@@ -75,6 +75,7 @@ def test_help_matches_committed_0_1_0_baseline(name: str, args: tuple[str, ...])
         [*args, "--help"],
         prog_name="heyfood",
         color=False,
+        terminal_width=120,
     )
 
     assert result.exit_code == 0
