@@ -74,6 +74,7 @@ def test_help_matches_committed_0_1_0_baseline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(typer.rich_utils, "MAX_WIDTH", 120)
+    monkeypatch.setattr(typer.rich_utils, "FORCE_TERMINAL", False)
     runner = CliRunner(env={"NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "120"})
 
     result = runner.invoke(
