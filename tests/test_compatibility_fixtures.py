@@ -6,6 +6,7 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
+import typer.rich_utils
 from click.utils import strip_ansi
 from rich.console import Console
 from typer.testing import CliRunner
@@ -67,7 +68,12 @@ def _normalize_help(value: str) -> str:
 
 
 @pytest.mark.parametrize(("name", "args"), HELP_COMMANDS.items())
-def test_help_matches_committed_0_1_0_baseline(name: str, args: tuple[str, ...]) -> None:
+def test_help_matches_committed_0_1_0_baseline(
+    name: str,
+    args: tuple[str, ...],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(typer.rich_utils, "MAX_WIDTH", 120)
     runner = CliRunner(env={"NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "120"})
 
     result = runner.invoke(
@@ -75,7 +81,6 @@ def test_help_matches_committed_0_1_0_baseline(name: str, args: tuple[str, ...])
         [*args, "--help"],
         prog_name="heyfood",
         color=False,
-        terminal_width=120,
     )
 
     assert result.exit_code == 0
