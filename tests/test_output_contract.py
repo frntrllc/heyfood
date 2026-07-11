@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import typer
+from click.utils import strip_ansi
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -252,14 +253,14 @@ def test_data_commands_advertise_json(args: tuple[str, ...]) -> None:
     result = CliRunner().invoke(main.app, [*args, "--help"], prog_name="heyfood")
 
     assert result.exit_code == 0
-    assert "--json" in result.stdout
+    assert "--json" in strip_ansi(result.stdout)
 
 
 def test_interactive_chat_rejects_json() -> None:
     result = CliRunner().invoke(main.app, ["chat", "--json"], prog_name="heyfood")
 
     assert result.exit_code == 2
-    assert "does not support --json" in result.output
+    assert "does not support --json" in strip_ansi(result.output)
 
 
 def test_menu_json_pending_is_spinner_free_and_nonzero(

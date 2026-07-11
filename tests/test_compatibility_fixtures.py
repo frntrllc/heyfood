@@ -6,6 +6,7 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
+from click.utils import strip_ansi
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -61,7 +62,7 @@ HELP_COMMANDS = {
 
 
 def _normalize_help(value: str) -> str:
-    lines = [line.rstrip() for line in value.splitlines()]
+    lines = [line.rstrip() for line in strip_ansi(value).splitlines()]
     return "\n".join(lines).strip() + "\n"
 
 

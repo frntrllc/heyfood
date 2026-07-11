@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 import typer
+from click.utils import strip_ansi
 from typer.testing import CliRunner
 
 from heyfood_cli import main
@@ -181,7 +182,7 @@ def test_onboard_no_input_mutation_requires_yes_before_client_creation(
     )
 
     assert result.exit_code == 2
-    assert "require --yes" in result.output
+    assert "require --yes" in strip_ansi(result.output)
 
 
 def test_onboard_yes_no_input_mutates_without_prompt(

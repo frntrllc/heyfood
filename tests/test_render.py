@@ -308,7 +308,7 @@ def test_critical_guidance_renderer_is_plain_in_narrow_no_color_terminal(width):
     )
 
     assert "\x1b" not in output.getvalue()
-    assert "not a safety verdict" in output.getvalue()
+    assert "not a safety verdict" in " ".join(output.getvalue().split())
 
 
 def test_saved_recipes_renders_cookbook_rows():

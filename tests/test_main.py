@@ -1,4 +1,5 @@
 import pytest
+from click.utils import strip_ansi
 from typer.testing import CliRunner
 
 from heyfood_cli import onboarding
@@ -470,7 +471,7 @@ def test_conversation_list_and_clear_are_local_and_automation_safe(tmp_path):
     assert "confirmation-secret" not in listed.stdout
     assert "idempotency-secret" not in listed.stdout
     assert refused.exit_code == 2
-    assert "--yes" in refused.output
+    assert "--yes" in strip_ansi(refused.output)
     document = __import__("json").loads(cleared.stdout)
     assert cleared.exit_code == 0
     assert document == {
