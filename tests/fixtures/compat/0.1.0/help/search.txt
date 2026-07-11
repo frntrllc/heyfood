@@ -1,0 +1,15 @@
+Usage: heyfood search [OPTIONS]
+
+ Search restaurants near coordinates, a saved default location, or a named place.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --query   -q      TEXT     Restaurant search text.                                                                   │
+│ --lat             FLOAT    Latitude (with --lng). Overrides saved location.                                          │
+│ --lng             FLOAT    Longitude (with --lat). Overrides saved location.                                         │
+│ --near            TEXT     Place name to search near, e.g. "Fresno, CA".                                             │
+│ --radius          FLOAT    Search radius in miles (default 5, or the saved location's radius).                       │
+│ --limit           INTEGER  Maximum restaurants. [default: 10]                                                        │
+│ --json                     Print stable JSON.                                                                        │
+│ --raw                      Deprecated alias for --json.                                                              │
+│ --help                     Show this message and exit.                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

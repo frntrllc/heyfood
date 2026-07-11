@@ -1,0 +1,11 @@
+Usage: heyfood conversation clear [OPTIONS]
+
+ Forget the local last-conversation pointer; server history is unaffected.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --yes       -y        Confirm clearing the local pointer.                                                            │
+│ --no-input            Never prompt; requires --yes.                                                                  │
+│ --json                Print stable JSON.                                                                             │
+│ --raw                 Deprecated alias for --json.                                                                   │
+│ --help                Show this message and exit.                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -1,0 +1,12 @@
+Usage: heyfood conversation [OPTIONS] COMMAND [ARGS]...
+
+ Inspect or manage the locally remembered agent conversation.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ list    Show the last conversation id remembered on this machine.                                                    │
+│ resume  Continue the last conversation remembered on this machine.                                                   │
+│ clear   Forget the local last-conversation pointer; server history is unaffected.                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

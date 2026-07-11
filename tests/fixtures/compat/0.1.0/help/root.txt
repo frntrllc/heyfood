@@ -1,0 +1,36 @@
+Usage: heyfood [OPTIONS] COMMAND [ARGS]...
+
+ heyfood: hello.food for your terminal.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --version                     Show version and exit.                                                                 │
+│ --no-banner                   Disable decorative ASCII branding.                                                     │
+│ --verbose                     Print safe request diagnostics to stderr.                                              │
+│ --install-completion          Install completion for the current shell.                                              │
+│ --show-completion             Show completion for the current shell, to copy it or customize the installation.       │
+│ --help                        Show this message and exit.                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ login         Authenticate this machine with HelloFood.                                                              │
+│ logout        Forget local credentials and revoke the current app session.                                           │
+│ status        Show the active HelloFood account and channel scopes.                                                  │
+│ doctor        Check local config, auth refresh, and API reachability.                                                │
+│ profile       Show your synced dietary graph.                                                                        │
+│ onboard       Build or update your hello.food dietary graph.                                                         │
+│ ask           Ask the HelloFood conversational agent.                                                                │
+│ reply         Reply to the last HelloFood agent conversation.                                                        │
+│ chat          Open an interactive HelloFood agent conversation.                                                      │
+│ log           Log a meal through the conversational agent.                                                           │
+│ item          Assess a food or menu item against your HelloFood profile.                                             │
+│ search        Search restaurants near coordinates, a saved default location, or a named place.                       │
+│ menu          Browse a full restaurant menu.                                                                         │
+│ get-menu      Fetch or browse a full restaurant menu (alias for `heyfood menu`).                                     │
+│ recommend     Recommend menu items for your profile.                                                                 │
+│ daily         Show meal log summary for a day.                                                                       │
+│ recipes       Recipe discovery from your terminal.                                                                   │
+│ location      Save a default location for restaurant searches.                                                       │
+│ context       Manage named API/auth environments.                                                                    │
+│ config        Inspect local CLI configuration safely.                                                                │
+│ members       Discover synced household member ids.                                                                  │
+│ conversation  Inspect or manage the locally remembered agent conversation.                                           │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

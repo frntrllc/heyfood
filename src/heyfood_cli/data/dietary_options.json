@@ -1,0 +1,189 @@
+{
+  "version": 2,
+  "sections": {
+    "health_conditions": {
+      "label": "Health Conditions",
+      "multi_select": true,
+      "tier1": [
+        { "label": "Celiac disease", "id": "celiac", "constraints": ["gluten"] },
+        { "label": "Type 1 diabetes", "id": "diabetes_type_1", "constraints": ["high_sugar", "refined_carbs", "insulin_management"] },
+        { "label": "Type 2 diabetes", "id": "diabetes_type_2", "constraints": ["high_sugar", "refined_carbs"] },
+        { "label": "Diabetes (Type 1 or 2)", "id": "diabetes", "constraints": ["high_sugar", "refined_carbs"], "deprecated": true, "replaced_by": ["diabetes_type_1", "diabetes_type_2"] },
+        { "label": "IBS", "id": "ibs", "constraints": ["high_fodmap", "carbonation"] },
+        { "label": "Crohn's disease", "id": "crohns", "constraints": ["high_fiber", "spicy", "alcohol"] },
+        { "label": "Gastroparesis", "id": "gastroparesis", "constraints": ["high_fat", "high_fiber", "carbonation"] },
+        { "label": "GERD / Acid reflux", "id": "gerd", "constraints": ["acidic", "spicy", "high_fat", "caffeine"] },
+        { "label": "Food allergies (general)", "id": "food_allergies_general", "constraints": [] },
+        { "label": "None of these", "id": "__none__", "constraints": [] }
+      ],
+      "tier2": [
+        { "label": "Ulcerative colitis", "id": "colitis", "constraints": ["high_fiber", "spicy"] },
+        { "label": "Diverticulitis", "id": "diverticulitis", "constraints": ["seeds", "nuts", "high_fiber"] },
+        { "label": "Eosinophilic esophagitis (EoE)", "id": "eoe", "constraints": ["dairy", "wheat", "eggs", "soy"] },
+        { "label": "Cyclic vomiting syndrome", "id": "cvs", "constraints": ["high_fat", "caffeine", "chocolate"] },
+        { "label": "Kidney disease / CKD", "id": "ckd", "constraints": ["high_potassium", "high_phosphorus", "high_sodium"] },
+        { "label": "PKU (Phenylketonuria)", "id": "pku", "constraints": ["phenylalanine", "aspartame", "high_protein"] },
+        { "label": "Alpha-gal syndrome", "id": "alpha_gal", "constraints": ["red_meat", "mammalian_products", "gelatin"] },
+        { "label": "Mast cell activation syndrome (MCAS)", "id": "mcas", "constraints": ["histamine", "fermented", "aged_foods"] },
+        { "label": "Histamine intolerance", "id": "histamine_intolerance", "constraints": ["histamine", "fermented", "aged_cheese", "alcohol"] },
+        { "label": "Fructose malabsorption", "id": "fructose_malabsorption", "constraints": ["high_fructose", "honey", "agave"] },
+        { "label": "SIBO", "id": "sibo", "constraints": ["high_fodmap", "fermentable_carbs"] },
+        { "label": "Pancreatitis (chronic)", "id": "pancreatitis", "constraints": ["high_fat", "alcohol"] },
+        { "label": "Short bowel syndrome", "id": "short_bowel", "constraints": ["high_fat", "high_sugar", "carbonation"] },
+        { "label": "Dumping syndrome", "id": "dumping_syndrome", "constraints": ["high_sugar", "large_meals"] },
+        { "label": "Gallbladder disease / post-cholecystectomy", "id": "gallbladder", "constraints": ["high_fat", "fried_foods"] },
+        { "label": "Liver disease", "id": "liver_disease", "constraints": ["alcohol", "high_sodium", "high_protein"] },
+        { "label": "Eating disorder (in recovery)", "id": "eating_disorder_recovery", "constraints": [] },
+        { "label": "Gestational diabetes", "id": "gestational_diabetes", "constraints": ["high_sugar", "refined_carbs"] },
+        { "label": "Hyperemesis", "id": "hyperemesis", "constraints": ["strong_odors", "spicy", "high_fat"] },
+        { "label": "Thyroid condition (hypo/hyper)", "id": "thyroid", "constraints": ["goitrogens", "soy", "high_iodine"] },
+        { "label": "Hypertension / high blood pressure", "id": "hypertension", "constraints": ["high_sodium"] },
+        { "label": "ARFID", "id": "arfid", "constraints": ["texture_sensitivity", "limited_variety"] },
+        { "label": "Autism / sensory food needs", "id": "autism_sensory", "constraints": ["texture_sensitivity"] }
+      ],
+      "custom_placeholder": "Add a condition...",
+      "custom_max": 10,
+      "custom_char_limit": 60
+    },
+    "diet_style": {
+      "label": "Diet Style",
+      "multi_select": true,
+      "tier1": [
+        { "label": "Gluten-free", "id": "gluten_free", "enum_key": null },
+        { "label": "Dairy-free", "id": "dairy_free", "enum_key": null },
+        { "label": "Vegetarian", "id": "vegetarian", "enum_key": "vegetarian" },
+        { "label": "Vegan", "id": "vegan", "enum_key": "vegan" },
+        { "label": "Keto", "id": "keto", "enum_key": "keto" },
+        { "label": "Pescatarian", "id": "pescatarian", "enum_key": "pescatarian" },
+        { "label": "None of these", "id": "__none__", "enum_key": null }
+      ],
+      "tier2": [
+        { "label": "Paleo", "id": "paleo", "enum_key": "paleo" },
+        { "label": "Whole30", "id": "whole30", "enum_key": "whole30" },
+        { "label": "Low-FODMAP", "id": "low_fodmap", "enum_key": null },
+        { "label": "Mediterranean", "id": "mediterranean", "enum_key": "mediterranean" },
+        { "label": "Low-carb", "id": "low_carb", "enum_key": "lowCarb" },
+        { "label": "Low-sodium", "id": "low_sodium", "enum_key": null },
+        { "label": "Low-fat", "id": "low_fat", "enum_key": null },
+        { "label": "High-protein", "id": "high_protein", "enum_key": null },
+        { "label": "Raw food", "id": "raw_food", "enum_key": null },
+        { "label": "Carnivore", "id": "carnivore", "enum_key": null },
+        { "label": "Flexitarian", "id": "flexitarian", "enum_key": null },
+        { "label": "Macrobiotic", "id": "macrobiotic", "enum_key": null },
+        { "label": "Anti-inflammatory", "id": "anti_inflammatory", "enum_key": null },
+        { "label": "Autoimmune protocol (AIP)", "id": "aip", "enum_key": null },
+        { "label": "Specific carbohydrate diet (SCD)", "id": "scd", "enum_key": null },
+        { "label": "DASH diet", "id": "dash", "enum_key": null },
+        { "label": "Halal", "id": "halal", "enum_key": null },
+        { "label": "Kosher", "id": "kosher", "enum_key": null }
+      ],
+      "custom_placeholder": "Add a diet style...",
+      "custom_max": 10,
+      "custom_char_limit": 40
+    },
+    "allergies": {
+      "label": "Allergies & Restrictions",
+      "multi_select": true,
+      "note": "Tier 1 anchored to FDA top 9 major allergens",
+      "tier1": [
+        { "label": "Milk / dairy", "id": "dairy", "enum_key": "dairyFree" },
+        { "label": "Eggs", "id": "eggs", "enum_key": "eggFree" },
+        { "label": "Tree nuts", "id": "tree_nuts", "enum_key": "treeNutFree" },
+        { "label": "Peanuts", "id": "peanuts", "enum_key": "peanutFree" },
+        { "label": "Shellfish", "id": "shellfish", "enum_key": "shellfishFree" },
+        { "label": "Fish", "id": "fish", "enum_key": "fishFree" },
+        { "label": "Wheat", "id": "wheat", "enum_key": "glutenFree" },
+        { "label": "Soy", "id": "soy", "enum_key": "soyFree" },
+        { "label": "Sesame", "id": "sesame", "enum_key": "sesameFree" },
+        { "label": "None of these", "id": "__none__", "enum_key": null }
+      ],
+      "tier2": [
+        { "label": "Mustard", "id": "mustard", "enum_key": null },
+        { "label": "Celery", "id": "celery", "enum_key": null },
+        { "label": "Lupin", "id": "lupin", "enum_key": null },
+        { "label": "Mollusks", "id": "mollusks", "enum_key": null },
+        { "label": "Sulfites", "id": "sulfites", "enum_key": null },
+        { "label": "Corn", "id": "corn", "enum_key": null },
+        { "label": "Nightshades (tomatoes, peppers, eggplant)", "id": "nightshades", "enum_key": null },
+        { "label": "Legumes", "id": "legumes", "enum_key": null },
+        { "label": "Coconut", "id": "coconut", "enum_key": null },
+        { "label": "Latex-fruit syndrome (banana, avocado, kiwi)", "id": "latex_fruit", "enum_key": null },
+        { "label": "Stone fruits", "id": "stone_fruits", "enum_key": null },
+        { "label": "Citrus", "id": "citrus", "enum_key": null },
+        { "label": "Gluten (non-celiac sensitivity)", "id": "gluten_sensitivity", "enum_key": null },
+        { "label": "Lactose intolerance", "id": "lactose", "enum_key": "lactoseIntolerant" },
+        { "label": "Caffeine", "id": "caffeine", "enum_key": null },
+        { "label": "Alcohol", "id": "alcohol", "enum_key": null },
+        { "label": "Artificial sweeteners", "id": "artificial_sweeteners", "enum_key": null },
+        { "label": "MSG", "id": "msg", "enum_key": null },
+        { "label": "Red dye / food colorings", "id": "food_colorings", "enum_key": null }
+      ],
+      "custom_placeholder": "Add an allergy or restriction...",
+      "custom_max": 10,
+      "custom_char_limit": 60
+    },
+    "ingredients_to_avoid": {
+      "label": "Ingredients to Avoid",
+      "multi_select": true,
+      "type": "custom_only",
+      "placeholder": "e.g., cilantro, raw onion, blue cheese",
+      "max_items": 20,
+      "char_limit": 40
+    },
+    "activity_level": {
+      "label": "Activity Level",
+      "multi_select": false,
+      "options": [
+        { "label": "Very active (5+/week)", "id": "very_active" },
+        { "label": "Moderate (2-4/week)", "id": "moderate" },
+        { "label": "Light activity", "id": "light" },
+        { "label": "Sedentary", "id": "sedentary" },
+        { "label": "Prefer not to say", "id": "prefer_not_to_say" }
+      ]
+    },
+    "cuisines": {
+      "label": "Cuisines You Love",
+      "multi_select": true,
+      "tier1": [
+        { "label": "Mexican", "id": "mexican" },
+        { "label": "Italian", "id": "italian" },
+        { "label": "Japanese", "id": "japanese" },
+        { "label": "Thai", "id": "thai" },
+        { "label": "Indian", "id": "indian" },
+        { "label": "Mediterranean", "id": "mediterranean" },
+        { "label": "Korean", "id": "korean" },
+        { "label": "American", "id": "american" }
+      ],
+      "tier2": [
+        { "label": "Chinese", "id": "chinese" },
+        { "label": "Vietnamese", "id": "vietnamese" },
+        { "label": "Ethiopian", "id": "ethiopian" },
+        { "label": "French", "id": "french" },
+        { "label": "Greek", "id": "greek" },
+        { "label": "Middle Eastern", "id": "middle_eastern" },
+        { "label": "Spanish / Tapas", "id": "spanish" },
+        { "label": "Brazilian", "id": "brazilian" },
+        { "label": "Peruvian", "id": "peruvian" },
+        { "label": "Turkish", "id": "turkish" },
+        { "label": "Jamaican / Caribbean", "id": "caribbean" },
+        { "label": "Southern / Soul food", "id": "southern" },
+        { "label": "Cajun / Creole", "id": "cajun_creole" },
+        { "label": "German", "id": "german" },
+        { "label": "British", "id": "british" },
+        { "label": "Filipino", "id": "filipino" },
+        { "label": "Malaysian", "id": "malaysian" },
+        { "label": "Indonesian", "id": "indonesian" },
+        { "label": "Hawaiian / Polynesian", "id": "hawaiian" },
+        { "label": "Georgian", "id": "georgian" }
+      ],
+      "custom_placeholder": "Add a cuisine...",
+      "custom_max": 10,
+      "custom_char_limit": 40
+    }
+  },
+  "household_diet_extras": [
+    { "label": "Low-fiber", "id": "low_fiber" },
+    { "label": "Soft foods only", "id": "soft_foods" },
+    { "label": "Bland diet", "id": "bland_diet" }
+  ]
+}

@@ -1,0 +1,14 @@
+Usage: heyfood recommend [OPTIONS] RESTAURANT_ID
+
+ Recommend menu items for your profile.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    restaurant_id      TEXT  HelloFood restaurant id or index from the last search. [required]                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --query  -q      TEXT     What you are in the mood for.                                                              │
+│ --limit          INTEGER  Maximum recommendations. [default: 5]                                                      │
+│ --json                    Print stable JSON.                                                                         │
+│ --raw                     Deprecated alias for --json.                                                               │
+│ --help                    Show this message and exit.                                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

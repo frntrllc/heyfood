@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/frntrllc/heyfood/blob/main/schemas/v1/heyfood-output.schema.json",
+  "title": "heyfood machine output contract v1",
+  "description": "Versioned core shapes for safety, menu, ranking, and recipe results. Service responses may add fields.",
+  "x-heyfood-schema-version": 1,
+  "oneOf": [
+    {"$ref": "#/$defs/safetyVerdict"},
+    {"$ref": "#/$defs/restaurantFit"},
+    {"$ref": "#/$defs/menuEvaluation"},
+    {"$ref": "#/$defs/recommendationRanking"},
+    {"$ref": "#/$defs/recipeCompatibility"}
+  ],
+  "$defs": {
+    "safetyStatus": {
+      "type": "string",
+      "enum": ["generally_safer", "risky", "avoid", "unable_to_evaluate"],
+      "description": "Canonical conservative safety vocabulary. 'Generally safer' is never an absolute safety guarantee."
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "safetyAssessment": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {"$ref": "#/$defs/safetyStatus"},
+        "confidence": {"$ref": "#/$defs/confidence"},
+        "reason": {"type": "string"},
+        "explanation": {"type": "string"},
+        "uncertainties": {"type": "array", "items": {"type": "string"}},
+        "modifications": {"type": "array", "items": {"type": "string"}},
+        "questions_to_ask": {"type": "array", "items": {"type": "string"}},
+        "alternatives": {"type": "array", "items": {"type": "string"}},
+        "member_id": {"type": "string"},
+        "menu_freshness": {"type": "string"},
+        "provenance": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "safetyVerdict": {
+      "title": "Safety verdict",
+      "type": "object",
+      "properties": {
+        "status": {"$ref": "#/$defs/safetyStatus"},
+        "confidence": {"$ref": "#/$defs/confidence"},
+        "items": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/safetyAssessment"}
+        }
+      },
+      "anyOf": [
+        {"required": ["status"]},
+        {"required": ["items"]}
+      ],
+      "additionalProperties": true
+    },
+    "restaurantFit": {
+      "title": "Restaurant fit search",
+      "type": "object",
+      "required": ["restaurants"],
+      "properties": {
+        "restaurants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "name"],
+            "properties": {
+              "id": {"type": "string"},
+              "name": {"type": "string"},
+              "fit_status": {
+                "anyOf": [
+                  {"$ref": "#/$defs/safetyStatus"},
+                  {"type": "null"}
+                ]
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "menuEvaluation": {
+      "title": "Menu evaluation",
+      "type": "object",
+      "required": ["sections"],
+      "properties": {
+        "restaurant_id": {"type": "string"},
+        "restaurant_name": {"type": "string"},
+        "menu_freshness": {"type": "string"},
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "items": {
+                "type": "array",
+                "items": {"$ref": "#/$defs/safetyAssessment"}
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "recommendationRanking": {
+      "title": "Recommendation ranking",
+      "description": "A relevance/match ranking, not a safety verdict.",
+      "type": "object",
+      "required": ["recommendations"],
+      "properties": {
+        "restaurant_id": {"type": "string"},
+        "restaurant_name": {"type": "string"},
+        "recommendations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["item_name", "score", "confidence"],
+            "properties": {
+              "item_name": {"type": "string"},
+              "score": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "Composite match/relevance rank. It is not a probability and not a safety status."
+              },
+              "confidence": {"$ref": "#/$defs/confidence"},
+              "rationale": {"type": "string"},
+              "alternatives": {"type": "array", "items": {"type": "string"}}
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "recipeCompatibility": {
+      "title": "Recipe compatibility",
+      "description": "Recipe match metadata is compatibility ranking unless an explicit safety assessment is present.",
+      "type": "object",
+      "required": ["recipes"],
+      "properties": {
+        "recipes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["title"],
+            "properties": {
+              "title": {"type": "string"},
+              "dietary_match_hint": {"$ref": "#/$defs/confidence"},
+              "partially_compatible": {"type": "boolean"},
+              "safety": {"$ref": "#/$defs/safetyAssessment"}
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}
