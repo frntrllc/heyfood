@@ -11,8 +11,24 @@ advice or emergency care.
 
 ## Installation
 
-The first public PyPI release is not available yet. Until the release checklist
-is complete, install from a reviewed source checkout:
+Install the isolated command with
+[`pipx`](https://pipx.pypa.io/stable/installation/):
+
+```bash
+pipx install heyfood-cli
+heyfood --version
+heyfood --help
+```
+
+Python 3.11, 3.12, and 3.13 are supported. To use the operating-system
+credential vault instead of the secure file fallback, install the optional
+keyring extra:
+
+```bash
+pipx install 'heyfood-cli[keyring]'
+```
+
+Contributors can install from a reviewed source checkout:
 
 ```bash
 git clone https://github.com/frntrllc/heyfood.git
@@ -26,10 +42,6 @@ python -m pip install -e '.[keyring]'
 heyfood --version
 heyfood --help
 ```
-
-Python 3.11, 3.12, and 3.13 are the intended initial support matrix. Public
-`pipx install heyfood-cli` instructions will be enabled only after the package
-is published and its clean-install smoke tests pass.
 
 ## Authenticate
 

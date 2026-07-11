@@ -6,6 +6,10 @@ authentication contracts are stabilized.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 0.1.0 - 2026-07-11
+
 ### Added
 
 - Apache-2.0 package metadata and FRNTR, LLC ownership notices.
@@ -46,12 +50,6 @@ authentication contracts are stabilized.
 - Typer and Click are bounded to the compatibility-tested minor lines so a
   fresh install preserves the frozen command and help grammar.
 
-### Known pre-release limitations
-
-- The PyPI project has not been published.
-- Place-name search remains pre-release until the completed shared
-  search/MCP/OpenAPI contract is deployed with the geocoding service.
-
-Release entries will replace `Unreleased` with a version and ISO date when a
-protected release completes. Removed or incompatible behavior must be called
-out explicitly with migration guidance.
+Each protected release moves relevant entries from `Unreleased` into a version
+section with an ISO date. Removed or incompatible behavior must be called out
+explicitly with migration guidance.
