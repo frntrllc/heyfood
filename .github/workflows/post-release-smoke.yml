@@ -1,0 +1,64 @@
+name: Post-release smoke
+
+run-name: Public PyPI smoke v${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published heyfood-cli version without the v prefix
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  public-pypi:
+    name: PyPI v${{ inputs.version }} / Python ${{ matrix.python }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13"]
+    env:
+      PIP_INDEX_URL: https://pypi.org/simple
+      PIP_NO_CACHE_DIR: "1"
+      PIPX_HOME: ${{ runner.temp }}/pipx-home
+      PIPX_BIN_DIR: ${{ runner.temp }}/pipx-bin
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the published package with pipx
+        shell: bash
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([abrc][0-9]+)?$ ]]
+          python -m pip install "pipx>=1.7,<2"
+          python -m pipx install --python "$(command -v python)" "heyfood-cli==$VERSION"
+      - name: Smoke the public executable
+        shell: bash
+        run: |
+          test "$($PIPX_BIN_DIR/heyfood --version)" = "heyfood $VERSION"
+          "$PIPX_BIN_DIR/heyfood" --help >/dev/null
+          "$PIPX_BIN_DIR/heyfood" login --help >/dev/null
+          set +e
+          "$PIPX_BIN_DIR/heyfood" doctor --json >doctor.json
+          doctor_status=$?
+          set -e
+          test "$doctor_status" = 1
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          raw = Path("doctor.json").read_text()
+          assert "\x1b" not in raw
+          json.loads(raw)
+          PY
+      - name: Uninstall cleanly
+        shell: bash
+        run: |
+          python -m pipx uninstall heyfood-cli
+          test ! -e "$PIPX_BIN_DIR/heyfood"
