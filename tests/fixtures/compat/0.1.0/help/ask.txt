@@ -1,0 +1,18 @@
+Usage: heyfood ask [OPTIONS] QUERY...
+
+ Ask the HelloFood conversational agent.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    query      QUERY...  Natural-language request. [required]                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --lat                      FLOAT  Latitude for restaurant/location-aware requests.                                   │
+│ --lng                      FLOAT  Longitude for restaurant/location-aware requests.                                  │
+│ --near                     TEXT   Place name for this request.                                                       │
+│ --no-location                     Do not send saved location context.                                                │
+│ --conversation-id          TEXT   Continue an existing conversation.                                                 │
+│ --continue         -c             Continue the last CLI conversation.                                                │
+│ --json                            Print stable JSON.                                                                 │
+│ --raw                             Deprecated alias for --json.                                                       │
+│ --help                            Show this message and exit.                                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

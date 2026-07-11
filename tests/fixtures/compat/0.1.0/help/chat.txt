@@ -1,0 +1,18 @@
+Usage: heyfood chat [OPTIONS] [INITIAL]...
+
+ Open an interactive HelloFood agent conversation.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   initial      [INITIAL]...  Optional first message.                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --new                       Start a fresh conversation instead of resuming the last one.                             │
+│ --no-input                  Never prompt; interactive chat will fail.                                                │
+│ --lat                FLOAT  Latitude for this chat.                                                                  │
+│ --lng                FLOAT  Longitude for this chat.                                                                 │
+│ --near               TEXT   Place name for this chat.                                                                │
+│ --no-location               Do not send saved location context.                                                      │
+│ --json                      Reserved; interactive chat has no JSON protocol.                                         │
+│ --raw                       Deprecated alias for --json.                                                             │
+│ --help                      Show this message and exit.                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
