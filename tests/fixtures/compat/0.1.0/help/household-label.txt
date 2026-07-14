@@ -1,14 +1,14 @@
-Usage: heyfood log [OPTIONS] MEAL...
+Usage: heyfood household label [OPTIONS] SELECTOR
 
- Log a meal through the conversational agent.
+ Give an imported profile id a local name and relationship.
 
 ╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ *    meal      MEAL...  Meal text to log. [required]                                                                 │
+│ *    selector      TEXT  Existing member name or id. [required]                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ --type        TEXT  breakfast, lunch, dinner, or snack.                                                              │
-│ --for         TEXT  Household scope: member name/id, me, or everyone.                                                │
-│ --json              Print stable JSON.                                                                               │
-│ --raw               Deprecated alias for --json.                                                                     │
-│ --help              Show this message and exit.                                                                      │
+│ *  --name                TEXT  Local display name. [required]                                                        │
+│    --relationship        TEXT  spouse, partner, parent, child, sibling, grandparent, friend, or other.               │
+│    --json                      Print stable JSON.                                                                    │
+│    --raw                       Deprecated alias for --json.                                                          │
+│    --help                      Show this message and exit.                                                           │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

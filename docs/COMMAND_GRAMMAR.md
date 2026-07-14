@@ -28,6 +28,9 @@ improving discovery.
   remembered agent conversation.
 - `chat --new` starts without the local conversation pointer; `conversation
   clear --yes` forgets that pointer without deleting server data.
+- `--for NAME_OR_ID`, `--for me`, and `--for everyone` override household
+  scope for an agent command. `household use` changes the persisted default;
+  `/for` changes it inside chat and starts a fresh conversation.
 - Onboarding preserves `--no-interactive` as the compatibility alias described
   in the public process contract; new automation should use `--no-input`.
 
@@ -39,3 +42,8 @@ the one conversation id remembered in local CLI state, then `conversation
 resume` or `conversation clear --yes`. The service does not currently expose a
 conversation-history listing API, so the CLI does not imply that local state is
 a complete history.
+
+`heyfood household list` reconciles synced ids into the local roster. Use
+`household label MEMBER_ID --name NAME --relationship RELATIONSHIP` when a
+profile created on another device has no local display name, then use a unique
+name or exact member id as the scope selector.

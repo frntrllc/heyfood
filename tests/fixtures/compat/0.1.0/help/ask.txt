@@ -12,6 +12,7 @@ Usage: heyfood ask [OPTIONS] QUERY...
 │ --no-location                     Do not send saved location context.                                                │
 │ --conversation-id          TEXT   Continue an existing conversation.                                                 │
 │ --continue         -c             Continue the last CLI conversation.                                                │
+│ --for                      TEXT   One-turn household scope: member name/id, me, or everyone.                         │
 │ --json                            Print stable JSON.                                                                 │
 │ --raw                             Deprecated alias for --json.                                                       │
 │ --help                            Show this message and exit.                                                        │

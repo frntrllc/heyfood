@@ -39,6 +39,18 @@ BUILTIN_CONTEXTS: dict[str, dict[str, str]] = {
         "auth_url": DEFAULT_LOCAL_AUTH_URL,
     },
 }
+ACCOUNT_SCOPED_CONFIG_KEYS = {
+    "first_name",
+    "first_name_updated_at",
+    "welcomed_at",
+    "household",
+    "household_local_profiles",
+    "household_profile_outbox",
+    "last_conversation",
+    "last_recipe_search",
+    "last_restaurant_search",
+    "location",
+}
 
 
 class ConfigError(RuntimeError):
@@ -141,8 +153,34 @@ def resolve_service_urls(config: dict[str, Any]) -> tuple[str, str, str]:
     return api_url.rstrip("/"), auth_url.rstrip("/"), context_name
 
 
+def bind_config_to_account(config: dict[str, Any], user_id: str) -> bool:
+    """Bind account-scoped local state to one authenticated principal.
+
+    Returns True when state from another or unbound account was removed. The
+    fail-closed unbound case protects upgrades from older CLI builds that did
+    not persist an account identity beside household data.
+    """
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        raise ConfigError("Authenticated session did not identify an account.")
+    session = config.get("session")
+    prior = config.get("account_user_id")
+    if not prior and isinstance(session, dict):
+        prior = session.get("user_id")
+    prior_id = str(prior or "").strip()
+    has_account_state = any(key in config for key in ACCOUNT_SCOPED_CONFIG_KEYS)
+    should_clear = has_account_state and prior_id != normalized_user_id
+    if should_clear:
+        for key in ACCOUNT_SCOPED_CONFIG_KEYS:
+            config.pop(key, None)
+    config["account_user_id"] = normalized_user_id
+    return should_clear
+
+
 def redacted_config(config: dict[str, Any]) -> dict[str, Any]:
     document = json.loads(json.dumps(config))
+    if document.get("account_user_id"):
+        document["account_user_id"] = "<redacted>"
     if document.get("api_key"):
         document["api_key"] = "<redacted>"
     for bundle_name in ("oauth", "session"):
@@ -152,6 +190,46 @@ def redacted_config(config: dict[str, Any]) -> dict[str, Any]:
         for token_name in ("access_token", "refresh_token"):
             if bundle.get(token_name):
                 bundle[token_name] = "<redacted>"
+    household_state = document.get("household")
+    if isinstance(household_state, dict):
+        members = household_state.get("members")
+        document["household"] = {
+            "version": household_state.get("version"),
+            "active_scope": "<redacted>",
+            "member_count": len(members) if isinstance(members, list) else 0,
+            "local_roster": "<redacted>",
+        }
+    local_profiles = document.get("household_local_profiles")
+    if isinstance(local_profiles, dict):
+        document["household_local_profiles"] = {
+            "profile_count": len(local_profiles),
+            "dietary_data": "<redacted>",
+        }
+    profile_outbox = document.get("household_profile_outbox")
+    if isinstance(profile_outbox, dict):
+        document["household_profile_outbox"] = {
+            "entry_count": len(profile_outbox),
+            "dietary_data": "<redacted>",
+        }
+    last_conversation = document.get("last_conversation")
+    if isinstance(last_conversation, dict):
+        pending = last_conversation.get("pending_confirmation")
+        document["last_conversation"] = {
+            "conversation_id": "<redacted>",
+            "household_scope_id": (
+                "<redacted>" if last_conversation.get("household_scope_id") else None
+            ),
+            "updated_at": last_conversation.get("updated_at"),
+            "pending_confirmation": (
+                {
+                    "present": True,
+                    "action": pending.get("action"),
+                    "details": "<redacted>",
+                }
+                if isinstance(pending, dict)
+                else None
+            ),
+        }
     return document
 
 
@@ -213,21 +291,35 @@ class ConfigStore:
 
     def _save_unlocked(self, data: dict[str, Any]) -> None:
         document = json.loads(json.dumps(data))
+        protected_secrets = self._extract_protected_secrets(document)
         secrets = (
             self._extract_secrets(document)
             if self.credential_store is not None
             else {}
         )
-        if self.credential_store is not None and secrets:
+        secrets.update(protected_secrets)
+        if self.credential_store is not None:
             try:
                 self.credential_store.save(secrets)
-                document["credential_store"] = self.credential_store.name
+                if secrets:
+                    document["credential_store"] = self.credential_store.name
+                else:
+                    document.pop("credential_store", None)
             except Exception:
-                # Headless/locked keyrings degrade to the existing 0600 file.
+                # Ordinary credentials and household state may use the
+                # documented 0600 fallback. Confirmation previews are more
+                # sensitive: drop them rather than writing dietary PII to a
+                # plaintext config file when the vault is unavailable.
                 document = json.loads(json.dumps(data))
+                self._strip_protected_secrets(document)
+                if self._contains_secrets(document):
+                    document["credential_store"] = "file"
+                else:
+                    document.pop("credential_store", None)
+        else:
+            self._strip_protected_secrets(document)
+            if self._contains_secrets(document):
                 document["credential_store"] = "file"
-        elif self.credential_store is None and self._contains_secrets(document):
-            document["credential_store"] = "file"
 
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
@@ -311,6 +403,19 @@ class ConfigStore:
                 value = bundle.pop(token_name, None)
                 if isinstance(value, str) and value:
                     secrets[f"{bundle_name}.{token_name}"] = value
+        # Household identity can include names and dates of birth. Child
+        # profiles are deliberately local-only, and failed adult sync writes
+        # remain local as a repair outbox. Keep all of that in the OS vault
+        # whenever available; the documented 0600 fallback remains for
+        # headless environments.
+        for field_name, secret_name in (
+            ("household", "household.state"),
+            ("household_local_profiles", "household.local_profiles"),
+            ("household_profile_outbox", "household.profile_outbox"),
+        ):
+            value = document.pop(field_name, None)
+            if isinstance(value, dict) and value:
+                secrets[secret_name] = json.dumps(value, sort_keys=True)
         return secrets
 
     @staticmethod
@@ -323,6 +428,18 @@ class ConfigStore:
                 continue
             if any(bundle.get(name) for name in ("access_token", "refresh_token")):
                 return True
+        if isinstance(document.get("household"), dict) and document["household"]:
+            return True
+        if (
+            isinstance(document.get("household_local_profiles"), dict)
+            and document["household_local_profiles"]
+        ):
+            return True
+        if (
+            isinstance(document.get("household_profile_outbox"), dict)
+            and document["household_profile_outbox"]
+        ):
+            return True
         return False
 
     @staticmethod
@@ -338,3 +455,67 @@ class ConfigStore:
                 bundle = document.setdefault(bundle_name, {})
                 if isinstance(bundle, dict):
                     bundle[token_name] = value
+        for field_name, secret_name in (
+            ("household", "household.state"),
+            ("household_local_profiles", "household.local_profiles"),
+            ("household_profile_outbox", "household.profile_outbox"),
+        ):
+            raw = secrets.get(secret_name)
+            if not raw:
+                continue
+            try:
+                value = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(value, dict):
+                document[field_name] = value
+        raw_preview = secrets.get("conversation.pending_preview")
+        if raw_preview:
+            try:
+                preview = json.loads(raw_preview)
+            except (TypeError, json.JSONDecodeError):
+                preview = None
+            conversation = document.get("last_conversation")
+            pending = (
+                conversation.get("pending_confirmation")
+                if isinstance(conversation, dict)
+                else None
+            )
+            if (
+                isinstance(preview, dict)
+                and isinstance(pending, dict)
+                and preview.get("conversation_id") == conversation.get("conversation_id")
+                and preview.get("confirmation_id") == pending.get("confirmation_id")
+            ):
+                for key in ("preview", "structured_preview"):
+                    if key in preview:
+                        pending[key] = preview[key]
+
+    @staticmethod
+    def _extract_protected_secrets(document: dict[str, Any]) -> dict[str, str]:
+        conversation = document.get("last_conversation")
+        pending = (
+            conversation.get("pending_confirmation")
+            if isinstance(conversation, dict)
+            else None
+        )
+        if not isinstance(pending, dict):
+            return {}
+        payload = {
+            "conversation_id": conversation.get("conversation_id"),
+            "confirmation_id": pending.get("confirmation_id"),
+        }
+        found = False
+        for key in ("preview", "structured_preview"):
+            if key in pending:
+                payload[key] = pending.pop(key)
+                found = True
+        if not found:
+            return {}
+        return {
+            "conversation.pending_preview": json.dumps(payload, sort_keys=True),
+        }
+
+    @staticmethod
+    def _strip_protected_secrets(document: dict[str, Any]) -> None:
+        ConfigStore._extract_protected_secrets(document)

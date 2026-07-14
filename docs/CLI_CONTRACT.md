@@ -60,6 +60,9 @@ The `hint` field is optional. Consumers must tolerate additive fields.
 
 Interactive `chat` does not have a JSON streaming protocol and rejects
 `--json`. Use `ask --json` and `reply --json` for one-result interactions.
+When the agent emits an out-of-band choice set, those commands add a `choices`
+object containing `choices[]` and `allow_multiple` to the result document.
+Confirmed local household writes are reported under additive `client_effects`.
 
 Versioned safety, restaurant-fit, menu-evaluation, recommendation-ranking, and
 recipe-compatibility core shapes are documented in
@@ -114,6 +117,25 @@ flag remains a compatibility alias for disabling guided questions.
 `conversation clear` follows the same automation rule: `--json`, `--no-input`,
 and non-TTY use require `--yes`. It clears only the local resume pointer and
 does not claim to delete server conversation data.
+
+Household roster commands never prompt. `household list` refreshes synced
+profile ids unless `--local-only` is passed; `current`, `use`, and `label` are
+local configuration operations. Dietary contents are loaded just in time for
+agent requests and are never persisted in the CLI roster. Child profiles are
+the privacy-preserving exception: they stay in protected local storage and
+never use server profile sync. The OS keyring is used when available, with the
+documented owner-only `0600` file as the headless fallback. Failed adult sync
+writes also stay in this protected store as a lossless repair outbox, continue
+to scope agent turns, merge into later writes, and retry automatically on a
+consented scoped turn. Confirmation previews are stricter: they are vault-only,
+redacted from `config show`, and are not persisted between processes when no
+vault is available. Account-scoped state is bound to the authenticated user and
+cleared before saving credentials for a different user.
+
+When synced-member discovery returns `403: Sync consent required`, `household
+list` succeeds with the local roster and adds a `reconciliation` object with
+`status: skipped`, `reason: profile_sync_consent_required`, and
+`source: local_roster`. No other API error is downgraded.
 
 `onboard --dry-run --no-input` performs no network call, credential/config
 write, consent grant, or prompt. Interactive `chat` rejects `--no-input` and

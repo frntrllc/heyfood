@@ -7,6 +7,7 @@ import pytest
 from heyfood_cli.config import (
     ConfigError,
     ConfigStore,
+    bind_config_to_account,
     discover_local_api_key,
     redacted_config,
     resolve_service_urls,
@@ -128,6 +129,145 @@ def test_keyring_store_keeps_tokens_out_of_config_file(tmp_path):
     assert json.loads(raw)["credential_store"] == "keyring"
     assert store.load()["session"]["access_token"] == "hf_at_secret"
     assert credentials.secrets["oauth.refresh_token"] == "hf_cr_secret"
+
+
+def test_keyring_store_protects_household_identity_and_local_child_profiles(tmp_path):
+    credentials = FakeCredentialStore()
+    path = tmp_path / "config.json"
+    store = ConfigStore(path, credential_store=credentials)
+    store.save(
+        {
+            "household": {
+                "members": [{"id": "child-1", "name": "Emma", "relationship": "child"}],
+            },
+            "household_local_profiles": {
+                "child-1": {"restrictions": ["dairyFree"]},
+            },
+            "household_profile_outbox": {
+                "adult-1": {
+                    "fields": {"restrictions": ["peanuts"]},
+                    "local_context": {"restrictions": ["peanuts"]},
+                }
+            },
+        }
+    )
+
+    raw = path.read_text(encoding="utf-8")
+    assert "Emma" not in raw
+    assert "dairyFree" not in raw
+    assert "peanuts" not in raw
+    assert "Emma" in credentials.secrets["household.state"]
+    assert "dairyFree" in credentials.secrets["household.local_profiles"]
+    assert "peanuts" in credentials.secrets["household.profile_outbox"]
+    assert store.load()["household_local_profiles"]["child-1"]["restrictions"] == [
+        "dairyFree"
+    ]
+
+
+def test_pending_confirmation_preview_is_vault_only(tmp_path):
+    credentials = FakeCredentialStore()
+    path = tmp_path / "config.json"
+    store = ConfigStore(path, credential_store=credentials)
+    store.save(
+        {
+            "last_conversation": {
+                "conversation_id": "conversation-1",
+                "pending_confirmation": {
+                    "confirmation_id": "confirmation-1",
+                    "idempotency_key": "idempotency-1",
+                    "action": "add_household_member",
+                    "preview": "Add Ava with a peanut allergy",
+                    "structured_preview": {
+                        "operation": "add_member",
+                        "name": "Ava",
+                        "date_of_birth": "2018-01-02",
+                        "restrictions": ["peanuts"],
+                    },
+                },
+            }
+        }
+    )
+
+    raw = path.read_text(encoding="utf-8")
+    assert "Ava" not in raw
+    assert "peanut" not in raw
+    assert "2018-01-02" not in raw
+    assert "Ava" in credentials.secrets["conversation.pending_preview"]
+    loaded = ConfigStore(path, credential_store=credentials).load()
+    assert loaded["last_conversation"]["pending_confirmation"]["structured_preview"]["name"] == "Ava"
+
+
+def test_pending_confirmation_preview_is_dropped_without_vault(tmp_path):
+    path = tmp_path / "config.json"
+    store = ConfigStore(path, credential_store=None)
+    store.save(
+        {
+            "last_conversation": {
+                "conversation_id": "conversation-1",
+                "pending_confirmation": {
+                    "confirmation_id": "confirmation-1",
+                    "idempotency_key": "idempotency-1",
+                    "action": "update_household_member",
+                    "preview": "Ava cannot eat peanuts",
+                    "structured_preview": {"name": "Ava", "restrictions": ["peanuts"]},
+                },
+            }
+        }
+    )
+
+    raw = path.read_text(encoding="utf-8")
+    assert "Ava" not in raw
+    assert "peanut" not in raw
+    pending = ConfigStore(path, credential_store=None).load()["last_conversation"][
+        "pending_confirmation"
+    ]
+    assert "preview" not in pending
+    assert "structured_preview" not in pending
+
+
+def test_pending_confirmation_preview_never_uses_keyring_failure_fallback(tmp_path):
+    path = tmp_path / "config.json"
+    store = ConfigStore(path, credential_store=FakeCredentialStore(fail_save=True))
+    config = _authenticated_config()
+    config["last_conversation"] = {
+        "conversation_id": "conversation-1",
+        "pending_confirmation": {
+            "confirmation_id": "confirmation-1",
+            "idempotency_key": "idempotency-1",
+            "action": "add_household_member",
+            "preview": "Add Ava with a peanut allergy",
+            "structured_preview": {"name": "Ava", "restrictions": ["peanuts"]},
+        },
+    }
+
+    store.save(config)
+
+    raw = path.read_text(encoding="utf-8")
+    assert "hf_rt_secret" in raw
+    assert "Ava" not in raw
+    assert "peanut" not in raw
+    assert json.loads(raw)["credential_store"] == "file"
+
+
+def test_account_binding_fails_closed_for_unbound_legacy_household():
+    config = {
+        "household": {"members": [{"id": "child-1", "name": "Ava"}]},
+        "household_local_profiles": {"child-1": {"restrictions": ["peanuts"]}},
+        "device_id": "device-1",
+    }
+
+    assert bind_config_to_account(config, "user-a") is True
+    assert config == {"device_id": "device-1", "account_user_id": "user-a"}
+
+
+def test_account_binding_preserves_state_for_same_account():
+    config = {
+        "account_user_id": "user-a",
+        "household": {"members": [{"id": "child-1", "name": "Ava"}]},
+    }
+
+    assert bind_config_to_account(config, "user-a") is False
+    assert config["household"]["members"][0]["name"] == "Ava"
 
 
 def test_unavailable_keyring_falls_back_to_mode_0600_file(tmp_path):

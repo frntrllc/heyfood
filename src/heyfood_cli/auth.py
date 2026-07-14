@@ -22,6 +22,7 @@ from .config import (
     DEFAULT_LOCAL_AUTH_URL,
     discover_local_api_key,
     expires_in_to_iso,
+    bind_config_to_account,
     is_local_api_url,
 )
 from . import diagnostics
@@ -335,6 +336,10 @@ def _save_authenticated_config(
     session_bundle: dict[str, Any],
 ) -> dict[str, Any]:
     config = store.load()
+    user_id = str(session_bundle.get("user_id") or "").strip()
+    if not user_id:
+        raise LoginFlowError("CLI session exchange did not identify the authenticated account.")
+    bind_config_to_account(config, user_id)
     config.update(
         {
             "api_url": api_url,

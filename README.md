@@ -81,6 +81,8 @@ heyfood recipes saved
 heyfood onboard
 heyfood profile
 heyfood members list
+heyfood household list
+heyfood household use everyone
 heyfood daily today
 
 heyfood conversation list
@@ -126,6 +128,44 @@ numbered selector such as `heyfood menu 1` or `heyfood recipes save 2`.
 Saved location is also supplied to `ask`, `reply`, and `chat` when no explicit
 location is provided. Override it with `--lat/--lng` or `--near`, or suppress
 location for a request with `--no-location`.
+
+## Households and conversational scope
+
+heyfood can ask for you, one household member, or everyone. The local roster
+mirrors the mobile app's local-first household model. Adult dietary graphs are
+loaded from profile sync only for the active turn; child graphs remain local.
+
+```bash
+heyfood household list
+heyfood household label MEMBER_ID --name Sarah --relationship spouse
+
+heyfood household use Sarah
+heyfood ask "What can she order here?"
+
+heyfood ask --for everyone "What can we all eat?"
+heyfood chat --for Sarah
+```
+
+`household list` discovers synced member profile ids. Because names and
+relationships remain device-local by design, a member created in the mobile
+app may first appear by id; use `household label` once on this machine. Child
+members remain device-local and do not appear through sync. Inside
+chat, `/household` shows the roster and `/for Sarah`, `/for everyone`, or `/for
+me` switches scope and starts a fresh conversation. Numbered agent choices can
+be answered with `2` or, for multi-select questions, `1, 3`.
+
+On an account without profile-sync consent, `household list` still returns the
+local roster and marks synced-member reconciliation as skipped in JSON output.
+Other authentication and service errors remain failures rather than being
+silently hidden.
+
+As in the mobile app, child dietary profiles stay on this machine and never
+enter profile sync. Other members' dietary graphs are loaded from profile sync
+only for the active agent turn. If an adult profile write fails, heyfood keeps
+the confirmed change in a protected local outbox, includes its full safety
+context in later turns, and automatically retries it on a consented scoped
+agent turn. A later mutation merges with pending fields instead of replacing
+them, so subsequent safety checks do not silently lose an allergy write.
 
 ## Dietary graph onboarding
 
@@ -204,13 +244,22 @@ capture the generated script instead of letting the CLI edit a shell file.
 Configuration is stored at `~/.config/heyfood/config.json` by default, or under
 `$XDG_CONFIG_HOME/heyfood/config.json` when `XDG_CONFIG_HOME` is set. The client
 keeps the directory owner-only and the file mode at `0600`. Install the optional
-`keyring` extra to keep access tokens, refresh tokens, and local API keys in the
-operating-system credential vault; the JSON file then contains only non-secret
-state and a `credential_store: "keyring"` marker.
+`keyring` extra to keep access tokens, refresh tokens, local API keys, household
+identity, local-only child dietary profiles, and pending profile-sync repairs
+in the operating-system credential vault; the JSON file then contains only
+non-secret state and a `credential_store: "keyring"` marker.
 
-On headless systems without a usable keyring, credentials remain in the `0600`
-file. This protects them from other local users under normal permissions, but
-not from malware or another process running as the same OS account. Set
+Confirmation previews can contain names, birth dates, and dietary data. They
+are persisted only in the credential vault and are omitted from both the JSON
+file and `heyfood config show`; without a usable vault, heyfood does not persist
+the preview between processes. Local household state is bound to the
+authenticated account and is cleared fail-closed when a different account logs
+in (including legacy unbound state on the first upgraded login).
+
+On headless systems without a usable keyring, credentials and protected
+household state remain in the `0600` file. This protects them from other local
+users under normal permissions, but not from malware or another process running
+as the same OS account. Set
 `HEYFOOD_CREDENTIAL_STORE=file` to choose that fallback explicitly, or
 `HEYFOOD_CREDENTIAL_STORE=keyring` to fail instead of falling back when the
 vault is unavailable. Never copy either credential store between machines.

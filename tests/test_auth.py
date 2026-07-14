@@ -82,7 +82,11 @@ def test_device_login_persists_both_token_bundles(monkeypatch):
     )
     monkeypatch.setattr(
         "heyfood_cli.auth.exchange_cli_session",
-        lambda **_: {"access_token": "hf_at_test", "refresh_token": "hf_rt_test"},
+        lambda **_: {
+            "access_token": "hf_at_test",
+            "refresh_token": "hf_rt_test",
+            "user_id": "user-a",
+        },
     )
 
     result = perform_device_login(
@@ -101,7 +105,56 @@ def test_device_login_persists_both_token_bundles(monkeypatch):
     )
     assert result["oauth"]["access_token"] == "hf_ct_test"
     assert result["session"]["access_token"] == "hf_at_test"
+    assert result["account_user_id"] == "user-a"
     store.save.assert_called_once_with(result)
+
+
+def test_authenticated_account_change_clears_account_scoped_local_state():
+    from heyfood_cli.auth import _save_authenticated_config
+
+    store = MagicMock()
+    store.load.return_value = {
+        "account_user_id": "user-a",
+        "household": {"members": [{"id": "child-1", "name": "Emma"}]},
+        "household_local_profiles": {"child-1": {"restrictions": ["peanuts"]}},
+        "household_profile_outbox": {
+            "adult-1": {
+                "fields": {"restrictions": ["dairyFree"]},
+                "local_context": {"restrictions": ["dairyFree"]},
+            }
+        },
+        "last_conversation": {"conversation_id": "account-a-conversation"},
+        "location": {"label": "Account A home"},
+    }
+
+    saved = _save_authenticated_config(
+        store=store,
+        api_url="https://api.hello.food",
+        auth_url="https://auth.hello.food/authorize",
+        api_key="",
+        device_id="device-1",
+        client_id="client-1",
+        oauth_bundle={
+            "access_token": "channel-access",
+            "refresh_token": "channel-refresh",
+        },
+        session_bundle={
+            "access_token": "session-access",
+            "refresh_token": "session-refresh",
+            "user_id": "user-b",
+        },
+    )
+
+    assert saved["account_user_id"] == "user-b"
+    for key in (
+        "household",
+        "household_local_profiles",
+        "household_profile_outbox",
+        "last_conversation",
+        "location",
+    ):
+        assert key not in saved
+    store.save.assert_called_once_with(saved)
 
 
 def test_device_poll_handles_pending_then_success(monkeypatch):
