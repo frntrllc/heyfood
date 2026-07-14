@@ -6,7 +6,22 @@ authentication contracts are stabilized.
 
 ## Unreleased
 
-No unreleased changes.
+### Added
+
+- Local-first household roster management with member and whole-household
+  conversational scopes.
+- `household list/current/use/label`, agent `--for`, interactive `/for` and
+  `/household`, and numbered agent-choice handling.
+- iOS-compatible dietary/device context, household confirmation rendering, and
+  confirmed mutation application with profile-sync repair guidance.
+- Child dietary profiles remain in protected local storage and never enter
+  profile sync, matching the mobile privacy boundary.
+- Lossless adult profile-sync outbox merging and automatic replay on consented
+  scoped agent turns.
+- Account-bound local household state, vault-only confirmation previews, and
+  literal rendering of user-controlled household names.
+- Local-roster fallback for `household list` when profile-sync consent has not
+  been granted, with an explicit machine-readable reconciliation status.
 
 ## 0.1.0 - 2026-07-11
 

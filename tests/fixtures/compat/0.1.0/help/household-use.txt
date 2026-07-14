@@ -1,14 +1,12 @@
-Usage: heyfood log [OPTIONS] MEAL...
+Usage: heyfood household use [OPTIONS] SELECTOR
 
- Log a meal through the conversational agent.
+ Persist the default household scope for ask, reply, chat, and log.
 
 ╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ *    meal      MEAL...  Meal text to log. [required]                                                                 │
+│ *    selector      TEXT  Member name/id, me, or everyone. [required]                                                 │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ --type        TEXT  breakfast, lunch, dinner, or snack.                                                              │
-│ --for         TEXT  Household scope: member name/id, me, or everyone.                                                │
-│ --json              Print stable JSON.                                                                               │
-│ --raw               Deprecated alias for --json.                                                                     │
-│ --help              Show this message and exit.                                                                      │
+│ --json          Print stable JSON.                                                                                   │
+│ --raw           Deprecated alias for --json.                                                                         │
+│ --help          Show this message and exit.                                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -10,6 +10,7 @@ Usage: heyfood conversation resume [OPTIONS] QUERY...
 │ --lng                FLOAT  Longitude for location-aware requests.                                                   │
 │ --near               TEXT   Place name for this request.                                                             │
 │ --no-location               Do not send saved location context.                                                      │
+│ --for                TEXT   Household scope: member name/id, me, or everyone.                                        │
 │ --json                      Print stable JSON.                                                                       │
 │ --raw                       Deprecated alias for --json.                                                             │
 │ --help                      Show this message and exit.                                                              │

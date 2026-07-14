@@ -12,6 +12,7 @@ Usage: heyfood chat [OPTIONS] [INITIAL]...
 │ --lng                FLOAT  Longitude for this chat.                                                                 │
 │ --near               TEXT   Place name for this chat.                                                                │
 │ --no-location               Do not send saved location context.                                                      │
+│ --for                TEXT   Initial household scope: member name/id, me, or everyone.                                │
 │ --json                      Reserved; interactive chat has no JSON protocol.                                         │
 │ --raw                       Deprecated alias for --json.                                                             │
 │ --help                      Show this message and exit.                                                              │

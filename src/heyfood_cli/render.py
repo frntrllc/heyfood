@@ -62,6 +62,118 @@ def profile_members(console: Console, data: dict[str, Any]) -> None:
     console.print(table)
 
 
+def household(console: Console, data: dict[str, Any]) -> None:
+    members = data.get("members") if isinstance(data.get("members"), list) else []
+    active_scope = data.get("active_scope") if isinstance(data.get("active_scope"), dict) else {}
+    table = Table(title="hello.food household")
+    table.add_column("Active")
+    table.add_column("Name", style="bold")
+    table.add_column("Relationship")
+    table.add_column("Member id")
+    table.add_column("Profile")
+    for member in members:
+        if not isinstance(member, dict) or member.get("archived"):
+            continue
+        marker = "*" if member.get("active") else ""
+        table.add_row(
+            marker,
+            _cell(member.get("name")),
+            _cell(member.get("relationship")),
+            _cell(member.get("id")),
+            (
+                "local-only"
+                if member.get("relationship") == "child"
+                else ("synced" if member.get("profile_synced") else "local")
+            ),
+        )
+    if data.get("everyone_available"):
+        table.add_row(
+            "*" if active_scope.get("mode") == "household" else "",
+            "Everyone",
+            "whole household",
+            "everyone",
+            "per-member",
+        )
+    console.print(table)
+    imported = [
+        member
+        for member in members
+        if isinstance(member, dict)
+        and not member.get("is_owner")
+        and member.get("name") == member.get("id")
+    ]
+    if imported:
+        console.print(
+            "[dim]Name an imported profile with: "
+            "heyfood household label MEMBER_ID --name NAME --relationship RELATIONSHIP[/dim]"
+        )
+
+
+def household_scope(
+    console: Console,
+    scope: dict[str, Any],
+    *,
+    changed: bool = False,
+) -> None:
+    label = str(scope.get("label") or scope.get("id") or "Me")
+    prefix = "Now checking for" if changed else "Checking for"
+    console.print(Text(f"{prefix} {label}.", style="green"))
+    console.print("[dim]Override one turn with --for, or use /for inside chat.[/dim]")
+
+
+def agent_choices(console: Console, data: dict[str, Any]) -> None:
+    choices = data.get("choices") if isinstance(data.get("choices"), list) else []
+    if not choices:
+        return
+    rows = tuple(
+        (p.cell(index, "accent", bold=True), p.cell(choice, "bright"))
+        for index, choice in enumerate(choices, start=1)
+    )
+    blocks: list[p.Block] = [
+        p.text_line(
+            "Choose one or more" if data.get("allow_multiple") else "Choose one",
+            "info",
+            bold=True,
+        ),
+        p.Rows(rows=rows, columns=(p.Column(3, no_wrap=True), p.Column(24, ratio=1))),
+        p.text_line(
+            "In chat, enter a number. With ask/reply, send the choice text in the next turn.",
+            "muted",
+        ),
+    ]
+    p.render(console, blocks)
+
+
+def household_mutation_effect(console: Console, effect: dict[str, Any]) -> None:
+    if effect.get("reason") == "synced_profile_cannot_become_child":
+        name = effect.get("name") or effect.get("member_id") or "This member"
+        console.print(
+            Text(
+                f"{name} still has a server-synced profile and cannot be changed to child. "
+                "Delete its synced dietary data in hello.food first, or keep the member "
+                "as an adult.",
+                style="yellow",
+            )
+        )
+        return
+    if effect.get("applied"):
+        name = effect.get("name") or effect.get("member_id") or "member"
+        console.print(Text(f"CLI household updated for {name}.", style="green"))
+    sync = effect.get("profile_sync")
+    if isinstance(sync, dict) and not sync.get("ok"):
+        console.print("[yellow]The local roster was saved, but the dietary profile did not sync.[/yellow]")
+        if sync.get("repair"):
+            console.print(Text(str(sync["repair"]), style="dim"))
+    if effect.get("operation") == "add_member":
+        name = effect.get("name") or "NAME"
+        console.print(
+            Text(
+                f'Switch with: heyfood household use "{name}" or /for {name} in chat',
+                style="dim",
+            )
+        )
+
+
 def conversations(console: Console, data: dict[str, Any]) -> None:
     conversations = (
         data.get("conversations")
@@ -417,6 +529,30 @@ def action_confirmation_blocks(data: dict[str, Any]) -> list[p.Block]:
             ("For", structured_preview.get("member_name")),
             ("Logged", _format_datetime(structured_preview.get("logged_at"))),
         )
+    elif action == "add_household_member":
+        title = "Add household member"
+        headline = str(structured_preview.get("name") or "New member")
+        metadata = (
+            ("Relationship", _titleize(structured_preview.get("relationship"))),
+            ("Diet", _joined_values(structured_preview.get("preferences"))),
+            ("Restrictions", _joined_values(structured_preview.get("restrictions"))),
+            ("Avoids", _joined_values(structured_preview.get("avoid_ingredients"))),
+            ("Condition", _titleize(structured_preview.get("medical_condition_id"))),
+        )
+    elif action in {"update_household_member", "remove_household_member"}:
+        fields = structured_preview.get("fields")
+        if not isinstance(fields, dict):
+            fields = {}
+        title = (
+            "Remove household member"
+            if action == "remove_household_member"
+            else "Update household member"
+        )
+        headline = str(structured_preview.get("member_id") or preview)
+        metadata = tuple(
+            (str(key).replace("_", " ").title(), _joined_values(value))
+            for key, value in fields.items()
+        ) or (("Preview", preview),)
     else:
         title = "Confirmation required"
         headline = _format_action(action)
@@ -434,6 +570,16 @@ def action_confirmation_blocks(data: dict[str, Any]) -> list[p.Block]:
         p.Rows(rows=rows, columns=(p.Column(10, no_wrap=True), p.Column(20, ratio=1))),
         p.text_line("Reply with 'confirmed' to run it, or keep chatting to adjust.", "muted"),
     ]
+
+
+def _joined_values(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value) or "None"
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    return str(value)
 
 
 def meal_nutrition(console: Console, data: dict[str, Any]) -> None:

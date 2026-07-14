@@ -1,0 +1,10 @@
+Usage: heyfood household list [OPTIONS]
+
+ List household members and the active conversational scope.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --local-only          Do not discover newly synced profile ids from the service.                                     │
+│ --json                Print stable JSON.                                                                             │
+│ --raw                 Deprecated alias for --json.                                                                   │
+│ --help                Show this message and exit.                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

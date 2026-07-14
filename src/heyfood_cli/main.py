@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
+from rich.text import Text
 
 from . import __version__
 from .auth import local_urls, perform_device_login, perform_login
@@ -29,6 +30,7 @@ from .config import (
 from . import diagnostics
 from . import onboarding
 from . import banner
+from . import household
 from . import output
 from . import personality
 from . import render
@@ -59,6 +61,11 @@ config_app = typer.Typer(add_completion=False, help="Inspect local CLI configura
 app.add_typer(config_app, name="config")
 members_app = typer.Typer(add_completion=False, help="Discover synced household member ids.")
 app.add_typer(members_app, name="members")
+household_app = typer.Typer(
+    add_completion=False,
+    help="Manage the local household roster and active agent scope.",
+)
+app.add_typer(household_app, name="household")
 conversation_app = typer.Typer(
     add_completion=False,
     help="Inspect or manage the locally remembered agent conversation.",
@@ -484,6 +491,116 @@ def members_list(
     render.profile_members(console, data)
 
 
+@household_app.command("list")
+def household_list(
+    local_only: bool = typer.Option(
+        False,
+        "--local-only",
+        help="Do not discover newly synced profile ids from the service.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print stable JSON."),
+    raw: bool = typer.Option(False, "--raw", help="Deprecated alias for --json."),
+) -> None:
+    """List household members and the active conversational scope."""
+    json_mode = _json_mode(json_output, raw)
+    client = HelloFoodClient(create_device=not local_only)
+    reconciliation: dict[str, str] | None = None
+    try:
+        state = client.household_state() if local_only else client.refresh_household_state()
+    except LoginRequired as exc:
+        _raise_command_error(exc, json_mode=json_mode)
+    except HelloFoodError as exc:
+        if not _is_profile_sync_consent_required(exc):
+            _raise_command_error(exc, json_mode=json_mode)
+        state = client.household_state()
+        reconciliation = {
+            "status": "skipped",
+            "reason": "profile_sync_consent_required",
+            "source": "local_roster",
+        }
+    document = household.public_document(state)
+    if reconciliation is not None:
+        document["reconciliation"] = reconciliation
+    if _write_result(document, json_mode=json_mode):
+        return
+    render.household(console, document)
+    if reconciliation is not None:
+        console.print(
+            "[dim]Showing the local roster. Synced member discovery is available "
+            "after profile sync consent is granted through `heyfood onboard`.[/dim]"
+        )
+
+
+@household_app.command("current")
+def household_current(
+    json_output: bool = typer.Option(False, "--json", help="Print stable JSON."),
+    raw: bool = typer.Option(False, "--raw", help="Deprecated alias for --json."),
+) -> None:
+    """Show the locally active conversational household scope."""
+    json_mode = _json_mode(json_output, raw)
+    state = HelloFoodClient(create_device=False).household_state()
+    document = household.public_document(state)
+    current = {"ok": True, "active_scope": document["active_scope"]}
+    if _write_result(current, json_mode=json_mode):
+        return
+    render.household_scope(console, current["active_scope"])
+
+
+@household_app.command("use")
+def household_use(
+    selector: str = typer.Argument(..., help="Member name/id, me, or everyone."),
+    json_output: bool = typer.Option(False, "--json", help="Print stable JSON."),
+    raw: bool = typer.Option(False, "--raw", help="Deprecated alias for --json."),
+) -> None:
+    """Persist the default household scope for ask, reply, chat, and log."""
+    json_mode = _json_mode(json_output, raw)
+    client = HelloFoodClient()
+    try:
+        try:
+            state = client.set_household_scope(selector)
+        except household.HouseholdError:
+            client.refresh_household_state()
+            state = client.set_household_scope(selector)
+    except household.HouseholdError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    except (LoginRequired, HelloFoodError) as exc:
+        _raise_command_error(exc, json_mode=json_mode)
+    document = household.public_document(state)
+    selected = {"ok": True, "active_scope": document["active_scope"]}
+    if _write_result(selected, json_mode=json_mode):
+        return
+    render.household_scope(console, selected["active_scope"], changed=True)
+
+
+@household_app.command("label")
+def household_label(
+    selector: str = typer.Argument(..., help="Existing member name or id."),
+    name: str = typer.Option(..., "--name", help="Local display name."),
+    relationship: Optional[str] = typer.Option(
+        None,
+        "--relationship",
+        help="spouse, partner, parent, child, sibling, grandparent, friend, or other.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print stable JSON."),
+    raw: bool = typer.Option(False, "--raw", help="Deprecated alias for --json."),
+) -> None:
+    """Give an imported profile id a local name and relationship."""
+    json_mode = _json_mode(json_output, raw)
+    client = HelloFoodClient(create_device=False)
+    try:
+        state = client.label_household_member(
+            selector,
+            name=name,
+            relationship=relationship,
+        )
+    except household.HouseholdError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    document = household.public_document(state)
+    if _write_result(document, json_mode=json_mode):
+        return
+    render.household(console, document)
+
+
 @app.command()
 def profile(
     member_id: str = typer.Option("_self", "--member-id", help="Synced profile member id."),
@@ -587,6 +704,15 @@ def onboard(
         )
 
     store = ConfigStore()
+    configured = store.load()
+    configured_household = household.normalize_state(
+        configured.get("household"),
+        owner_name=configured.get("first_name"),
+    )
+    target_member = household.find_member(configured_household, member_id)
+    is_child_profile = bool(
+        target_member is not None and target_member.get("relationship") == "child"
+    )
     text_profile = _validated(
         lambda: validation.optional_text(
             " ".join(profile_text or []),
@@ -719,16 +845,20 @@ def onboard(
 
     if not dry_run:
         client = HelloFoodClient()
-        _ensure_profile_sync_consent(client, auto_yes=yes, json_mode=json_mode)
-        if not replace:
-            try:
-                existing = client.download_profile(member_id=member_id)
-                existing_profile = existing.get("profile_data") if isinstance(existing, dict) else None
-                version = existing.get("version") if isinstance(existing, dict) else None
-                expected_version = int(version) if isinstance(version, int) else None
-            except HelloFoodError as exc:
-                if not str(exc).startswith("404:"):
-                    _raise_command_error(exc, json_mode=json_mode)
+        if is_child_profile:
+            if not replace:
+                existing_profile = client.local_household_profiles().get(member_id)
+        else:
+            _ensure_profile_sync_consent(client, auto_yes=yes, json_mode=json_mode)
+            if not replace:
+                try:
+                    existing = client.download_profile(member_id=member_id)
+                    existing_profile = existing.get("profile_data") if isinstance(existing, dict) else None
+                    version = existing.get("version") if isinstance(existing, dict) else None
+                    expected_version = int(version) if isinstance(version, int) else None
+                except HelloFoodError as exc:
+                    if not str(exc).startswith("404:"):
+                        _raise_command_error(exc, json_mode=json_mode)
 
     try:
         profile_data = onboarding.build_profile_data(
@@ -770,18 +900,32 @@ def onboard(
         if not Confirm.ask("Save this dietary graph?", default=True):
             raise typer.Exit()
 
-    try:
-        uploaded = client.upload_profile(
-            profile_data,
-            member_id=member_id,
-            expected_version=expected_version,
-        )
-    except (LoginRequired, HelloFoodError) as exc:
-        _raise_command_error(exc, json_mode=json_mode)
+    if is_child_profile:
+        try:
+            uploaded = client.save_local_child_profile(member_id, profile_data)
+        except household.HouseholdError as exc:
+            _fail(str(exc), kind="invalid_household_member", json_mode=json_mode, exit_code=2)
+    else:
+        try:
+            uploaded = client.upload_profile(
+                profile_data,
+                member_id=member_id,
+                expected_version=expected_version,
+            )
+        except (LoginRequired, HelloFoodError) as exc:
+            _raise_command_error(exc, json_mode=json_mode)
+
+        if member_id != household.OWNER_ID:
+            client.mark_household_profile_synced(member_id)
 
     if _write_result(uploaded, json_mode=json_mode):
         return
-    console.print("[green]Dietary graph saved. Your CLI agent is now profile-aware.[/green]")
+    if is_child_profile:
+        console.print(
+            "[green]Child dietary graph saved locally. It was not sent to profile sync.[/green]"
+        )
+    else:
+        console.print("[green]Dietary graph saved. Your CLI agent is now profile-aware.[/green]")
     if yes:
         quip = personality.onboarding_quip(profile_data)
         if quip:
@@ -804,6 +948,11 @@ def ask(
     no_location: bool = typer.Option(False, "--no-location", help="Do not send saved location context."),
     conversation_id: Optional[str] = typer.Option(None, "--conversation-id", help="Continue an existing conversation."),
     continue_last: bool = typer.Option(False, "--continue", "-c", help="Continue the last CLI conversation."),
+    checking_for: Optional[str] = typer.Option(
+        None,
+        "--for",
+        help="One-turn household scope: member name/id, me, or everyone.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print stable JSON."),
     raw: bool = typer.Option(False, "--raw", help="Deprecated alias for --json."),
 ) -> None:
@@ -817,6 +966,7 @@ def ask(
         no_location=no_location,
         conversation_id=conversation_id,
         continue_last=continue_last,
+        checking_for=checking_for,
         json_output=json_output,
         raw=raw,
     )
@@ -832,15 +982,17 @@ def _ask_agent(
     use_saved_location: bool = True,
     conversation_id: Optional[str] = None,
     continue_last: bool = False,
+    checking_for: Optional[str] = None,
     json_output: bool = False,
     raw: bool = False,
     show_continue_hint: bool = True,
-) -> None:
+    client: Optional[HelloFoodClient] = None,
+) -> dict[str, Any]:
     json_mode = _json_mode(json_output, raw)
     text = _validated(
         lambda: validation.required_text(text, label="Query", max_length=500)
     )
-    client = HelloFoodClient()
+    client = client or HelloFoodClient()
     lat, lng = _resolve_agent_location(
         client,
         lat=lat,
@@ -866,12 +1018,58 @@ def _ask_agent(
     else:
         payload["query"] = text
 
+    scope_context: dict[str, Any] = {}
+    context_builder = getattr(client, "agent_household_context", None)
+    if callable(context_builder):
+        try:
+            scope_context = context_builder(checking_for)
+        except household.HouseholdError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        except (LoginRequired, HelloFoodError) as exc:
+            _raise_command_error(exc, json_mode=json_mode)
+        for key in ("dietary_context", "device_context", "meal_context"):
+            value = scope_context.get(key)
+            if isinstance(value, dict):
+                payload[key] = value
+
+    request_scope = scope_context.get("scope")
+    request_scope_id = (
+        request_scope.get("id") if isinstance(request_scope, dict) else None
+    )
+    if "confirm" in payload:
+        remembered_scope_reader = getattr(
+            client,
+            "last_conversation_household_scope",
+            None,
+        )
+        remembered_scope_id = (
+            remembered_scope_reader()
+            if callable(remembered_scope_reader)
+            else None
+        )
+        if (
+            remembered_scope_id
+            and request_scope_id
+            and remembered_scope_id != request_scope_id
+        ):
+            raise typer.BadParameter(
+                "The household scope changed after this action was proposed. "
+                "Restate the request for the current scope instead of confirming it."
+            )
+
+    local_household_effect = None
+    if "confirm" in payload:
+        apply_pending = getattr(client, "apply_pending_household_confirmation", None)
+        if callable(apply_pending):
+            local_household_effect = apply_pending()
+
     if lat is not None:
         payload["lat"] = lat
     if lng is not None:
         payload["lng"] = lng
 
     final_result = None
+    choices_result = None
     partial_chunks: list[str] = []
     status = None if json_mode else stderr_console.status("[dim]thinking…[/dim]")
     if status is not None:
@@ -889,6 +1087,13 @@ def _ask_agent(
                 chunk = data.get("text") or data.get("delta") or ""
                 if chunk:
                     partial_chunks.append(str(chunk))
+            elif event == "choices":
+                choices = data.get("choices")
+                if isinstance(choices, list) and choices:
+                    choices_result = {
+                        "choices": [str(choice) for choice in choices],
+                        "allow_multiple": bool(data.get("allow_multiple")),
+                    }
             elif event == "result":
                 final_result = data
             elif event == "error":
@@ -904,23 +1109,44 @@ def _ask_agent(
             final_result.get("message") or final_result.get("text") or final_result.get("response")
         ):
             final_result["text"] = "".join(partial_chunks)
+        if choices_result:
+            final_result["choices"] = choices_result
+        effects: dict[str, Any] = {}
+        if isinstance(local_household_effect, dict):
+            effects["household_local_first"] = local_household_effect
+        apply_result = getattr(client, "apply_household_result", None)
+        if callable(apply_result):
+            result_effect = apply_result(final_result)
+            if isinstance(result_effect, dict):
+                effects["household_result"] = result_effect
+        if effects:
+            final_result["client_effects"] = effects
         client.remember_conversation(final_result)
+        remember_scope = getattr(client, "remember_conversation_household_scope", None)
+        if callable(remember_scope):
+            remember_scope(str(request_scope_id) if request_scope_id else None)
         if json_mode:
             output.write_json(final_result)
         else:
             render.agent_result(console, final_result)
+            if choices_result:
+                render.agent_choices(console, choices_result)
+            visible_effect = effects.get("household_result") or effects.get("household_local_first")
+            if isinstance(visible_effect, dict):
+                render.household_mutation_effect(console, visible_effect)
         if show_continue_hint and not json_mode:
             conversation_id = final_result.get("conversation_id")
             if conversation_id:
                 stderr_console.print(
                     "[dim]Continue with: heyfood reply \"...\" or heyfood chat[/dim]"
                 )
-        return
+        return final_result
     _fail(
         "The hello.food agent returned no final result.",
         kind="empty_agent_result",
         json_mode=json_mode,
     )
+    return {}  # pragma: no cover - _fail always raises
 
 
 def _local_conversation_document(client: HelloFoodClient) -> dict[str, Any]:
@@ -966,6 +1192,11 @@ def conversation_resume(
     lng: Optional[float] = typer.Option(None, "--lng", help="Longitude for location-aware requests."),
     near: Optional[str] = typer.Option(None, "--near", help="Place name for this request."),
     no_location: bool = typer.Option(False, "--no-location", help="Do not send saved location context."),
+    checking_for: Optional[str] = typer.Option(
+        None,
+        "--for",
+        help="Household scope: member name/id, me, or everyone.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print stable JSON."),
     raw: bool = typer.Option(False, "--raw", help="Deprecated alias for --json."),
 ) -> None:
@@ -977,6 +1208,7 @@ def conversation_resume(
         near=near,
         no_location=no_location,
         continue_last=True,
+        checking_for=checking_for,
         json_output=json_output,
         raw=raw,
     )
@@ -1051,6 +1283,24 @@ def _is_confirmation_reply(text: str) -> bool:
     }
 
 
+def _resolve_chat_choice(text: str, choice_set: dict[str, Any]) -> str:
+    choices = choice_set.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return text
+    raw = text.strip()
+    tokens = [part.strip() for part in raw.split(",")]
+    if not tokens or not all(token.isdigit() for token in tokens):
+        return text
+    indexes = [int(token) for token in tokens]
+    if not choice_set.get("allow_multiple") and len(indexes) > 1:
+        raise household.HouseholdError("Choose one number for this question.")
+    if any(index < 1 or index > len(choices) for index in indexes):
+        raise household.HouseholdError(
+            f"Choose a number from 1 to {len(choices)}."
+        )
+    return ", ".join(str(choices[index - 1]) for index in indexes)
+
+
 @app.command()
 def reply(
     query: list[str] = typer.Argument(..., help="Follow-up text for the last conversation."),
@@ -1058,6 +1308,11 @@ def reply(
     lng: Optional[float] = typer.Option(None, "--lng", help="Longitude for this follow-up."),
     near: Optional[str] = typer.Option(None, "--near", help="Place name for this follow-up."),
     no_location: bool = typer.Option(False, "--no-location", help="Do not send saved location context."),
+    checking_for: Optional[str] = typer.Option(
+        None,
+        "--for",
+        help="Household scope: member name/id, me, or everyone.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print stable JSON."),
     raw: bool = typer.Option(False, "--raw", help="Deprecated alias for --json."),
 ) -> None:
@@ -1069,6 +1324,7 @@ def reply(
         near=near,
         no_location=no_location,
         continue_last=True,
+        checking_for=checking_for,
         json_output=json_output,
         raw=raw,
     )
@@ -1083,6 +1339,11 @@ def chat(
     lng: Optional[float] = typer.Option(None, "--lng", help="Longitude for this chat."),
     near: Optional[str] = typer.Option(None, "--near", help="Place name for this chat."),
     no_location: bool = typer.Option(False, "--no-location", help="Do not send saved location context."),
+    checking_for: Optional[str] = typer.Option(
+        None,
+        "--for",
+        help="Initial household scope: member name/id, me, or everyone.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Reserved; interactive chat has no JSON protocol."),
     raw: bool = typer.Option(False, "--raw", help="Deprecated alias for --json."),
 ) -> None:
@@ -1100,14 +1361,29 @@ def chat(
     if new:
         client.clear_last_conversation()
 
-    console.print("[bold green]hello.food chat[/bold green] [dim](type /exit to leave, /new to reset)[/dim]")
+    try:
+        initial_scope = client.agent_household_context(checking_for).get("scope") or {}
+    except household.HouseholdError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    except (LoginRequired, HelloFoodError) as exc:
+        _raise_command_error(exc, json_mode=False)
+    chat_scope = str(initial_scope.get("id") or checking_for or "") or None
+    console.print(
+        "[bold green]hello.food chat[/bold green] "
+        "[dim](type /exit, /new, /household, or /for NAME)[/dim]"
+    )
+    if initial_scope:
+        render.household_scope(console, initial_scope)
 
     first_message = " ".join(initial).strip() if initial else ""
+    active_choices: Optional[dict[str, Any]] = None
     while True:
         if first_message:
             text = first_message
             first_message = ""
-            console.print(f"[bold]you[/bold] {text}")
+            line = Text("you", style="bold")
+            line.append(f" {text}")
+            console.print(line)
         else:
             text = Prompt.ask("[bold]you[/bold]").strip()
 
@@ -1120,8 +1396,43 @@ def chat(
             conversation_id = None
             console.print("[dim]Started a fresh conversation.[/dim]")
             continue
+        if text == "/household":
+            render.household(console, household.public_document(client.household_state()))
+            continue
+        if text == "/for":
+            render.household_scope(
+                console,
+                household.public_document(client.household_state())["active_scope"],
+            )
+            continue
+        if text.startswith("/for "):
+            selector = text.removeprefix("/for ").strip()
+            try:
+                state = client.set_household_scope(selector)
+            except household.HouseholdError as exc:
+                stderr_console.print(Text(str(exc), style="red"))
+                continue
+            chat_scope = str(state["active_scope"])
+            client.clear_last_conversation()
+            conversation_id = None
+            active_choices = None
+            render.household_scope(
+                console,
+                household.public_document(state)["active_scope"],
+                changed=True,
+            )
+            console.print("[dim]Started a fresh conversation for the new scope.[/dim]")
+            continue
 
-        _ask_agent(
+        if active_choices:
+            try:
+                text = _resolve_chat_choice(text, active_choices)
+            except household.HouseholdError as exc:
+                stderr_console.print(Text(str(exc), style="red"))
+                continue
+            active_choices = None
+
+        result = _ask_agent(
             text,
             lat=lat,
             lng=lng,
@@ -1129,15 +1440,24 @@ def chat(
             no_location=no_location,
             conversation_id=conversation_id,
             continue_last=False,
+            checking_for=chat_scope,
             show_continue_hint=False,
+            client=client,
         )
-        conversation_id = HelloFoodClient().last_conversation_id()
+        conversation_id = client.last_conversation_id()
+        choices = result.get("choices")
+        active_choices = choices if isinstance(choices, dict) else None
 
 
 @app.command()
 def log(
     meal: list[str] = typer.Argument(..., help="Meal text to log."),
     meal_type: Optional[str] = typer.Option(None, "--type", help="breakfast, lunch, dinner, or snack."),
+    checking_for: Optional[str] = typer.Option(
+        None,
+        "--for",
+        help="Household scope: member name/id, me, or everyone.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print stable JSON."),
     raw: bool = typer.Option(False, "--raw", help="Deprecated alias for --json."),
 ) -> None:
@@ -1156,6 +1476,7 @@ def log(
     _ask_agent(
         prompt,
         use_saved_location=False,
+        checking_for=checking_for,
         json_output=json_output,
         raw=raw,
     )
@@ -1921,6 +2242,11 @@ def _error_kind(exc: HelloFoodError) -> str:
     if isinstance(exc, ChannelToolUnavailable):
         return "channel_tool_unavailable"
     return "api_error"
+
+
+def _is_profile_sync_consent_required(exc: HelloFoodError) -> bool:
+    message = str(exc).strip().casefold()
+    return message.startswith("403:") and "sync consent" in message and "required" in message
 
 
 def _raise_command_error(exc: HelloFoodError, *, json_mode: bool = False) -> None:

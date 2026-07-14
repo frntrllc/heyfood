@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from copy import deepcopy
 from typing import Any, Iterator
 from uuid import uuid4
 
@@ -20,6 +21,7 @@ from .config import (
     utcnow,
 )
 from . import diagnostics
+from . import household
 
 
 class HelloFoodError(RuntimeError):
@@ -56,6 +58,7 @@ class HelloFoodClient:
         if create_device:
             self.config = self.store.load()
         self._ensure_local_api_key(persist=create_device)
+        self._profile_consent_cache: bool | None = None
 
     def _save(self) -> None:
         self.store.save(self.config)
@@ -326,6 +329,288 @@ class HelloFoodClient:
     def list_profile_members(self) -> dict[str, Any]:
         return self._request("GET", "/v1/profile/sync/members", auth="session")
 
+    def household_state(self) -> dict[str, Any]:
+        return household.normalize_state(
+            self.config.get("household"),
+            owner_name=self.config.get("first_name"),
+        )
+
+    def remember_household_state(self, state: dict[str, Any]) -> None:
+        self.config["household"] = household.normalize_state(
+            state,
+            owner_name=self.config.get("first_name"),
+        )
+        self._save()
+
+    def refresh_household_state(self) -> dict[str, Any]:
+        profiles = self.list_profile_members()
+        profile_rows = profiles.get("profiles")
+        member_ids = [
+            str(item.get("member_id"))
+            for item in profile_rows or []
+            if isinstance(item, dict) and item.get("member_id")
+        ]
+        state = household.reconcile_profile_members(
+            self.household_state(),
+            member_ids,
+            owner_name=self.config.get("first_name"),
+        )
+        pending_outbox = self.household_profile_outbox()
+        for member in state["members"]:
+            if (
+                member["id"] in pending_outbox
+                and member.get("relationship") != "child"
+            ):
+                member["profile_synced"] = False
+        self.remember_household_state(state)
+        return state
+
+    def set_household_scope(self, selector: str) -> dict[str, Any]:
+        state = household.set_active_scope(self.household_state(), selector)
+        self.remember_household_state(state)
+        return state
+
+    def label_household_member(
+        self,
+        selector: str,
+        *,
+        name: str,
+        relationship: str | None = None,
+    ) -> dict[str, Any]:
+        state = household.label_member(
+            self.household_state(),
+            selector,
+            name=name,
+            relationship=relationship,
+        )
+        self.remember_household_state(state)
+        return state
+
+    def local_household_profiles(self) -> dict[str, dict[str, Any]]:
+        value = self.config.get("household_local_profiles")
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(member_id): deepcopy(profile)
+            for member_id, profile in value.items()
+            if isinstance(member_id, str) and isinstance(profile, dict)
+        }
+
+    def _remember_local_household_profile(
+        self,
+        member_id: str,
+        profile_data: dict[str, Any] | None,
+    ) -> None:
+        profiles = self.local_household_profiles()
+        if profile_data is None:
+            profiles.pop(member_id, None)
+        else:
+            profiles[member_id] = deepcopy(profile_data)
+        if profiles:
+            self.config["household_local_profiles"] = profiles
+        else:
+            self.config.pop("household_local_profiles", None)
+        self._save()
+
+    def save_local_child_profile(
+        self,
+        member_id: str,
+        profile_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        state = self.household_state()
+        member = household.find_member(state, member_id)
+        if member is None:
+            raise household.HouseholdError(f"Unknown household member '{member_id}'.")
+        if member.get("relationship") != "child":
+            raise household.HouseholdError(
+                "Only child profiles use local-only dietary storage."
+            )
+        self._remember_local_household_profile(member_id, profile_data)
+        member["profile_synced"] = False
+        self.remember_household_state(state)
+        self._remember_household_profile_outbox(member_id, None)
+        return {
+            "member_id": member_id,
+            "profile_data": deepcopy(profile_data),
+            "storage": "local_only",
+            "synced": False,
+            "updated_at": utcnow().isoformat(),
+        }
+
+    def mark_household_profile_synced(self, member_id: str) -> None:
+        state = self.household_state()
+        member = household.find_member(state, member_id)
+        if member is None or member.get("relationship") == "child":
+            return
+        member["profile_synced"] = True
+        self.remember_household_state(state)
+        self._remember_household_profile_outbox(member_id, None)
+
+    def household_profile_outbox(self) -> dict[str, dict[str, Any]]:
+        value = self.config.get("household_profile_outbox")
+        if not isinstance(value, dict):
+            return {}
+        entries: dict[str, dict[str, Any]] = {}
+        for member_id, entry in value.items():
+            if not isinstance(member_id, str) or not isinstance(entry, dict):
+                continue
+            fields = entry.get("fields")
+            local_context = entry.get("local_context")
+            if not isinstance(fields, dict) or not isinstance(local_context, dict):
+                continue
+            entries[member_id] = {
+                "version": 1,
+                "fields": deepcopy(fields),
+                "local_context": deepcopy(local_context),
+                "updated_at": str(entry.get("updated_at") or utcnow().isoformat()),
+            }
+        return entries
+
+    def _remember_household_profile_outbox(
+        self,
+        member_id: str,
+        entry: dict[str, Any] | None,
+    ) -> None:
+        outbox = self.household_profile_outbox()
+        if entry is None:
+            outbox.pop(member_id, None)
+        else:
+            outbox[member_id] = {
+                "version": 1,
+                "fields": deepcopy(entry.get("fields") or {}),
+                "local_context": deepcopy(entry.get("local_context") or {}),
+                "updated_at": utcnow().isoformat(),
+            }
+        if outbox:
+            self.config["household_profile_outbox"] = outbox
+        else:
+            self.config.pop("household_profile_outbox", None)
+        self._save()
+
+    def _retry_household_profile_outbox(
+        self,
+        member: dict[str, Any],
+        entry: dict[str, Any],
+    ) -> dict[str, Any]:
+        member_id = str(member["id"])
+        fields = entry.get("fields") if isinstance(entry.get("fields"), dict) else {}
+        fallback = (
+            deepcopy(entry.get("local_context"))
+            if isinstance(entry.get("local_context"), dict)
+            else {}
+        )
+        try:
+            downloaded = self.download_profile(member_id=member_id)
+        except HelloFoodError as exc:
+            if not str(exc).startswith("404:"):
+                return fallback
+            base: dict[str, Any] = {}
+            expected_version = None
+        else:
+            downloaded_profile = downloaded.get("profile_data")
+            base = downloaded_profile if isinstance(downloaded_profile, dict) else {}
+            version = downloaded.get("version")
+            expected_version = int(version) if isinstance(version, int) else None
+        desired = household.apply_profile_fields(base, fields)
+        try:
+            self.upload_profile(
+                desired,
+                member_id=member_id,
+                expected_version=expected_version,
+            )
+        except (HelloFoodError, LoginRequired):
+            return fallback or desired
+        self.mark_household_profile_synced(member_id)
+        return desired
+
+    def _profile_for_agent(
+        self,
+        member: dict[str, Any],
+        *,
+        has_consent: bool,
+    ) -> dict[str, Any]:
+        member_id = str(member["id"])
+        local_profile = self.local_household_profiles().get(member_id, {})
+        if member.get("relationship") == "child":
+            return local_profile
+        outbox_entry = self.household_profile_outbox().get(member_id)
+        if outbox_entry is not None:
+            if has_consent:
+                return self._retry_household_profile_outbox(member, outbox_entry)
+            local_context = outbox_entry.get("local_context")
+            return deepcopy(local_context) if isinstance(local_context, dict) else {}
+        if not has_consent:
+            return {}
+        try:
+            downloaded = self.download_profile(member_id=member_id)
+        except HelloFoodError as exc:
+            return {}
+        profile_data = downloaded.get("profile_data")
+        return profile_data if isinstance(profile_data, dict) else {}
+
+    def agent_household_context(
+        self,
+        selector: str | None = None,
+    ) -> dict[str, Any]:
+        """Build the iOS-compatible household context for one agent turn.
+
+        Roster metadata stays local. Adult dietary graphs are read from the
+        server only for the selected scope. Child graphs use protected local
+        storage and never enter profile sync; a failed adult sync write uses
+        the same store as an outbox until repaired.
+        """
+        state = self.household_state()
+        scope_id = household.resolve_scope(state, selector)
+        consent = self.profile_consent_status()
+        has_consent = bool(consent.get("has_consent"))
+        self._profile_consent_cache = has_consent
+        context: dict[str, Any] = {}
+        if has_consent:
+            context["device_context"] = {
+                "household": household.roster_wire_context(state),
+            }
+        active = household.active_members(state)
+        owner = household.find_member(state, household.OWNER_ID) or active[0]
+        if scope_id == household.EVERYONE_ID:
+            profiles = {
+                str(member["id"]): self._profile_for_agent(
+                    member,
+                    has_consent=has_consent,
+                )
+                for member in active
+            }
+            context["dietary_context"] = household.household_dietary_context(
+                state,
+                profiles,
+            )
+            context["meal_context"] = {
+                "is_cook_mode": True,
+            }
+        else:
+            member = household.find_member(state, scope_id)
+            if member is None:
+                raise household.HouseholdError(f"Unknown household member '{scope_id}'.")
+            profile_data = self._profile_for_agent(
+                member,
+                has_consent=has_consent,
+            )
+            context["dietary_context"] = household.member_dietary_context(
+                member,
+                profile_data,
+                owner_name=str(owner["name"]),
+            )
+            context["meal_context"] = {
+                "active_member_id": scope_id,
+                "active_member_name": member["name"],
+                "is_cook_mode": False,
+            }
+        context["scope"] = {
+            "id": scope_id,
+            "label": household.scope_label(state, scope_id),
+            "mode": "household" if scope_id == household.EVERYONE_ID else "member",
+        }
+        return context
+
     def last_conversation(self) -> dict[str, Any]:
         value = self.config.get("last_conversation")
         return value if isinstance(value, dict) else {}
@@ -334,6 +619,20 @@ class HelloFoodClient:
         conversation = self.last_conversation()
         value = conversation.get("conversation_id")
         return value if isinstance(value, str) and value else None
+
+    def last_conversation_household_scope(self) -> str | None:
+        value = self.last_conversation().get("household_scope_id")
+        return value if isinstance(value, str) and value else None
+
+    def remember_conversation_household_scope(self, scope_id: str | None) -> None:
+        if not scope_id:
+            return
+        conversation = self.last_conversation()
+        if not conversation.get("conversation_id"):
+            return
+        conversation["household_scope_id"] = scope_id
+        self.config["last_conversation"] = conversation
+        self._save()
 
     def pending_confirmation(self) -> dict[str, str] | None:
         conversation = self.last_conversation()
@@ -349,6 +648,11 @@ class HelloFoodClient:
             }
         return None
 
+    def pending_confirmation_details(self) -> dict[str, Any] | None:
+        conversation = self.last_conversation()
+        pending = conversation.get("pending_confirmation")
+        return deepcopy(pending) if isinstance(pending, dict) else None
+
     def remember_conversation(self, result: dict[str, Any]) -> None:
         conversation_id = result.get("conversation_id")
         if not isinstance(conversation_id, str) or not conversation_id:
@@ -363,6 +667,9 @@ class HelloFoodClient:
                 pending_confirmation = {
                     "confirmation_id": confirmation_id,
                     "idempotency_key": idempotency_key,
+                    "action": structured.get("action"),
+                    "preview": structured.get("preview"),
+                    "structured_preview": deepcopy(structured.get("structured_preview")),
                 }
 
         self.config["last_conversation"] = {
@@ -373,6 +680,222 @@ class HelloFoodClient:
         if isinstance(structured, dict) and structured.get("type") == "recipe_search":
             self.remember_recipe_search(structured, save=False)
         self._save()
+
+    def apply_pending_household_confirmation(self) -> dict[str, Any] | None:
+        pending = self.pending_confirmation_details()
+        if not pending or pending.get("action") not in {
+            "add_household_member",
+            "update_household_member",
+            "remove_household_member",
+        }:
+            return None
+        mutation = pending.get("structured_preview")
+        if not isinstance(mutation, dict):
+            return {"applied": False, "reason": "missing_structured_preview"}
+        return self._apply_and_sync_household_mutation(mutation)
+
+    def apply_household_result(self, result: dict[str, Any]) -> dict[str, Any] | None:
+        structured = result.get("structured")
+        if not isinstance(structured, dict):
+            return None
+        mutation = structured.get("household_mutation")
+        if not isinstance(mutation, dict):
+            return None
+        pending = self.pending_confirmation_details()
+        pending_preview = (
+            pending.get("structured_preview")
+            if isinstance(pending, dict)
+            else None
+        )
+        local_first_matches = (
+            isinstance(pending_preview, dict)
+            and pending_preview.get("operation") == mutation.get("operation")
+        )
+        return self._apply_and_sync_household_mutation(
+            mutation,
+            sync_profile=not local_first_matches,
+        )
+
+    def _apply_and_sync_household_mutation(
+        self,
+        mutation: dict[str, Any],
+        *,
+        sync_profile: bool = True,
+    ) -> dict[str, Any]:
+        previous_state = self.household_state()
+        previous_member_id = str(mutation.get("member_id") or "")
+        previous_member = household.find_member(previous_state, previous_member_id)
+        mutation_fields_container = mutation.get("fields")
+        requested_relationship = (
+            mutation_fields_container.get("relationship")
+            if isinstance(mutation_fields_container, dict)
+            and "relationship" in mutation_fields_container
+            else mutation.get("relationship")
+        )
+        if (
+            previous_member is not None
+            and previous_member.get("relationship") != "child"
+            and requested_relationship == "child"
+            and previous_member.get("profile_synced")
+        ):
+            return {
+                "applied": False,
+                "operation": mutation.get("operation"),
+                "reason": "synced_profile_cannot_become_child",
+                "member_id": previous_member_id,
+                "name": previous_member.get("name"),
+            }
+        state, effect = household.apply_mutation(previous_state, mutation)
+        self.remember_household_state(state)
+        if effect.get("reason") == "already_applied":
+            return effect
+        matching_existing = effect.get("reason") == "matching_member_exists"
+        if not effect.get("applied") and not matching_existing:
+            return effect
+
+        operation = mutation.get("operation")
+        member_id = effect.get("member_id")
+        if operation == "remove_member" and member_id:
+            self._remember_local_household_profile(str(member_id), None)
+            self._remember_household_profile_outbox(str(member_id), None)
+            return effect
+        if operation not in {"add_member", "update_member"} or not member_id:
+            return effect
+        updated_member = household.find_member(state, str(member_id))
+        if updated_member is None:
+            return effect
+        if matching_existing:
+            if updated_member.get("relationship") == "child":
+                if str(member_id) in self.local_household_profiles():
+                    return effect
+            elif (
+                updated_member.get("profile_synced")
+                and str(member_id) not in self.household_profile_outbox()
+            ):
+                return effect
+
+        if updated_member.get("relationship") == "child":
+            local_profiles = self.local_household_profiles()
+            base = local_profiles.get(str(member_id), {})
+            if (
+                not base
+                and operation == "update_member"
+                and previous_member is not None
+                and previous_member.get("relationship") != "child"
+            ):
+                try:
+                    downloaded = self.download_profile(member_id=str(member_id))
+                except (HelloFoodError, LoginRequired):
+                    pass
+                else:
+                    downloaded_profile = downloaded.get("profile_data")
+                    if isinstance(downloaded_profile, dict):
+                        base = downloaded_profile
+            profile_data = household.profile_patch_from_mutation(base, mutation)
+            self._remember_local_household_profile(str(member_id), profile_data)
+            self._remember_household_profile_outbox(str(member_id), None)
+            updated = self.household_state()
+            stored_member = household.find_member(updated, str(member_id))
+            if stored_member is not None:
+                stored_member["profile_synced"] = False
+                self.remember_household_state(updated)
+            effect["profile_sync"] = {
+                "ok": True,
+                "source": "local_only",
+                "server": False,
+            }
+            return effect
+
+        outbox_entry = self.household_profile_outbox().get(str(member_id), {})
+        pending_fields = (
+            deepcopy(outbox_entry.get("fields"))
+            if isinstance(outbox_entry.get("fields"), dict)
+            else {}
+        )
+        mutation_profile_fields = household.profile_fields_from_mutation(mutation)
+        if previous_member is not None and previous_member.get("relationship") == "child":
+            child_profile = self.local_household_profiles().get(str(member_id), {})
+            pending_fields.update(household.profile_fields_from_profile(child_profile))
+        pending_fields.update(mutation_profile_fields)
+
+        if operation == "update_member" and not pending_fields:
+            effect["profile_sync"] = {"ok": True, "source": "not_required"}
+            return effect
+        if (
+            not sync_profile
+            and updated_member.get("profile_synced")
+            and not outbox_entry
+        ):
+            effect["profile_sync"] = {"ok": True, "source": "local_first"}
+            return effect
+
+        profile_data: dict[str, Any] | None = None
+        sync_error: HelloFoodError | LoginRequired | None = None
+        if self._profile_consent_cache is False:
+            sync_error = HelloFoodError("Profile sync consent is required.")
+        try:
+            if sync_error is not None:
+                raise sync_error
+            if previous_member is not None and previous_member.get("relationship") == "child":
+                base = {}
+                expected_version = None
+            elif operation == "update_member" or matching_existing or outbox_entry:
+                try:
+                    downloaded = self.download_profile(member_id=str(member_id))
+                except HelloFoodError as exc:
+                    if not str(exc).startswith("404:"):
+                        raise
+                    base = {}
+                    expected_version = None
+                else:
+                    downloaded_profile = downloaded.get("profile_data")
+                    base = downloaded_profile if isinstance(downloaded_profile, dict) else {}
+                    version = downloaded.get("version")
+                    expected_version = int(version) if isinstance(version, int) else None
+            else:
+                base = {}
+                expected_version = None
+            profile_data = household.apply_profile_fields(base, pending_fields)
+            self.upload_profile(
+                profile_data,
+                member_id=str(member_id),
+                expected_version=(
+                    int(expected_version)
+                    if isinstance(expected_version, int)
+                    else None
+                ),
+            )
+        except (HelloFoodError, LoginRequired) as exc:
+            if profile_data is None:
+                local_context = outbox_entry.get("local_context")
+                base = local_context if isinstance(local_context, dict) else {}
+                profile_data = household.apply_profile_fields(base, pending_fields)
+            self._remember_household_profile_outbox(
+                str(member_id),
+                {
+                    "fields": pending_fields,
+                    "local_context": profile_data,
+                },
+            )
+            updated = self.household_state()
+            member = household.find_member(updated, str(member_id))
+            if member is not None:
+                member["profile_synced"] = False
+                self.remember_household_state(updated)
+            effect["profile_sync"] = {
+                "ok": False,
+                "error": str(exc),
+                "repair": (
+                    "A future scoped agent turn will retry automatically. "
+                    f"For an adult profile, `heyfood onboard --member-id {member_id}` "
+                    "can also repair sync."
+                ),
+            }
+        else:
+            self.mark_household_profile_synced(str(member_id))
+            self._remember_local_household_profile(str(member_id), None)
+            effect["profile_sync"] = {"ok": True}
+        return effect
 
     def clear_last_conversation(self) -> bool:
         if "last_conversation" not in self.config:
