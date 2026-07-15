@@ -66,6 +66,13 @@ With an existing `pipx`, install the optional keyring extra directly with:
 pipx install 'heyfood-cli[keyring]'
 ```
 
+To capture voice directly from your microphone (see [Voice input](#voice-input)),
+install the optional voice extra:
+
+```bash
+pipx install 'heyfood-cli[voice]'
+```
+
 Contributors can install from a reviewed source checkout:
 
 ```bash
@@ -242,6 +249,54 @@ field from an API caller) clears only that source category and its derived
 values; unrelated diet, allergy, condition, avoid, cuisine, and activity data
 is preserved. `--replace` discards the complete existing graph before applying
 the supplied fields.
+
+## Voice input
+
+Speak instead of type. `--voice` is available on `onboard`, `ask`, and `log`:
+
+```bash
+heyfood onboard --voice
+heyfood ask --voice
+heyfood log --voice
+```
+
+The default capture mode is `auto`, which walks a fallback chain:
+
+1. **Native microphone** — records locally and uploads the audio to hello.food's
+   authenticated endpoint, which transcribes it and discards it. This keeps your
+   spoken dietary and health information within hello.food's own service rather
+   than a browser vendor's speech engine. Requires the `voice` extra.
+2. **Browser capture** — opens a localhost page that uses your browser's built-in
+   speech recognition (a third-party service). Used when native capture isn't
+   available.
+3. **Typed input** — always works, and is used when neither of the above can run.
+
+Whatever the mode, the transcript is shown for review (`[Y/n/e]`) before anything
+is submitted — voice never writes to your profile or meal history unconfirmed.
+
+Choose a mode explicitly with `--voice-capture native|browser|typed` (an explicit
+`native` that can't run reports a clear error instead of silently falling back).
+List and select microphones:
+
+```bash
+heyfood voice devices
+heyfood ask --voice --audio-device 1
+```
+
+Your capture mode and device selection are remembered locally for next time.
+`--voice-timeout` and `--no-browser` apply to the browser rung only.
+
+### Platform notes
+
+- **Linux:** the `sounddevice` wheel needs the system PortAudio library. Install
+  it with your package manager, e.g. `sudo apt-get install libportaudio2`.
+  Without it, native capture is skipped and voice falls back to the browser.
+- **WSL:** prefer a native Windows install of the CLI for microphone access;
+  inside WSL, native capture generally cannot reach the microphone, so voice
+  falls back to browser capture.
+- **SSH / headless:** the browser capture server binds on the remote host and
+  can't reach your local microphone, so over SSH voice falls back to typed input
+  with an explanation rather than opening a dead localhost URL.
 
 ## Machine output
 

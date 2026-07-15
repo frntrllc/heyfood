@@ -33,6 +33,21 @@ improving discovery.
   `/for` changes it inside chat and starts a fresh conversation.
 - Onboarding preserves `--no-interactive` as the compatibility alias described
   in the public process contract; new automation should use `--no-input`.
+- `--voice` on `onboard`, `ask`, and `log` speaks the request instead of typing
+  it; the positional request text is optional when `--voice` is used. Every mode
+  shows the transcript for confirmation (`[Y/n/e]`) before submitting.
+- `--voice-capture auto|native|browser|typed` (default `auto`) selects the
+  capture mechanism; `--audio-device <id-or-name>` picks a microphone for native
+  capture. Both are additive named options. The capture mode and device are
+  persisted locally.
+- `--voice-timeout` and `--no-browser` are browser-rung controls only: they tune
+  the localhost browser capture and do not affect native or typed capture.
+
+## Voice device discovery
+
+`heyfood voice devices` lists input devices for native capture (index, name,
+default marker). Pass the index or a name substring to `--audio-device`. Without
+the `voice` extra installed, it prints an enable hint instead of a device list.
 
 ## Discovering opaque ids
 

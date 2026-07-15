@@ -1,0 +1,12 @@
+Usage: heyfood get-menu [OPTIONS] RESTAURANT_ID
+
+ Fetch or browse a full restaurant menu (alias for `heyfood menu`).
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    restaurant_id      TEXT  HelloFood restaurant id or index from the last search. [required]                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --json          Print stable JSON.                                                                                   │
+│ --raw           Deprecated alias for --json.                                                                         │
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

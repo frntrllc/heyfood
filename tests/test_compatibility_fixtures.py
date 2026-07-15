@@ -14,7 +14,10 @@ from typer.testing import CliRunner
 from heyfood_cli import main
 
 
-FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "compat" / "0.1.0"
+# Pinned to the current baseline. 0.1.0 fixtures are kept on disk for reference;
+# the 0.2.0 baseline adds the native-voice flags (--voice-capture, --audio-device),
+# the `ask`/`log` --voice surface, and the `voice` command group.
+FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "compat" / "0.2.0"
 HELP_ROOT = FIXTURE_ROOT / "help"
 RAW_OUTPUTS = json.loads((FIXTURE_ROOT / "raw_outputs.json").read_text())["outputs"]
 
@@ -64,6 +67,8 @@ HELP_COMMANDS = {
     "conversation-list": ("conversation", "list"),
     "conversation-resume": ("conversation", "resume"),
     "conversation-clear": ("conversation", "clear"),
+    "voice": ("voice",),
+    "voice-devices": ("voice", "devices"),
 }
 
 

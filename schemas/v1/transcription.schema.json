@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/frntrllc/heyfood/blob/main/schemas/v1/transcription.schema.json",
+  "title": "heyfood audio transcription response v1",
+  "description": "Success body returned when a captured WAV is transcribed server-side. The audio is transcribed and discarded; it is never retained.",
+  "x-heyfood-schema-version": 1,
+  "type": "object",
+  "required": ["transcript"],
+  "properties": {
+    "transcript": {
+      "type": "string",
+      "description": "The recognized text of the recording."
+    },
+    "duration_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Length of the submitted audio, derived from the WAV header."
+    },
+    "language": {
+      "type": "string",
+      "description": "BCP-47 language tag of the transcript (e.g. \"en\")."
+    },
+    "model_version": {
+      "type": "string",
+      "description": "Opaque transcription version tag (e.g. \"hf-transcribe-1\"). Not a provider or model identifier; treat it as a stable, meaningless-to-parse label."
+    }
+  },
+  "additionalProperties": true
+}

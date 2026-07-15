@@ -36,6 +36,30 @@ class ChannelToolUnavailable(HelloFoodError):
     pass
 
 
+class TranscriptionUnavailable(HelloFoodError):
+    """The transcription endpoint is dark, pre-deploy, or unreachable.
+
+    Callers treat this as "degrade to browser capture", never a hard failure —
+    CLI releases are decoupled from backend deploy timing.
+    """
+
+
+class TranscriptionScopeRequired(HelloFoodError):
+    """The channel token predates the ``audio:transcribe`` scope; re-login."""
+
+
+class TranscriptionRejected(HelloFoodError):
+    """The audio was rejected for size, duration, or format."""
+
+
+class TranscriptionRateLimited(HelloFoodError):
+    """Per-device transcription rate limit hit; carries the retry hint."""
+
+    def __init__(self, message: str, *, retry_after: str | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 OPTIONAL_CHANNEL_TOOLS = {
     "get_menu_status": "menu_acquisition_polling",
     "list_saved_recipes": "recipe_cookbook",
@@ -325,6 +349,122 @@ class HelloFoodClient:
             "get_menu_status",
             {"restaurant_id": restaurant_id, "job_id": job_id},
         )
+
+    def transcribe_audio(
+        self,
+        wav_bytes: bytes,
+        *,
+        purpose: str,
+        language: str | None = None,
+        timeout: float | None = 60.0,
+    ) -> dict[str, Any]:
+        """Upload a WAV clip and return the server-side transcript.
+
+        This is the CLI's only multipart request, so it does not reuse
+        ``_request``: that path hardcodes ``Content-Type: application/json`` and
+        would clobber the multipart boundary httpx sets for us. Auth is the
+        channel access token (the endpoint requires channel scopes; the session
+        JWT is the wrong credential).
+        """
+        token = self.channel_access_token()
+        request_id = str(uuid4())
+        started_at = time.monotonic()
+        headers = self._headers(token, request_id=request_id)
+        # Drop the JSON content type so httpx negotiates the multipart boundary.
+        headers.pop("Content-Type", None)
+        files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
+        data: dict[str, str] = {"purpose": purpose}
+        if language:
+            data["language"] = language
+
+        diagnostics.reporter.emit(
+            "http.start",
+            request_id=request_id,
+            context=self.context_name,
+            method="POST",
+            endpoint="/v1/audio/transcriptions",
+            byte_size=len(wav_bytes),
+        )
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(
+                    f"{self.api_url}/v1/audio/transcriptions",
+                    headers=headers,
+                    files=files,
+                    data=data,
+                )
+        except httpx.HTTPError as exc:
+            diagnostics.reporter.emit(
+                "http.error",
+                request_id=request_id,
+                context=self.context_name,
+                method="POST",
+                endpoint="/v1/audio/transcriptions",
+                duration_ms=round((time.monotonic() - started_at) * 1000, 1),
+                error=type(exc).__name__,
+            )
+            # A network-level failure is indistinguishable, from the user's seat,
+            # from a dark endpoint — degrade to browser capture rather than error.
+            raise TranscriptionUnavailable(
+                f"Could not reach the transcription service: {exc}"
+            ) from exc
+        diagnostics.reporter.emit(
+            "http.complete",
+            request_id=request_id,
+            server_request_id=response.headers.get("X-Request-ID"),
+            context=self.context_name,
+            method="POST",
+            endpoint="/v1/audio/transcriptions",
+            status=response.status_code,
+            duration_ms=round((time.monotonic() - started_at) * 1000, 1),
+        )
+        if response.status_code >= 400:
+            _raise_transcription_error(response)
+        if not response.content:
+            raise TranscriptionUnavailable(
+                "The transcription service returned an empty response."
+            )
+        parsed = response.json()
+        if not isinstance(parsed, dict):
+            raise HelloFoodError("Transcription response was not a JSON object.")
+        return parsed
+
+    def voice_settings(self) -> dict[str, Any]:
+        """Local, device-scoped voice preferences (capture mode + input device).
+
+        These describe this machine's microphone, not the account, so they are
+        intentionally kept out of the account-scoped state that logout clears.
+        """
+        value = self.config.get("voice")
+        if not isinstance(value, dict):
+            return {}
+        settings: dict[str, Any] = {}
+        mode = value.get("capture_mode")
+        if isinstance(mode, str) and mode:
+            settings["capture_mode"] = mode
+        device = value.get("device")
+        if isinstance(device, (str, int)) and not isinstance(device, bool):
+            settings["device"] = device
+        return settings
+
+    def remember_voice_settings(
+        self,
+        *,
+        capture_mode: str | None = None,
+        device: str | int | None = None,
+    ) -> dict[str, Any]:
+        """Persist a voice preference. Only provided fields change."""
+        current = self.voice_settings()
+        if capture_mode is not None:
+            current["capture_mode"] = capture_mode
+        if device is not None:
+            current["device"] = device
+        if current:
+            self.config["voice"] = current
+        else:
+            self.config.pop("voice", None)
+        self._save()
+        return current
 
     def list_profile_members(self) -> dict[str, Any]:
         return self._request("GET", "/v1/profile/sync/members", auth="session")
@@ -1233,6 +1373,39 @@ def _error_message(response: httpx.Response, body: bytes | None = None) -> str:
         if detail:
             return f"{response.status_code}: {detail}"
     return f"{response.status_code}: {data}"
+
+
+def _raise_transcription_error(response: httpx.Response) -> None:
+    """Map a transcription error response onto a typed exception.
+
+    Keyed on the contract body ``{"error": <code>, "message": <human text>}`` —
+    the channel-tools convention, NOT ``detail``.
+    """
+    status = response.status_code
+    body: dict[str, Any] = {}
+    try:
+        parsed = response.json()
+        if isinstance(parsed, dict):
+            body = parsed
+    except Exception:
+        body = {}
+    error = str(body.get("error") or "")
+    message = str(body.get("message") or body.get("error") or f"HTTP {status}")
+
+    if status == 429:
+        raise TranscriptionRateLimited(
+            message,
+            retry_after=response.headers.get("Retry-After"),
+        )
+    if status in (400, 413):
+        raise TranscriptionRejected(message)
+    if status == 403 and error == "insufficient_scope":
+        raise TranscriptionScopeRequired(message)
+    if status == 401:
+        raise LoginRequired("Run `heyfood login` first.")
+    if status in (404, 503):
+        raise TranscriptionUnavailable(message)
+    raise HelloFoodError(f"{status}: {message}")
 
 
 def _is_invalid_channel_token_error(message: str) -> bool:

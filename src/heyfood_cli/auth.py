@@ -41,6 +41,10 @@ LOGIN_SCOPES = [
     "profile:write",
     "meals:read",
     "meals:write",
+    # Native voice capture uploads a WAV to the transcription endpoint. The
+    # backend accepts this scope already; it stays LAST because the server pins
+    # a canonical scope order at token time.
+    "audio:transcribe",
 ]
 
 

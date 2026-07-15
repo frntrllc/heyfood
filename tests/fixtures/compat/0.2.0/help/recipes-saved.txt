@@ -1,0 +1,10 @@
+Usage: heyfood recipes saved [OPTIONS]
+
+ Show your saved recipe cookbook.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --limit  -n      INTEGER  Maximum saved recipes to show. [default: 20]                                               │
+│ --json                    Print stable JSON.                                                                         │
+│ --raw                     Deprecated alias for --json.                                                               │
+│ --help                    Show this message and exit.                                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

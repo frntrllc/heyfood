@@ -1,0 +1,17 @@
+Usage: heyfood conversation resume [OPTIONS] QUERY...
+
+ Continue the last conversation remembered on this machine.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    query      QUERY...  Follow-up text for the last conversation. [required]                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --lat                FLOAT  Latitude for location-aware requests.                                                    │
+│ --lng                FLOAT  Longitude for location-aware requests.                                                   │
+│ --near               TEXT   Place name for this request.                                                             │
+│ --no-location               Do not send saved location context.                                                      │
+│ --for                TEXT   Household scope: member name/id, me, or everyone.                                        │
+│ --json                      Print stable JSON.                                                                       │
+│ --raw                       Deprecated alias for --json.                                                             │
+│ --help                      Show this message and exit.                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

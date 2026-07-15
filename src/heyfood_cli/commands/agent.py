@@ -28,7 +28,7 @@ from ..main import (
 
 @app.command()
 def ask(
-    query: list[str] = typer.Argument(..., help="Natural-language request."),
+    query: Optional[list[str]] = typer.Argument(None, help="Natural-language request."),
     lat: Optional[float] = typer.Option(None, "--lat", help="Latitude for restaurant/location-aware requests."),
     lng: Optional[float] = typer.Option(None, "--lng", help="Longitude for restaurant/location-aware requests."),
     near: Optional[str] = typer.Option(None, "--near", help="Place name for this request."),
@@ -40,11 +40,23 @@ def ask(
         "--for",
         help="One-turn household scope: member name/id, me, or everyone.",
     ),
+    voice: bool = typer.Option(False, "--voice", help="Speak your request instead of typing it."),
+    voice_capture_mode: str = typer.Option("auto", "--voice-capture", help="Voice capture mode: auto, native, browser, or typed."),
+    audio_device: Optional[str] = typer.Option(None, "--audio-device", help="Input device id or name for native voice capture."),
     json_output: bool = typer.Option(False, "--json", help="Print stable JSON."),
     raw: bool = typer.Option(False, "--raw", help="Deprecated alias for --json."),
 ) -> None:
     """Ask the HelloFood conversational agent."""
-    text = " ".join(query).strip()
+    text = " ".join(query or []).strip()
+    if voice:
+        text = main._voice_transcript(
+            purpose="ask",
+            capture_mode=voice_capture_mode,
+            audio_device=audio_device,
+            json_mode=_json_mode(json_output, raw),
+        )
+    if not text:
+        raise typer.BadParameter("Provide a request, or use --voice to speak one.")
     main._ask_agent(
         text,
         lat=lat,
@@ -538,18 +550,30 @@ def chat(
 
 @app.command()
 def log(
-    meal: list[str] = typer.Argument(..., help="Meal text to log."),
+    meal: Optional[list[str]] = typer.Argument(None, help="Meal text to log."),
     meal_type: Optional[str] = typer.Option(None, "--type", help="breakfast, lunch, dinner, or snack."),
     checking_for: Optional[str] = typer.Option(
         None,
         "--for",
         help="Household scope: member name/id, me, or everyone.",
     ),
+    voice: bool = typer.Option(False, "--voice", help="Speak the meal instead of typing it."),
+    voice_capture_mode: str = typer.Option("auto", "--voice-capture", help="Voice capture mode: auto, native, browser, or typed."),
+    audio_device: Optional[str] = typer.Option(None, "--audio-device", help="Input device id or name for native voice capture."),
     json_output: bool = typer.Option(False, "--json", help="Print stable JSON."),
     raw: bool = typer.Option(False, "--raw", help="Deprecated alias for --json."),
 ) -> None:
     """Log a meal through the conversational agent."""
-    text = " ".join(meal).strip()
+    text = " ".join(meal or []).strip()
+    if voice:
+        text = main._voice_transcript(
+            purpose="log",
+            capture_mode=voice_capture_mode,
+            audio_device=audio_device,
+            json_mode=_json_mode(json_output, raw),
+        )
+    if not text:
+        raise typer.BadParameter("Provide a meal to log, or use --voice to speak one.")
     meal_type = _validated(
         lambda: validation.choice(
             meal_type,

@@ -1,0 +1,9 @@
+Usage: heyfood location show [OPTIONS]
+
+ Show the saved default location.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --json          Print stable JSON.                                                                                   │
+│ --raw           Deprecated alias for --json.                                                                         │
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
