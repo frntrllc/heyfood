@@ -14,6 +14,8 @@ environment may publish heyfood.
    tests pass from a clean environment.
 6. The release commit contains no secrets, private data, or proprietary service
    content.
+7. `install.sh` passes its macOS/Linux behavior suite, its SHA-256 file matches,
+   and the website mirror is byte-for-byte identical before deployment.
 
 ## Publication contract
 
@@ -24,6 +26,9 @@ environment may publish heyfood.
 - The workflow builds artifacts once, verifies them, and publishes those exact
   bytes. It must not rebuild between verification and publication.
 - GitHub release notes and the changelog must describe the same version.
+- The hosted installer is a convenience bootstrap into this PyPI channel, not
+  a second release authority. It may install only `heyfood-cli` from public
+  PyPI and must retain the no-sudo, no-shell-edit contract.
 
 Before the first release, register a pending trusted publisher on PyPI with
 these exact values:
@@ -48,7 +53,11 @@ publisher emits attestations for the verified wheel and sdist.
    artifact checks before approval.
 4. Verify the PyPI project page, attestations, GitHub release attachments, and
    a fresh `pipx install heyfood-cli` on macOS and Linux.
-5. If any verification fails, follow the fix-forward policy below; do not
+5. After the separately reviewed website deployment succeeds, verify that
+   `https://hey.food/install.sh` returns the repository bytes and defensive
+   headers, then run it with temporary `HOME`, `PIPX_HOME`, and `PIPX_BIN_DIR`
+   and confirm install, repeat execution, version, help, and uninstall.
+6. If any verification fails, follow the fix-forward policy below; do not
    rebuild or replace the published version.
 
 ## Failed or unsafe releases

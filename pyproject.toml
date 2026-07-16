@@ -64,6 +64,8 @@ include = [
   "/DEVELOPMENT.md",
   "/CHANGELOG.md",
   "/RELEASING.md",
+  "/install.sh",
+  "/install.sh.sha256",
   "/docs",
   "/schemas",
   "/pyproject.toml",

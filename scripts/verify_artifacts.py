@@ -97,6 +97,8 @@ def verify_sdist(sdist: Path, *, version: str) -> None:
         "COPYRIGHT",
         "README.md",
         "RELEASING.md",
+        "install.sh",
+        "install.sh.sha256",
         "docs/JSON_SCHEMAS.md",
         "pyproject.toml",
         "schemas/v1/heyfood-output.schema.json",
