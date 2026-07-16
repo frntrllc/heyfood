@@ -118,9 +118,20 @@ case "${HEYFOOD_WITH_KEYRING:-0}" in
   *) fail "HEYFOOD_WITH_KEYRING must be 0 or 1 when set" ;;
 esac
 
+WITH_VOICE="0"
+case "${HEYFOOD_WITH_VOICE:-0}" in
+  0 | false | FALSE | False | no | NO | No) ;;
+  1 | true | TRUE | True | yes | YES | Yes) WITH_VOICE="1" ;;
+  *) fail "HEYFOOD_WITH_VOICE must be 0 or 1 when set" ;;
+esac
+
 REQUIREMENT="$HEYFOOD_PACKAGE"
-if [[ "$WITH_KEYRING" == "1" ]]; then
+if [[ "$WITH_KEYRING" == "1" && "$WITH_VOICE" == "1" ]]; then
+  REQUIREMENT="${REQUIREMENT}[keyring,voice]"
+elif [[ "$WITH_KEYRING" == "1" ]]; then
   REQUIREMENT="${REQUIREMENT}[keyring]"
+elif [[ "$WITH_VOICE" == "1" ]]; then
+  REQUIREMENT="${REQUIREMENT}[voice]"
 fi
 if [[ -n "$VERSION" ]]; then
   REQUIREMENT="${REQUIREMENT}==${VERSION}"
@@ -227,7 +238,8 @@ case ":${PATH:-}:" in
     printf '  export PATH=%q:$PATH\n' "$HEYFOOD_BIN_DIR"
     ;;
 esac
-say "Next: heyfood login"
+say "Next: heyfood"
+say "Returning user or recovery: heyfood login"
 printf 'Uninstall:'
 printf ' %q' "${PIPX_CMD[@]}"
 printf ' uninstall %q\n' "$HEYFOOD_PACKAGE"

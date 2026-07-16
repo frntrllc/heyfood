@@ -2,7 +2,7 @@
 
 The public machine-output schema is versioned at
 `schemas/v1/heyfood-output.schema.json` using JSON Schema draft 2020-12. It
-defines the stable core of five developer-facing result families while allowing
+defines the stable core of six developer-facing result families while allowing
 additive service fields:
 
 | Commands/results | Schema definition |
@@ -12,12 +12,14 @@ additive service fields:
 | `menu --json`, agent menu evaluations | `menuEvaluation` |
 | `recommend --json` | `recommendationRanking` |
 | `recipes search --json` | `recipeCompatibility` |
+| `register --json` | `registrationResult` |
 
 The schema version is carried by the repository path and
 `x-heyfood-schema-version`. heyfood intentionally does not wrap service
 responses in a new envelope merely to repeat that number: existing consumers
 keep the documented top-level response shape and pin the schema file for their
-CLI major/minor compatibility range.
+CLI major/minor compatibility range. The cross-client first-run registration
+contract is the exception: its canonical object includes `schema_version: 1`.
 
 Additive optional fields remain compatible within v1. Removing a field,
 changing its meaning/type, or changing an enum requires a new schema version,

@@ -229,6 +229,60 @@ def onboard(
     raw: bool = typer.Option(False, "--raw", help="Deprecated alias for --json."),
 ) -> None:
     """Build or update your hello.food dietary graph."""
+    run_onboarding(
+        profile_text=profile_text,
+        diet=diet,
+        allergy=allergy,
+        condition=condition,
+        avoid=avoid,
+        cuisine=cuisine,
+        activity=activity,
+        notes=notes,
+        severity=severity,
+        member_id=member_id,
+        replace=replace,
+        yes=yes,
+        voice=voice,
+        voice_capture_mode=voice_capture_mode,
+        audio_device=audio_device,
+        voice_timeout=voice_timeout,
+        no_browser=no_browser,
+        interactive=interactive,
+        no_input=no_input,
+        list_options=list_options,
+        dry_run=dry_run,
+        json_output=json_output,
+        raw=raw,
+    )
+
+
+def run_onboarding(
+    *,
+    profile_text: list[str] | None = None,
+    diet: list[str] | None = None,
+    allergy: list[str] | None = None,
+    condition: list[str] | None = None,
+    avoid: list[str] | None = None,
+    cuisine: list[str] | None = None,
+    activity: str | None = None,
+    notes: str | None = None,
+    severity: int | None = None,
+    member_id: str = "_self",
+    replace: bool = False,
+    yes: bool = False,
+    voice: bool = False,
+    voice_capture_mode: str = "auto",
+    audio_device: str | None = None,
+    voice_timeout: int = 300,
+    no_browser: bool = False,
+    interactive: bool = True,
+    no_input: bool = False,
+    list_options: bool = False,
+    dry_run: bool = False,
+    json_output: bool = False,
+    raw: bool = False,
+) -> None:
+    """Execute onboarding independently of Typer command parsing."""
     json_mode = _json_mode(json_output, raw)
     interactive = (
         interactive is not False

@@ -224,6 +224,7 @@ def test_doctor_json_reports_failed_checks_and_exits_one(
     "args",
     (
         ("status",),
+        ("register",),
         ("doctor",),
         ("profile",),
         ("onboard",),
@@ -251,6 +252,7 @@ def test_doctor_json_reports_failed_checks_and_exits_one(
         ("conversation", "list"),
         ("conversation", "resume"),
         ("conversation", "clear"),
+        ("account", "delete"),
     ),
 )
 def test_data_commands_advertise_json(args: tuple[str, ...]) -> None:

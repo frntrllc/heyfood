@@ -1,12 +1,42 @@
 {
-  "$comment": "The exhaustive, checked-in enumeration of every (method, endpoint) the heyfood CLI can send. tests/test_called_endpoints_contract.py extracts the endpoints actually reachable in src/heyfood_cli/{client,auth}.py and fails CI if this list and the source drift. Path parameters are written with readable names (e.g. {name}); the test compares them positionally. Part 2 (server-side reachability of every entry under exactly LOGIN_SCOPES) is owned by the backend authorization-contract suite, which consumes this same file.",
+  "$comment": "The exhaustive, checked-in enumeration of every (method, endpoint) the heyfood CLI can send. tests/test_called_endpoints_contract.py extracts the endpoints actually reachable in src/heyfood_cli/{client,auth,auth_application}.py and fails CI if this list and the source drift. Path parameters are written with readable names (e.g. {name}); the test compares them positionally. Part 2 (server-side reachability under the declared session/channel scope or one-purpose capability) is owned by the backend authorization-contract suite, which consumes this same file.",
   "schema_version": 1,
   "endpoints": [
+    {
+      "method": "GET",
+      "endpoint": "/v1/auth/capabilities",
+      "auth": "none",
+      "note": "Public, versioned registration and authorization capability preflight before any browser or OAuth action."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v1/channel/tools/profile/readiness",
+      "auth": "channel",
+      "note": "Least-privilege first-run classification without returning dietary profile contents."
+    },
     {
       "method": "GET",
       "endpoint": "/v1/auth/me",
       "auth": "session",
       "note": "Session identity lookup (login, doctor, status)."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/auth/account-deletion/begin",
+      "auth": "session",
+      "note": "Begin browser-confirmed account deletion; requires account:delete authority."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/auth/account-deletion/status",
+      "auth": "status_capability",
+      "note": "Poll deletion state using the in-memory one-purpose status capability."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/auth/account-deletion/cancel",
+      "auth": "status_capability",
+      "note": "Cancel an active deletion transaction using its one-purpose status capability."
     },
     {
       "method": "GET",

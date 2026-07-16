@@ -85,6 +85,7 @@ def _environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
     for name in (
         "HEYFOOD_VERSION",
         "HEYFOOD_WITH_KEYRING",
+        "HEYFOOD_WITH_VOICE",
         "HEYFOOD_PYTHON",
         "PIPX_BIN_DIR",
         "PIPX_HOME",
@@ -149,7 +150,8 @@ def test_installs_fixed_public_package_and_verifies_command(tmp_path: Path) -> N
 
     assert result.returncode == 0, result.stderr
     assert "Installed heyfood 0.2.0" in result.stdout
-    assert "Next: heyfood login" in result.stdout
+    assert "Next: heyfood" in result.stdout
+    assert "Returning user or recovery: heyfood login" in result.stdout
     assert "Add heyfood to this shell's PATH:" in result.stdout
     assert log.read_text(encoding="utf-8").splitlines() == [
         "install",
@@ -174,6 +176,26 @@ def test_validates_pinned_keyring_requirement(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert log.read_text(encoding="utf-8").splitlines()[-1] == (
         "heyfood-cli[keyring]==0.2.0"
+    )
+
+
+def test_voice_extra_is_an_explicit_hosted_installer_opt_in(tmp_path: Path) -> None:
+    result, log = _run(tmp_path, HEYFOOD_WITH_VOICE="1")
+
+    assert result.returncode == 0, result.stderr
+    assert log.read_text(encoding="utf-8").splitlines()[-1] == "heyfood-cli[voice]"
+
+
+def test_installer_combines_optional_extras_canonically(tmp_path: Path) -> None:
+    result, log = _run(
+        tmp_path,
+        HEYFOOD_WITH_KEYRING="1",
+        HEYFOOD_WITH_VOICE="1",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert log.read_text(encoding="utf-8").splitlines()[-1] == (
+        "heyfood-cli[keyring,voice]"
     )
 
 

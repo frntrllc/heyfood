@@ -8,8 +8,8 @@ import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Callable
-from urllib.parse import parse_qs, urlencode, urlparse
+from typing import Any, Callable, Literal
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from uuid import uuid4
 
 import httpx
@@ -31,6 +31,7 @@ from . import diagnostics
 
 LOGIN_SCOPES = [
     "account:link",
+    "account:delete",
     "knowledge:read",
     "menu:read",
     "recommend:read",
@@ -46,6 +47,13 @@ LOGIN_SCOPES = [
     # a canonical scope order at token time.
     "audio:transcribe",
 ]
+
+AuthIntent = Literal["register", "login", "auto"]
+_WEB_INTENT = {
+    "register": "create_account",
+    "login": "sign_in",
+    "auto": "auto",
+}
 
 
 class LoginFlowError(RuntimeError):
@@ -163,6 +171,7 @@ def perform_login(
     api_key: str | None,
     open_browser: bool,
     timeout_seconds: int,
+    intent: AuthIntent = "login",
     authorize_url_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     api_url = api_url.rstrip("/")
@@ -192,6 +201,7 @@ def perform_login(
             redirect_uri=redirect_uri,
             state=state,
             code_challenge=challenge,
+            intent=intent,
         )
 
         if open_browser:
@@ -250,6 +260,7 @@ def perform_device_login(
     open_browser: bool,
     timeout_seconds: int,
     authorization_callback: Callable[[str, str], None],
+    intent: AuthIntent = "login",
 ) -> dict[str, Any]:
     """Authenticate without a loopback callback using a short user code."""
     api_url = api_url.rstrip("/")
@@ -261,7 +272,7 @@ def perform_device_login(
 
     registration = register_client(api_url, "http://127.0.0.1:1/device-unused")
     client_id = str(registration["client_id"])
-    authorization = start_device_authorization(api_url, client_id)
+    authorization = start_device_authorization(api_url, client_id, intent)
     # Anchor the advertised deadline to the moment the code was issued, not to
     # when polling begins, so the browser-prompt time counts against expires_in.
     authorized_at = time.monotonic()
@@ -270,6 +281,7 @@ def perform_device_login(
         or authorization.get("verification_uri")
         or auth_url
     )
+    verification_url = _url_with_auth_intent(verification_url, intent)
     user_code = str(authorization["user_code"])
     authorization_callback(verification_url, user_code)
     if open_browser:
@@ -306,12 +318,20 @@ def perform_device_login(
     )
 
 
-def start_device_authorization(api_url: str, client_id: str) -> dict[str, Any]:
+def start_device_authorization(
+    api_url: str,
+    client_id: str,
+    intent: AuthIntent = "login",
+) -> dict[str, Any]:
     try:
         response = _post_with_diagnostics(
             api_url,
             "/v1/channel/oauth/device/authorize",
-            json_body={"client_id": client_id, "scope": " ".join(LOGIN_SCOPES)},
+            json_body={
+                "client_id": client_id,
+                "scope": " ".join(LOGIN_SCOPES),
+                "intent": _web_intent(intent),
+            },
         )
     except httpx.HTTPError as exc:
         raise LoginFlowError(
@@ -602,6 +622,7 @@ def build_authorize_url(
     redirect_uri: str,
     state: str,
     code_challenge: str,
+    intent: AuthIntent = "login",
 ) -> str:
     params = {
         "response_type": "code",
@@ -613,7 +634,36 @@ def build_authorize_url(
         "code_challenge_method": "S256",
         "app_client_id": APP_CLIENT_ID,
     }
+    if intent != "login":
+        # This is a browser UX hint only. The authorization transaction and
+        # verified identity resolver remain authoritative for account state.
+        params["intent"] = _web_intent(intent)
     return f"{auth_url}?{urlencode(params)}"
+
+
+def _web_intent(intent: AuthIntent) -> str:
+    try:
+        return _WEB_INTENT[intent]
+    except KeyError as exc:  # pragma: no cover - callers are type checked.
+        raise ValueError(f"Unsupported authentication intent: {intent}") from exc
+
+
+def _url_with_auth_intent(url: str, intent: AuthIntent) -> str:
+    """Add the non-authoritative account intent to a verification URL.
+
+    The backend persists the same intent on the device transaction. Repeating
+    it on the verification URL keeps older auth pages usable while the server
+    record remains authoritative.
+    """
+    if intent == "login":
+        # Preserve the released login URL byte-for-byte. The auth site already
+        # defaults to sign-in, so an extra query parameter adds no value.
+        return url
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    query["intent"] = [_web_intent(intent)]
+    encoded = urlencode(query, doseq=True)
+    return urlunparse(parsed._replace(query=encoded))
 
 
 def exchange_code(

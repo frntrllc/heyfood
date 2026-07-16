@@ -23,6 +23,14 @@ improving discovery.
 ## Compatibility aliases
 
 - `--raw` is the deprecated machine-output alias for `--json`.
+- `register` creates or connects an account through the same OAuth application
+  service as `login`; registration adds `--no-onboard` and canonical `--json`.
+  `register --json` suppresses browser launch and all prompts. Use `--device
+  --no-browser --json` for headless automation with one human approval.
+- `account delete` requires explicit destructive acknowledgement and browser
+  identity confirmation. `--json` additionally requires `--yes`, never opens a
+  browser, and emits a receipt only after the backend commit. Local credentials
+  remain intact for denial, expiry, interruption, timeout, or malformed output.
 - `get-menu` is the compatibility alias for `menu`.
 - `reply TEXT` and `conversation resume TEXT` both continue the last locally
   remembered agent conversation.

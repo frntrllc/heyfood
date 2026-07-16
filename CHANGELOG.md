@@ -8,9 +8,20 @@ authentication contracts are stabilized.
 
 ### Added
 
+- `heyfood register` with a fail-closed capability preflight, loopback/device
+  account-creation intent, strict profile-readiness validation, immediate
+  interactive onboarding handoff, and a credential-free one-document `--json`
+  contract.
+- Bare `heyfood` now provides a TTY-only first-run journey from registration or
+  sign-in through profile readiness and onboarding into chat; non-TTY execution
+  remains side-effect-free and prints plain next steps.
+- `heyfood account delete` adds explicit local acknowledgement, browser identity
+  confirmation, fresh `account:delete` authority, one-attempt cancellation, and
+  post-commit receipt validation before local credentials are cleared.
+
 - A public, no-sudo macOS/Linux installer at `https://hey.food/install.sh`
   that installs the canonical PyPI package through isolated pipx, verifies the
-  command, supports exact-version and keyring opt-ins, and never edits shell
+  command, supports exact-version, keyring, and voice opt-ins, and never edits shell
   startup files.
 - Native in-memory microphone voice capture for `onboard`, `ask`, and `log` via
   the optional `voice` extra (`pipx install 'heyfood-cli[voice]'`): audio is
@@ -30,6 +41,9 @@ authentication contracts are stabilized.
   CI test that fails when a new call appears without a contract update.
 
 ### Changed
+
+- The hosted installer now hands successful installs to bare `heyfood`, with
+  `heyfood login` retained as the explicit returning-user recovery command.
 
 - `auto` voice capture never crosses from native transcription to browser
   speech recognition without an explicit, default-no consent that discloses the

@@ -1,11 +1,12 @@
 """Issue #10 Part 1: the CLI's endpoint surface is an exhaustive, checked-in contract.
 
 This test statically extracts every ``(method, endpoint)`` the CLI can actually
-send from ``src/heyfood_cli/{client,auth}.py`` and asserts it matches
+send from ``src/heyfood_cli/{client,auth,auth_application}.py`` and asserts it matches
 ``tests/fixtures/called_endpoints.json`` exactly. Adding a new endpoint call
 without updating the contract fails CI with an actionable message; the same file
 is consumed by the backend authorization-contract suite (Part 2) to prove every
-listed endpoint is reachable under exactly ``LOGIN_SCOPES``.
+listed endpoint is reachable under its declared session/channel scope or
+one-purpose capability.
 
 The extraction understands the four ways the CLI issues a request:
 
@@ -28,7 +29,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "src" / "heyfood_cli"
-SCAN_FILES = ("client.py", "auth.py")
+SCAN_FILES = ("client.py", "auth.py", "auth_application.py")
 CONTRACT_PATH = ROOT / "tests" / "fixtures" / "called_endpoints.json"
 API_MARKER = "/v1/"
 HTTP_METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
@@ -138,7 +139,7 @@ def test_contract_is_wellformed() -> None:
     for item in contract:
         assert item["method"].upper() in HTTP_METHODS, item
         assert item["endpoint"].startswith(API_MARKER), item
-        assert item["auth"] in {"session", "channel", "none"}, item
+        assert item["auth"] in {"session", "channel", "status_capability", "none"}, item
         key = (item["method"].upper(), _normalize_path(item["endpoint"]))
         assert key not in seen, f"duplicate contract entry: {key}"
         seen.add(key)

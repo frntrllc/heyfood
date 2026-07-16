@@ -26,6 +26,7 @@ def test_machine_output_schema_is_versioned_and_covers_public_result_families():
         "menuEvaluation",
         "recommendationRanking",
         "recipeCompatibility",
+        "registrationResult",
     }
     assert schema["$defs"]["safetyStatus"]["enum"] == CANONICAL_STATUSES
 
@@ -38,6 +39,27 @@ def test_ranking_schema_cannot_be_described_as_a_safety_verdict():
     assert "not a safety verdict" in ranking["description"].lower()
     assert "not a probability" in score["description"].lower()
     assert "status" not in ranking["properties"]["recommendations"]["items"]["required"]
+
+
+def test_registration_result_is_the_shared_first_run_v1_contract():
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    registration = schema["$defs"]["registrationResult"]
+
+    fields = {
+        "schema_version",
+        "authenticated",
+        "account_outcome",
+        "profile_status",
+        "next_command",
+    }
+    assert set(registration["required"]) == fields
+    assert set(registration["properties"]) == fields
+    assert registration["additionalProperties"] is False
+    assert registration["properties"]["account_outcome"]["enum"] == [
+        "created",
+        "existing",
+        None,
+    ]
 
 
 def test_schema_documentation_maps_all_five_result_families():
