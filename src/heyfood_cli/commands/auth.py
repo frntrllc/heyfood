@@ -7,6 +7,7 @@ from ..main import (
     ConfigStore,
     DEFAULT_API_KEY,
     HelloFoodError,
+    LoginInterrupted,
     LoginRequired,
     Optional,
     _error_kind,
@@ -69,6 +70,14 @@ def login(
                 timeout_seconds=timeout,
                 authorize_url_callback=lambda url: main.stderr_console.print(f"Open this URL:\n{url}"),
             )
+    except (LoginInterrupted, KeyboardInterrupt) as exc:
+        # Deliberate Ctrl-C: exit calmly, no traceback. The loopback flow raises a
+        # bare KeyboardInterrupt; the device flow wraps it as LoginInterrupted.
+        from ..auth import DEVICE_LOGIN_INTERRUPTED_MESSAGE
+
+        message = str(exc) if isinstance(exc, LoginInterrupted) else DEVICE_LOGIN_INTERRUPTED_MESSAGE
+        main.stderr_console.print(f"[yellow]{message}[/yellow]")
+        raise typer.Exit(130) from None
     except Exception as exc:
         message = str(exc)
         main.stderr_console.print(f"[red]Login failed:[/red] {message}")
