@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import random
 import secrets
 import threading
 import time
@@ -45,6 +46,52 @@ LOGIN_SCOPES = [
 
 class LoginFlowError(RuntimeError):
     pass
+
+
+class LoginInterrupted(LoginFlowError):
+    """Raised when the operator presses Ctrl-C during an interactive login.
+
+    Subclasses ``LoginFlowError`` so existing broad handlers still catch it, but
+    the login command treats it specially to print a calm cancellation notice
+    instead of a failure. There is no resume state: a restart is a fresh request.
+    """
+
+
+# --- Device-flow polling contract -----------------------------------------
+# Jitter added on top of the server-advertised interval so a fleet of clients
+# does not synchronise its polls into a thundering herd.
+_DEVICE_POLL_JITTER_SECONDS = 1.0
+# RFC 8628 §3.5: on `slow_down` the client MUST add 5 seconds to the interval
+# for this and every subsequent request.
+_DEVICE_POLL_SLOW_DOWN_STEP_SECONDS = 5
+# Generous bounds so a brief network/server wobble never aborts a login that
+# still has time on the clock, while a sustained outage still gives up cleanly.
+_DEVICE_POLL_MAX_TRANSPORT_FAILURES = 10
+_DEVICE_POLL_MAX_SERVER_ERRORS = 10
+
+# Stable, classified recovery guidance. Each terminal outcome gets its own
+# message so users always know whether to wait, retry, or start fresh — we never
+# collapse distinct causes into one generic failure.
+DEVICE_LOGIN_EXPIRED_MESSAGE = "The approval window ended. Run heyfood login again."
+DEVICE_LOGIN_DENIED_MESSAGE = (
+    "The request was declined. Run heyfood login again if this was a mistake."
+)
+DEVICE_LOGIN_INVALID_GRANT_MESSAGE = (
+    "This login attempt is no longer valid. Run heyfood login to start a fresh one."
+)
+DEVICE_LOGIN_UNAVAILABLE_MESSAGE = (
+    "hello.food is having trouble right now — your login was not completed. "
+    "Try again shortly."
+)
+DEVICE_LOGIN_NETWORK_MESSAGE = (
+    "hello.food could not be reached after several attempts — your login was not "
+    "completed. Check your connection and run heyfood login again."
+)
+DEVICE_LOGIN_INTERRUPTED_MESSAGE = (
+    "Login canceled. Nothing was completed and no partial login was saved. "
+    "Run heyfood login to start a fresh request — there is no resume, so a "
+    "restart always begins a new login."
+)
 
 
 def _post_with_diagnostics(
@@ -211,6 +258,9 @@ def perform_device_login(
     registration = register_client(api_url, "http://127.0.0.1:1/device-unused")
     client_id = str(registration["client_id"])
     authorization = start_device_authorization(api_url, client_id)
+    # Anchor the advertised deadline to the moment the code was issued, not to
+    # when polling begins, so the browser-prompt time counts against expires_in.
+    authorized_at = time.monotonic()
     verification_url = str(
         authorization.get("verification_uri_complete")
         or authorization.get("verification_uri")
@@ -229,7 +279,11 @@ def perform_device_login(
         client_id=client_id,
         device_code=str(authorization["device_code"]),
         interval_seconds=int(authorization.get("interval", 5)),
-        timeout_seconds=min(timeout_seconds, int(authorization.get("expires_in", timeout_seconds))),
+        timeout_seconds=timeout_seconds,
+        # expires_in is the single authoritative deadline; poll_device_authorization
+        # clamps the user timeout to it exactly rather than approximating here.
+        expires_in=int(authorization.get("expires_in", timeout_seconds)),
+        authorized_at=authorized_at,
     )
     session_bundle = exchange_cli_session(
         api_url=api_url,
@@ -275,53 +329,188 @@ def poll_device_authorization(
     device_code: str,
     interval_seconds: int,
     timeout_seconds: int,
+    expires_in: int | None = None,
+    authorized_at: float | None = None,
+    sleep: Callable[[float], None] | None = None,
+    monotonic: Callable[[], float] | None = None,
+    jitter: Callable[[], float] | None = None,
 ) -> dict[str, Any]:
-    deadline = time.monotonic() + max(1, timeout_seconds)
+    """Poll the device-token endpoint until approval, denial, or the deadline.
+
+    Deadline discipline: ``expires_in`` from the authorize response is the single
+    authoritative deadline. We anchor it to ``authorized_at`` — the monotonic
+    clock reading captured right after the authorize call — rather than to the
+    moment polling starts, because the gap between authorize and the first poll
+    (browser prompt, user reading the code) would otherwise let us run slightly
+    past the server's real cutoff. The effective deadline is therefore *exactly*
+    ``min(user timeout, advertised deadline)``, and no sleep is allowed to carry
+    us beyond it.
+
+    ``sleep``/``monotonic``/``jitter`` are injectable so the polling contract can
+    be exercised on a fake clock with no real waiting.
+    """
+    # Resolve injectables at call time so callers (and tests) can monkeypatch the
+    # module-level time functions without the defaults freezing an early binding.
+    if sleep is None:
+        sleep = time.sleep
+    if monotonic is None:
+        monotonic = time.monotonic
+    if jitter is None:
+        jitter = lambda: random.uniform(0.0, _DEVICE_POLL_JITTER_SECONDS)
+
+    start = monotonic()
+    reference = authorized_at if authorized_at is not None else start
+    user_deadline = start + max(1, timeout_seconds)
+    if expires_in is not None:
+        advertised_deadline = reference + max(1, expires_in)
+        deadline = min(user_deadline, advertised_deadline)
+        # Was the server's window (not the user's --timeout) the binding limit?
+        advertised_is_binding = advertised_deadline <= user_deadline
+    else:
+        deadline = user_deadline
+        advertised_is_binding = False
+
     interval = max(1, interval_seconds)
-    with httpx.Client(timeout=20.0) as client:
-        while time.monotonic() < deadline:
-            try:
-                response = _post_with_diagnostics(
-                    api_url,
-                    "/v1/channel/oauth/device/token",
-                    json_body={"client_id": client_id, "device_code": device_code},
-                    client=client,
-                )
-            except httpx.HTTPError as exc:
-                raise LoginFlowError(
-                    f"Lost connection to the device authorization service: {exc}"
-                ) from exc
-            data = _response_json(response, "Device token exchange") if response.content else {}
-            if response.status_code < 400:
-                if not isinstance(data, dict) or not data.get("access_token"):
-                    raise LoginFlowError("Device token exchange returned an unexpected response.")
-                return data
-            error = data.get("error") if isinstance(data, dict) else None
-            if error == "authorization_pending":
-                diagnostics.reporter.emit(
-                    "auth.device_pending",
-                    context="authentication",
-                    retry_in_seconds=interval,
-                )
-                time.sleep(interval)
-                continue
-            if error == "slow_down":
-                interval += 5
-                diagnostics.reporter.emit(
-                    "auth.device_slow_down",
-                    context="authentication",
-                    retry_in_seconds=interval,
-                )
-                time.sleep(interval)
-                continue
-            if error == "access_denied":
-                raise LoginFlowError("Login was denied in the browser.")
-            if error == "expired_token":
-                raise LoginFlowError(
-                    "The device login code expired. Run `heyfood login --device` again."
-                )
-            raise LoginFlowError(_response_error(response))
+    consecutive_transport_failures = 0
+    consecutive_server_errors = 0
+
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            while monotonic() < deadline:
+                try:
+                    response = _post_with_diagnostics(
+                        api_url,
+                        "/v1/channel/oauth/device/token",
+                        json_body={"client_id": client_id, "device_code": device_code},
+                        client=client,
+                    )
+                except httpx.HTTPError as exc:
+                    # A single transport blip must not abort a login that still
+                    # has time on the clock; retry on the next tick and only give
+                    # up after a sustained run of consecutive failures.
+                    consecutive_transport_failures += 1
+                    diagnostics.reporter.emit(
+                        "auth.device_transport_error",
+                        context="authentication",
+                        error=type(exc).__name__,
+                        consecutive=consecutive_transport_failures,
+                    )
+                    if consecutive_transport_failures >= _DEVICE_POLL_MAX_TRANSPORT_FAILURES:
+                        raise LoginFlowError(DEVICE_LOGIN_NETWORK_MESSAGE) from exc
+                    _sleep_before_next_poll(sleep, monotonic, deadline, interval, jitter)
+                    continue
+
+                # A completed round-trip means the network is healthy again.
+                consecutive_transport_failures = 0
+
+                if response.status_code >= 500:
+                    # Server-side wobble: retry like a transient error, but track
+                    # it separately so exhaustion maps to the "having trouble"
+                    # message rather than the connectivity one.
+                    consecutive_server_errors += 1
+                    diagnostics.reporter.emit(
+                        "auth.device_server_error",
+                        context="authentication",
+                        status=response.status_code,
+                        consecutive=consecutive_server_errors,
+                    )
+                    if consecutive_server_errors >= _DEVICE_POLL_MAX_SERVER_ERRORS:
+                        raise LoginFlowError(DEVICE_LOGIN_UNAVAILABLE_MESSAGE)
+                    _sleep_before_next_poll(sleep, monotonic, deadline, interval, jitter)
+                    continue
+
+                data = _safe_json(response)
+
+                if response.status_code < 400:
+                    if not data.get("access_token"):
+                        raise LoginFlowError(
+                            "Device token exchange returned an unexpected response."
+                        )
+                    return data
+
+                error = data.get("error")
+                if error == "authorization_pending":
+                    consecutive_server_errors = 0
+                    diagnostics.reporter.emit(
+                        "auth.device_pending",
+                        context="authentication",
+                        retry_in_seconds=interval,
+                    )
+                    _sleep_before_next_poll(sleep, monotonic, deadline, interval, jitter)
+                    continue
+                if error == "slow_down":
+                    consecutive_server_errors = 0
+                    interval += _DEVICE_POLL_SLOW_DOWN_STEP_SECONDS
+                    diagnostics.reporter.emit(
+                        "auth.device_slow_down",
+                        context="authentication",
+                        retry_in_seconds=interval,
+                    )
+                    _sleep_before_next_poll(sleep, monotonic, deadline, interval, jitter)
+                    continue
+                if error == "temporarily_unavailable":
+                    # A soft 4xx signalling overload — retryable, same class as 5xx.
+                    consecutive_server_errors += 1
+                    diagnostics.reporter.emit(
+                        "auth.device_unavailable",
+                        context="authentication",
+                        consecutive=consecutive_server_errors,
+                    )
+                    if consecutive_server_errors >= _DEVICE_POLL_MAX_SERVER_ERRORS:
+                        raise LoginFlowError(DEVICE_LOGIN_UNAVAILABLE_MESSAGE)
+                    _sleep_before_next_poll(sleep, monotonic, deadline, interval, jitter)
+                    continue
+                if error == "access_denied":
+                    raise LoginFlowError(DEVICE_LOGIN_DENIED_MESSAGE)
+                if error == "expired_token":
+                    raise LoginFlowError(DEVICE_LOGIN_EXPIRED_MESSAGE)
+                if error == "invalid_grant":
+                    raise LoginFlowError(DEVICE_LOGIN_INVALID_GRANT_MESSAGE)
+                raise LoginFlowError(_response_error(response))
+    except KeyboardInterrupt:
+        # Restart is the contract — no partial state is persisted. Surface a calm
+        # notice and drop the traceback so Ctrl-C never dumps a stack.
+        raise LoginInterrupted(DEVICE_LOGIN_INTERRUPTED_MESSAGE) from None
+
+    # The loop exited because we reached the deadline without a terminal answer.
+    # If the advertised window was the binding constraint, the approval window
+    # truly ended; otherwise the user's --timeout elapsed first.
+    if advertised_is_binding:
+        raise LoginFlowError(DEVICE_LOGIN_EXPIRED_MESSAGE)
     raise LoginFlowError("Timed out waiting for device authorization.")
+
+
+def _sleep_before_next_poll(
+    sleep: Callable[[float], None],
+    monotonic: Callable[[], float],
+    deadline: float,
+    interval: float,
+    jitter: Callable[[], float],
+) -> None:
+    """Wait the advertised interval plus jitter, but never sleep past the deadline.
+
+    Clamping to the remaining time keeps the total poll window from exceeding the
+    authoritative deadline even when the interval is large relative to what's left.
+    """
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        return
+    sleep(min(interval + jitter(), remaining))
+
+
+def _safe_json(response: httpx.Response) -> dict[str, Any]:
+    """Best-effort JSON decode of a poll response.
+
+    Unlike ``_response_json`` this never raises: a 5xx page or an empty body must
+    be treated as a retryable poll tick, not a fatal parse error.
+    """
+    if not response.content:
+        return {}
+    try:
+        data = response.json()
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _save_authenticated_config(

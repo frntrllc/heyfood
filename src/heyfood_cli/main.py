@@ -14,7 +14,7 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__
-from .auth import local_urls, perform_device_login, perform_login
+from .auth import LoginInterrupted, local_urls, perform_device_login, perform_login
 from .client import ChannelToolUnavailable, HelloFoodClient, HelloFoodError, LoginRequired
 from .config import (
     BUILTIN_CONTEXTS,
