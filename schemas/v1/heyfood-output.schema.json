@@ -2,14 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/frntrllc/heyfood/blob/main/schemas/v1/heyfood-output.schema.json",
   "title": "heyfood machine output contract v1",
-  "description": "Versioned core shapes for safety, menu, ranking, and recipe results. Service responses may add fields.",
+  "description": "Versioned core shapes for registration, safety, menu, ranking, and recipe results. Service responses may add fields.",
   "x-heyfood-schema-version": 1,
   "oneOf": [
     {"$ref": "#/$defs/safetyVerdict"},
     {"$ref": "#/$defs/restaurantFit"},
     {"$ref": "#/$defs/menuEvaluation"},
     {"$ref": "#/$defs/recommendationRanking"},
-    {"$ref": "#/$defs/recipeCompatibility"}
+    {"$ref": "#/$defs/recipeCompatibility"},
+    {"$ref": "#/$defs/registrationResult"}
   ],
   "$defs": {
     "safetyStatus": {
@@ -138,6 +139,29 @@
         }
       },
       "additionalProperties": true
+    },
+    "registrationResult": {
+      "title": "Registration result",
+      "description": "Credential-free terminal result after one completed registration authorization decision.",
+      "type": "object",
+      "required": [
+        "schema_version",
+        "authenticated",
+        "account_outcome",
+        "profile_status",
+        "next_command"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "authenticated": {"type": "boolean"},
+        "account_outcome": {"enum": ["created", "existing", null]},
+        "profile_status": {"enum": ["ready", "missing", "unknown", null]},
+        "next_command": {
+          "type": ["string", "null"],
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": false
     },
     "recipeCompatibility": {
       "title": "Recipe compatibility",

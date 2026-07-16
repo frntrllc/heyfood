@@ -20,6 +20,7 @@ from heyfood_cli.auth import (
     perform_login,
     pkce_pair,
     poll_device_authorization,
+    start_device_authorization,
 )
 
 
@@ -42,6 +43,7 @@ def test_build_authorize_url_contains_cli_scope():
     assert parse_qs(urlparse(url).query)["scope"] == [" ".join(LOGIN_SCOPES)]
     assert LOGIN_SCOPES == [
         "account:link",
+        "account:delete",
         "knowledge:read",
         "menu:read",
         "recommend:read",
@@ -115,6 +117,42 @@ def test_device_login_persists_both_token_bundles(monkeypatch):
     assert result["session"]["access_token"] == "hf_at_test"
     assert result["account_user_id"] == "user-a"
     store.save.assert_called_once_with(result)
+
+
+@pytest.mark.parametrize(
+    ("intent", "wire_intent"),
+    [
+        ("register", "create_account"),
+        ("login", "sign_in"),
+        ("auto", "auto"),
+    ],
+)
+def test_device_authorization_sends_backend_intent(monkeypatch, intent, wire_intent):
+    request = {}
+    response = httpx.Response(
+        200,
+        json={
+            "device_code": "hf_dc_test",
+            "user_code": "ABCD-EFGH",
+            "verification_uri": "https://auth.hello.food/authorize?flow=device",
+            "expires_in": 600,
+            "interval": 5,
+        },
+    )
+
+    def fake_post(_api_url, _path, *, json_body, **_kwargs):
+        request.update(json_body)
+        return response
+
+    monkeypatch.setattr("heyfood_cli.auth._post_with_diagnostics", fake_post)
+
+    start_device_authorization("https://api.hello.food", "client-1", intent)
+
+    assert request == {
+        "client_id": "client-1",
+        "scope": " ".join(LOGIN_SCOPES),
+        "intent": wire_intent,
+    }
 
 
 def test_authenticated_account_change_clears_account_scoped_local_state():

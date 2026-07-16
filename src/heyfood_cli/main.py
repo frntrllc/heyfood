@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 import sys
 from contextlib import nullcontext
@@ -79,6 +80,11 @@ voice_app = typer.Typer(
     help="Inspect microphones for native voice capture.",
 )
 app.add_typer(voice_app, name="voice")
+account_app = typer.Typer(
+    add_completion=False,
+    help="Manage your hello.food account.",
+)
+app.add_typer(account_app, name="account")
 console = Console(theme=HEYFOOD_THEME)
 stderr_console = Console(stderr=True, theme=HEYFOOD_THEME, highlight=False)
 MENU_POLL_INTERVAL_SECONDS = 3.0
@@ -134,6 +140,17 @@ def _stdin_is_tty() -> bool:
         return False
 
 
+def _interactive_terminal() -> bool:
+    """True only when the bare command may safely prompt and open a browser."""
+    return (
+        _stdin_is_tty()
+        and console.is_terminal
+        and stderr_console.is_terminal
+        and os.environ.get("TERM", "").lower() != "dumb"
+        and "CI" not in os.environ
+    )
+
+
 @app.callback()
 def callback(
     ctx: typer.Context,
@@ -147,7 +164,15 @@ def callback(
         console.print(f"heyfood {__version__}")
         raise typer.Exit()
     if ctx.invoked_subcommand is None:
-        render.intro(console)
+        if not _interactive_terminal():
+            render.noninteractive_intro(console)
+            return
+        # Import-time command registration is complete before Click invokes
+        # this callback, so the bare-command application can safely enter the
+        # first-run state machine without duplicating command implementations.
+        from .commands.auth import run_bare_first_run
+
+        run_bare_first_run()
 
 
 def _raise_geocode_error(
@@ -363,11 +388,14 @@ def _print_no_menu(restaurant: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 from .commands.auth import (  # noqa: E402,F401
     login,
+    register,
     logout,
     status,
     doctor,
     _first_name_from_account,
+    run_bare_first_run,
 )
+from .commands.account import account_delete  # noqa: E402,F401
 from .commands.profiles import (  # noqa: E402,F401
     members_list,
     household_list,

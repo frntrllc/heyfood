@@ -331,6 +331,51 @@ class HelloFoodClient:
                     "Run `heyfood login` again to refresh this CLI session."
                 ) from retry_exc
 
+    def profile_readiness(self) -> dict[str, Any]:
+        """Return the strictly validated least-privilege first-run state."""
+        from .auth_application import AuthContractError, validate_profile_readiness
+
+        for attempt in range(2):
+            try:
+                data = self._request(
+                    "GET",
+                    "/v1/channel/tools/profile/readiness",
+                    auth="channel",
+                )
+                return validate_profile_readiness(data).document()
+            except AuthContractError as exc:
+                raise HelloFoodError(str(exc)) from exc
+            except HelloFoodError as exc:
+                if attempt == 0 and _is_invalid_channel_token_error(str(exc)):
+                    self.refresh_channel()
+                    continue
+                raise
+        raise LoginRequired("Run `heyfood login` again to refresh this CLI session.")
+
+    def begin_account_deletion(self, request_nonce: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/v1/auth/account-deletion/begin",
+            auth="session",
+            json_body={"schema_version": 1, "request_nonce": request_nonce},
+        )
+
+    def account_deletion_status(self, status_token: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/v1/auth/account-deletion/status",
+            auth=None,
+            json_body={"schema_version": 1, "status_token": status_token},
+        )
+
+    def cancel_account_deletion(self, status_token: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/v1/auth/account-deletion/cancel",
+            auth=None,
+            json_body={"schema_version": 1, "status_token": status_token},
+        )
+
     def channel_tool(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
         for attempt in range(2):
             try:

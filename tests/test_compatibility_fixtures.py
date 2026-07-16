@@ -30,6 +30,7 @@ RAW_OUTPUTS = json.loads((FIXTURE_ROOT / "raw_outputs.json").read_text())["outpu
 HELP_COMMANDS = {
     "root": (),
     "login": ("login",),
+    "register": ("register",),
     "logout": ("logout",),
     "status": ("status",),
     "doctor": ("doctor",),
@@ -78,6 +79,8 @@ HELP_COMMANDS = {
     "voice-status": ("voice", "status"),
     "voice-set": ("voice", "set"),
     "voice-reset": ("voice", "reset"),
+    "account": ("account",),
+    "account-delete": ("account", "delete"),
 }
 
 
@@ -215,9 +218,14 @@ def test_raw_output_matches_current_examples(
 # Historical baselines: immutable release evidence, guarded so they cannot rot.
 # --------------------------------------------------------------------------- #
 
-# Commands present in the pre-voice releases (0.1.0 and the reconstructed 0.2.0).
+# Commands present before first-run registration and voice (0.1.0 and the
+# reconstructed 0.2.0).
 _PRE_VOICE_COMMANDS = {
-    name for name in HELP_COMMANDS if not name.startswith("voice")
+    name
+    for name in HELP_COMMANDS
+    if not name.startswith("voice")
+    and not name.startswith("account")
+    and name != "register"
 }
 
 
@@ -250,13 +258,22 @@ def test_0_2_0_raw_outputs_match_the_0_1_0_release() -> None:
     assert v020 == v010
 
 
-def test_current_baseline_only_adds_voice_over_0_2_0() -> None:
-    # The 0.2.0 -> 0.3.0 diff must be exactly the voice surface: new voice
-    # commands plus the four commands that gained --voice options.
+def test_current_baseline_adds_first_run_and_voice_over_0_2_0() -> None:
+    # The 0.2.0 -> 0.3.0 diff is the reviewed first-run/registration and voice
+    # surface. Historical 0.1.0/0.2.0 fixtures remain immutable.
     v020 = _help_files("0.2.0")
     v030 = _help_files("0.3.0")
     assert set(v020).issubset(set(v030))
     new_commands = set(v030) - set(v020)
-    assert new_commands == {"voice", "voice-devices", "voice-status", "voice-set", "voice-reset"}
+    assert new_commands == {
+        "register",
+        "voice",
+        "voice-devices",
+        "voice-status",
+        "voice-set",
+        "voice-reset",
+        "account",
+        "account-delete",
+    }
     changed = {name for name in v020 if v030[name] != v020[name]}
     assert changed == {"root", "ask", "log", "onboard"}

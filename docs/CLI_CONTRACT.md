@@ -64,6 +64,28 @@ When the agent emits an out-of-band choice set, those commands add a `choices`
 object containing `choices[]` and `allow_multiple` to the result document.
 Confirmed local household writes are reported under additive `client_effects`.
 
+`register --json` waits for one browser/device authorization decision and then
+emits exactly one terminal result. It never opens a browser or starts dietary
+onboarding:
+
+```json
+{
+  "schema_version": 1,
+  "authenticated": true,
+  "account_outcome": null,
+  "profile_status": "missing",
+  "next_command": "heyfood onboard"
+}
+```
+
+`profile_status` is `ready`, `missing`, or `unknown`. A service or contract
+failure after authentication is `unknown`, never guessed as `missing`, and does
+not remove the valid session. `account_outcome` is `null` because the OAuth grant
+does not expose a trustworthy created/existing distinction; the CLI never
+guesses it. Identity resolution remains authoritative in the browser/backend.
+This exact shape is the shared first-run contract and `registrationResult` in
+the v1 JSON schema.
+
 Versioned safety, restaurant-fit, menu-evaluation, recommendation-ranking, and
 recipe-compatibility core shapes are documented in
 [`JSON_SCHEMAS.md`](JSON_SCHEMAS.md) and
@@ -140,6 +162,15 @@ list` succeeds with the local roster and adds a `reconciliation` object with
 `onboard --dry-run --no-input` performs no network call, credential/config
 write, consent grant, or prompt. Interactive `chat` rejects `--no-input` and
 non-TTY stdin; automation uses `ask` and `reply` instead.
+
+Bare `heyfood` owns an interactive first-run state machine only when stdin,
+stdout, and stderr are usable TTYs. A fresh local state recommends registration;
+prior account state recommends sign-in. After authentication it strictly checks
+profile readiness, offers the existing onboarding flow when the profile is
+missing (typed input by default, with contextual voice or defer choices), and
+enters chat after readiness or an intentional defer.
+Non-TTY bare execution never performs network, credential, prompt, browser, or
+profile actions and exits `0` after printing plain next steps.
 
 ## Compatibility and deprecation
 

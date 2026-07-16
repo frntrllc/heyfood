@@ -21,10 +21,20 @@ def intro(console: Console) -> None:
         Panel.fit(
             "[bold green]heyfood[/bold green]\n"
             "[dim]hello.food intelligence for people who live in terminals[/dim]\n\n"
-            "Try: [bold]heyfood login[/bold], then "
-            "[bold]heyfood ask \"can I eat pad thai?\"[/bold]",
+            "Create an account, sign in, and get useful dietary guidance "
+            "without leaving your terminal.",
             border_style="green",
         )
+    )
+
+
+def noninteractive_intro(console: Console) -> None:
+    """Plain, side-effect-free bare-command output for pipes and automation."""
+    console.print(
+        "heyfood - hello.food for your terminal\n"
+        "New here: heyfood register\n"
+        "Returning user: heyfood login\n"
+        "Run heyfood --help for commands."
     )
 
 

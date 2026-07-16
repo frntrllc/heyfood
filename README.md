@@ -50,6 +50,7 @@ To select an exact release or add operating-system credential-vault support:
 ```bash
 curl -fsSL https://hey.food/install.sh | HEYFOOD_VERSION=0.2.0 bash
 curl -fsSL https://hey.food/install.sh | HEYFOOD_WITH_KEYRING=1 bash
+curl -fsSL https://hey.food/install.sh | HEYFOOD_WITH_VOICE=1 bash
 ```
 
 Direct `pipx` installation remains fully supported:
@@ -88,7 +89,42 @@ heyfood --version
 heyfood --help
 ```
 
-## Authenticate
+## Get started
+
+Run the bare command after installation. In a terminal, it takes a new user
+from account creation through optional dietary onboarding and into a useful
+session. In a pipe or other non-interactive environment it only prints concise
+next steps and never opens a browser.
+
+```bash
+heyfood
+```
+
+New users can also start explicitly:
+
+```bash
+heyfood register
+```
+
+Registration preflights the production capability contract before opening the
+browser. Identity verification, current Terms and Privacy acceptance, account
+resolution, and capability consent stay on `auth.hello.food`. If the first
+dietary profile is missing, interactive registration offers the existing
+guided onboarding immediately. Choose `type`, `voice`, or `later`; voice is an
+optional path and never blocks typed onboarding. Use `--no-onboard` to defer it.
+
+For a headless machine, use the one-decision short-code flow. JSON mode never
+opens a browser or starts onboarding; progress and the approval URL use stderr,
+and stdout receives exactly one JSON result after the decision:
+
+```bash
+heyfood register --device --no-browser --json
+```
+
+SMS registration is US-only. Email remains available without a phone. The auth
+page advertises only identity methods that are genuinely enabled.
+
+## Sign in to an existing account
 
 ```bash
 heyfood login
@@ -101,6 +137,15 @@ CLI credentials securely. On an SSH/headless machine, use the short-code flow:
 
 ```bash
 heyfood login --device --no-browser
+```
+
+Account deletion is a separate, deliberately destructive flow. It requires a
+fresh CLI session with `account:delete`, explicit local acknowledgement, and a
+second identity confirmation in the browser. Local credentials are removed
+only after the service returns a validated post-commit receipt:
+
+```bash
+heyfood account delete
 ```
 
 Open the printed URL on any browser, confirm that the displayed code matches

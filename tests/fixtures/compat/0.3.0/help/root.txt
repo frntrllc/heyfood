@@ -12,6 +12,7 @@ Usage: heyfood [OPTIONS] COMMAND [ARGS]...
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ login         Authenticate this machine with HelloFood.                                                              │
+│ register      Create or connect a hello.food account, then offer onboarding.                                         │
 │ logout        Forget local credentials and revoke the current app session.                                           │
 │ status        Show the active HelloFood account and channel scopes.                                                  │
 │ doctor        Check local config, auth refresh, and API reachability.                                                │
@@ -35,4 +36,5 @@ Usage: heyfood [OPTIONS] COMMAND [ARGS]...
 │ household     Manage the local household roster and active agent scope.                                              │
 │ conversation  Inspect or manage the locally remembered agent conversation.                                           │
 │ voice         Inspect microphones for native voice capture.                                                          │
+│ account       Manage your hello.food account.                                                                        │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

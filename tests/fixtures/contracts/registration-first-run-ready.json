@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "authenticated": true,
+  "account_outcome": "existing",
+  "profile_status": "ready",
+  "next_command": "heyfood chat"
+}

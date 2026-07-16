@@ -108,3 +108,31 @@ jobs:
           python scripts/smoke_installed_cli.py "$PIPX_BIN_DIR/heyfood" "$VERSION"
       - name: Uninstall cleanly
         run: python -m pipx uninstall heyfood-cli
+
+  voice-wheel-smoke:
+    name: Voice wheel / ${{ matrix.os }}
+    needs: build-distribution
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-distributions
+          path: dist
+      - name: Install Linux voice runtime
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes libportaudio2
+      - name: Install exact wheel with voice extra
+        run: python -m pip install "$(find dist -name '*.whl' -print -quit)[voice]"
+      - name: Smoke optional voice runtime without microphone access
+        run: |
+          python -c 'import sounddevice; import heyfood_cli.voice_capture'
+          heyfood voice status --json
