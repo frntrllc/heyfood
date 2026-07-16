@@ -1,0 +1,17 @@
+Usage: heyfood reply [OPTIONS] QUERY...
+
+ Reply to the last HelloFood agent conversation.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    query      QUERY...  Follow-up text for the last conversation. [required]                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --lat                FLOAT  Latitude for this follow-up.                                                             │
+│ --lng                FLOAT  Longitude for this follow-up.                                                            │
+│ --near               TEXT   Place name for this follow-up.                                                           │
+│ --no-location               Do not send saved location context.                                                      │
+│ --for                TEXT   Household scope: member name/id, me, or everyone.                                        │
+│ --json                      Print stable JSON.                                                                       │
+│ --raw                       Deprecated alias for --json.                                                             │
+│ --help                      Show this message and exit.                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

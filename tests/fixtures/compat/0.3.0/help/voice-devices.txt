@@ -1,0 +1,9 @@
+Usage: heyfood voice devices [OPTIONS]
+
+ List microphones available for native voice capture.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --json          Print stable JSON.                                                                                   │
+│ --raw           Deprecated alias for --json.                                                                         │
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

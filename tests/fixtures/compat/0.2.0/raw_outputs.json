@@ -1,0 +1,83 @@
+{
+  "fixture_version": 1,
+  "baseline_commit": "688a9105",
+  "outputs": {
+    "profile": {
+      "member_id": "_self",
+      "version": 4,
+      "updated_at": "2026-07-10T12:00:00Z",
+      "profile_data": {
+        "preferences": ["mediterranean"],
+        "preference_strictness": {"mediterranean": "prefer"},
+        "restrictions": ["peanuts"],
+        "restriction_handling": {"peanuts": "avoid"},
+        "avoid_ingredients": ["onion", "garlic"],
+        "medical_condition_id": "hypertension",
+        "medical_constraints": ["high_sodium"],
+        "severity_level": 3,
+        "activity_level": "moderate",
+        "cuisine_preferences": ["mediterranean"],
+        "health_condition_ids": ["hypertension"],
+        "custom_health_conditions": [],
+        "custom_diet_styles": [],
+        "custom_restrictions": [],
+        "custom_cuisines": []
+      }
+    },
+    "ask": {
+      "message": "Steamed rice is generally safer; confirm preparation and cross-contact.",
+      "structured": {
+        "type": "general_response"
+      },
+      "conversation_id": "conv-fixture-1"
+    },
+    "search": {
+      "total_count": 1,
+      "restaurants": [
+        {
+          "id": "restaurant-fixture-1",
+          "name": "Thai Taste Restaurant",
+          "address": "123 Higuera Street, San Luis Obispo, CA",
+          "distance_miles": 1.8,
+          "has_menu": true,
+        "fit_status": "risky"
+        }
+      ]
+    },
+    "recipes_search": {
+      "query_used": "Thai dinner",
+      "personalized": true,
+      "recipes": [
+        {
+          "recipe_ref": "recipe:thai-basil-chicken",
+          "title": "Thai Basil Chicken",
+          "ready_in_minutes": 25,
+          "calories_per_serving": 410,
+          "dietary_match_hint": 0.96,
+          "dietary_tags": ["gluten_free", "dairy_free"]
+        }
+      ]
+    },
+    "recipes_save": {
+      "message": "Saved Thai Basil Chicken.",
+      "recipe": {
+        "recipe_ref": "recipe:thai-basil-chicken",
+        "title": "Thai Basil Chicken",
+        "ready_in_minutes": 25,
+        "servings": 4,
+        "updated_at": "2026-07-10T12:00:00Z"
+      }
+    },
+    "recipes_saved": {
+      "recipes": [
+        {
+          "recipe_ref": "recipe:thai-basil-chicken",
+          "title": "Thai Basil Chicken",
+          "ready_in_minutes": 25,
+          "servings": 4,
+          "updated_at": "2026-07-10T12:00:00Z"
+        }
+      ]
+    }
+  }
+}

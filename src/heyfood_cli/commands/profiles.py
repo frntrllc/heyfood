@@ -12,7 +12,6 @@ from ..main import (
     Panel,
     Prompt,
     Table,
-    VoiceCaptureError,
     _fail,
     _is_profile_sync_consent_required,
     _json_mode,
@@ -20,7 +19,6 @@ from ..main import (
     _validated,
     _write_result,
     app,
-    capture_voice_transcript,
     household,
     household_app,
     members_app,
@@ -218,9 +216,11 @@ def onboard(
     member_id: str = typer.Option("_self", "--member-id", help="Synced profile member id."),
     replace: bool = typer.Option(False, "--replace", help="Replace the existing profile instead of merging answered fields."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Grant sync consent and save without confirmation."),
-    voice: bool = typer.Option(False, "--voice", help="Open a browser voice capture session before extracting the profile."),
-    voice_timeout: int = typer.Option(300, "--voice-timeout", help="Seconds to wait for browser voice capture."),
-    no_browser: bool = typer.Option(False, "--no-browser", help="With --voice, print the capture URL instead of opening it."),
+    voice: bool = typer.Option(False, "--voice", help="Capture your dietary profile by voice before extracting it."),
+    voice_capture_mode: str = typer.Option("auto", "--voice-capture", help="Voice capture mode: auto, native, browser, or typed."),
+    audio_device: Optional[str] = typer.Option(None, "--audio-device", help="Input device id or name for native voice capture."),
+    voice_timeout: int = typer.Option(300, "--voice-timeout", help="Seconds to wait for browser voice capture (browser rung only)."),
+    no_browser: bool = typer.Option(False, "--no-browser", help="With --voice, print the browser capture URL instead of opening it (browser rung only)."),
     interactive: bool = typer.Option(True, "--interactive/--no-interactive", help="Prompt for missing fields."),
     no_input: bool = typer.Option(False, "--no-input", help="Never prompt; fail if required input or approval is missing."),
     list_options: bool = typer.Option(False, "--list-options", help="Show accepted onboarding labels and ids."),
@@ -278,22 +278,22 @@ def onboard(
             max_length=1000,
         )
     ) or ""
+    main._validate_voice_options(
+        voice=voice,
+        positional_text="",
+        capture_mode=voice_capture_mode,
+        audio_device=audio_device,
+    )
     if voice:
-        try:
-            result = capture_voice_transcript(
-                timeout_seconds=voice_timeout,
-                open_browser=not no_browser,
-                url_callback=lambda url: main.stderr_console.print(f"Voice capture URL:\n{url}"),
-            )
-        except VoiceCaptureError as exc:
-            _fail(
-                str(exc),
-                kind="voice_capture_error",
-                json_mode=json_mode,
-            )
-        text_profile = result.transcript
-        if not json_mode:
-            main.console.print(Panel(text_profile, title="Voice transcript", border_style="green"))
+        text_profile = main._voice_transcript(
+            purpose="onboarding",
+            capture_mode=voice_capture_mode,
+            audio_device=audio_device,
+            json_mode=json_mode,
+            no_input=no_input,
+            open_browser=not no_browser,
+            browser_timeout=voice_timeout,
+        )
 
     first_name = _resolve_first_name(
         store,

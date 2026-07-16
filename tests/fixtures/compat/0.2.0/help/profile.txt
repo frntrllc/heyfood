@@ -1,0 +1,10 @@
+Usage: heyfood profile [OPTIONS]
+
+ Show your synced dietary graph.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --member-id        TEXT  Synced profile member id. [default: _self]                                                  │
+│ --json                   Print stable JSON.                                                                          │
+│ --raw                    Deprecated alias for --json.                                                                │
+│ --help                   Show this message and exit.                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

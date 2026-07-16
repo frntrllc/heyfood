@@ -1,0 +1,14 @@
+Usage: heyfood household label [OPTIONS] SELECTOR
+
+ Give an imported profile id a local name and relationship.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    selector      TEXT  Existing member name or id. [required]                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *  --name                TEXT  Local display name. [required]                                                        │
+│    --relationship        TEXT  spouse, partner, parent, child, sibling, grandparent, friend, or other.               │
+│    --json                      Print stable JSON.                                                                    │
+│    --raw                       Deprecated alias for --json.                                                          │
+│    --help                      Show this message and exit.                                                           │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

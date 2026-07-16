@@ -52,6 +52,7 @@ def test_build_authorize_url_contains_cli_scope():
         "profile:write",
         "meals:read",
         "meals:write",
+        "audio:transcribe",
     ]
 
 

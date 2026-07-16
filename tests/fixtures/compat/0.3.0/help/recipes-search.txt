@@ -1,0 +1,16 @@
+Usage: heyfood recipes search [OPTIONS] QUERY...
+
+ Search real recipes matched to your hello.food profile.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    query      QUERY...  Recipe search text. [required]                                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --cuisine         -c      TEXT     Cuisine filter.                                                                   │
+│ --type            -t      TEXT     Override inferred meal type: breakfast, lunch, dinner, snack, or dessert.         │
+│ --max-ready-time          INTEGER  Maximum ready time in minutes.                                                    │
+│ --limit           -n      INTEGER  Maximum recipes to show. [default: 5]                                             │
+│ --json                             Print stable JSON.                                                                │
+│ --raw                              Deprecated alias for --json.                                                      │
+│ --help                             Show this message and exit.                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

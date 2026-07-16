@@ -37,6 +37,9 @@ from . import render
 from .theme import HEYFOOD_THEME
 from . import validation
 from .voice import VoiceCaptureError, capture_voice_transcript
+from . import voice_capture
+from . import voice_policy
+from .voice_capture import VoiceCancelled, VoiceInputError, capture_voice_input
 
 
 app = typer.Typer(
@@ -71,6 +74,11 @@ conversation_app = typer.Typer(
     help="Inspect or manage the locally remembered agent conversation.",
 )
 app.add_typer(conversation_app, name="conversation")
+voice_app = typer.Typer(
+    add_completion=False,
+    help="Inspect microphones for native voice capture.",
+)
+app.add_typer(voice_app, name="voice")
 console = Console(theme=HEYFOOD_THEME)
 stderr_console = Console(stderr=True, theme=HEYFOOD_THEME, highlight=False)
 MENU_POLL_INTERVAL_SECONDS = 3.0
@@ -257,6 +265,88 @@ def _print_tool_unavailable(exc: ChannelToolUnavailable) -> None:
     )
 
 
+def _validate_voice_options(
+    *,
+    voice: bool,
+    positional_text: str,
+    capture_mode: str,
+    audio_device: str | None,
+) -> None:
+    """Shared local validation for the --voice option bundle on ask/log/onboard.
+
+    Positional text and --voice are mutually exclusive, and voice-only controls
+    (--voice-capture / --audio-device) fail locally when given without --voice
+    instead of being silently ignored.
+    """
+    if voice and positional_text.strip():
+        raise typer.BadParameter(
+            "Provide either positional text or --voice, not both."
+        )
+    if not voice:
+        if capture_mode and capture_mode.strip().lower() != voice_capture.AUTO:
+            raise typer.BadParameter("--voice-capture requires --voice.")
+        if audio_device is not None:
+            raise typer.BadParameter("--audio-device requires --voice.")
+
+
+def _voice_transcript(
+    *,
+    purpose: str,
+    capture_mode: str,
+    audio_device: str | None,
+    json_mode: bool,
+    no_input: bool = False,
+    client: "HelloFoodClient | None" = None,
+    open_browser: bool = True,
+    browser_timeout: int = 300,
+) -> str:
+    """Capture and return a reviewed voice transcript for a command.
+
+    Rejects every noninteractive context (--json/--raw, --no-input, CI, dumb
+    terminal, non-TTY) up front with one stable error before any microphone or
+    browser is touched, then resolves the capture rung, reviews the transcript,
+    persists an explicit device/mode choice, and surfaces terminal failures
+    through the shared ``_fail`` UX. All capture UI stays on stderr so ``--json``
+    stdout remains a clean data channel.
+    """
+    # One central interactive-capability gate, before any hardware/browser.
+    try:
+        voice_policy.ensure_voice_interactive(json_mode=json_mode, no_input=no_input)
+    except voice_policy.VoiceNotInteractiveError as exc:
+        _fail(str(exc), kind=exc.kind, json_mode=json_mode, hint=exc.hint)
+
+    client = client or HelloFoodClient()
+    settings = client.voice_settings()
+    persisted_mode = settings.get("capture_mode")
+    device = audio_device if audio_device is not None else settings.get("device")
+    try:
+        outcome = capture_voice_input(
+            client,
+            purpose=purpose,
+            requested_mode=capture_mode,
+            device=device,
+            stderr_console=stderr_console,
+            is_tty=_stdin_is_tty(),
+            open_browser=open_browser,
+            browser_timeout=browser_timeout,
+            persisted_mode=persisted_mode,
+        )
+    except VoiceCancelled:
+        # A deliberate cancel at review is a clean exit — nothing submitted.
+        stderr_console.print("[dim]Nothing submitted.[/dim]")
+        raise typer.Exit(0)
+    except VoiceInputError as exc:
+        _fail(str(exc), kind=exc.kind, json_mode=json_mode, hint=exc.hint)
+    remember: dict[str, Any] = {}
+    if audio_device is not None:
+        remember["device"] = audio_device
+    if capture_mode and capture_mode != voice_capture.AUTO:
+        remember["capture_mode"] = capture_mode
+    if remember:
+        client.remember_voice_settings(**remember)
+    return outcome.transcript
+
+
 def _print_no_menu(restaurant: dict[str, Any]) -> None:
     name = restaurant.get("name") or "that restaurant"
     stderr_console.print(f"[yellow]No menu is available for {name} yet.[/yellow]")
@@ -349,4 +439,10 @@ from .commands.config import (  # noqa: E402,F401
     config_path,
     config_show,
     config_validate,
+)
+from .commands.voice import (  # noqa: E402,F401
+    voice_devices,
+    voice_status,
+    voice_set,
+    voice_reset,
 )
