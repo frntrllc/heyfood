@@ -11,8 +11,48 @@ advice or emergency care.
 
 ## Installation
 
-Install the isolated command with
-[`pipx`](https://pipx.pypa.io/stable/installation/):
+On macOS or Linux, run the hosted installer:
+
+```bash
+curl -fsSL https://hey.food/install.sh | bash
+```
+
+The public [installer source](install.sh) selects a supported Python, uses or
+bootstraps an isolated [`pipx`](https://pipx.pypa.io/stable/installation/),
+installs only `heyfood-cli` from PyPI, and verifies `heyfood --version`. It does
+not use `sudo`, install Python or Homebrew, edit shell startup files, or start
+authentication. If the command directory is not already on `PATH`, it prints
+the exact export command. Python 3.11, 3.12, and 3.13 are supported.
+
+To inspect pinned repository bytes before running them, replace `REVISION` with
+a reviewed full commit SHA from this repository, then download and verify both
+files from that immutable revision:
+
+```bash
+REVISION="<full-reviewed-commit-sha>"
+curl -fsSLO "https://raw.githubusercontent.com/frntrllc/heyfood/${REVISION}/install.sh"
+curl -fsSLO "https://raw.githubusercontent.com/frntrllc/heyfood/${REVISION}/install.sh.sha256"
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum -c install.sh.sha256
+else
+  shasum -a 256 -c install.sh.sha256
+fi
+less install.sh
+bash install.sh
+```
+
+The SHA-256 file is meaningful only when it comes from a separately reviewed,
+pinned repository revision. Fetching a script and checksum from the same
+mutable endpoint does not protect against that endpoint being compromised.
+
+To select an exact release or add operating-system credential-vault support:
+
+```bash
+curl -fsSL https://hey.food/install.sh | HEYFOOD_VERSION=0.2.0 bash
+curl -fsSL https://hey.food/install.sh | HEYFOOD_WITH_KEYRING=1 bash
+```
+
+Direct `pipx` installation remains fully supported:
 
 ```bash
 pipx install heyfood-cli
@@ -20,9 +60,7 @@ heyfood --version
 heyfood --help
 ```
 
-Python 3.11, 3.12, and 3.13 are supported. To use the operating-system
-credential vault instead of the secure file fallback, install the optional
-keyring extra:
+With an existing `pipx`, install the optional keyring extra directly with:
 
 ```bash
 pipx install 'heyfood-cli[keyring]'
@@ -341,13 +379,16 @@ Revoke the local session before removing the package:
 
 ```bash
 heyfood logout
-python -m pip uninstall heyfood-cli
+pipx uninstall heyfood-cli
 ```
 
-For a future `pipx` installation, use `pipx uninstall heyfood-cli` after logout.
-If logout cannot reach the service, local credentials are still removed but
-server-side sessions may persist until expiry. Use `heyfood logout --json` to
-inspect per-step teardown results without exposing token values.
+The hosted installer prints the exact `pipx` command that manages its
+installation. When it had to create its own isolated bootstrap, that command
+uses the Python under
+`${XDG_DATA_HOME:-$HOME/.local/share}/heyfood/installer/pipx/`. If logout cannot
+reach the service, local credentials are still removed but server-side sessions
+may persist until expiry. Use `heyfood logout --json` to inspect per-step
+teardown results without exposing token values.
 
 ## License and project boundary
 

@@ -54,6 +54,8 @@ def test_public_legal_and_contributor_documents_are_present() -> None:
         "DEVELOPMENT.md",
         "CHANGELOG.md",
         "RELEASING.md",
+        "install.sh",
+        "install.sh.sha256",
         "docs/CLI_CONTRACT.md",
         "docs/COMMAND_GRAMMAR.md",
         "docs/JSON_SCHEMAS.md",

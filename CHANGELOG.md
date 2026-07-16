@@ -4,6 +4,15 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
+## Unreleased
+
+### Added
+
+- A public, no-sudo macOS/Linux installer at `https://hey.food/install.sh`
+  that installs the canonical PyPI package through isolated pipx, verifies the
+  command, supports exact-version and keyring opt-ins, and never edits shell
+  startup files.
+
 ## 0.2.0 - 2026-07-15
 
 ### Added
