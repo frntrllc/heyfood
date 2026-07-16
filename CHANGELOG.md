@@ -4,7 +4,7 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
-## Unreleased
+## 0.2.0 - 2026-07-15
 
 ### Added
 

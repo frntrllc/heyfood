@@ -1,3 +1,3 @@
 """The heyfood command-line client for hello.food."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
