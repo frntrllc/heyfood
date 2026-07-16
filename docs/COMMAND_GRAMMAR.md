@@ -34,20 +34,34 @@ improving discovery.
 - Onboarding preserves `--no-interactive` as the compatibility alias described
   in the public process contract; new automation should use `--no-input`.
 - `--voice` on `onboard`, `ask`, and `log` speaks the request instead of typing
-  it; the positional request text is optional when `--voice` is used. Every mode
-  shows the transcript for confirmation (`[Y/n/e]`) before submitting.
+  it; the positional request text is optional when `--voice` is used, and
+  positional text and `--voice` are mutually exclusive. Every mode shows the
+  transcript for a review menu (accept / edit / record again / type instead /
+  cancel) before submitting.
+- `--voice` is interactive-only: combined with `--json`, `--raw`, `--no-input`,
+  a non-TTY stdin/stderr, `CI`, or `TERM=dumb` it produces one stable
+  noninteractive error and never opens a microphone or browser. Voice-only
+  controls (`--voice-capture`, `--audio-device`) fail locally when given without
+  `--voice`.
+- `auto` never crosses from native transcription to browser speech recognition
+  (a different, browser-vendor processor) without an explicit, default-no
+  consent; an explicit `--voice-capture native` never opens a browser.
 - `--voice-capture auto|native|browser|typed` (default `auto`) selects the
   capture mechanism; `--audio-device <id-or-name>` picks a microphone for native
-  capture. Both are additive named options. The capture mode and device are
-  persisted locally.
+  capture. Both are additive named options.
 - `--voice-timeout` and `--no-browser` are browser-rung controls only: they tune
   the localhost browser capture and do not affect native or typed capture.
 
-## Voice device discovery
+## Voice device discovery and preferences
 
 `heyfood voice devices` lists input devices for native capture (index, name,
 default marker). Pass the index or a name substring to `--audio-device`. Without
 the `voice` extra installed, it prints an enable hint instead of a device list.
+
+`heyfood voice status`, `heyfood voice set` (`--mode`, `--device`), and
+`heyfood voice reset` inspect and manage persisted, reversible capture
+preferences. An omitted mode stays distinct from an explicit `auto`, so a stored
+preference can never silently cross processors or open a browser.
 
 ## Discovering opaque ids
 

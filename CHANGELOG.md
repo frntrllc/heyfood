@@ -12,6 +12,41 @@ authentication contracts are stabilized.
   that installs the canonical PyPI package through isolated pipx, verifies the
   command, supports exact-version and keyring opt-ins, and never edits shell
   startup files.
+- Native in-memory microphone voice capture for `onboard`, `ask`, and `log` via
+  the optional `voice` extra (`pipx install 'heyfood-cli[voice]'`): audio is
+  uploaded once to the authenticated `/v1/audio/transcriptions` endpoint,
+  processed by hello.food and its configured transcription provider, and never
+  written to disk. Browser Web Speech capture becomes an explicit,
+  consent-gated fallback, and typed input always works.
+- `heyfood voice devices`, `voice status`, `voice set`, and `voice reset` for
+  inspecting microphones and managing persisted, reversible capture preferences
+  (an omitted mode stays distinct from an explicit `auto`).
+- A single canonical transcription contract (`schemas/v1/transcription.schema.json`)
+  that drives request limits (separate audio-file and multipart-request byte
+  ceilings, an 8–48 kHz sample-rate window) and runtime validation of every
+  transcription response.
+- A checked-in endpoint contract (`tests/fixtures/called_endpoints.json`) that
+  enumerates every `(method, endpoint)` the CLI can send, kept exhaustive by a
+  CI test that fails when a new call appears without a contract update.
+
+### Changed
+
+- `auto` voice capture never crosses from native transcription to browser
+  speech recognition without an explicit, default-no consent that discloses the
+  browser vendor processes the audio; declining goes to typed input. An
+  explicit `--voice-capture native` never opens a browser.
+- Remote (non-loopback) API and auth URLs now require verified HTTPS at every
+  ingress; URL userinfo, fragments, and base-URL query strings are rejected.
+  Plain HTTP is allowed only for exact loopback development hosts.
+- The `audio:transcribe` scope is requested at login and verified on the stored
+  channel token before the microphone is opened, so an older session is asked to
+  re-authorize before any audio is recorded rather than after upload.
+
+### Fixed
+
+- The compatibility baseline for the released `0.2.0` (household support, no
+  voice) is reconstructed from the exact published commit and preserved
+  immutably; the current baseline moves to `0.3.0`.
 
 ## 0.2.0 - 2026-07-15
 

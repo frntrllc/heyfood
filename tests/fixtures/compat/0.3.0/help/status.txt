@@ -1,0 +1,9 @@
+Usage: heyfood status [OPTIONS]
+
+ Show the active HelloFood account and channel scopes.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --json          Print stable JSON.                                                                                   │
+│ --raw           Deprecated alias for --json.                                                                         │
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

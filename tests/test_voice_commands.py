@@ -30,26 +30,58 @@ class _AgentClient:
         pass
 
 
-def test_ask_voice_json_stdout_is_pure(monkeypatch):
-    def fake_capture(client, *, purpose, **kwargs):
-        # Simulate capture UI noise landing on stderr, never stdout.
-        kwargs["stderr_console"].print("[dim]● Recording...[/dim]")
-        assert purpose == "ask"
-        return VoiceOutcome(transcript="spoken request", source="native")
+def _bypass_policy(monkeypatch):
+    """Neutralize the interactive-capability gate so the happy path is testable
+    under CliRunner (which has no real TTY)."""
+    monkeypatch.setattr(main.voice_policy, "ensure_voice_interactive", lambda **kw: None)
+
+
+def test_voice_with_json_is_rejected_before_any_capture(monkeypatch):
+    calls = {"captured": False}
+
+    def fake_capture(client, *, purpose, **kwargs):  # must never run
+        calls["captured"] = True
+        return VoiceOutcome(transcript="x", source="native")
 
     monkeypatch.setattr(main, "capture_voice_input", fake_capture)
     monkeypatch.setattr(main, "HelloFoodClient", lambda: _AgentClient())
 
-    result = runner.invoke(
-        main.app,
-        ["ask", "--voice", "--json"],
-        color=False,
-    )
+    result = runner.invoke(main.app, ["ask", "--voice", "--json"], color=False)
 
-    assert result.exit_code == 0
+    assert result.exit_code != 0
+    assert calls["captured"] is False  # no mic/browser touched
     payload = json.loads(result.stdout)
-    assert payload["conversation_id"] == "conv-1"
-    assert "Recording" not in result.stdout
+    assert payload["error"]["type"] == "voice_not_interactive"
+
+
+def test_voice_no_input_is_rejected(monkeypatch):
+    monkeypatch.setattr(main, "HelloFoodClient", lambda: _AgentClient())
+    result = runner.invoke(
+        main.app, ["onboard", "--voice", "--no-input", "--json"], color=False
+    )
+    assert result.exit_code != 0
+
+
+def test_voice_non_tty_is_rejected(monkeypatch):
+    # No policy bypass: CliRunner provides a non-interactive stdin/stderr.
+    monkeypatch.setattr(main, "HelloFoodClient", lambda: _AgentClient())
+    result = runner.invoke(main.app, ["log", "--voice"], color=False)
+    assert result.exit_code != 0
+
+
+def test_positional_text_and_voice_are_mutually_exclusive(monkeypatch):
+    monkeypatch.setattr(main, "HelloFoodClient", lambda: _AgentClient())
+    result = runner.invoke(main.app, ["ask", "pad thai", "--voice"], color=False)
+    assert result.exit_code != 0
+    assert "not both" in (result.stdout + result.stderr)
+
+
+def test_voice_only_controls_require_voice(monkeypatch):
+    monkeypatch.setattr(main, "HelloFoodClient", lambda: _AgentClient())
+    result = runner.invoke(
+        main.app, ["ask", "pad thai", "--voice-capture", "native"], color=False
+    )
+    assert result.exit_code != 0
 
 
 def test_ask_without_query_or_voice_is_rejected(monkeypatch):
@@ -58,7 +90,25 @@ def test_ask_without_query_or_voice_is_rejected(monkeypatch):
     assert result.exit_code != 0
 
 
+def test_ask_voice_keeps_capture_ui_off_stdout(monkeypatch):
+    _bypass_policy(monkeypatch)
+
+    def fake_capture(client, *, purpose, **kwargs):
+        kwargs["stderr_console"].print("[dim]● Recording...[/dim]")
+        assert purpose == "ask"
+        return VoiceOutcome(transcript="spoken request", source="native")
+
+    monkeypatch.setattr(main, "capture_voice_input", fake_capture)
+    monkeypatch.setattr(main, "HelloFoodClient", lambda: _AgentClient())
+
+    result = runner.invoke(main.app, ["ask", "--voice"], color=False)
+
+    assert result.exit_code == 0
+    assert "Recording" not in result.stdout
+
+
 def test_log_voice_routes_through_agent(monkeypatch):
+    _bypass_policy(monkeypatch)
     captured = {}
 
     def fake_capture(client, *, purpose, **kwargs):

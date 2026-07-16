@@ -19,18 +19,22 @@ from dataclasses import dataclass
 from typing import Callable, Protocol
 
 
-# Capture format. Mono 16-bit PCM is what the transcription endpoint prefers;
-# the sample rate is negotiated at open time (16 kHz first, device default as a
-# fallback) because not every input device supports 16 kHz.
-CHANNELS = 1
-SAMPLE_WIDTH = 2  # bytes per frame per channel (int16)
-DEFAULT_SAMPLE_RATE = 16_000
-WAV_HEADER_BYTES = 44
-
-# Duration/size ceilings. These mirror the server-side limits so a completed
-# recording is never rejected for being too long or too large after the fact.
-MAX_DURATION_SECONDS = 120
-MAX_WAV_BYTES = 12_500_000
+# Capture format and limits. All of these are sourced from the single canonical
+# transcription contract (see ``transcription_contract`` and
+# ``schemas/v1/transcription.schema.json``) so the recorder can never negotiate a
+# rate, duration, or size the server would reject. The sample rate is negotiated
+# at open time (preferred rate first, then the device default, then the window
+# ceiling), but a rate outside the accepted window is never opened.
+from .transcription_contract import (  # noqa: E402
+    CHANNELS as CHANNELS,
+    MAX_AUDIO_BYTES as MAX_WAV_BYTES,
+    MAX_DURATION_SECONDS as MAX_DURATION_SECONDS,
+    PREFERRED_SAMPLE_RATE_HZ as DEFAULT_SAMPLE_RATE,
+    SAMPLE_RATE_MAX_HZ as SAMPLE_RATE_MAX_HZ,
+    SAMPLE_RATE_MIN_HZ as SAMPLE_RATE_MIN_HZ,
+    SAMPLE_WIDTH_BYTES as SAMPLE_WIDTH,
+    WAV_HEADER_BYTES as WAV_HEADER_BYTES,
+)
 
 
 class NativeCaptureError(RuntimeError):
@@ -89,6 +93,9 @@ class MicrophoneStream(Protocol):
 
     def start(self) -> None:
         ...
+
+    def stop(self) -> None:
+        """Halt capture before draining. Optional; fakes may omit it."""
 
     def drain(self) -> bytes:
         """Return every buffered PCM frame captured so far and clear the buffer."""
@@ -166,15 +173,38 @@ def _open_negotiated(
     channels: int,
     default_sample_rate: int,
 ) -> tuple[MicrophoneStream, int]:
-    """Open the stream, trying the requested rate then the device default.
+    """Open the stream at a rate inside the accepted 8-48 kHz window.
 
-    A ``PortAudioError`` at the requested rate is an expected condition (many
-    devices reject 16 kHz), not a bug — retry once at the device's own rate.
+    Candidate rates are the requested rate, the preferred rate, the device
+    default, and the window ceiling — but only those inside the server's accepted
+    window are ever tried. A device whose native rate is above 48 kHz (many pro
+    interfaces default to 96 kHz) is negotiated down to an in-window rate rather
+    than producing a WAV the server would reject; if no in-window rate opens, the
+    capture fails cleanly instead of uploading an out-of-contract clip. A
+    ``PortAudioError`` at one rate is an expected condition, not a bug — try the
+    next in-window candidate.
     """
     candidates: list[int] = []
-    for rate in (requested_sample_rate, default_sample_rate, DEFAULT_SAMPLE_RATE):
-        if rate and int(rate) not in candidates:
-            candidates.append(int(rate))
+    for rate in (
+        requested_sample_rate,
+        DEFAULT_SAMPLE_RATE,
+        default_sample_rate,
+        SAMPLE_RATE_MAX_HZ,
+    ):
+        if not rate:
+            continue
+        value = int(rate)
+        if not (SAMPLE_RATE_MIN_HZ <= value <= SAMPLE_RATE_MAX_HZ):
+            # Never open outside the accepted window — a 96 kHz stream would
+            # yield a WAV the endpoint rejects.
+            continue
+        if value not in candidates:
+            candidates.append(value)
+    if not candidates:
+        raise NativeCaptureFailed(
+            "This microphone has no supported sample rate within the accepted "
+            f"{SAMPLE_RATE_MIN_HZ // 1000}-{SAMPLE_RATE_MAX_HZ // 1000} kHz range."
+        )
     last_error: Exception | None = None
     for rate in candidates:
         try:
@@ -190,6 +220,21 @@ def _open_negotiated(
     raise NativeCaptureFailed(
         "Could not open the microphone at any supported sample rate."
     ) from last_error
+
+
+def _stop_stream(stream: "MicrophoneStream") -> None:
+    """Stop a stream before draining, if it exposes an optional ``stop``.
+
+    Kept tolerant so hardware-free fakes that only implement start/drain/close
+    still work; the concrete backend defines ``stop`` and halts the callback
+    before the buffer is drained.
+    """
+    stopper = getattr(stream, "stop", None)
+    if callable(stopper):
+        try:
+            stopper()
+        except Exception:  # pragma: no cover - stop is best-effort before drain
+            pass
 
 
 def capture_recording(
@@ -216,6 +261,12 @@ def capture_recording(
             "Native voice capture needs the optional 'voice' extra."
         )
     info = backend.resolve_device(device)
+
+    # The explicit start acknowledgement happens BEFORE the device is opened, so
+    # no microphone stream is created and no OS permission prompt is triggered
+    # until the user has taken an affirmative action.
+    wait_to_start()
+
     stream, used_rate = _open_negotiated(
         backend,
         device_index=info.index,
@@ -231,11 +282,13 @@ def capture_recording(
     )
     overflowed = False
     try:
-        wait_to_start()
         stream.start()
         if on_record_start is not None:
             on_record_start(used_rate, deadline)
         wait_to_stop(deadline)
+        # Stop the stream before draining so no frames arrive mid-drain and the
+        # captured buffer is deterministic.
+        _stop_stream(stream)
         pcm = stream.drain()
         overflowed = stream.overflowed
     finally:
@@ -299,6 +352,12 @@ class _SoundDeviceStream:
 
     def start(self) -> None:
         self._stream.start()
+
+    def stop(self) -> None:
+        try:
+            self._stream.stop()
+        except Exception:  # pragma: no cover - stop is best-effort before drain
+            pass
 
     def drain(self) -> bytes:
         chunks: list[bytes] = []

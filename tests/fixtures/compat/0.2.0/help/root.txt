@@ -34,5 +34,4 @@ Usage: heyfood [OPTIONS] COMMAND [ARGS]...
 │ members       Discover synced household member ids.                                                                  │
 │ household     Manage the local household roster and active agent scope.                                              │
 │ conversation  Inspect or manage the locally remembered agent conversation.                                           │
-│ voice         Inspect microphones for native voice capture.                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

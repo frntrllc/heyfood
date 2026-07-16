@@ -7,4 +7,7 @@ Usage: heyfood voice [OPTIONS] COMMAND [ARGS]...
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ devices  List microphones available for native voice capture.                                                        │
+│ status   Show the persisted voice capture preferences for this machine.                                              │
+│ set      Persist a voice capture preference (mode and/or device).                                                    │
+│ reset    Clear all persisted voice capture preferences for this machine.                                             │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

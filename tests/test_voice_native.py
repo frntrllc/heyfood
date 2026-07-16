@@ -24,10 +24,14 @@ class FakeStream:
         self._drained = False
         self.overflowed = overflowed
         self.started = False
+        self.stopped = False
         self.closed = False
 
     def start(self) -> None:
         self.started = True
+
+    def stop(self) -> None:
+        self.stopped = True
 
     def drain(self) -> bytes:
         if self._drained:
@@ -95,6 +99,70 @@ def _silence(frames: int) -> bytes:
     return b"\x00\x00" * frames
 
 
+def test_out_of_window_device_rate_is_negotiated_down_never_opened():
+    # A 96 kHz-default device is negotiated to an in-window rate (48 kHz), and
+    # the out-of-window rate is never opened (a 96 kHz WAV would be rejected).
+    backend = FakeBackend(
+        pcm=_silence(10),
+        devices=[InputDevice(0, "Pro Interface", 1, 96_000.0, is_default=True)],
+    )
+    recording = capture_recording(
+        backend=backend,
+        wait_to_start=lambda: None,
+        wait_to_stop=lambda deadline: None,
+    )
+    assert 96_000 not in backend.opened_rates
+    assert all(8_000 <= rate <= 48_000 for rate in backend.opened_rates)
+    assert 8_000 <= recording.sample_rate <= 48_000
+
+
+def test_out_of_window_only_device_fails_rather_than_uploading():
+    # If the only rate the device supports is above the window, capture fails
+    # cleanly instead of producing a WAV the server rejects.
+    backend = FakeBackend(
+        pcm=_silence(10),
+        devices=[InputDevice(0, "192k only", 1, 96_000.0, is_default=True)],
+        unsupported_rates=(8_000, 16_000, 44_100, 48_000),
+    )
+    with pytest.raises(NativeCaptureFailed):
+        capture_recording(
+            backend=backend,
+            wait_to_start=lambda: None,
+            wait_to_stop=lambda deadline: None,
+        )
+    assert all(rate <= 48_000 for rate in backend.opened_rates)
+
+
+def test_stream_is_stopped_before_drain():
+    backend = FakeBackend(pcm=_silence(100))
+    capture_recording(
+        backend=backend,
+        wait_to_start=lambda: None,
+        wait_to_stop=lambda deadline: None,
+    )
+    # The concrete fake exposes a stop() the recorder must call before draining.
+    assert backend.streams[0].stopped is True
+
+
+def test_start_acknowledgement_happens_before_device_open():
+    order: list[str] = []
+    backend = FakeBackend(pcm=_silence(100))
+    original_open = backend.open
+
+    def _tracking_open(**kwargs):
+        order.append("open")
+        return original_open(**kwargs)
+
+    backend.open = _tracking_open  # type: ignore[assignment]
+    capture_recording(
+        backend=backend,
+        wait_to_start=lambda: order.append("ack"),
+        wait_to_stop=lambda deadline: None,
+    )
+    assert order[0] == "ack"
+    assert "open" in order and order.index("ack") < order.index("open")
+
+
 def test_pcm_to_wav_round_trips_mono_int16():
     pcm = _silence(1000)
     wav = pcm_to_wav(pcm, sample_rate=16_000)
@@ -141,7 +209,7 @@ def test_capture_raises_when_all_rates_unsupported():
     backend = FakeBackend(
         pcm=_silence(10),
         devices=[InputDevice(0, "Broken", 1, 44_100.0, is_default=True)],
-        unsupported_rates=(16_000, 44_100),
+        unsupported_rates=(16_000, 44_100, 48_000),
     )
     with pytest.raises(NativeCaptureFailed):
         capture_recording(

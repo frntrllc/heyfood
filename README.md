@@ -260,40 +260,64 @@ heyfood ask --voice
 heyfood log --voice
 ```
 
-The default capture mode is `auto`, which walks a fallback chain:
+The default capture mode is `auto`, which prefers native capture and never
+changes speech processors without asking you first:
 
-1. **Native microphone** — records locally and uploads the audio to hello.food's
-   authenticated endpoint, which transcribes it and discards it. This keeps your
-   spoken dietary and health information within hello.food's own service rather
-   than a browser vendor's speech engine. Requires the `voice` extra.
-2. **Browser capture** — opens a localhost page that uses your browser's built-in
-   speech recognition (a third-party service). Used when native capture isn't
-   available.
-3. **Typed input** — always works, and is used when neither of the above can run.
+1. **Native microphone** (needs the `voice` extra) — records into memory and
+   uploads the audio once over HTTPS to hello.food's authenticated transcription
+   endpoint. The audio is processed by hello.food and its configured
+   transcription provider, then discarded; it is never written to disk. The
+   upload happens **before** you review the transcript — reviewing gates whether
+   the resulting *text* is submitted to your profile, meal history, or the agent,
+   not whether the audio is uploaded.
+2. **Browser speech recognition** — a localhost page that uses your browser's
+   built-in speech engine. This is a **different processor**: your browser vendor
+   (a third party) receives the audio, not hello.food. In `auto` mode the CLI
+   never crosses to it silently — if native capture is unavailable or fails, it
+   asks first, defaulting to *no*, with a one-line disclosure. Declining goes
+   straight to typed input.
+3. **Typed input** — always works.
 
-Whatever the mode, the transcript is shown for review (`[Y/n/e]`) before anything
-is submitted — voice never writes to your profile or meal history unconfirmed.
+Before recording, native capture verifies your login carries the
+`audio:transcribe` permission; an older session is asked to re-run
+`heyfood login` **before** any audio is recorded. If your microphone's native
+rate is above the supported range, the CLI negotiates a supported rate rather
+than producing an upload the server would reject.
 
-Choose a mode explicitly with `--voice-capture native|browser|typed` (an explicit
-`native` that can't run reports a clear error instead of silently falling back).
-List and select microphones:
+After capture, the transcript is shown for review: **accept**, **edit**, **record
+again**, **type instead**, or **cancel** (nothing is submitted). A recording that
+dropped audio can't be accepted as-is for a saved profile or meal — edit it,
+record again, or type.
+
+Choose a mode explicitly with `--voice-capture native|browser|typed`. An explicit
+`native` never opens a browser: if native can't run, it falls back to typed input
+(or asks you to re-login for a missing permission). `--voice` is interactive-only
+— combined with `--json`, `--raw`, `--no-input`, a non-TTY, CI, or `TERM=dumb` it
+prints one stable error and never opens a microphone or browser. Positional text
+and `--voice` are mutually exclusive.
+
+List and select microphones, and manage preferences:
 
 ```bash
-heyfood voice devices
+heyfood voice devices              # list input devices (also `--json`)
 heyfood ask --voice --audio-device 1
+heyfood voice status               # show persisted capture preferences
+heyfood voice set --mode native    # persist a preference (an omitted mode
+                                   # stays distinct from an explicit `auto`)
+heyfood voice reset                # clear persisted preferences
 ```
 
-Your capture mode and device selection are remembered locally for next time.
 `--voice-timeout` and `--no-browser` apply to the browser rung only.
 
 ### Platform notes
 
 - **Linux:** the `sounddevice` wheel needs the system PortAudio library. Install
   it with your package manager, e.g. `sudo apt-get install libportaudio2`.
-  Without it, native capture is skipped and voice falls back to the browser.
+  Without it, native capture is skipped; `auto` then asks (default no) before
+  using browser speech recognition, otherwise types.
 - **WSL:** prefer a native Windows install of the CLI for microphone access;
-  inside WSL, native capture generally cannot reach the microphone, so voice
-  falls back to browser capture.
+  inside WSL, native capture generally cannot reach the microphone, so `auto`
+  asks before browser capture or falls back to typed input.
 - **SSH / headless:** the browser capture server binds on the remote host and
   can't reach your local microphone, so over SSH voice falls back to typed input
   with an explanation rather than opening a dead localhost URL.

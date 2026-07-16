@@ -119,8 +119,63 @@ def discover_local_api_key(start: Path | None = None) -> str | None:
     return None
 
 
+EXACT_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def is_exact_loopback_host(host: str | None) -> bool:
+    """True only for an exact loopback host.
+
+    Deliberately exact: ``127.0.0.1`` and ``localhost`` qualify, but
+    ``localhost.evil.example`` or ``127.0.0.1.evil.example`` do not, so a
+    look-alike host can never be treated as a development loopback and waved
+    through the HTTPS requirement.
+    """
+    value = (host or "").strip().lower()
+    if value.startswith("[") and value.endswith("]"):
+        value = value[1:-1]
+    return value in EXACT_LOOPBACK_HOSTS
+
+
+def validate_service_url(url: str, *, field: str = "Service URL") -> str:
+    """Enforce the transport contract for any API/auth URL at every ingress.
+
+    Remote (non-loopback) hosts must use verified HTTPS; only an exact loopback
+    development host may use plain HTTP. URL userinfo, fragments, and unexpected
+    base-URL query strings are rejected. Returns the trimmed URL, or raises
+    :class:`ConfigError`.
+    """
+    from urllib.parse import urlsplit
+
+    if not isinstance(url, str) or not url.strip():
+        raise ConfigError(f"{field} must be a non-empty URL.")
+    candidate = url.strip()
+    parts = urlsplit(candidate)
+    if parts.scheme not in {"http", "https"}:
+        raise ConfigError(
+            f"{field} must use http or https, not "
+            f"'{parts.scheme or 'an empty scheme'}'."
+        )
+    if not parts.hostname:
+        raise ConfigError(f"{field} must include a host.")
+    if parts.username or parts.password:
+        raise ConfigError(f"{field} must not embed credentials (userinfo).")
+    if parts.fragment:
+        raise ConfigError(f"{field} must not contain a URL fragment.")
+    if parts.query:
+        raise ConfigError(f"{field} must not contain a query string.")
+    if parts.scheme == "http" and not is_exact_loopback_host(parts.hostname):
+        raise ConfigError(
+            f"{field} must use https for the remote host '{parts.hostname}'; "
+            "plain http is allowed only for an exact loopback development host."
+        )
+    return candidate
+
+
 def is_local_api_url(api_url: str) -> bool:
-    return api_url.startswith("http://localhost") or api_url.startswith("http://127.0.0.1")
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(api_url)
+    return parts.scheme == "http" and is_exact_loopback_host(parts.hostname)
 
 
 def configured_contexts(config: dict[str, Any]) -> dict[str, dict[str, str]]:
@@ -150,6 +205,12 @@ def resolve_service_urls(config: dict[str, Any]) -> tuple[str, str, str]:
     auth_url = os.environ.get("HEYFOOD_AUTH_URL") or (
         stored_auth if isinstance(stored_auth, str) and stored_auth else context["auth_url"]
     )
+    # Enforce the transport contract at resolution time, so a bad URL from any
+    # ingress (env, stored config, or a named context) fails closed here rather
+    # than reaching an httpx client that would happily talk plain HTTP to a
+    # remote host.
+    api_url = validate_service_url(api_url, field="API URL")
+    auth_url = validate_service_url(auth_url, field="Auth URL")
     return api_url.rstrip("/"), auth_url.rstrip("/"), context_name
 
 

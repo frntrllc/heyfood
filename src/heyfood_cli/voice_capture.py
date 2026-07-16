@@ -1,15 +1,23 @@
 """Capture-mode resolution and the shared capture-then-review voice flow.
 
-Three capture rungs, tried in this order under ``auto``:
+Three capture rungs exist, but they are never crossed silently:
 
-    1. native microphone  -> WAV -> transcription endpoint  (most private)
-    2. browser capture     (localhost page, third-party speech service)
+    1. native microphone  -> WAV -> transcription endpoint  (hello.food + its
+       configured transcription subprocessor)
+    2. browser speech recognition (localhost page, processed by the browser
+       vendor — a different processor and trust boundary)
     3. typed input         (final fallback, always works)
 
-``resolve_capture_mode`` is pure so the whole resolution matrix is unit-tested
-without hardware or network. ``capture_voice_input`` runs the chosen rung, keeps
-every prompt on stderr (stdout stays a clean data channel), and enforces the
-mandatory transcript review before any transcript is returned to a command.
+``auto`` prefers native. It never crosses from native to the browser processor
+without an explicit, default-no consent that discloses the browser vendor
+processes the audio; declining goes straight to typed input. An explicit
+``--voice-capture native`` never changes processors: native unavailability or
+failure yields a typed recovery (or a re-login prompt for a missing scope), never
+a browser. Native capture verifies the ``audio:transcribe`` scope *before* the
+microphone is opened, so an older session is asked to re-login before any audio
+is recorded. A completed transcript is always reviewed before it reaches a
+profile, meal history, or the agent, and a capture that reports dropped audio can
+never be accepted as-is for a saved mutation.
 """
 from __future__ import annotations
 
@@ -20,6 +28,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Prompt
 
@@ -31,6 +40,8 @@ from .client import (
     TranscriptionScopeRequired,
     TranscriptionUnavailable,
 )
+from . import transcription_contract
+from .transcription_contract import TranscriptionContractError
 from . import voice_native
 from .voice import VoiceCaptureError, capture_voice_transcript
 
@@ -42,11 +53,19 @@ TYPED = "typed"
 VALID_MODES = (AUTO, NATIVE, BROWSER, TYPED)
 
 # purpose enum values understood by the transcription endpoint.
-PURPOSE_ONBOARDING = "onboarding"
-PURPOSE_ASK = "ask"
-PURPOSE_LOG = "log"
+PURPOSE_ONBOARDING = transcription_contract.PURPOSE_ONBOARDING
+PURPOSE_ASK = transcription_contract.PURPOSE_ASK
+PURPOSE_LOG = transcription_contract.PURPOSE_LOG
 
 _INSTALL_HINT = "pipx install 'heyfood-cli[voice]'"
+
+# One-line disclosure shown before any browser speech recognition starts. Browser
+# Web Speech is a third-party processor (the browser vendor), distinct from
+# native capture which is transcribed by hello.food and its configured provider.
+_BROWSER_DISCLOSURE = (
+    "Browser speech recognition sends your audio to your browser vendor's "
+    "speech service (a third party), not to hello.food."
+)
 
 
 class VoiceInputError(RuntimeError):
@@ -56,6 +75,13 @@ class VoiceInputError(RuntimeError):
         super().__init__(message)
         self.kind = kind
         self.hint = hint
+
+
+class VoiceCancelled(VoiceInputError):
+    """The user cancelled capture at review. Commands exit cleanly, nothing saved."""
+
+    def __init__(self, message: str = "Nothing submitted."):
+        super().__init__(message, kind="voice_cancelled")
 
 
 @dataclass(frozen=True)
@@ -96,8 +122,9 @@ def resolve_capture_mode(
 
     An explicit ``--voice-capture native`` that cannot run raises
     :class:`VoiceInputError` rather than silently degrading. ``auto`` (or a
-    persisted default) walks the chain: native if usable, then browser — skipped
-    entirely over SSH — then typed.
+    persisted default) walks the chain: native if usable, otherwise it will offer
+    the browser processor behind an explicit consent (skipped over SSH), then
+    typed.
     """
     requested = (requested or AUTO).strip().lower()
     if requested not in VALID_MODES:
@@ -117,13 +144,13 @@ def resolve_capture_mode(
             raise VoiceInputError(
                 "Native voice capture needs the optional 'voice' extra.",
                 kind="voice_capture_unavailable",
-                hint=f"Install it with: {_INSTALL_HINT} — or use --voice-capture browser.",
+                hint=f"Install it with: {_INSTALL_HINT} — or type your input instead.",
             )
         if not has_input_device:
             raise VoiceInputError(
                 "No microphone input device was found on this machine.",
                 kind="voice_capture_unavailable",
-                hint="Use --voice-capture browser or --voice-capture typed.",
+                hint="Type your input instead, or pick a device with --audio-device.",
             )
         return CapturePlan(mode=NATIVE, reason="native_selected")
 
@@ -159,14 +186,14 @@ def resolve_capture_mode(
             mode=BROWSER,
             reason="auto_browser_no_extra",
             message=(
-                "Native microphone capture isn't installed; using browser capture. "
+                "Native microphone capture isn't installed. "
                 f"For local mic capture: {_INSTALL_HINT}."
             ),
         )
     return CapturePlan(
         mode=BROWSER,
         reason="auto_browser_no_device",
-        message="No microphone was found; using browser capture.",
+        message="No microphone was found for native capture.",
     )
 
 
@@ -224,13 +251,15 @@ def capture_voice_input(
     backend: voice_native.MicrophoneBackend | None = None,
     browser_capture: Callable[..., Any] | None = None,
     prompt: Callable[..., str] | None = None,
+    confirm: Callable[..., bool] | None = None,
     wait_to_start: Callable[[], None] | None = None,
     wait_to_stop: Callable[[float], None] | None = None,
 ) -> VoiceOutcome:
     """Capture a transcript through the resolved rung, review it, and return it.
 
     Raises :class:`VoiceInputError` for terminal failures a command should print,
-    and only ever returns a transcript the user has explicitly confirmed.
+    :class:`VoiceCancelled` when the user cancels at review, and only ever returns
+    a transcript the user has explicitly confirmed.
     """
     if not is_tty:
         raise VoiceInputError(
@@ -242,11 +271,18 @@ def capture_voice_input(
     backend = backend or voice_native.SoundDeviceBackend()
     browser_capture = browser_capture or capture_voice_transcript
     ssh = is_ssh_session(env)
+    requested_native = requested_mode.strip().lower() == NATIVE
 
     def _ask(message: str, *, default: str = "") -> str:
         if prompt is not None:
             return prompt(message, default=default)
         return Prompt.ask(message, console=stderr_console, default=default)
+
+    def _confirm(message: str) -> bool:
+        if confirm is not None:
+            return confirm(message)
+        answer = _ask(f"{message} [y/N]", default="n").strip().lower()
+        return answer in ("y", "yes")
 
     plan = resolve_capture_mode(
         requested_mode,
@@ -260,10 +296,20 @@ def capture_voice_input(
 
     while True:
         if notice:
-            stderr_console.print(f"[dim]{notice}[/dim]")
+            stderr_console.print(f"[dim]{escape(notice)}[/dim]")
             notice = None
 
+        quality_ok = True
         if current == NATIVE:
+            # Scope preflight BEFORE the device is opened: an older session
+            # lacking audio:transcribe is asked to re-login before any recording.
+            if not client.has_transcribe_scope():
+                raise VoiceInputError(
+                    "Your login is missing voice permission.",
+                    kind="insufficient_scope",
+                    hint="Run `heyfood login` again to grant voice access, "
+                    "then retry — or type your input instead.",
+                )
             transcript, meta, retry = _run_native(
                 client,
                 backend=backend,
@@ -271,21 +317,32 @@ def capture_voice_input(
                 purpose=purpose,
                 language=language,
                 stderr_console=stderr_console,
-                requested_native=(requested_mode.strip().lower() == NATIVE),
                 wait_to_start=wait_to_start,
                 wait_to_stop=wait_to_stop,
             )
             if retry is not None:
-                stderr_console.print(f"[yellow]{retry}[/yellow]")
-                current = TYPED if ssh else BROWSER
+                stderr_console.print(f"[yellow]{escape(retry)}[/yellow]")
+                # Explicit native never crosses to the browser processor; over
+                # SSH the browser rung can't reach the mic anyway. Otherwise fall
+                # to the browser rung, whose own consent gate (below) governs the
+                # processor crossing — never silent.
+                current = TYPED if (requested_native or ssh) else BROWSER
                 continue
             source = NATIVE
+            quality_ok = bool(meta.get("quality_ok", True)) if isinstance(meta, dict) else True
         elif current == BROWSER:
+            # Never start the browser processor without an explicit, default-no
+            # consent and the vendor disclosure.
+            if not _browser_consent(_confirm, stderr_console):
+                stderr_console.print("[dim]Using typed input instead.[/dim]")
+                current = TYPED
+                continue
             transcript, fell_back = _run_browser(
                 browser_capture,
                 stderr_console=stderr_console,
                 timeout=browser_timeout,
                 open_browser=open_browser,
+                purpose=purpose,
             )
             if fell_back:
                 current = TYPED
@@ -301,17 +358,35 @@ def capture_voice_input(
             stderr_console.print("[yellow]No transcript captured. Let's try again.[/yellow]")
             continue
 
-        action, text = _review(transcript, stderr_console=stderr_console, ask=_ask)
-        if action == "retry":
-            continue
-        return VoiceOutcome(
-            transcript=text,
-            source=source,
-            model_version=(meta.get("model_version") if isinstance(meta, dict) else None),
-            duration_seconds=(
-                meta.get("duration_seconds") if isinstance(meta, dict) else None
-            ),
+        action, text = _review(
+            transcript,
+            stderr_console=stderr_console,
+            ask=_ask,
+            quality_ok=quality_ok,
         )
+        if action == "accept":
+            return VoiceOutcome(
+                transcript=text,
+                source=source,
+                model_version=(meta.get("model_version") if isinstance(meta, dict) else None),
+                duration_seconds=(
+                    meta.get("duration_seconds") if isinstance(meta, dict) else None
+                ),
+            )
+        if action == "record_again":
+            current = source
+            continue
+        if action == "type":
+            current = TYPED
+            continue
+        # cancel
+        raise VoiceCancelled()
+
+
+def _browser_consent(confirm: Callable[[str], bool], stderr_console) -> bool:
+    """Explicit, default-no consent to start the browser speech processor."""
+    stderr_console.print(f"[yellow]{escape(_BROWSER_DISCLOSURE)}[/yellow]")
+    return confirm("Use browser speech recognition instead?")
 
 
 def _run_native(
@@ -322,14 +397,14 @@ def _run_native(
     purpose: str,
     language: str | None,
     stderr_console,
-    requested_native: bool,
     wait_to_start: Callable[[], None] | None,
     wait_to_stop: Callable[[float], None] | None,
 ) -> tuple[str, dict[str, Any], str | None]:
     """Record + transcribe. Returns (transcript, meta, retry_notice).
 
-    ``retry_notice`` is non-None when the caller should fall back a rung (auto
-    only). Terminal, user-facing failures raise :class:`VoiceInputError`.
+    ``retry_notice`` is non-None when the caller should recover a rung (native
+    unavailable/failed). Terminal, user-facing failures — including a malformed
+    transcription response — raise :class:`VoiceInputError` instead of looping.
     """
     start = wait_to_start or (lambda: _default_wait_to_start(stderr_console))
     stop = wait_to_stop or (lambda deadline: _default_wait_to_stop(deadline))
@@ -349,29 +424,27 @@ def _run_native(
             on_record_start=_on_record_start,
         )
     except voice_native.NativeCaptureUnavailable as exc:
-        if requested_native:
-            raise VoiceInputError(
-                str(exc),
-                kind="voice_capture_unavailable",
-                hint=f"Install with {_INSTALL_HINT}, or use --voice-capture browser.",
-            ) from exc
-        return "", {}, f"{exc} Falling back."
+        return "", {}, f"{exc} Recovering."
     except voice_native.NativeCaptureFailed as exc:
-        if requested_native:
-            raise VoiceInputError(
-                str(exc),
-                kind="voice_capture_failed",
-                hint="Try --voice-capture browser or --voice-capture typed.",
-            ) from exc
-        return "", {}, f"{exc} Falling back."
+        return "", {}, f"{exc} Recovering."
 
+    # A capture that dropped frames or hit the length limit is not trustworthy
+    # enough to accept unchanged for a saved dietary/meal mutation. It is still
+    # shown so the user can edit from it, record again, or type.
+    quality_ok = not (recording.overflowed or recording.truncated)
     if recording.truncated:
         stderr_console.print(
             "[yellow]Recording reached the length limit and was trimmed.[/yellow]"
         )
-    stderr_console.print("[dim]Transcribing...[/dim]")
+    if recording.overflowed:
+        stderr_console.print(
+            "[yellow]The recording dropped some audio frames.[/yellow]"
+        )
+    stderr_console.print(
+        f"[dim]Captured {recording.duration_seconds:.1f}s. Transcribing...[/dim]"
+    )
     try:
-        result = client.transcribe_audio(
+        raw = client.transcribe_audio(
             recording.wav_bytes,
             purpose=purpose,
             language=language,
@@ -395,10 +468,12 @@ def _run_native(
         raise VoiceInputError(
             str(exc),
             kind="audio_rejected",
-            hint="Recordings are limited to 120 seconds and 12.5 MB.",
+            hint="Recordings are limited to 120 seconds; try a shorter clip.",
         ) from exc
     except TranscriptionUnavailable as exc:
-        return "", {}, f"{exc} Falling back to browser capture."
+        # A dark/unreachable endpoint is a recoverable condition, not a hard
+        # error — recover a rung (typed, or browser after explicit consent).
+        return "", {}, f"{exc} Recovering."
     except LoginRequired as exc:
         raise VoiceInputError(
             str(exc),
@@ -411,8 +486,25 @@ def _run_native(
             kind="transcription_error",
         ) from exc
 
-    transcript = str(result.get("transcript") or "").strip()
-    return transcript, result, None
+    # Runtime-validate the success body against the versioned contract. A
+    # malformed-but-2xx payload is a typed service error, never a capture loop.
+    try:
+        result = transcription_contract.validate_response(raw)
+    except TranscriptionContractError as exc:
+        raise VoiceInputError(
+            str(exc),
+            kind="transcription_contract_error",
+            hint="The transcription service returned an unexpected response. "
+            "Try again, or type your input instead.",
+        ) from exc
+
+    meta = {
+        "model_version": result.model_version,
+        "duration_seconds": result.duration_seconds,
+        "language": result.language,
+        "quality_ok": quality_ok,
+    }
+    return result.transcript, meta, None
 
 
 def _run_browser(
@@ -421,19 +513,21 @@ def _run_browser(
     stderr_console,
     timeout: int,
     open_browser: bool,
+    purpose: str,
 ) -> tuple[str, bool]:
     """Run browser capture. Returns (transcript, fell_back_to_typed)."""
     try:
         result = browser_capture(
             timeout_seconds=timeout,
             open_browser=open_browser,
+            purpose=purpose,
             url_callback=lambda url: stderr_console.print(
-                f"[dim]Voice capture URL:[/dim] {url}"
+                f"[dim]Voice capture URL:[/dim] {escape(str(url))}"
             ),
         )
     except VoiceCaptureError as exc:
         stderr_console.print(
-            f"[yellow]{exc} Falling back to typed input.[/yellow]"
+            f"[yellow]{escape(str(exc))} Falling back to typed input.[/yellow]"
         )
         return "", True
     transcript = getattr(result, "transcript", "") or ""
@@ -449,20 +543,47 @@ def _review(
     *,
     stderr_console,
     ask: Callable[..., str],
+    quality_ok: bool = True,
 ) -> tuple[str, str]:
-    """Mandatory transcript review. Returns ('accept', text) or ('retry', '')."""
-    stderr_console.print(
-        Panel(transcript, title="Transcript", border_style="green")
-    )
-    answer = ask("Use this transcript? [Y/n/e]", default="y").strip().lower()
-    if answer in ("", "y", "yes"):
-        return "accept", transcript
-    if answer in ("e", "edit"):
-        edited = ask("Edit transcript", default=transcript).strip()
-        if not edited:
-            return "retry", ""
-        return "accept", edited
-    return "retry", ""
+    """Mandatory transcript review menu.
+
+    Returns one of ``('accept', text)``, ``('record_again', '')``,
+    ``('type', '')``, or ``('cancel', '')``. A low-quality capture (dropped
+    frames or length-trimmed) cannot be accepted unchanged — the user must edit
+    it (edited text is user-verified), record again, or type.
+    """
+    stderr_console.print(Panel(escape(transcript), title="Transcript", border_style="green"))
+    while True:
+        if quality_ok:
+            answer = ask(
+                "[A]ccept, [E]dit, [R]ecord again, [T]ype instead, [C]ancel",
+                default="a",
+            ).strip().lower()
+        else:
+            stderr_console.print(
+                "[yellow]This capture reported dropped audio, so it can't be "
+                "saved as-is. Edit it, record again, or type instead.[/yellow]"
+            )
+            answer = ask(
+                "[E]dit, [R]ecord again, [T]ype instead, [C]ancel",
+                default="e",
+            ).strip().lower()
+
+        if answer in ("a", "accept", "y", "yes") and quality_ok:
+            return "accept", transcript
+        if answer in ("e", "edit"):
+            edited = ask("Edit transcript", default=transcript).strip()
+            if edited:
+                return "accept", edited
+            # An empty edit is not a submission — re-show the menu.
+            continue
+        if answer in ("r", "record", "record again", "again"):
+            return "record_again", ""
+        if answer in ("t", "type", "type instead"):
+            return "type", ""
+        if answer in ("c", "cancel", "n", "no", "q", "quit"):
+            return "cancel", ""
+        # Unrecognized answer: re-prompt.
 
 
 def describe_devices(backend: voice_native.MicrophoneBackend | None = None) -> dict[str, Any]:

@@ -1,27 +1,66 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/frntrllc/heyfood/blob/main/schemas/v1/transcription.schema.json",
-  "title": "heyfood audio transcription response v1",
-  "description": "Success body returned when a captured WAV is transcribed server-side. The audio is transcribed and discarded; it is never retained.",
+  "title": "heyfood audio transcription contract v1",
+  "description": "The single canonical client-side contract for the authenticated /v1/audio/transcriptions endpoint. The CLI generates its request limits, capture negotiation, and response validation from this document so it can never build a WAV the server would reject and never trust a malformed success body. The audio is transcribed and discarded server-side; it is never retained by the CLI or written to disk.",
   "x-heyfood-schema-version": 1,
+  "x-heyfood-endpoint": {
+    "method": "POST",
+    "path": "/v1/audio/transcriptions",
+    "auth": "channel",
+    "required_scope": "audio:transcribe"
+  },
+  "x-heyfood-purposes": ["onboarding", "ask", "log"],
+  "x-heyfood-audio": {
+    "container": "wav",
+    "channels": 1,
+    "sample_width_bytes": 2,
+    "wav_header_bytes": 44,
+    "sample_rate_min_hz": 8000,
+    "sample_rate_max_hz": 48000,
+    "preferred_sample_rate_hz": 16000,
+    "max_duration_seconds": 120,
+    "max_audio_bytes": 12500000,
+    "max_request_bytes": 13107200,
+    "notes": "max_audio_bytes bounds the WAV file itself; max_request_bytes bounds the whole multipart envelope (WAV + boundary framing + form fields) so multipart overhead can never reject an otherwise-valid maximum-size WAV. The client caps recordings to keep the WAV within max_audio_bytes and refuses to send an envelope larger than max_request_bytes. max_audio_bytes must be >= max_duration_seconds * sample_rate_max_hz * channels * sample_width_bytes + wav_header_bytes, and max_request_bytes must exceed max_audio_bytes."
+  },
+  "x-heyfood-response-limits": {
+    "max_transcript_chars": 20000,
+    "max_duration_seconds": 3600,
+    "max_language_chars": 35,
+    "max_model_version_chars": 128
+  },
+  "x-heyfood-client-error-kinds": [
+    "insufficient_scope",
+    "audio_rejected",
+    "rate_limited",
+    "transcription_unavailable",
+    "login_required",
+    "transcription_contract_error"
+  ],
   "type": "object",
   "required": ["transcript"],
   "properties": {
     "transcript": {
       "type": "string",
-      "description": "The recognized text of the recording."
+      "minLength": 1,
+      "maxLength": 20000,
+      "description": "The recognized text of the recording. Must contain at least one non-whitespace character."
     },
     "duration_seconds": {
       "type": "number",
       "minimum": 0,
+      "maximum": 3600,
       "description": "Length of the submitted audio, derived from the WAV header."
     },
     "language": {
-      "type": "string",
-      "description": "BCP-47 language tag of the transcript (e.g. \"en\")."
+      "type": ["string", "null"],
+      "maxLength": 35,
+      "description": "BCP-47 language tag of the transcript (e.g. \"en\"), or null when the server does not report one."
     },
     "model_version": {
       "type": "string",
+      "maxLength": 128,
       "description": "Opaque transcription version tag (e.g. \"hf-transcribe-1\"). Not a provider or model identifier; treat it as a stable, meaningless-to-parse label."
     }
   },

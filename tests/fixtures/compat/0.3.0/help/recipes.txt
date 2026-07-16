@@ -1,0 +1,12 @@
+Usage: heyfood recipes [OPTIONS] COMMAND [ARGS]...
+
+ Recipe discovery from your terminal.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ search  Search real recipes matched to your hello.food profile.                                                      │
+│ save    Save a recipe to your hello.food cookbook.                                                                   │
+│ saved   Show your saved recipe cookbook.                                                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

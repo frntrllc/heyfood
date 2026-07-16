@@ -278,12 +278,19 @@ def onboard(
             max_length=1000,
         )
     ) or ""
+    main._validate_voice_options(
+        voice=voice,
+        positional_text="",
+        capture_mode=voice_capture_mode,
+        audio_device=audio_device,
+    )
     if voice:
         text_profile = main._voice_transcript(
             purpose="onboarding",
             capture_mode=voice_capture_mode,
             audio_device=audio_device,
             json_mode=json_mode,
+            no_input=no_input,
             open_browser=not no_browser,
             browser_timeout=voice_timeout,
         )

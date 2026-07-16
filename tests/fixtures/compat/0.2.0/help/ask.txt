@@ -1,9 +1,9 @@
-Usage: heyfood ask [OPTIONS] [QUERY]...
+Usage: heyfood ask [OPTIONS] QUERY...
 
  Ask the HelloFood conversational agent.
 
 ╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│   query      [QUERY]...  Natural-language request.                                                                   │
+│ *    query      QUERY...  Natural-language request. [required]                                                       │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ --lat                      FLOAT  Latitude for restaurant/location-aware requests.                                   │
@@ -13,9 +13,6 @@ Usage: heyfood ask [OPTIONS] [QUERY]...
 │ --conversation-id          TEXT   Continue an existing conversation.                                                 │
 │ --continue         -c             Continue the last CLI conversation.                                                │
 │ --for                      TEXT   One-turn household scope: member name/id, me, or everyone.                         │
-│ --voice                           Speak your request instead of typing it.                                           │
-│ --voice-capture            TEXT   Voice capture mode: auto, native, browser, or typed. [default: auto]               │
-│ --audio-device             TEXT   Input device id or name for native voice capture.                                  │
 │ --json                            Print stable JSON.                                                                 │
 │ --raw                             Deprecated alias for --json.                                                       │
 │ --help                            Show this message and exit.                                                        │

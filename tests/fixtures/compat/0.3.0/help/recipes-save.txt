@@ -1,0 +1,13 @@
+Usage: heyfood recipes save [OPTIONS] SELECTOR
+
+ Save a recipe to your hello.food cookbook.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    selector      TEXT  Recipe ref, Spoonacular id, or index from the last recipe search. [required]                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --notes        TEXT  Optional cookbook note.                                                                         │
+│ --json               Print stable JSON.                                                                              │
+│ --raw                Deprecated alias for --json.                                                                    │
+│ --help               Show this message and exit.                                                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

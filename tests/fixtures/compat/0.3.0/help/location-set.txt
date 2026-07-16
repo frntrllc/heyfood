@@ -1,0 +1,16 @@
+Usage: heyfood location set [OPTIONS] [PLACE]
+
+ Save a default location by place name, or directly with --lat/--lng.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   place      [PLACE]  Place name to geocode, e.g. "San Luis Obispo, CA".                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --lat           FLOAT  Latitude (with --lng; skips geocoding).                                                       │
+│ --lng           FLOAT  Longitude (with --lat; skips geocoding).                                                      │
+│ --label         TEXT   Label for a coordinate location.                                                              │
+│ --radius        FLOAT  Default search radius in miles. [default: 5.0]                                                │
+│ --json                 Print stable JSON.                                                                            │
+│ --raw                  Deprecated alias for --json.                                                                  │
+│ --help                 Show this message and exit.                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

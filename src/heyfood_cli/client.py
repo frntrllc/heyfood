@@ -55,7 +55,7 @@ class TranscriptionRejected(HelloFoodError):
 class TranscriptionRateLimited(HelloFoodError):
     """Per-device transcription rate limit hit; carries the retry hint."""
 
-    def __init__(self, message: str, *, retry_after: str | None = None):
+    def __init__(self, message: str, *, retry_after: int | None = None):
         super().__init__(message)
         self.retry_after = retry_after
 
@@ -208,6 +208,25 @@ class HelloFoodClient:
         if not isinstance(token, str) or not token:
             raise LoginRequired("Run `heyfood login` first.")
         return token
+
+    def channel_scopes(self) -> set[str]:
+        """The scopes granted to the stored channel token, as persisted at login."""
+        oauth = self.config.get("oauth")
+        if not isinstance(oauth, dict):
+            return set()
+        scope = oauth.get("scope")
+        if not isinstance(scope, str):
+            return set()
+        return {part for part in scope.split() if part}
+
+    def has_transcribe_scope(self) -> bool:
+        """True when the stored channel token was granted ``audio:transcribe``.
+
+        Checked before opening the microphone so an older session minted before
+        the scope existed is asked to re-login *before* any audio is recorded or
+        uploaded, rather than recording first and hitting a 403 afterward.
+        """
+        return "audio:transcribe" in self.channel_scopes()
 
     def refresh_session(self) -> None:
         diagnostics.reporter.emit("auth.refresh_session", context=self.context_name)
@@ -366,6 +385,18 @@ class HelloFoodClient:
         channel access token (the endpoint requires channel scopes; the session
         JWT is the wrong credential).
         """
+        # Lazily imported to keep the client free of a top-level dependency on
+        # the contract module (which imports HelloFoodError from here).
+        from . import transcription_contract as contract
+
+        # The WAV file itself must stay under the audio-file ceiling. The
+        # recorder already caps capture, but a malformed or oversized buffer is
+        # rejected locally rather than sent to be 413'd.
+        if len(wav_bytes) > contract.MAX_AUDIO_BYTES:
+            raise TranscriptionRejected(
+                "The recording is larger than the transcription size limit."
+            )
+
         token = self.channel_access_token()
         request_id = str(uuid4())
         started_at = time.monotonic()
@@ -387,12 +418,26 @@ class HelloFoodClient:
         )
         try:
             with httpx.Client(timeout=timeout) as client:
-                response = client.post(
+                # Build the request first so the whole multipart envelope (WAV +
+                # boundary framing + form fields) can be measured against the
+                # request ceiling, which is separate from the audio-file ceiling
+                # so framing overhead can never reject a valid maximum-size WAV.
+                request = client.build_request(
+                    "POST",
                     f"{self.api_url}/v1/audio/transcriptions",
                     headers=headers,
                     files=files,
                     data=data,
                 )
+                envelope = request.read()
+                if len(envelope) > contract.MAX_REQUEST_BYTES:
+                    raise TranscriptionRejected(
+                        "The transcription upload is larger than the request "
+                        "size limit."
+                    )
+                response = client.send(request)
+        except TranscriptionRejected:
+            raise
         except httpx.HTTPError as exc:
             diagnostics.reporter.emit(
                 "http.error",
@@ -420,13 +465,18 @@ class HelloFoodClient:
         )
         if response.status_code >= 400:
             _raise_transcription_error(response)
+        # A malformed or empty *success* body is a contract violation, not a
+        # reason to degrade to a different capture processor. Return the parsed
+        # value (or an empty dict) and let the caller's contract validation turn
+        # it into a typed service error rather than a silent browser fallback.
         if not response.content:
-            raise TranscriptionUnavailable(
-                "The transcription service returned an empty response."
-            )
-        parsed = response.json()
+            return {}
+        try:
+            parsed = response.json()
+        except ValueError:
+            return {}
         if not isinstance(parsed, dict):
-            raise HelloFoodError("Transcription response was not a JSON object.")
+            return {}
         return parsed
 
     def voice_settings(self) -> dict[str, Any]:
@@ -452,8 +502,19 @@ class HelloFoodClient:
         *,
         capture_mode: str | None = None,
         device: str | int | None = None,
+        clear: bool = False,
     ) -> dict[str, Any]:
-        """Persist a voice preference. Only provided fields change."""
+        """Persist a voice preference. Only provided fields change.
+
+        ``clear=True`` wipes all persisted voice preferences (used by
+        ``voice reset``). An explicit ``capture_mode`` (including ``"auto"``) is
+        recorded verbatim, so an omitted preference and an explicit ``auto`` stay
+        distinguishable.
+        """
+        if clear:
+            self.config.pop("voice", None)
+            self._save()
+            return {}
         current = self.voice_settings()
         if capture_mode is not None:
             current["capture_mode"] = capture_mode
@@ -1389,13 +1450,15 @@ def _raise_transcription_error(response: httpx.Response) -> None:
             body = parsed
     except Exception:
         body = {}
-    error = str(body.get("error") or "")
-    message = str(body.get("message") or body.get("error") or f"HTTP {status}")
+    error = str(body.get("error") or "")[:200]
+    # Bound the server-controlled human string so an oversized error document
+    # can never flood the terminal; callers render it literally, never as markup.
+    message = str(body.get("message") or body.get("error") or f"HTTP {status}")[:500]
 
     if status == 429:
         raise TranscriptionRateLimited(
             message,
-            retry_after=response.headers.get("Retry-After"),
+            retry_after=_parse_retry_after(response.headers.get("Retry-After")),
         )
     if status in (400, 413):
         raise TranscriptionRejected(message)
@@ -1406,6 +1469,28 @@ def _raise_transcription_error(response: httpx.Response) -> None:
     if status in (404, 503):
         raise TranscriptionUnavailable(message)
     raise HelloFoodError(f"{status}: {message}")
+
+
+def _parse_retry_after(value: str | None) -> int | None:
+    """Parse a ``Retry-After`` header as a bounded, non-negative integer.
+
+    Only the delta-seconds form is honored; an HTTP-date, a malformed value, or
+    an absurdly large number yields ``None`` (the caller falls back to its own
+    fixed guidance) or a value clamped to a sane ceiling. Never trusts the raw
+    header as a display string.
+    """
+    if value is None:
+        return None
+    text = value.strip()
+    if not text.isdigit():
+        return None
+    try:
+        seconds = int(text)
+    except ValueError:
+        return None
+    if seconds < 0:
+        return None
+    return min(seconds, 3600)
 
 
 def _is_invalid_channel_token_error(message: str) -> bool:

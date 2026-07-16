@@ -38,7 +38,8 @@ from .theme import HEYFOOD_THEME
 from . import validation
 from .voice import VoiceCaptureError, capture_voice_transcript
 from . import voice_capture
-from .voice_capture import VoiceInputError, capture_voice_input
+from . import voice_policy
+from .voice_capture import VoiceCancelled, VoiceInputError, capture_voice_input
 
 
 app = typer.Typer(
@@ -264,23 +265,56 @@ def _print_tool_unavailable(exc: ChannelToolUnavailable) -> None:
     )
 
 
+def _validate_voice_options(
+    *,
+    voice: bool,
+    positional_text: str,
+    capture_mode: str,
+    audio_device: str | None,
+) -> None:
+    """Shared local validation for the --voice option bundle on ask/log/onboard.
+
+    Positional text and --voice are mutually exclusive, and voice-only controls
+    (--voice-capture / --audio-device) fail locally when given without --voice
+    instead of being silently ignored.
+    """
+    if voice and positional_text.strip():
+        raise typer.BadParameter(
+            "Provide either positional text or --voice, not both."
+        )
+    if not voice:
+        if capture_mode and capture_mode.strip().lower() != voice_capture.AUTO:
+            raise typer.BadParameter("--voice-capture requires --voice.")
+        if audio_device is not None:
+            raise typer.BadParameter("--audio-device requires --voice.")
+
+
 def _voice_transcript(
     *,
     purpose: str,
     capture_mode: str,
     audio_device: str | None,
     json_mode: bool,
+    no_input: bool = False,
     client: "HelloFoodClient | None" = None,
     open_browser: bool = True,
     browser_timeout: int = 300,
 ) -> str:
     """Capture and return a reviewed voice transcript for a command.
 
-    Resolves the capture rung (native -> browser -> typed), reviews the
-    transcript with the user, persists an explicit device/mode choice, and
-    surfaces terminal failures through the shared ``_fail`` UX. All capture UI
-    stays on stderr so ``--json`` stdout remains a clean data channel.
+    Rejects every noninteractive context (--json/--raw, --no-input, CI, dumb
+    terminal, non-TTY) up front with one stable error before any microphone or
+    browser is touched, then resolves the capture rung, reviews the transcript,
+    persists an explicit device/mode choice, and surfaces terminal failures
+    through the shared ``_fail`` UX. All capture UI stays on stderr so ``--json``
+    stdout remains a clean data channel.
     """
+    # One central interactive-capability gate, before any hardware/browser.
+    try:
+        voice_policy.ensure_voice_interactive(json_mode=json_mode, no_input=no_input)
+    except voice_policy.VoiceNotInteractiveError as exc:
+        _fail(str(exc), kind=exc.kind, json_mode=json_mode, hint=exc.hint)
+
     client = client or HelloFoodClient()
     settings = client.voice_settings()
     persisted_mode = settings.get("capture_mode")
@@ -297,6 +331,10 @@ def _voice_transcript(
             browser_timeout=browser_timeout,
             persisted_mode=persisted_mode,
         )
+    except VoiceCancelled:
+        # A deliberate cancel at review is a clean exit — nothing submitted.
+        stderr_console.print("[dim]Nothing submitted.[/dim]")
+        raise typer.Exit(0)
     except VoiceInputError as exc:
         _fail(str(exc), kind=exc.kind, json_mode=json_mode, hint=exc.hint)
     remember: dict[str, Any] = {}
@@ -404,4 +442,7 @@ from .commands.config import (  # noqa: E402,F401
 )
 from .commands.voice import (  # noqa: E402,F401
     voice_devices,
+    voice_status,
+    voice_set,
+    voice_reset,
 )

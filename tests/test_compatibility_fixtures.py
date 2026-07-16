@@ -14,10 +14,16 @@ from typer.testing import CliRunner
 from heyfood_cli import main
 
 
-# Pinned to the current baseline. 0.1.0 fixtures are kept on disk for reference;
-# the 0.2.0 baseline adds the native-voice flags (--voice-capture, --audio-device),
-# the `ask`/`log` --voice surface, and the `voice` command group.
-FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "compat" / "0.2.0"
+# Pinned to the CURRENT baseline (0.3.0): the live CLI's help and raw output must
+# match these fixtures byte-for-byte. 0.3.0 adds native voice (--voice /
+# --voice-capture / --audio-device on ask/log/onboard, the `voice` group with
+# devices/status/set/reset). The 0.1.0 and 0.2.0 baselines are kept on disk as
+# immutable historical evidence and are guarded by the historical tests below;
+# see COMPAT_ROOT / "0.2.0" for the reconstructed released-v0.2.0 (household, no
+# voice) snapshot.
+COMPAT_ROOT = Path(__file__).parent / "fixtures" / "compat"
+CURRENT_VERSION = "0.3.0"
+FIXTURE_ROOT = COMPAT_ROOT / CURRENT_VERSION
 HELP_ROOT = FIXTURE_ROOT / "help"
 RAW_OUTPUTS = json.loads((FIXTURE_ROOT / "raw_outputs.json").read_text())["outputs"]
 
@@ -69,6 +75,9 @@ HELP_COMMANDS = {
     "conversation-clear": ("conversation", "clear"),
     "voice": ("voice",),
     "voice-devices": ("voice", "devices"),
+    "voice-status": ("voice", "status"),
+    "voice-set": ("voice", "set"),
+    "voice-reset": ("voice", "reset"),
 }
 
 
@@ -78,7 +87,7 @@ def _normalize_help(value: str) -> str:
 
 
 @pytest.mark.parametrize(("name", "args"), HELP_COMMANDS.items())
-def test_help_matches_committed_0_1_0_baseline(
+def test_help_matches_current_baseline(
     name: str,
     args: tuple[str, ...],
     monkeypatch: pytest.MonkeyPatch,
@@ -194,9 +203,60 @@ def _capture_raw(monkeypatch: pytest.MonkeyPatch, callback) -> dict:
         ("recipes_saved", lambda: main.recipes_saved(limit=20, raw=True)),
     ),
 )
-def test_raw_output_matches_committed_0_1_0_examples(
+def test_raw_output_matches_current_examples(
     monkeypatch: pytest.MonkeyPatch,
     name: str,
     callback,
 ) -> None:
     assert _capture_raw(monkeypatch, callback) == RAW_OUTPUTS[name]
+
+
+# --------------------------------------------------------------------------- #
+# Historical baselines: immutable release evidence, guarded so they cannot rot.
+# --------------------------------------------------------------------------- #
+
+# Commands present in the pre-voice releases (0.1.0 and the reconstructed 0.2.0).
+_PRE_VOICE_COMMANDS = {
+    name for name in HELP_COMMANDS if not name.startswith("voice")
+}
+
+
+def _help_files(version: str) -> dict[str, str]:
+    root = COMPAT_ROOT / version / "help"
+    return {path.stem: path.read_text() for path in sorted(root.glob("*.txt"))}
+
+
+def test_reconstructed_0_2_0_matches_the_0_1_0_baseline() -> None:
+    # The released v0.2.0 (household support) never changed any command's help
+    # from the 0.1.0 baseline. The reconstruction from the exact published commit
+    # 583ced64 proved this; freezing the equality here keeps that evidence honest.
+    v010 = _help_files("0.1.0")
+    v020 = _help_files("0.2.0")
+    assert set(v020) == set(v010) == _PRE_VOICE_COMMANDS
+    for name in v010:
+        assert v020[name] == v010[name], f"0.2.0 help drifted from 0.1.0 for {name}"
+
+
+def test_reconstructed_0_2_0_has_no_voice_surface() -> None:
+    # Voice shipped in 0.3.0, not 0.2.0. The historical baseline must not contain
+    # any voice command help — that was the whole point of reconstructing it.
+    v020_help = COMPAT_ROOT / "0.2.0" / "help"
+    assert not list(v020_help.glob("voice*.txt"))
+
+
+def test_0_2_0_raw_outputs_match_the_0_1_0_release() -> None:
+    v010 = json.loads((COMPAT_ROOT / "0.1.0" / "raw_outputs.json").read_text())
+    v020 = json.loads((COMPAT_ROOT / "0.2.0" / "raw_outputs.json").read_text())
+    assert v020 == v010
+
+
+def test_current_baseline_only_adds_voice_over_0_2_0() -> None:
+    # The 0.2.0 -> 0.3.0 diff must be exactly the voice surface: new voice
+    # commands plus the four commands that gained --voice options.
+    v020 = _help_files("0.2.0")
+    v030 = _help_files("0.3.0")
+    assert set(v020).issubset(set(v030))
+    new_commands = set(v030) - set(v020)
+    assert new_commands == {"voice", "voice-devices", "voice-status", "voice-set", "voice-reset"}
+    changed = {name for name in v020 if v030[name] != v020[name]}
+    assert changed == {"root", "ask", "log", "onboard"}

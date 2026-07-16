@@ -19,17 +19,12 @@ Usage: heyfood onboard [OPTIONS] [PROFILE_TEXT]...
 │ --replace                                                         Replace the existing profile instead of merging    │
 │                                                                   answered fields.                                   │
 │ --yes            -y                                               Grant sync consent and save without confirmation.  │
-│ --voice                                                           Capture your dietary profile by voice before       │
-│                                                                   extracting it.                                     │
-│ --voice-capture                          TEXT                     Voice capture mode: auto, native, browser, or      │
-│                                                                   typed.                                             │
-│                                                                   [default: auto]                                    │
-│ --audio-device                           TEXT                     Input device id or name for native voice capture.  │
-│ --voice-timeout                          INTEGER                  Seconds to wait for browser voice capture (browser │
-│                                                                   rung only).                                        │
+│ --voice                                                           Open a browser voice capture session before        │
+│                                                                   extracting the profile.                            │
+│ --voice-timeout                          INTEGER                  Seconds to wait for browser voice capture.         │
 │                                                                   [default: 300]                                     │
-│ --no-browser                                                      With --voice, print the browser capture URL        │
-│                                                                   instead of opening it (browser rung only).         │
+│ --no-browser                                                      With --voice, print the capture URL instead of     │
+│                                                                   opening it.                                        │
 │ --interactive        --no-interactive                             Prompt for missing fields. [default: interactive]  │
 │ --no-input                                                        Never prompt; fail if required input or approval   │
 │                                                                   is missing.                                        │

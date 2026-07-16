@@ -48,6 +48,12 @@ def ask(
 ) -> None:
     """Ask the HelloFood conversational agent."""
     text = " ".join(query or []).strip()
+    main._validate_voice_options(
+        voice=voice,
+        positional_text=text,
+        capture_mode=voice_capture_mode,
+        audio_device=audio_device,
+    )
     if voice:
         text = main._voice_transcript(
             purpose="ask",
@@ -565,6 +571,12 @@ def log(
 ) -> None:
     """Log a meal through the conversational agent."""
     text = " ".join(meal or []).strip()
+    main._validate_voice_options(
+        voice=voice,
+        positional_text=text,
+        capture_mode=voice_capture_mode,
+        audio_device=audio_device,
+    )
     if voice:
         text = main._voice_transcript(
             purpose="log",

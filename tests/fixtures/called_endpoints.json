@@ -1,0 +1,126 @@
+{
+  "$comment": "The exhaustive, checked-in enumeration of every (method, endpoint) the heyfood CLI can send. tests/test_called_endpoints_contract.py extracts the endpoints actually reachable in src/heyfood_cli/{client,auth}.py and fails CI if this list and the source drift. Path parameters are written with readable names (e.g. {name}); the test compares them positionally. Part 2 (server-side reachability of every entry under exactly LOGIN_SCOPES) is owned by the backend authorization-contract suite, which consumes this same file.",
+  "schema_version": 1,
+  "endpoints": [
+    {
+      "method": "GET",
+      "endpoint": "/v1/auth/me",
+      "auth": "session",
+      "note": "Session identity lookup (login, doctor, status)."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v1/channel/oauth/whoami",
+      "auth": "channel",
+      "note": "Channel token identity/health probe."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v1/profile/sync/members",
+      "auth": "session",
+      "note": "Household member reconciliation (household list). The v0.2.0 least-privilege regression was this endpoint returning 403 for real CLI sessions."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v1/profile/sync",
+      "auth": "session",
+      "note": "Download a member's dietary profile."
+    },
+    {
+      "method": "PUT",
+      "endpoint": "/v1/profile/sync",
+      "auth": "session",
+      "note": "Upload/merge a member's dietary profile."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v1/profile/consent",
+      "auth": "session",
+      "note": "Profile-sync consent status."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/profile/consent",
+      "auth": "session",
+      "note": "Grant profile-sync consent."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v1/meals/daily-summary",
+      "auth": "session",
+      "note": "Daily meal summary."
+    },
+    {
+      "method": "DELETE",
+      "endpoint": "/v1/channel/links/{link_id}",
+      "auth": "session",
+      "note": "Best-effort channel-link teardown on logout."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/agent/converse",
+      "auth": "session",
+      "note": "Streaming conversational agent (ask, reply, chat, log, item)."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/audio/transcriptions",
+      "auth": "channel",
+      "note": "Native voice capture: multipart WAV upload; requires the audio:transcribe scope."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/channel/tools/{name}",
+      "auth": "channel",
+      "note": "Channel-tool dispatch (search_restaurant, geocode, get_menu, recommend, search_recipes, save_recipe, list_saved_recipes, and other named tools)."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/auth/session/refresh",
+      "auth": "none",
+      "note": "Refresh the CLI session access token."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/auth/session/revoke",
+      "auth": "session",
+      "note": "Server-side session teardown on logout."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/auth/device/revoke",
+      "auth": "session",
+      "note": "Device-record teardown on logout."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/channel/oauth/cli/session",
+      "auth": "channel",
+      "note": "Exchange the channel grant for a CLI session (login and re-exchange)."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/channel/oauth/token",
+      "auth": "none",
+      "note": "Channel token issuance and refresh."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/channel/oauth/register",
+      "auth": "none",
+      "note": "Dynamic client registration during login."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/channel/oauth/device/authorize",
+      "auth": "none",
+      "note": "RFC 8628 device-authorization request (headless login)."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/channel/oauth/device/token",
+      "auth": "none",
+      "note": "RFC 8628 device-token polling (headless login)."
+    }
+  ]
+}

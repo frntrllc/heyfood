@@ -130,7 +130,7 @@ def test_rate_limited_carries_retry_after(tmp_path, monkeypatch):
     _install_transport(monkeypatch, handler)
     with pytest.raises(TranscriptionRateLimited) as excinfo:
         client.transcribe_audio(b"RIFF", purpose="ask")
-    assert excinfo.value.retry_after == "45"
+    assert excinfo.value.retry_after == 45
 
 
 def test_forbidden_without_scope_code_is_generic_error(tmp_path, monkeypatch):
@@ -171,3 +171,111 @@ def test_transcription_schema_is_versioned_and_opaque():
     # The public schema must not name a provider or model family.
     for banned in ("openai", "whisper", "gpt", "deepgram", "eleven"):
         assert banned not in schema_path.read_text().lower()
+
+
+# --------------------------------------------------------------------------- #
+# Byte-boundary and scope-preflight behavior (blockers 5 and 2).
+# --------------------------------------------------------------------------- #
+
+from heyfood_cli import transcription_contract as _contract  # noqa: E402
+
+
+def test_audio_over_the_file_ceiling_is_rejected_without_a_request(tmp_path, monkeypatch):
+    client = _client_with_channel_token(tmp_path, monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:  # must never run
+        raise AssertionError("oversized audio must not be uploaded")
+
+    _install_transport(monkeypatch, handler)
+    monkeypatch.setattr(_contract, "MAX_AUDIO_BYTES", 100)
+    with pytest.raises(TranscriptionRejected):
+        client.transcribe_audio(b"\x00" * 101, purpose="ask")
+
+
+def test_audio_at_the_file_ceiling_is_sent(tmp_path, monkeypatch):
+    client = _client_with_channel_token(tmp_path, monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"transcript": "ok"})
+
+    _install_transport(monkeypatch, handler)
+    monkeypatch.setattr(_contract, "MAX_AUDIO_BYTES", 100)
+    result = client.transcribe_audio(b"\x00" * 100, purpose="ask")
+    assert result["transcript"] == "ok"
+
+
+def test_multipart_request_envelope_boundary_is_enforced(tmp_path, monkeypatch):
+    # Exercise the ACTUAL httpx multipart envelope at max-1 / max / max+1, so
+    # framing overhead is bounded separately from the audio-file ceiling.
+    client = _client_with_channel_token(tmp_path, monkeypatch)
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["envelope"] = len(request.content)
+        return httpx.Response(200, json={"transcript": "ok"})
+
+    _install_transport(monkeypatch, handler)
+    wav = b"\x00" * 5000
+
+    # Discover the true envelope size with a generous ceiling.
+    monkeypatch.setattr(_contract, "MAX_REQUEST_BYTES", 10_000_000)
+    client.transcribe_audio(wav, purpose="ask")
+    envelope = seen["envelope"]
+
+    # max: an envelope of exactly the ceiling is allowed.
+    monkeypatch.setattr(_contract, "MAX_REQUEST_BYTES", envelope)
+    assert client.transcribe_audio(wav, purpose="ask")["transcript"] == "ok"
+
+    # max+1: headroom, allowed.
+    monkeypatch.setattr(_contract, "MAX_REQUEST_BYTES", envelope + 1)
+    assert client.transcribe_audio(wav, purpose="ask")["transcript"] == "ok"
+
+    # max-1: rejected locally before the wire.
+    monkeypatch.setattr(_contract, "MAX_REQUEST_BYTES", envelope - 1)
+    with pytest.raises(TranscriptionRejected):
+        client.transcribe_audio(wav, purpose="ask")
+
+
+def test_empty_and_nonobject_success_bodies_return_empty_dict(tmp_path, monkeypatch):
+    # A malformed *success* body is not mapped to "unavailable" (which would
+    # silently degrade to a different processor); it is returned for the caller's
+    # contract validation to reject.
+    client = _client_with_channel_token(tmp_path, monkeypatch)
+
+    def empty(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"")
+
+    _install_transport(monkeypatch, empty)
+    assert client.transcribe_audio(b"RIFF", purpose="ask") == {}
+
+    def not_object(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=["not", "an", "object"])
+
+    _install_transport(monkeypatch, not_object)
+    assert client.transcribe_audio(b"RIFF", purpose="ask") == {}
+
+
+def test_has_transcribe_scope_reads_persisted_grant(tmp_path, monkeypatch):
+    client = _client_with_channel_token(tmp_path, monkeypatch)
+    client.config["oauth"]["scope"] = "profile:read audio:transcribe meals:read"
+    assert client.has_transcribe_scope() is True
+    client.config["oauth"]["scope"] = "profile:read meals:read"
+    assert client.has_transcribe_scope() is False
+    client.config["oauth"].pop("scope", None)
+    assert client.has_transcribe_scope() is False
+
+
+def test_retry_after_non_integer_is_ignored(tmp_path, monkeypatch):
+    client = _client_with_channel_token(tmp_path, monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            json={"error": "rate_limited", "message": "slow"},
+            headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"},
+        )
+
+    _install_transport(monkeypatch, handler)
+    with pytest.raises(TranscriptionRateLimited) as excinfo:
+        client.transcribe_audio(b"RIFF", purpose="ask")
+    assert excinfo.value.retry_after is None

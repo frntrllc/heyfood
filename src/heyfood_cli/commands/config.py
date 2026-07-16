@@ -21,13 +21,13 @@ from ..main import (
 )
 
 def _validated_service_url(value: str, *, label: str) -> str:
-    from urllib.parse import urlparse
+    from ..config import ConfigError, validate_service_url
 
-    candidate = value.strip().rstrip("/")
-    parsed = urlparse(candidate)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise typer.BadParameter(f"{label} must be an http:// or https:// URL.")
-    return candidate
+    try:
+        validated = validate_service_url(value, field=label)
+    except ConfigError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    return validated.rstrip("/")
 
 
 @context_app.command("list")
