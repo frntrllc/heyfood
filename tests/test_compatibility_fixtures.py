@@ -14,8 +14,10 @@ from typer.testing import CliRunner
 from heyfood_cli import main
 
 
-# Pinned to the CURRENT baseline (0.3.0): the live CLI's help and raw output must
-# match these fixtures byte-for-byte. 0.3.0 adds native voice (--voice /
+# Pinned to the current command-surface baseline (0.3.0): the live CLI's help
+# and raw output must match these fixtures byte-for-byte. Patch release 0.3.1
+# changes only account-deletion reconciliation and intentionally reuses this
+# interface baseline. 0.3.0 adds native voice (--voice /
 # --voice-capture / --audio-device on ask/log/onboard, the `voice` group with
 # devices/status/set/reset). The 0.1.0 and 0.2.0 baselines are kept on disk as
 # immutable historical evidence and are guarded by the historical tests below;

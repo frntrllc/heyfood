@@ -38,6 +38,10 @@ class AccountDeletionExpired(AccountDeletionError):
     kind = "account_deletion_expired"
 
 
+class AccountDeletionIndeterminate(AccountDeletionError):
+    kind = "account_deletion_indeterminate"
+
+
 class DeletionClient(Protocol):
     def begin_account_deletion(self, request_nonce: str) -> dict[str, Any]: ...
     def account_deletion_status(self, status_token: str) -> dict[str, Any]: ...
@@ -67,6 +71,12 @@ class DeletionReceipt:
         }
 
 
+@dataclass(frozen=True)
+class _Reconciliation:
+    state: str
+    receipt: DeletionReceipt | None = None
+
+
 def run_account_deletion(
     client: DeletionClient,
     *,
@@ -76,19 +86,62 @@ def run_account_deletion(
     browser_callback: Callable[[str], None],
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    reconciliation_attempts: int = 3,
 ) -> DeletionReceipt:
     begin = validate_begin(client.begin_account_deletion(request_nonce))
     deadline = monotonic() + min(max(1, timeout_seconds), begin.expires_in)
-    active = True
     try:
         browser_callback(begin.browser_url)
         while monotonic() < deadline:
-            status = validate_status(client.account_deletion_status(begin.status_token))
+            try:
+                status = validate_status(
+                    client.account_deletion_status(begin.status_token)
+                )
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                reconciled = _reconcile_status(
+                    client,
+                    begin.status_token,
+                    attempts=reconciliation_attempts,
+                )
+                if reconciled.state == "completed":
+                    assert reconciled.receipt is not None
+                    return reconciled.receipt
+                if reconciled.state == "denied":
+                    raise AccountDeletionDenied(
+                        "Account deletion was canceled in the browser. Your account and local credentials remain active."
+                    )
+                if reconciled.state == "expired":
+                    raise AccountDeletionExpired(
+                        "The account-deletion confirmation expired. Your account and local credentials remain active."
+                    )
+                if reconciled.state == "pending":
+                    sleep(
+                        min(
+                            max(0.1, interval_seconds),
+                            max(0.0, deadline - monotonic()),
+                        )
+                    )
+                    continue
+                return _settle_after_cancel(
+                    client,
+                    begin.status_token,
+                    attempts=reconciliation_attempts,
+                    confirmed_error=(
+                        type(exc)
+                        if isinstance(exc, AccountDeletionError)
+                        else AccountDeletionError
+                    ),
+                    confirmed_message=(
+                        "Account deletion could not continue, but cancellation was confirmed. "
+                        "Your account and local credentials remain active."
+                    ),
+                )
             state = status["state"]
             if state == "pending":
                 sleep(min(max(0.1, interval_seconds), max(0.0, deadline - monotonic())))
                 continue
-            active = False
             if state == "completed":
                 return validate_receipt(status["result"])
             if state == "denied":
@@ -99,26 +152,26 @@ def run_account_deletion(
                 "The account-deletion confirmation expired. Your account and local credentials remain active."
             )
     except KeyboardInterrupt:
-        if active:
-            _cancel_once(client, begin.status_token)
-        raise AccountDeletionInterrupted(
-            "Account deletion was interrupted and canceled. Your local credentials were retained."
-        ) from None
-    except (AccountDeletionDenied, AccountDeletionExpired):
-        raise
-    except AccountDeletionError:
-        if active:
-            _cancel_once(client, begin.status_token)
-        raise
-    except Exception:
-        if active:
-            _cancel_once(client, begin.status_token)
-        raise
+        return _settle_after_cancel(
+            client,
+            begin.status_token,
+            attempts=reconciliation_attempts,
+            confirmed_error=AccountDeletionInterrupted,
+            confirmed_message=(
+                "Account deletion was interrupted and cancellation was confirmed. "
+                "Your account and local credentials remain active."
+            ),
+        )
 
-    if active:
-        _cancel_once(client, begin.status_token)
-    raise AccountDeletionTimeout(
-        "Account deletion timed out and was canceled. Your account and local credentials were retained."
+    return _settle_after_cancel(
+        client,
+        begin.status_token,
+        attempts=reconciliation_attempts,
+        confirmed_error=AccountDeletionTimeout,
+        confirmed_message=(
+            "Account deletion timed out and cancellation was confirmed. "
+            "Your account and local credentials remain active."
+        ),
     )
 
 
@@ -173,17 +226,66 @@ def validate_receipt(value: Any) -> DeletionReceipt:
     return DeletionReceipt(deleted_at, grace, confirmation)
 
 
-def _cancel_once(client: DeletionClient, status_token: str) -> None:
+def _reconcile_status(
+    client: DeletionClient,
+    status_token: str,
+    *,
+    attempts: int,
+) -> _Reconciliation:
+    last_state = "unknown"
+    for _ in range(min(max(1, attempts), 5)):
+        try:
+            status = validate_status(client.account_deletion_status(status_token))
+        except Exception:
+            continue
+        state = status["state"]
+        if state == "completed":
+            return _Reconciliation("completed", validate_receipt(status["result"]))
+        if state in {"denied", "expired"}:
+            return _Reconciliation(state)
+        last_state = "pending"
+    return _Reconciliation(last_state)
+
+
+def _settle_after_cancel(
+    client: DeletionClient,
+    status_token: str,
+    *,
+    attempts: int,
+    confirmed_error: type[AccountDeletionError],
+    confirmed_message: str,
+) -> DeletionReceipt:
+    if _cancel_once(client, status_token):
+        raise confirmed_error(confirmed_message)
+    reconciled = _reconcile_status(client, status_token, attempts=attempts)
+    if reconciled.state == "completed":
+        assert reconciled.receipt is not None
+        return reconciled.receipt
+    if reconciled.state == "denied":
+        raise confirmed_error(confirmed_message)
+    if reconciled.state == "expired":
+        raise AccountDeletionExpired(
+            "The account-deletion confirmation expired. Your account and local credentials remain active."
+        )
+    raise AccountDeletionIndeterminate(
+        "Account deletion may have completed, but its final state could not be verified. "
+        "Local credentials were not changed. Run `heyfood account delete --yes` again "
+        "to reconcile the account state, or contact hello.food support with the time of this attempt."
+    )
+
+
+def _cancel_once(client: DeletionClient, status_token: str) -> bool:
     try:
         response = client.cancel_account_deletion(status_token)
         data = _strict_object(response, {"schema_version", "state"}, "account-deletion cancel")
         _schema_one(data)
         if data["state"] != "denied":
             raise AccountDeletionContractError("Account-deletion cancel was not acknowledged.")
+        return True
     except Exception:
         # Cancellation is one-attempt and best-effort. Never retry a destructive
         # protocol request or mask the original interruption/timeout.
-        return
+        return False
 
 
 def _strict_object(value: Any, keys: set[str], label: str) -> dict[str, Any]:

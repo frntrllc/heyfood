@@ -8,6 +8,18 @@ authentication contracts are stabilized.
 
 _Nothing yet._
 
+## 0.3.1 - 2026-07-16
+
+### Fixed
+
+- Account deletion now reconciles a lost or transient status response before
+  canceling, recovers a completed deletion receipt when the original response
+  was lost, and never tells users their account was retained unless a terminal
+  denied or expired state was actually confirmed.
+- Cancellation is still submitted at most once. If both cancellation and the
+  bounded status reconciliation are inconclusive, the CLI reports an explicit
+  indeterminate state and leaves local credentials unchanged.
+
 ## 0.3.0 - 2026-07-16
 
 ### Added

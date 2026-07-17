@@ -137,6 +137,69 @@ def test_malformed_completed_receipt_is_fail_closed_and_canceled():
     client.cancel_account_deletion.assert_called_once_with(STATUS_TOKEN)
 
 
+def test_lost_completed_response_is_reconciled_without_cancellation():
+    client = MagicMock()
+    client.begin_account_deletion.return_value = _begin()
+    client.account_deletion_status.side_effect = [
+        ConnectionError("response lost"),
+        _completed(),
+    ]
+
+    receipt = account_deletion.run_account_deletion(
+        client,
+        request_nonce="n" * 43,
+        timeout_seconds=30,
+        browser_callback=lambda _url: None,
+    )
+
+    assert receipt.confirmation_id == "hf-confirmation-1"
+    client.cancel_account_deletion.assert_not_called()
+
+
+def test_cancel_conflict_reconciles_completed_transaction():
+    client = MagicMock()
+    client.begin_account_deletion.return_value = _begin()
+    client.account_deletion_status.side_effect = [
+        ConnectionError("initial response lost"),
+        ConnectionError("reconcile 1"),
+        ConnectionError("reconcile 2"),
+        ConnectionError("reconcile 3"),
+        _completed(),
+    ]
+    client.cancel_account_deletion.side_effect = HelloFoodError("409: completed")
+
+    receipt = account_deletion.run_account_deletion(
+        client,
+        request_nonce="n" * 43,
+        timeout_seconds=30,
+        browser_callback=lambda _url: None,
+    )
+
+    assert receipt.confirmation_id == "hf-confirmation-1"
+    client.cancel_account_deletion.assert_called_once_with(STATUS_TOKEN)
+
+
+def test_unresolved_poll_and_cancel_is_indeterminate_not_retained():
+    client = MagicMock()
+    client.begin_account_deletion.return_value = _begin()
+    client.account_deletion_status.side_effect = ConnectionError("unavailable")
+    client.cancel_account_deletion.side_effect = ConnectionError("unavailable")
+
+    with pytest.raises(account_deletion.AccountDeletionIndeterminate) as exc_info:
+        account_deletion.run_account_deletion(
+            client,
+            request_nonce="n" * 43,
+            timeout_seconds=30,
+            browser_callback=lambda _url: None,
+        )
+
+    message = str(exc_info.value).lower()
+    assert "may have completed" in message
+    assert "retained" not in message
+    assert "remain active" not in message
+    client.cancel_account_deletion.assert_called_once_with(STATUS_TOKEN)
+
+
 def test_delete_command_clears_credentials_only_after_completed_receipt(monkeypatch):
     client = MagicMock()
     client.channel_scopes.return_value = {"account:delete"}
@@ -184,6 +247,29 @@ def test_delete_command_never_clears_on_denial_and_never_leaks_status_token(monk
     client.store.delete.assert_not_called()
     assert json.loads(result.stdout)["error"]["type"] == "account_deletion_denied"
     assert "hf_dtx_" not in result.stdout
+
+
+def test_delete_command_reports_indeterminate_without_claiming_retention(monkeypatch):
+    client = MagicMock()
+    client.channel_scopes.return_value = {"account:delete"}
+    monkeypatch.setattr(main, "HelloFoodClient", lambda **_kwargs: client)
+    monkeypatch.setattr(
+        account_deletion,
+        "run_account_deletion",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            account_deletion.AccountDeletionIndeterminate(
+                "Account deletion may have completed. Local credentials were not changed."
+            )
+        ),
+    )
+
+    result = CliRunner().invoke(main.app, ["account", "delete", "--yes", "--json"])
+
+    assert result.exit_code == 1
+    document = json.loads(result.stdout)
+    assert document["error"]["type"] == "account_deletion_indeterminate"
+    assert "retained" not in document["error"]["message"].lower()
+    client.store.delete.assert_not_called()
 
 
 def test_completed_backend_with_local_cleanup_failure_is_truthful(monkeypatch):
