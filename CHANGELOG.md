@@ -6,6 +6,10 @@ authentication contracts are stabilized.
 
 ## Unreleased
 
+_Nothing yet._
+
+## 0.3.0 - 2026-07-16
+
 ### Added
 
 - `heyfood register` with a fail-closed capability preflight, loopback/device
