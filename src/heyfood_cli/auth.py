@@ -7,6 +7,7 @@ import secrets
 import threading
 import time
 import webbrowser
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Callable, Literal
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -54,6 +55,107 @@ _WEB_INTENT = {
     "login": "sign_in",
     "auto": "auto",
 }
+
+
+# --- Server capability detection (RFC 8414) --------------------------------
+# The authorization server publishes its metadata (including scopes_supported)
+# at this well-known path. It is deployed on every hello.food backend, old and
+# new, so we can fetch it before login and only request what the live server
+# actually accepts. The path deliberately does NOT contain "/v1/" so it stays
+# outside the tracked endpoint-surface contract (see tests/fixtures/
+# called_endpoints.json) — it is metadata discovery, not a product endpoint.
+SERVER_METADATA_PATH = "/.well-known/oauth-authorization-server"
+# Short and fail-soft: capability discovery must never noticeably delay or block
+# a login. On any timeout/failure we fall back to the full scope set.
+SERVER_METADATA_TIMEOUT_SECONDS = 5.0
+
+
+@dataclass(frozen=True)
+class LoginCapabilities:
+    """What the live authorization server will accept for this login.
+
+    ``scopes`` is the subset of ``LOGIN_SCOPES`` the server advertises, in the
+    canonical ``LOGIN_SCOPES`` order (the server pins this order at token time).
+    ``include_intent`` records whether the registration-capable ``intent`` field
+    is safe to send — see ``resolve_login_capabilities`` for why that is gated on
+    ``account:delete`` support.
+    """
+
+    scopes: list[str]
+    include_intent: bool
+
+
+def fetch_supported_scopes(
+    api_url: str,
+    *,
+    client: httpx.Client | None = None,
+    timeout: float = SERVER_METADATA_TIMEOUT_SECONDS,
+) -> list[str] | None:
+    """Return the server's advertised ``scopes_supported``, or ``None``.
+
+    Fail-soft by contract: any transport error, non-2xx status, malformed body,
+    or a missing/empty/typewrong ``scopes_supported`` yields ``None`` so callers
+    fall back to the full ``LOGIN_SCOPES`` set (never worse than pre-hotfix
+    behavior). ``client`` is injectable so the discovery can be exercised with a
+    deterministic transport in tests.
+    """
+    url = f"{api_url.rstrip('/')}{SERVER_METADATA_PATH}"
+    try:
+        if client is not None:
+            response = client.get(url)
+        else:
+            with httpx.Client(timeout=timeout) as discovery_client:
+                response = discovery_client.get(url)
+    except httpx.HTTPError:
+        return None
+    if response.status_code >= 400:
+        return None
+    try:
+        data = response.json()
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    supported = data.get("scopes_supported")
+    if not isinstance(supported, list):
+        return None
+    scopes = [item for item in supported if isinstance(item, str)]
+    return scopes or None
+
+
+def resolve_login_capabilities(
+    api_url: str,
+    *,
+    client: httpx.Client | None = None,
+) -> LoginCapabilities:
+    """Derive the scopes and intent this login should send for ``api_url``.
+
+    * ``scopes`` — the intersection of ``LOGIN_SCOPES`` with the server's
+      advertised ``scopes_supported``, preserving ``LOGIN_SCOPES`` order.
+    * ``include_intent`` — whether to send the ``intent`` field. The registration
+      capable backend ships the ``intent`` request field and the ``account:delete``
+      scope together, so ``account:delete`` support is a reliable proxy for
+      ``intent`` support. TODO(registration cutover): once ``intent`` and
+      ``account:delete`` can ship independently, gate ``include_intent`` on a
+      dedicated capability signal instead of this proxy.
+
+    If the metadata is unreachable or omits ``scopes_supported`` we fall back to
+    the full ``LOGIN_SCOPES`` set with ``intent`` enabled — exactly the
+    pre-hotfix behavior, so discovery failure is never worse than before.
+    """
+    supported = fetch_supported_scopes(api_url, client=client)
+    if supported is None:
+        return LoginCapabilities(scopes=list(LOGIN_SCOPES), include_intent=True)
+    scopes = [scope for scope in LOGIN_SCOPES if scope in supported]
+    if not scopes:
+        # A hello.food server advertising zero of our known scopes is not a
+        # server we can meaningfully negotiate with; treat it like discovery
+        # failure and fall back rather than send an empty scope request.
+        return LoginCapabilities(scopes=list(LOGIN_SCOPES), include_intent=True)
+    return LoginCapabilities(
+        scopes=scopes,
+        include_intent="account:delete" in supported,
+    )
 
 
 class LoginFlowError(RuntimeError):
@@ -193,6 +295,10 @@ def perform_login(
         redirect_uri = f"http://127.0.0.1:{callback.port}/callback"
         verifier, challenge = pkce_pair()
         state = secrets.token_urlsafe(24)
+        # Ask the live server what it accepts before we request anything, so a
+        # backend that has not yet deployed newer scopes/intent is not sent a
+        # request it will reject with 400/422.
+        capabilities = resolve_login_capabilities(api_url)
         client_registration = register_client(api_url, redirect_uri)
         client_id = client_registration["client_id"]
         authorize_url = build_authorize_url(
@@ -202,6 +308,8 @@ def perform_login(
             state=state,
             code_challenge=challenge,
             intent=intent,
+            scopes=capabilities.scopes,
+            include_intent=capabilities.include_intent,
         )
 
         if open_browser:
@@ -270,9 +378,19 @@ def perform_device_login(
     if not effective_api_key and is_local_api_url(api_url):
         effective_api_key = discover_local_api_key() or ""
 
+    # Ask the live server what it accepts before we request anything, so a
+    # backend that has not yet deployed newer scopes/intent is not sent a
+    # request it will reject with 400/422.
+    capabilities = resolve_login_capabilities(api_url)
     registration = register_client(api_url, "http://127.0.0.1:1/device-unused")
     client_id = str(registration["client_id"])
-    authorization = start_device_authorization(api_url, client_id, intent)
+    authorization = start_device_authorization(
+        api_url,
+        client_id,
+        intent,
+        scopes=capabilities.scopes,
+        include_intent=capabilities.include_intent,
+    )
     # Anchor the advertised deadline to the moment the code was issued, not to
     # when polling begins, so the browser-prompt time counts against expires_in.
     authorized_at = time.monotonic()
@@ -281,7 +399,8 @@ def perform_device_login(
         or authorization.get("verification_uri")
         or auth_url
     )
-    verification_url = _url_with_auth_intent(verification_url, intent)
+    if capabilities.include_intent:
+        verification_url = _url_with_auth_intent(verification_url, intent)
     user_code = str(authorization["user_code"])
     authorization_callback(verification_url, user_code)
     if open_browser:
@@ -322,16 +441,25 @@ def start_device_authorization(
     api_url: str,
     client_id: str,
     intent: AuthIntent = "login",
+    *,
+    scopes: list[str] | None = None,
+    include_intent: bool = True,
 ) -> dict[str, Any]:
+    # ``scopes``/``include_intent`` default to the full request (all LOGIN_SCOPES
+    # plus intent) so a direct caller behaves as before; login flows pass the
+    # server-negotiated values from resolve_login_capabilities.
+    request_scopes = scopes if scopes is not None else LOGIN_SCOPES
+    json_body: dict[str, Any] = {
+        "client_id": client_id,
+        "scope": " ".join(request_scopes),
+    }
+    if include_intent:
+        json_body["intent"] = _web_intent(intent)
     try:
         response = _post_with_diagnostics(
             api_url,
             "/v1/channel/oauth/device/authorize",
-            json_body={
-                "client_id": client_id,
-                "scope": " ".join(LOGIN_SCOPES),
-                "intent": _web_intent(intent),
-            },
+            json_body=json_body,
         )
     except httpx.HTTPError as exc:
         raise LoginFlowError(
@@ -623,18 +751,24 @@ def build_authorize_url(
     state: str,
     code_challenge: str,
     intent: AuthIntent = "login",
+    scopes: list[str] | None = None,
+    include_intent: bool = True,
 ) -> str:
+    # ``scopes``/``include_intent`` default to the full request so a direct
+    # caller behaves as before; login flows pass the server-negotiated values
+    # from resolve_login_capabilities.
+    request_scopes = scopes if scopes is not None else LOGIN_SCOPES
     params = {
         "response_type": "code",
         "client_id": client_id,
         "redirect_uri": redirect_uri,
-        "scope": " ".join(LOGIN_SCOPES),
+        "scope": " ".join(request_scopes),
         "state": state,
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
         "app_client_id": APP_CLIENT_ID,
     }
-    if intent != "login":
+    if intent != "login" and include_intent:
         # This is a browser UX hint only. The authorization transaction and
         # verified identity resolver remain authoritative for account state.
         params["intent"] = _web_intent(intent)
