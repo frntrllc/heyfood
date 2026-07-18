@@ -12,6 +12,7 @@ from heyfood_cli.auth import (
     DEVICE_LOGIN_NETWORK_MESSAGE,
     DEVICE_LOGIN_UNAVAILABLE_MESSAGE,
     LOGIN_SCOPES,
+    LoginCapabilities,
     LoginFlowError,
     LoginInterrupted,
     build_authorize_url,
@@ -22,6 +23,12 @@ from heyfood_cli.auth import (
     poll_device_authorization,
     start_device_authorization,
 )
+
+
+def _full_capabilities(*_args, **_kwargs) -> LoginCapabilities:
+    """Discovery stub: behave as an unreachable-metadata fallback (full scopes,
+    intent on) so login-flow tests never touch the network."""
+    return LoginCapabilities(scopes=list(LOGIN_SCOPES), include_intent=True)
 
 
 def test_normalize_auth_url_appends_authorize():
@@ -63,13 +70,14 @@ def test_device_login_persists_both_token_bundles(monkeypatch):
     store.get_device_id.return_value = "heyfood-cli-device-1"
     store.load.return_value = {}
     callback = MagicMock()
+    monkeypatch.setattr("heyfood_cli.auth.resolve_login_capabilities", _full_capabilities)
     monkeypatch.setattr(
         "heyfood_cli.auth.register_client",
         lambda *_: {"client_id": "hf_cid_device"},
     )
     monkeypatch.setattr(
         "heyfood_cli.auth.start_device_authorization",
-        lambda *_: {
+        lambda *a, **k: {
             "device_code": "hf_dc_test",
             "user_code": "ABCD-EFGH",
             "verification_uri": "https://auth.hello.food/authorize?flow=device",
@@ -281,6 +289,7 @@ class FakeCallbackServer:
 def test_loopback_login_reports_browser_denial(monkeypatch):
     store = MagicMock()
     store.get_device_id.return_value = "device-1"
+    monkeypatch.setattr("heyfood_cli.auth.resolve_login_capabilities", _full_capabilities)
     monkeypatch.setattr(
         "heyfood_cli.auth.OAuthCallbackServer",
         lambda: FakeCallbackServer({"error": "access_denied"}),
@@ -303,6 +312,7 @@ def test_loopback_login_reports_browser_denial(monkeypatch):
 def test_loopback_login_rejects_state_mismatch(monkeypatch):
     store = MagicMock()
     store.get_device_id.return_value = "device-1"
+    monkeypatch.setattr("heyfood_cli.auth.resolve_login_capabilities", _full_capabilities)
     monkeypatch.setattr(
         "heyfood_cli.auth.OAuthCallbackServer",
         lambda: FakeCallbackServer({"state": "wrong", "code": "code-1"}),
@@ -325,6 +335,7 @@ def test_loopback_login_rejects_state_mismatch(monkeypatch):
 def test_loopback_login_preserves_timeout_guidance(monkeypatch):
     store = MagicMock()
     store.get_device_id.return_value = "device-1"
+    monkeypatch.setattr("heyfood_cli.auth.resolve_login_capabilities", _full_capabilities)
     monkeypatch.setattr(
         "heyfood_cli.auth.OAuthCallbackServer",
         lambda: FakeCallbackServer(error=LoginFlowError("Timed out waiting for browser login.")),
@@ -718,12 +729,13 @@ def test_device_login_anchors_deadline_to_authorize_time(monkeypatch):
     store = MagicMock()
     store.get_device_id.return_value = "device-1"
     store.load.return_value = {}
+    monkeypatch.setattr("heyfood_cli.auth.resolve_login_capabilities", _full_capabilities)
     monkeypatch.setattr(
         "heyfood_cli.auth.register_client", lambda *_: {"client_id": "cid"}
     )
     monkeypatch.setattr(
         "heyfood_cli.auth.start_device_authorization",
-        lambda *_: {
+        lambda *a, **k: {
             "device_code": "dc",
             "user_code": "ABCD-EFGH",
             "verification_uri": "https://auth.hello.food/authorize",

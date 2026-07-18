@@ -43,11 +43,16 @@ def account_delete(
 
     client = main.HelloFoodClient(create_device=False)
     if "account:delete" not in client.channel_scopes():
+        # A stored grant without account:delete now most often means the live
+        # hello.food server does not yet offer account deletion, so login never
+        # requested the scope (see resolve_login_capabilities). Re-authenticating
+        # would not help, so we say so plainly instead of raising a raw
+        # authorization error or telling the user to log in again.
         _fail(
-            "This CLI session does not have account:delete authority.",
+            "Account deletion isn't available on this hello.food server yet — "
+            "it arrives with an upcoming update.",
             kind="missing_account_delete_scope",
             json_mode=json_mode,
-            hint="Run `heyfood login` again, then retry `heyfood account delete`.",
         )
 
     def show_browser(url: str) -> None:

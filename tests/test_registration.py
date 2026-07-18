@@ -12,7 +12,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from heyfood_cli import auth_application, main
-from heyfood_cli.auth import build_authorize_url
+from heyfood_cli.auth import LOGIN_SCOPES, build_authorize_url
 from heyfood_cli.commands import auth as auth_command
 
 
@@ -558,6 +558,14 @@ def test_registration_device_runner_end_to_end_at_http_boundary(monkeypatch):
         return httpx.Response(200, json=payloads[path])
 
     monkeypatch.setattr("heyfood_cli.auth._post_with_diagnostics", fake_post)
+    # This boundary test models a registration-capable backend: server metadata
+    # advertises the full scope set (including account:delete), so the device
+    # request legitimately carries the create_account intent. Stubbed here so the
+    # capability discovery GET stays off the network and the test is hermetic.
+    monkeypatch.setattr(
+        "heyfood_cli.auth.fetch_supported_scopes",
+        lambda *_a, **_k: list(LOGIN_SCOPES),
+    )
     monkeypatch.setattr(
         auth_command,
         "_profile_readiness",

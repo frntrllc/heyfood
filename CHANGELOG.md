@@ -8,10 +8,19 @@ authentication contracts are stabilized.
 
 _Nothing yet._
 
-## 0.3.1 - 2026-07-16
+## 0.3.1 - 2026-07-18
 
 ### Fixed
 
+- Restores sign-in compatibility with the current hello.food service; newer
+  capabilities activate automatically when the service supports them. Login now
+  reads the authorization server's published capabilities before signing in and
+  requests only what the live service accepts, so both the browser and device
+  sign-in flows work again against the deployed service. If capability discovery
+  cannot be reached, sign-in falls back to its previous behavior.
+- `heyfood account delete` now explains clearly when the connected hello.food
+  service does not yet offer account deletion, instead of surfacing a raw
+  authorization error.
 - Account deletion now reconciles a lost or transient status response before
   canceling, recovers a completed deletion receipt when the original response
   was lost, and never tells users their account was retained unless a terminal
