@@ -1,6 +1,6 @@
 # heyfood interactive terminal session plan
 
-**Status:** Draft v2 — first review findings folded in; execution requires independent approval
+**Status:** Draft v3 — two review rounds folded in; execution requires independent approval
 **Baseline:** `frntrllc/heyfood` `main` at `9c6b91929143180252ad1b644aea273729a1f1b9` (`heyfood 0.3.2`)
 **Primary user:** a developer running bare `heyfood` in an interactive terminal
 **Release target:** `0.4.0` after all gates pass
@@ -274,6 +274,33 @@ read uses a finite heartbeat/inactivity deadline agreed with the service rather
 than `timeout=None`. Phase 0 may tighten these values with evidence but may not
 make them unbounded.
 
+Phase 0 inventories every operation that can leave the UI loop—including
+ordinary HTTP requests, token refresh, slash-command requests, onboarding
+saves, keyring access, configuration reads/writes, and diagnostics—and assigns
+exactly one execution class:
+
+| Class | Contract |
+|---|---|
+| Cooperatively cancellable | Own a close handle/token, finite deadline, bounded join, and no commit after cancellation |
+| Serialized atomic persistence | Run through the sole application state writer; use temp-file + flush/fsync + atomic replace; cancellation waits for the current sub-500 ms commit section, preserving either the old or new complete state |
+| Process-isolated blocking adapter | Run behind a supervised helper process when a library/backend exposes no cancellation or deadline; communicate over anonymous pipes, never argv/environment; terminate on the documented bound and reconcile uncertain completion |
+
+Ordinary and refresh HTTP calls use per-operation clients with finite timeouts
+and owned close handles. Filesystem configuration persistence uses the atomic
+state-writer class. OS keyring backends are not placed in an unkillable Python
+worker thread: Phase 0 proves a process-isolated credential broker on supported
+platforms, including secure pipe handling, backend prompts, timeout/termination,
+and read-after-write reconciliation. If that proof fails, the hard three-second
+exit claim and the affected interactive auth design return to independent
+review; implementation may not quietly leak a thread or move keyring calls onto
+the UI loop.
+
+For an uncertain credential write, the parent records no secret or success
+claim. A later broker read reconciles whether the backend committed. For an
+atomic config write, the application accepts only the complete old or complete
+new file. No secret is written to diagnostics, temp artifacts, argv, or the
+environment.
+
 The session may not rely on cancelling an `asyncio` future to stop a blocking
 thread. Exit tests must prove there are no surviving operation threads,
 sockets, callback listeners, pollers, or microphone streams.
@@ -309,6 +336,34 @@ Events and actions are typed. Each background operation carries an operation
 ID and the cancellable resource contract from A3; late events from cancelled
 or replaced work are ignored. State transitions are unit-testable without a
 terminal or network.
+
+### A4.1 — Stateful work is single-flight
+
+The composer may remain editable during background work, but heyfood runs one
+stateful workflow at a time. Responsiveness does not authorize concurrent
+mutation.
+
+| While a stateful turn/auth/onboarding workflow is active | Policy |
+|---|---|
+| Draft editing, scrolling, `/help` | Allowed; local only |
+| Submit another prompt | Keep at most one memory-only queued draft; it is not sent until the active operation reaches a terminal state |
+| `/status` | Show a local immutable snapshot; defer any network refresh |
+| `/for`, `/new`, `/location`, mutating `/profile` | Require cancel-and-join of the active workflow, then explicit execution; never overlap or silently queue |
+| Auth refresh required by the active request | Part of that operation and committed through the state writer before its terminal outcome |
+| Registration or onboarding | Exclusive; no conversational turn or mutating command may start |
+
+Each operation receives an immutable config/auth/scope snapshot and its own
+`HelloFoodClient`. Workers never share a mutable client or `ConfigStore`.
+Workers return proposed local mutations to one application-owned state writer,
+which serializes them and applies them only when the operation generation still
+matches. UI late-event suppression therefore cannot hide a stale disk write.
+
+If an existing contract requires a local-first effect, such as accepting a
+pending household confirmation before a converse stream completes, the state
+writer records the effect as its own committed event. Cancellation or an
+uncertain server outcome explicitly tells the user what changed locally,
+refreshes the authoritative snapshot, and never lets the cancelled operation
+overwrite the replacement conversation ID or household scope.
 
 ### A5 — Presentation remains semantic
 
@@ -437,12 +492,16 @@ readers.
 | Capability selection before application launch | `TerminalSession` |
 | Background operation supervision and cancellation | `TerminalSession` + A3 operation handles |
 | Browser/child suspension coordination | `TerminalSession` through supported `prompt_toolkit` APIs |
+| Process-signal handlers and normalized exit codes | `TerminalSession`; keyboard bindings remain application input |
 | State-normalized exit and post-restore crash output | `TerminalSession` |
 
-Signal behavior is explicit:
+Signal behavior is explicit and distinguishes input from process control:
 
-- `SIGINT`/`Ctrl+C` follows the composer/active-turn contract and exits `130`
-  only after the confirmed idle-exit path;
+- keyboard `Ctrl+C` is a `prompt_toolkit` key event: it clears a draft, cancels
+  the active operation, or performs the documented double-press idle exit;
+- an actual process-level `SIGINT` (for example `kill -INT`) is one-shot: cancel
+  all owned operations, restore the terminal, and exit `130` within the exit
+  budget; it never waits for a second keypress;
 - `SIGTERM` cancels resources, lets the application restore, and exits `143`;
 - `SIGHUP` cancels resources, restores where the TTY remains available, and
   exits `129`;
@@ -453,7 +512,11 @@ Signal behavior is explicit:
   the terminal matrix.
 
 Crash reporting happens only after terminal restoration and remains redacted.
-No feature module may write ANSI mode sequences directly.
+No feature module may write ANSI mode sequences directly. Diagnostics use a
+UI-neutral redacted event sink: one-shot mode may emit to stderr, while an
+active TUI consumes events through its bounded queue or holds them for
+post-restore output. Worker code never calls `Console.print()` over the active
+frame.
 
 ## Proposed code organization
 
@@ -492,18 +555,25 @@ network/business rules into widgets.
 | `src/heyfood_cli/commands/agent.py` | Delegate ask/reply/chat behavior to shared turn/session services; preserve option contracts | Command compatibility |
 | `src/heyfood_cli/commands/auth.py` | Delegate registration/login/onboarding operations without duplicating prompts | Auth compatibility |
 | `src/heyfood_cli/client.py` | Cancellable SSE ownership, finite timeouts, separate tracing/idempotency headers after contract verification | Transport/security |
+| `src/heyfood_cli/config.py` | Immutable operation snapshots and atomic writes through the sole state writer | State/persistence |
+| `src/heyfood_cli/credentials.py` | Route keyring work through the process-isolated credential broker and reconcile uncertain writes | Credential security |
+| `src/heyfood_cli/diagnostics.py` | Add a UI-neutral redacted event sink; one-shot may print stderr, TUI queues safe events or emits after restore | Diagnostics/terminal safety |
 | `src/heyfood_cli/auth.py` | Expose cancellable loopback/device primitives and deterministic resource close | Auth/security |
 | `src/heyfood_cli/auth_application.py` | Add transport selection and UI-neutral auth state operations | Auth architecture |
 | `src/heyfood_cli/onboarding.py` | Expose UI-neutral onboarding actions and explicit profile-sync consent | Privacy/product |
+| `src/heyfood_cli/commands/profiles.py` | Move current `run_onboarding()` and profile-sync consent UI into shared application operations while preserving one-shot prompts | Profile/onboarding compatibility |
 | `src/heyfood_cli/presentation.py` | Define complete `PresentationDocument` builders for every supported result/event | Safety/presentation |
 | `src/heyfood_cli/render.py` | Become the Rich leaf adapter over semantic documents | One-shot UX |
 | `src/heyfood_cli/banner.py` | Expose canonical non-blocking animation frames/timing without owning terminal mode | Brand/terminal safety |
 | `src/heyfood_cli/voice_capture.py` | Extract cancellable capture/transcribe/review operations; preserve processor consent | Voice/privacy |
+| `src/heyfood_cli/voice.py` | Make browser callback-server wait cancellable and guarantee listener teardown | Voice/resource safety |
 | `src/heyfood_cli/voice_native.py` | Guarantee immediate idempotent microphone close on cancellation | Voice/resource safety |
 | `src/heyfood_cli/application/__init__.py` | Application-layer package boundary | Architecture |
 | `src/heyfood_cli/application/auth_flow.py` | UI-neutral registration/login operations and outcomes | Auth architecture |
 | `src/heyfood_cli/application/onboarding_flow.py` | UI-neutral onboarding operations and outcomes | Product architecture |
 | `src/heyfood_cli/application/turns.py` | `TurnService`, logical operations, normalized events, cancellation | Transport/product |
+| `src/heyfood_cli/application/state_writer.py` | Serialize generation-checked config/auth/scope/conversation persistence and atomic file commits | Concurrency/persistence |
+| `src/heyfood_cli/application/credential_broker.py` | Supervise isolated keyring helper, secure anonymous-pipe protocol, timeout, termination, reconciliation | Credential lifecycle |
 | `src/heyfood_cli/session/__init__.py` | Lazy interactive-session public entry point | Import isolation |
 | `src/heyfood_cli/session/app.py` | Composition root and application loop | TUI architecture |
 | `src/heyfood_cli/session/state.py` | State, reducer, operation identities | State correctness |
@@ -519,6 +589,9 @@ network/business rules into widgets.
 | `src/heyfood_cli/session/voice.py` | TUI voice state/controller | Voice UX |
 | `tests/test_session_state.py` | Reducer, operation identity, late-event tests | State gate |
 | `tests/test_session_cancellation.py` | Thread/socket/server/poller/microphone teardown fault tests | Resource gate |
+| `tests/test_session_concurrency.py` | Single-flight, queued-draft, generation, turn/command/refresh/onboarding overlap tests | Concurrency gate |
+| `tests/test_state_writer.py` | Serialized atomic writes, stale-generation rejection, interrupted commit recovery | Persistence gate |
+| `tests/test_credential_broker.py` | Secret-safe IPC, prompt/timeout/kill, uncertain write reconciliation, no orphan process | Credential gate |
 | `tests/test_session_terminal_pty.py` | Launch, keys, paste, resize, signals, suspend, restoration | Terminal gate |
 | `tests/test_session_layout.py` | Width/theme/motion/accessibility golden tests | Visual gate |
 | `tests/test_session_commands.py` | Registry, completion, aliases, availability, parsing | Command gate |
@@ -527,10 +600,13 @@ network/business rules into widgets.
 | `tests/test_session_onboarding.py` | New, partial, consent, resume, and failure states | Onboarding gate |
 | `tests/test_session_voice.py` | Recording/transcribing/review/cancel/processor-consent behavior | Voice gate |
 | `tests/test_session_compatibility.py` | Root/chat option, lazy import, classic, exit-code compatibility | CLI gate |
+| `tests/test_diagnostics.py` | Extend redaction and prove no worker `Console.print()` during an active TUI | Diagnostics gate |
 | `tests/test_output_contract.py` | Extend real/simulated-TTY JSON isolation assertions | Automation gate |
 | `tests/test_package_metadata.py` | Dependency bounds, licenses, wheel/sdist contents | Packaging gate |
 | `tests/test_installer.py` | `pipx`, hosted installer, upgrade, rollback artifact | Release gate |
 | `docs/interactive-session.md` | Keyboard, commands, terminal support, privacy, accessibility fallback | User documentation |
+| `docs/CLI_CONTRACT.md` | Update interactive/classic/machine-output lifecycle contracts | Public contract |
+| `docs/COMMAND_GRAMMAR.md` | Update bare/chat options, slash grammar, aliases, and fallback behavior | Command contract |
 | `README.md` | Bare-command journey and classic fallback | Public documentation |
 | `CHANGELOG.md` | `0.4.0` behavior and compatibility | Release documentation |
 | `RELEASING.md` | Qualification, monitoring, rollback drill | Operations |
@@ -573,6 +649,8 @@ state or pay the interactive dependency's import/startup path.
 
 - Implement typed state, events, actions, operation IDs, reducer, cancellable
   resource supervision, bounded queues/joins, and demand-driven invalidation.
+- Implement single-flight workflows, immutable snapshots, the sole state
+  writer, and the supervised credential broker.
 - Centralize terminal lifecycle and signal behavior.
 - Bound scrollback and avoid redraw busy loops.
 
@@ -646,39 +724,52 @@ summary.
 3. Write the session state/event contract, terminal ownership table,
    `CancellableOperation` contract, queue bounds, close/join deadlines, and
    complete `PresentationDocument` inventory.
-4. Inspect Production/backend source for `/v1/agent/converse` idempotency-key
+4. Inventory every offloaded blocking operation and assign its cancellable,
+   atomic-persistence, or process-isolated class. Prove the keyring credential
+   broker and atomic state-writer strategy on supported platforms, or return
+   the exit/auth design to review.
+5. Write the single-flight/concurrency table, immutable operation snapshot,
+   generation check, and local-first-effect reconciliation contract.
+6. Inspect Production/backend source for `/v1/agent/converse` idempotency-key
    and fingerprint support. Record verified headers/schema and replay
    semantics, or create a separate backend prerequisite and retain the strict
    no-automatic-retry policy.
-5. Define classic-mode selection and supported terminal matrix.
-6. Map `_ask_agent()`, auth, onboarding, voice, and presentation code into the
+7. Define classic-mode selection and supported terminal matrix.
+8. Map `_ask_agent()`, auth, onboarding, voice, and presentation code into the
    shared application layer with no duplicated business behavior.
-7. Record the pinned Grok SHA and pattern-only source-provenance decision.
-8. Freeze the exact deliverables map or commit reviewed path amendments.
-9. Map the Phase 6 aggregate metrics to existing privacy-safe backend logs or
+9. Record the pinned Grok SHA and pattern-only source-provenance decision.
+10. Freeze the exact deliverables map or commit reviewed path amendments.
+11. Map the Phase 6 aggregate metrics to existing privacy-safe backend logs or
    monitoring. If any required signal is absent, create a separately reviewed
    backend observability prerequisite; do not add covert CLI telemetry.
 
 **Exit gate:** the spike proves the foundation on macOS and Linux CI, the
 architecture has no network work on the UI loop, and an independent reviewer
-approves dependency bounds, resource cancellation, terminal ownership,
-idempotency posture, semantic renderer completeness, privacy, and migration
-seams.
+approves dependency bounds, the complete blocking-operation inventory,
+credential/persistence proof, resource cancellation, single-flight state
+mutation, terminal ownership, idempotency posture, semantic renderer
+completeness, privacy, and migration seams.
 
 ### Phase 1 — Session kernel and terminal safety
 
 1. Implement `TerminalSession`, state, reducer, events, operation IDs, task
    supervision, bounded queues, cancellable resource handles, and
    demand-driven invalidation.
-2. Add safe launch/exit, signals, resize, suspend/resume, and crash restoration.
-3. Add bounded semantic scrollback with no sensitive disk persistence.
-4. Add deterministic unit and PTY tests before visual features.
+2. Implement the single application state writer, immutable snapshots,
+   generation checks, atomic config persistence, and supervised credential
+   broker.
+3. Add safe launch/exit, separate key-event/process-signal behavior, resize,
+   suspend/resume, and crash restoration.
+4. Add bounded semantic scrollback with no sensitive disk persistence.
+5. Add deterministic unit, subprocess, and PTY tests before visual features.
 
 **Exit gate:** every intentional and injected abnormal exit restores the
-terminal; cancel/exit leaves zero live operation threads, HTTP streams,
-callback listeners, device pollers, or microphone streams after the defined
-join bound; idle CPU meets the measured budget; late events cannot mutate
-replacement operations; independent safety review passes.
+terminal; cancel/exit leaves zero live operation threads, helper processes,
+HTTP streams, callback listeners, device pollers, or microphone streams after
+the defined bound; atomic persistence resolves to a complete old/new state;
+keyboard `Ctrl+C` and process `SIGINT` pass distinct tests; idle CPU meets the
+measured budget; late operations cannot mutate replacement state; independent
+safety review passes.
 
 ### Phase 2 — Interactive shell and presentation
 
@@ -703,15 +794,20 @@ passes.
    `/location`, and `/status`.
 4. Preserve one-shot `ask`, `reply`, and classic chat behavior through the same
    service.
-5. Enable no automatic POST replay. If the separately reviewed backend
+5. Enforce the A4.1 single-flight table and add overlap tests for turn + `/for`,
+   turn + `/new`, queued draft, token refresh + exit, onboarding save + exit,
+   and cancelled local-first confirmation turns.
+6. Enable no automatic POST replay. If the separately reviewed backend
    idempotency prerequisite is delivered, test the stable logical key and
    fingerprint across an intentionally replayed transport attempt before any
    retry behavior is proposed.
 
 **Exit gate:** typed turns work end to end against a controlled service;
-cancellation is reliable; service failures never look successful; safety
-vocabulary and structured guidance match one-shot output; independent product
-and code review passes.
+cancellation is reliable; concurrent mutation is impossible; stale operations
+cannot overwrite conversation/scope/config; local-first effects are disclosed
+and reconciled; service failures never look successful; safety vocabulary and
+structured guidance match one-shot output; independent product and code review
+passes.
 
 ### Phase 4 — Net-new user journey
 
@@ -793,6 +889,10 @@ review closes the plan.
   retry guidance, and cancellation;
 - injected cancellation during blocked SSE reads, auth waits, transcription,
   and microphone capture with zero surviving owned resources;
+- turn + `/for`, turn + `/new`, queued draft replacement, token refresh + exit,
+  onboarding save + exit, and cancelled local-first confirmation overlap;
+- keyring read/write prompt, timeout, broker termination, uncertain-write
+  reconciliation, and atomic config interruption;
 - slash parsing, aliases, completion, invalid arguments, unavailable commands;
 - voice success, review/edit/rerecord, missing mic, missing dependency,
   permission denial, scope loss, timeout, and cancellation.
@@ -805,8 +905,8 @@ review closes the plan.
 - bracketed multi-line paste and control-character sanitization;
 - `NO_COLOR`, `HEYFOOD_NO_BANNER`, `HEYFOOD_NO_ANIMATION`,
   `HEYFOOD_NO_TUI`, `TERM=dumb`, CI, pipe, redirected output;
-- exception, `Ctrl+C`, `Ctrl+D`, `SIGTERM`, `SIGHUP`, suspend/resume, browser
-  handoff, and child failure restoration.
+- exception, keyboard `Ctrl+C`, external process `SIGINT`, `Ctrl+D`, `SIGTERM`,
+  `SIGHUP`, suspend/resume, browser handoff, and child failure restoration.
 
 ### Contracts
 
@@ -815,6 +915,8 @@ review closes the plan.
 - existing schemas and exit codes remain compatible;
 - existing HTTPS enforcement, credential storage, scopes, and capability gates
   remain fail closed;
+- worker operations use immutable snapshots and isolated clients; only the
+  generation-checking application state writer mutates local state;
 - service text cannot inject terminal escapes or markup;
 - tracing IDs, logical idempotency keys/fingerprints, and pending-confirmation
   keys remain separate contracts; no uncertain conversational POST is retried
@@ -846,8 +948,9 @@ review closes the plan.
   dropping;
 - total RSS stays below 150 MiB and grows by less than 25 MiB while cycling
   10,000 bounded synthetic events after warm-up;
-- cancellation meets the 500 ms/2 second resource-close and 3 second total-exit
-  budgets in every fault-injection test;
+- cancellation, credential broker termination, and state-writer completion
+  meet their 500 ms/2 second resource-close and 3 second total-exit budgets in
+  every fault-injection test;
 - no unbounded task, queue, event, response-fragment, or history accumulation.
 
 ## Acceptance criteria
@@ -878,14 +981,19 @@ review closes the plan.
     same independently verified `0.4.0` artifact.
 14. The released installed wheel passes clean-machine registration, login,
     onboarding, typed-turn, and real-hardware voice smoke tests.
-15. Cancelling or exiting closes every owned network/auth/voice resource within
-    the defined budget; late-event suppression is not used as a substitute.
+15. Cancelling or exiting closes every owned network/auth/voice resource and
+    keyring helper process within the defined budget; atomic persistence
+    resolves completely; late-event suppression is not used as a substitute.
 16. SSH/headless login selects the short-code device flow and never launches a
     browser against a remote loopback callback.
 17. Every result and progress type becomes one renderer-neutral semantic
     document used by both Rich and the TUI.
 18. Release and rollback decisions use the named owner, windows, privacy-safe
     metrics, thresholds, and installed-artifact drill in Phase 6.
+19. Only one stateful workflow runs at a time; stale generations cannot
+    overwrite conversation, household, auth, onboarding, or config state.
+20. Keyboard `Ctrl+C` follows interactive semantics, while external `SIGINT`
+    always cancels, restores, and exits `130` without a second press.
 
 ## Risks and controls
 
@@ -893,6 +1001,8 @@ review closes the plan.
 |---|---|
 | Terminal corruption on crash or browser handoff | One terminal lifecycle boundary, `finally` restoration, PTY fault injection, no direct ANSI mode writes elsewhere |
 | UI freezes or resources survive cancellation | Cancellable resource owners, bounded queues/joins, operation IDs, no blocking work on application loop, teardown fault tests |
+| Keyring backend blocks or finishes after caller uncertainty | Supervised process-isolated broker, secret-safe pipes, hard termination, read-after-write reconciliation, no worker thread |
+| Concurrent turn/command/auth state corrupts scope or conversation | Single-flight workflows, immutable snapshots, isolated clients, sole generation-checking state writer, overlap tests |
 | TUI and one-shot behavior drift | Shared application services and semantic presentation fixtures |
 | Health/dietary content leaks through history or logs | Memory-only history, redacted diagnostics, explicit future review for persistence |
 | Terminal escape/markup injection from service content | Control sanitization, literal service text, validated links, bounded content |
