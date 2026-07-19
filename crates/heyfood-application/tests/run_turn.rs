@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::future::{Future, pending};
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
@@ -13,8 +13,8 @@ use heyfood_application::{
 };
 use heyfood_core::{
     AccountId, AgentEvent, ClientConfig, ConfigRevision, CredentialVersion, GenerationId,
-    NetworkPolicy, OperationId, RefreshRequest, RefreshResult, SensitiveString, ServiceUrl,
-    SessionCredentials, SessionSnapshot,
+    NetworkPolicy, OperationId, RefreshOutcome, RefreshRequest, RefreshResult, SensitiveString,
+    ServiceUrl, SessionCredentials, SessionSnapshot,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -82,6 +82,9 @@ struct FakeCredentials {
     reconciliation: Mutex<Vec<heyfood_core::CommitId>>,
     cancel_during_commit: Mutex<Option<CancellationToken>>,
     fail_commit: Mutex<bool>,
+    fail_marker: Mutex<bool>,
+    fail_clear: Mutex<bool>,
+    clears: Mutex<Vec<heyfood_core::CommitId>>,
 }
 
 impl CredentialPort for FakeCredentials {
@@ -111,7 +114,33 @@ impl CredentialPort for FakeCredentials {
         commit_id: heyfood_core::CommitId,
     ) -> BoxFuture<'_, Result<(), PortError>> {
         Box::pin(async move {
+            if *self.fail_marker.lock().unwrap() {
+                return Err(PortError::new(
+                    "marker_write",
+                    "reconciliation marker write failed",
+                ));
+            }
             self.reconciliation.lock().unwrap().push(commit_id);
+            Ok(())
+        })
+    }
+
+    fn clear_reconciliation_required(
+        &self,
+        commit_id: heyfood_core::CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async move {
+            if *self.fail_clear.lock().unwrap() {
+                return Err(PortError::new(
+                    "marker_clear",
+                    "reconciliation marker clear failed",
+                ));
+            }
+            self.reconciliation
+                .lock()
+                .unwrap()
+                .retain(|value| *value != commit_id);
+            self.clears.lock().unwrap().push(commit_id);
             Ok(())
         })
     }
@@ -145,8 +174,9 @@ impl ClockPort for FakeClock {
 
 #[derive(Clone, Copy)]
 enum RefreshBehavior {
-    Pending,
+    CancelledBeforeDispatch,
     Accepted,
+    Uncertain,
 }
 
 struct FakeService {
@@ -161,15 +191,20 @@ impl ServicePort for FakeService {
         &self,
         request: RefreshRequest,
         _cancellation: CancellationToken,
-    ) -> BoxFuture<'_, Result<RefreshResult, PortError>> {
+    ) -> BoxFuture<'_, Result<RefreshOutcome, PortError>> {
         Box::pin(async move {
             match self.behavior {
-                RefreshBehavior::Pending => {
+                RefreshBehavior::CancelledBeforeDispatch => {
                     self.cancellation.cancel();
-                    pending::<Result<RefreshResult, PortError>>().await
+                    Ok(RefreshOutcome::CancelledBeforeDispatch)
                 }
                 RefreshBehavior::Accepted => RefreshResult::validated(&request, credentials(2))
+                    .map(RefreshOutcome::Refreshed)
                     .map_err(|error| PortError::new("fixture", error)),
+                RefreshBehavior::Uncertain => Err(PortError::uncertain(
+                    "refresh_transport",
+                    "peer consumed the token but withheld its response",
+                )),
             }
         })
     }
@@ -242,8 +277,11 @@ fn harness(
 fn cancellation_before_server_acceptance_does_not_mutate_credentials() {
     block_on(async {
         let cancellation = CancellationToken::new();
-        let (run_turn, credentials_port, _, _, service) =
-            harness(RefreshBehavior::Pending, &cancellation, vec![]);
+        let (run_turn, credentials_port, _, _, service) = harness(
+            RefreshBehavior::CancelledBeforeDispatch,
+            &cancellation,
+            vec![],
+        );
         let (sender, _receiver) = mpsc::channel(4);
 
         let outcome = run_turn
@@ -409,11 +447,123 @@ fn duplicate_durable_proposal_is_idempotent() {
             writer.commit(proposal.clone()).await.unwrap(),
             CommitOutcome::Applied
         );
+        credentials_port
+            .reconciliation
+            .lock()
+            .unwrap()
+            .push(proposal.metadata.commit_id);
         assert_eq!(
             writer.commit(proposal).await.unwrap(),
             CommitOutcome::Duplicate
         );
         assert_eq!(credentials_port.commits.lock().unwrap().len(), 1);
+        assert!(credentials_port.reconciliation.lock().unwrap().is_empty());
+        assert_eq!(credentials_port.clears.lock().unwrap().len(), 2);
+    });
+}
+
+#[test]
+fn uncertain_post_dispatch_refresh_is_marked_and_blocks_restart() {
+    block_on(async {
+        let cancellation = CancellationToken::new();
+        let (run_turn, credentials_port, _, _, service) =
+            harness(RefreshBehavior::Uncertain, &cancellation, vec![]);
+        let (sender, _receiver) = mpsc::channel(4);
+
+        let error = run_turn
+            .execute(
+                TurnRequest {
+                    prompt: "hello".into(),
+                    conversation_id: None,
+                    refresh: RefreshPolicy::Required,
+                },
+                snapshot(),
+                cancellation,
+                sender,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RunTurnError::ServiceReconciliationRequired(ref cause)
+                if cause.outcome_uncertain
+        ));
+        assert_eq!(credentials_port.reconciliation.lock().unwrap().len(), 1);
+        assert_eq!(*service.opens.lock().unwrap(), 0);
+
+        // A restarted application reconstructs this bit from the durable
+        // marker and must fail closed before dispatching another request.
+        let restart_cancellation = CancellationToken::new();
+        let restarted_writer = Arc::new(SerializedStateWriter::new(
+            credentials_port.clone(),
+            Arc::new(FakeConfig::default()),
+            GenerationId::INITIAL,
+            Some(&credentials(1)),
+        ));
+        let restarted_service = Arc::new(FakeService {
+            behavior: RefreshBehavior::Accepted,
+            cancellation: restart_cancellation.clone(),
+            events: Mutex::new(vec![]),
+            opens: Mutex::new(0),
+        });
+        let restarted = RunTurn::new(
+            restarted_service.clone(),
+            Arc::new(FakeClock),
+            restarted_writer,
+        );
+        let mut restart_snapshot = snapshot();
+        restart_snapshot.session.reconciliation_required =
+            !credentials_port.reconciliation.lock().unwrap().is_empty();
+        let (sender, _receiver) = mpsc::channel(4);
+        let error = restarted
+            .execute(
+                TurnRequest {
+                    prompt: "do not dispatch".into(),
+                    conversation_id: None,
+                    refresh: RefreshPolicy::Required,
+                },
+                restart_snapshot,
+                restart_cancellation,
+                sender,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error, RunTurnError::UnresolvedReconciliation);
+        assert_eq!(*restarted_service.opens.lock().unwrap(), 0);
+    });
+}
+
+#[test]
+fn reconciliation_marker_write_failure_is_surfaced_fail_closed() {
+    block_on(async {
+        let cancellation = CancellationToken::new();
+        let (run_turn, credentials_port, _, _, service) =
+            harness(RefreshBehavior::Uncertain, &cancellation, vec![]);
+        *credentials_port.fail_marker.lock().unwrap() = true;
+        let (sender, _receiver) = mpsc::channel(4);
+
+        let error = run_turn
+            .execute(
+                TurnRequest {
+                    prompt: "hello".into(),
+                    conversation_id: None,
+                    refresh: RefreshPolicy::Required,
+                },
+                snapshot(),
+                cancellation,
+                sender,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RunTurnError::State(heyfood_application::CommitError::ReconciliationMarkerWrite { .. })
+        ));
+        assert!(credentials_port.commits.lock().unwrap().is_empty());
+        assert!(credentials_port.reconciliation.lock().unwrap().is_empty());
+        assert_eq!(*service.opens.lock().unwrap(), 0);
     });
 }
 

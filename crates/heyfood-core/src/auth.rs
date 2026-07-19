@@ -5,6 +5,7 @@ use std::fmt;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 /// A secret string that redacts both `Debug` and `Display` output.
 #[derive(Clone)]
@@ -121,6 +122,26 @@ impl SessionCredentials {
         })
     }
 
+    /// Construct credentials from the RFC 3339 timestamp emitted by the
+    /// Python `SessionResponse` and `CliSessionExchangeResponse` schemas.
+    pub fn from_rfc3339_expiry(
+        account_id: AccountId,
+        access_token: SensitiveString,
+        refresh_token: SensitiveString,
+        version: CredentialVersion,
+        access_expires_at: &str,
+    ) -> Result<Self, &'static str> {
+        let expires_at = OffsetDateTime::parse(access_expires_at, &Rfc3339)
+            .map_err(|_| "credential expiry is not a valid RFC 3339 timestamp")?;
+        Ok(Self {
+            account_id,
+            access_token,
+            refresh_token,
+            version,
+            expires_at,
+        })
+    }
+
     #[must_use]
     pub fn expires_at_unix(&self) -> i64 {
         self.expires_at.unix_timestamp()
@@ -136,7 +157,9 @@ pub struct SessionSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RefreshRequest {
     pub account_id: AccountId,
-    pub refresh_token: SensitiveString,
+    /// Python permits legacy/session-exchange documents without a refresh
+    /// token and immediately falls back to the channel re-exchange path.
+    pub refresh_token: Option<SensitiveString>,
     pub current_version: CredentialVersion,
 }
 
@@ -144,10 +167,22 @@ impl From<&SessionCredentials> for RefreshRequest {
     fn from(credentials: &SessionCredentials) -> Self {
         Self {
             account_id: credentials.account_id.clone(),
-            refresh_token: credentials.refresh_token.clone(),
+            refresh_token: (!credentials.refresh_token.expose_secret().is_empty())
+                .then(|| credentials.refresh_token.clone()),
             current_version: credentials.version,
         }
     }
+}
+
+/// Whether a refresh operation crossed the network dispatch boundary.
+///
+/// Cancellation and transport errors after dispatch are errors with uncertain
+/// outcomes, not this value. This variant is reserved for a cancellation
+/// observed before either refresh/re-exchange request was dispatched.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RefreshOutcome {
+    Refreshed(RefreshResult),
+    CancelledBeforeDispatch,
 }
 
 /// A validated server-accepted credential rotation.

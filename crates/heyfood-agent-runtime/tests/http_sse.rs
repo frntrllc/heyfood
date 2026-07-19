@@ -1,14 +1,15 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use heyfood_agent_runtime::{HttpDeadlines, HttpService};
+use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
 use heyfood_application::{
     BoxFuture, ClockPort, ConfigCommit, ConfigPort, CredentialCommit, CredentialPort, PortError,
     RefreshPolicy, RunTurn, RunTurnOutcome, SerializedStateWriter, ServicePort, TurnRequest,
 };
 use heyfood_core::{
     AccountId, AgentEvent, ClientConfig, ConfigRevision, CredentialVersion, GenerationId,
-    NetworkPolicy, OperationId, SensitiveString, ServiceUrl, SessionCredentials, SessionSnapshot,
+    NetworkPolicy, OperationId, RefreshOutcome, RefreshRequest, SensitiveString, ServiceUrl,
+    SessionCredentials, SessionSnapshot,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -69,6 +70,13 @@ impl CredentialPort for MemoryCredentials {
     ) -> BoxFuture<'_, Result<(), PortError>> {
         Box::pin(async { Ok(()) })
     }
+
+    fn clear_reconciliation_required(
+        &self,
+        _commit_id: heyfood_core::CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 #[derive(Default)]
@@ -123,10 +131,20 @@ async fn read_request(socket: &mut TcpStream) -> String {
 }
 
 async fn respond(socket: &mut TcpStream, content_type: &str, body: &[u8]) {
+    respond_status(socket, 200, "OK", content_type, body).await;
+}
+
+async fn respond_status(
+    socket: &mut TcpStream,
+    status: u16,
+    reason: &str,
+    content_type: &str,
+    body: &[u8],
+) {
     socket
         .write_all(
             format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             )
             .as_bytes(),
@@ -135,6 +153,47 @@ async fn respond(socket: &mut TcpStream, content_type: &str, body: &[u8]) {
         .unwrap();
     socket.write_all(body).await.unwrap();
     socket.flush().await.unwrap();
+}
+
+fn auth_fixture() -> serde_json::Value {
+    serde_json::from_str(include_str!("fixtures/python_backend_refresh.json")).unwrap()
+}
+
+fn assert_frozen_request(request: &str, fixture: &serde_json::Value) {
+    let mut parts = request.split("\r\n\r\n");
+    let head = parts.next().unwrap();
+    let body = parts.next().unwrap_or_default();
+    let mut lines = head.lines();
+    let request_line = lines.next().unwrap();
+    assert!(request_line.starts_with(&format!(
+        "{} {} ",
+        fixture["method"].as_str().unwrap(),
+        fixture["path"].as_str().unwrap()
+    )));
+    let headers = lines
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.to_ascii_lowercase(), value.trim().to_owned()))
+        .collect::<std::collections::HashMap<_, _>>();
+    for (name, expected) in fixture["headers"].as_object().unwrap() {
+        assert_eq!(
+            headers.get(name),
+            Some(&expected.as_str().unwrap().to_owned())
+        );
+    }
+    assert!(headers.contains_key("x-request-id"));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(body).unwrap(),
+        fixture["body"]
+    );
+}
+
+fn cli_auth(api_key: Option<&str>) -> CliAuthContext {
+    CliAuthContext::new(
+        "hellofood-cli-fixture-device",
+        SensitiveString::new("channel-access-fixture"),
+        api_key.map(SensitiveString::new),
+    )
+    .unwrap()
 }
 
 async fn fixture_service() -> (TcpListener, ServiceUrl) {
@@ -150,14 +209,14 @@ async fn fixture_service() -> (TcpListener, ServiceUrl) {
 #[tokio::test]
 async fn refresh_rotation_integrates_with_run_turn_and_normalized_sse() {
     let (listener, base) = fixture_service().await;
+    let fixture = auth_fixture();
+    let refresh_fixture = fixture["refresh"].clone();
     let server = tokio::spawn(async move {
         let (mut refresh, _) = listener.accept().await.unwrap();
         let request = read_request(&mut refresh).await;
-        assert!(request.starts_with("POST /v1/auth/session/refresh "));
-        assert!(request.contains("\"current_version\":1"));
-        assert!(request.contains("\"refresh_token\":\"refresh-1\""));
-        let refresh_body = br#"{"account_id":"account-fixture","access_token":"access-2","refresh_token":"refresh-2","credential_version":2,"expires_at_unix":4102444800}"#;
-        respond(&mut refresh, "application/json", refresh_body).await;
+        assert_frozen_request(&request, &refresh_fixture);
+        let refresh_body = serde_json::to_vec(&refresh_fixture["response"]).unwrap();
+        respond(&mut refresh, "application/json", &refresh_body).await;
 
         let (mut converse, _) = listener.accept().await.unwrap();
         let request = read_request(&mut converse).await;
@@ -172,8 +231,11 @@ async fn refresh_rotation_integrates_with_run_turn_and_normalized_sse() {
         respond(&mut converse, "text/event-stream; charset=utf-8", stream).await;
     });
 
-    let service =
-        Arc::new(HttpService::new(base.clone(), NetworkPolicy::DEVELOPMENT, deadlines()).unwrap());
+    let service = Arc::new(
+        HttpService::new(base.clone(), NetworkPolicy::DEVELOPMENT, deadlines())
+            .unwrap()
+            .with_cli_auth(cli_auth(Some("fixture-api-key"))),
+    );
     let credential_port = Arc::new(MemoryCredentials {
         stored: Mutex::new(Some(credentials(1))),
         commits: Mutex::new(0),
@@ -234,6 +296,147 @@ async fn refresh_rotation_integrates_with_run_turn_and_normalized_sse() {
         receiver.recv().await.unwrap().event,
         AgentEvent::Result { .. }
     ));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn known_api_key_gate_failure_uses_frozen_channel_reexchange_contract() {
+    let (listener, base) = fixture_service().await;
+    let fixture = auth_fixture();
+    let fallback_fixture = fixture["fallback"].clone();
+    let server = tokio::spawn(async move {
+        let (mut refresh, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut refresh).await;
+        assert!(request.starts_with("POST /v1/auth/session/refresh "));
+        assert!(request.contains("\"refresh_token\":\"refresh-1\""));
+        assert!(!request.to_ascii_lowercase().contains("x-api-key:"));
+        let failure = serde_json::to_vec(&fallback_fixture["refresh_response"]).unwrap();
+        respond_status(
+            &mut refresh,
+            401,
+            "Unauthorized",
+            "application/json",
+            &failure,
+        )
+        .await;
+
+        let (mut reexchange, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut reexchange).await;
+        assert_frozen_request(&request, &fallback_fixture);
+        let response = serde_json::to_vec(&fallback_fixture["response"]).unwrap();
+        respond(&mut reexchange, "application/json", &response).await;
+    });
+
+    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines())
+        .unwrap()
+        .with_cli_auth(cli_auth(None));
+    let outcome = service
+        .refresh_session(
+            RefreshRequest::from(&credentials(1)),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let RefreshOutcome::Refreshed(result) = outcome else {
+        panic!("fallback unexpectedly cancelled before dispatch");
+    };
+    assert_eq!(
+        result.rotated().access_token.expose_secret(),
+        "access-fallback"
+    );
+    assert_eq!(result.rotated().version, CredentialVersion::new(2));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn peer_consumes_refresh_token_and_withholds_response_is_uncertain() {
+    let (listener, base) = fixture_service().await;
+    let (consumed_sender, consumed_receiver) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut refresh, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut refresh).await;
+        assert!(request.contains("\"refresh_token\":\"refresh-1\""));
+        consumed_sender.send(()).unwrap();
+        // The peer may have rotated the one-time token. Closing without a
+        // response makes that server outcome unknowable to the client.
+    });
+
+    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines())
+        .unwrap()
+        .with_cli_auth(cli_auth(Some("fixture-api-key")));
+    let refresh = tokio::spawn(async move {
+        service
+            .refresh_session(
+                RefreshRequest::from(&credentials(1)),
+                CancellationToken::new(),
+            )
+            .await
+    });
+    consumed_receiver.await.unwrap();
+    let error = refresh.await.unwrap().unwrap_err();
+    assert!(error.outcome_uncertain);
+    assert_eq!(error.code, "refresh_transport");
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn cancellation_after_peer_consumes_refresh_token_is_uncertain() {
+    let (listener, base) = fixture_service().await;
+    let (consumed_sender, consumed_receiver) = oneshot::channel();
+    let (release_sender, release_receiver) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut refresh, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut refresh).await;
+        assert!(request.contains("\"refresh_token\":\"refresh-1\""));
+        consumed_sender.send(()).unwrap();
+        let _ = release_receiver.await;
+    });
+
+    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines())
+        .unwrap()
+        .with_cli_auth(cli_auth(Some("fixture-api-key")));
+    let cancellation = CancellationToken::new();
+    let request_cancellation = cancellation.clone();
+    let refresh = tokio::spawn(async move {
+        service
+            .refresh_session(RefreshRequest::from(&credentials(1)), request_cancellation)
+            .await
+    });
+    consumed_receiver.await.unwrap();
+    cancellation.cancel();
+    let error = refresh.await.unwrap().unwrap_err();
+    assert!(error.outcome_uncertain);
+    assert_eq!(error.code, "refresh_cancelled_after_dispatch");
+    release_sender.send(()).unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn missing_session_refresh_token_reexchanges_without_primary_request() {
+    let (listener, base) = fixture_service().await;
+    let fixture = auth_fixture();
+    let fallback_fixture = fixture["fallback"].clone();
+    let server = tokio::spawn(async move {
+        let (mut reexchange, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut reexchange).await;
+        assert_frozen_request(&request, &fallback_fixture);
+        let response = serde_json::to_vec(&fallback_fixture["response"]).unwrap();
+        respond(&mut reexchange, "application/json", &response).await;
+    });
+
+    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines())
+        .unwrap()
+        .with_cli_auth(cli_auth(None));
+    let mut without_refresh = credentials(1);
+    without_refresh.refresh_token = SensitiveString::new("");
+    let outcome = service
+        .refresh_session(
+            RefreshRequest::from(&without_refresh),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(outcome, RefreshOutcome::Refreshed(_)));
     server.await.unwrap();
 }
 

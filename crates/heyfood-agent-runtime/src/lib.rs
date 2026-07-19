@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use heyfood_application::{AcceptedTurn, BoxFuture, PortError, ServicePort, TurnRequest};
 use heyfood_core::{
-    AccountId, CredentialVersion, NetworkPolicy, RefreshRequest, RefreshResult, SensitiveString,
+    AccountId, NetworkPolicy, RefreshOutcome, RefreshRequest, RefreshResult, SensitiveString,
     ServiceUrl, SessionCredentials,
 };
 use reqwest::{Client, StatusCode};
@@ -70,6 +70,51 @@ pub struct HttpService {
     base_url: ServiceUrl,
     policy: NetworkPolicy,
     deadlines: HttpDeadlines,
+    cli_auth: Option<CliAuthContext>,
+}
+
+/// Python-compatible headers and fallback bearer used for CLI session refresh.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CliAuthContext {
+    device_id: String,
+    channel_access_token: SensitiveString,
+    api_key: Option<SensitiveString>,
+}
+
+impl CliAuthContext {
+    pub fn new(
+        device_id: impl Into<String>,
+        channel_access_token: SensitiveString,
+        api_key: Option<SensitiveString>,
+    ) -> Result<Self, PortError> {
+        let device_id = device_id.into();
+        if device_id.trim() != device_id || device_id.len() < 3 || device_id.len() > 255 {
+            return Err(PortError::new(
+                "refresh_context",
+                "CLI device ID must contain 3 to 255 characters without surrounding whitespace",
+            ));
+        }
+        if channel_access_token.expose_secret().is_empty() {
+            return Err(PortError::new(
+                "refresh_context",
+                "channel access token is required for session re-exchange",
+            ));
+        }
+        if api_key
+            .as_ref()
+            .is_some_and(|value| value.expose_secret().is_empty())
+        {
+            return Err(PortError::new(
+                "refresh_context",
+                "API key must be omitted instead of empty",
+            ));
+        }
+        Ok(Self {
+            device_id,
+            channel_access_token,
+            api_key,
+        })
+    }
 }
 
 impl HttpService {
@@ -89,7 +134,15 @@ impl HttpService {
             base_url,
             policy,
             deadlines,
+            cli_auth: None,
         })
+    }
+
+    /// Attach the channel/API-key material owned by the active CLI context.
+    #[must_use]
+    pub fn with_cli_auth(mut self, cli_auth: CliAuthContext) -> Self {
+        self.cli_auth = Some(cli_auth);
+        self
     }
 
     fn client(&self, streaming: bool) -> Result<Client, PortError> {
@@ -100,7 +153,7 @@ impl HttpService {
             .pool_idle_timeout(self.deadlines.pool_idle)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
-            .user_agent(format!("heyfood/{}", VERSION));
+            .user_agent(format!("heyfood-cli/{}", VERSION));
         if !streaming {
             builder = builder.timeout(self.deadlines.request);
         }
@@ -119,20 +172,20 @@ impl HttpService {
 
 #[derive(Serialize)]
 struct RefreshBody<'a> {
-    account_id: &'a str,
     refresh_token: &'a str,
-    current_version: u64,
 }
 
 #[derive(Deserialize)]
 struct RefreshBodyResponse {
-    account_id: String,
+    user_id: String,
     access_token: String,
     refresh_token: String,
-    #[serde(alias = "credential_version", alias = "version")]
-    credential_version: u64,
-    #[serde(alias = "expires_at", alias = "expires_at_unix")]
-    expires_at_unix: i64,
+    access_expires_at: String,
+}
+
+#[derive(Serialize)]
+struct ReexchangeBody<'a> {
+    device_id: &'a str,
 }
 
 impl ServicePort for HttpService {
@@ -140,36 +193,73 @@ impl ServicePort for HttpService {
         &self,
         request: RefreshRequest,
         cancellation: CancellationToken,
-    ) -> BoxFuture<'_, Result<RefreshResult, PortError>> {
+    ) -> BoxFuture<'_, Result<RefreshOutcome, PortError>> {
         Box::pin(async move {
+            if cancellation.is_cancelled() {
+                return Ok(RefreshOutcome::CancelledBeforeDispatch);
+            }
+            let cli_auth = self.cli_auth.as_ref().ok_or_else(|| {
+                PortError::new(
+                    "refresh_context",
+                    "CLI auth context is required for session refresh",
+                )
+            })?;
             let client = self.client(false)?;
-            let endpoint = self.endpoint("/v1/auth/session/refresh")?;
-            let body = RefreshBody {
-                account_id: request.account_id.as_str(),
-                refresh_token: request.refresh_token.expose_secret(),
-                current_version: request.current_version.get(),
+            let response = if let Some(refresh_token) = request.refresh_token.as_ref() {
+                let endpoint = self.endpoint("/v1/auth/session/refresh")?;
+                let body = RefreshBody {
+                    refresh_token: refresh_token.expose_secret(),
+                };
+                let mut builder = client
+                    .post(endpoint)
+                    .header("Accept", "application/json")
+                    .header("X-App-Client-ID", "heyfood-cli")
+                    .header("X-Device-ID", &cli_auth.device_id)
+                    .header(
+                        "X-Request-ID",
+                        heyfood_core::OperationId::new().as_uuid().to_string(),
+                    )
+                    .json(&body);
+                if let Some(api_key) = cli_auth.api_key.as_ref() {
+                    builder = builder.header("X-API-Key", api_key.expose_secret());
+                }
+                let response = dispatch_refresh(
+                    builder,
+                    &cancellation,
+                    "refresh_transport",
+                    "refresh_cancelled_after_dispatch",
+                )
+                .await?;
+                if response.status().is_success() {
+                    response
+                } else {
+                    dispatch_reexchange(&client, self, cli_auth, &cancellation).await?
+                }
+            } else {
+                dispatch_reexchange(&client, self, cli_auth, &cancellation).await?
             };
-            let send = client.post(endpoint).json(&body).send();
-            let response = tokio::select! {
-                () = cancellation.cancelled() => cancellation_pending().await,
-                result = send => result.map_err(|error| uncertain_transport("refresh_transport", &error))?,
-            };
-            ensure_success(response.status(), "refresh_http_status")?;
+            if !response.status().is_success() {
+                return Err(PortError::new(
+                    "login_required",
+                    "session expired and could not be renewed; login is required",
+                ));
+            }
             let decoded = tokio::select! {
-                () = cancellation.cancelled() => cancellation_pending().await,
+                () = cancellation.cancelled() => return Err(PortError::uncertain("refresh_cancelled_after_dispatch", "session response was not observed after request dispatch")),
                 result = response.json::<RefreshBodyResponse>() => result.map_err(|error| PortError::uncertain("refresh_response", sanitized_reqwest_error(&error)))?,
             };
-            let account_id = AccountId::parse(decoded.account_id)
+            let account_id = AccountId::parse(decoded.user_id)
                 .map_err(|message| PortError::uncertain("refresh_response", message))?;
-            let credentials = SessionCredentials::from_unix_expiry(
+            let credentials = SessionCredentials::from_rfc3339_expiry(
                 account_id,
                 SensitiveString::new(decoded.access_token),
                 SensitiveString::new(decoded.refresh_token),
-                CredentialVersion::new(decoded.credential_version),
-                decoded.expires_at_unix,
+                request.current_version.next(),
+                &decoded.access_expires_at,
             )
             .map_err(|message| PortError::uncertain("refresh_response", message))?;
             RefreshResult::validated(&request, credentials)
+                .map(RefreshOutcome::Refreshed)
                 .map_err(|message| PortError::uncertain("refresh_response", message))
         })
     }
@@ -230,6 +320,57 @@ impl ServicePort for HttpService {
                 )),
             })
         })
+    }
+}
+
+async fn dispatch_reexchange(
+    client: &Client,
+    service: &HttpService,
+    cli_auth: &CliAuthContext,
+    cancellation: &CancellationToken,
+) -> Result<reqwest::Response, PortError> {
+    if cancellation.is_cancelled() {
+        return Err(PortError::uncertain(
+            "reexchange_cancelled_after_refresh",
+            "fallback was required after refresh dispatch but was interrupted",
+        ));
+    }
+    let endpoint = service.endpoint("/v1/channel/oauth/cli/session")?;
+    let mut builder = client
+        .post(endpoint)
+        .header("Accept", "application/json")
+        .header("X-App-Client-ID", "heyfood-cli")
+        .header("X-Device-ID", &cli_auth.device_id)
+        .header(
+            "X-Request-ID",
+            heyfood_core::OperationId::new().as_uuid().to_string(),
+        )
+        .bearer_auth(cli_auth.channel_access_token.expose_secret())
+        .json(&ReexchangeBody {
+            device_id: &cli_auth.device_id,
+        });
+    if let Some(api_key) = cli_auth.api_key.as_ref() {
+        builder = builder.header("X-API-Key", api_key.expose_secret());
+    }
+    dispatch_refresh(
+        builder,
+        cancellation,
+        "reexchange_transport",
+        "reexchange_cancelled_after_dispatch",
+    )
+    .await
+}
+
+async fn dispatch_refresh(
+    builder: reqwest::RequestBuilder,
+    cancellation: &CancellationToken,
+    transport_code: &'static str,
+    cancellation_code: &'static str,
+) -> Result<reqwest::Response, PortError> {
+    let send = builder.send();
+    tokio::select! {
+        () = cancellation.cancelled() => Err(PortError::uncertain(cancellation_code, "session response was not observed after request dispatch")),
+        result = send => result.map_err(|error| uncertain_transport(transport_code, &error)),
     }
 }
 

@@ -139,6 +139,11 @@ pub enum CommitError {
     InvalidProposal(&'static str),
     Port(crate::PortError),
     ReconciliationRequired(crate::PortError),
+    ReconciliationMarkerWrite {
+        operation: crate::PortError,
+        marker: crate::PortError,
+    },
+    ReconciliationMarkerClear(crate::PortError),
 }
 
 impl fmt::Display for CommitError {
@@ -152,6 +157,14 @@ impl fmt::Display for CommitError {
                     "state commit outcome requires reconciliation: {error}"
                 )
             }
+            Self::ReconciliationMarkerWrite { operation, marker } => write!(
+                formatter,
+                "state outcome is uncertain ({operation}) and its reconciliation marker could not be written: {marker}"
+            ),
+            Self::ReconciliationMarkerClear(error) => write!(
+                formatter,
+                "durable state was committed but its reconciliation marker could not be cleared: {error}"
+            ),
         }
     }
 }
@@ -160,7 +173,10 @@ impl std::error::Error for CommitError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidProposal(_) => None,
-            Self::Port(error) | Self::ReconciliationRequired(error) => Some(error),
+            Self::Port(error)
+            | Self::ReconciliationRequired(error)
+            | Self::ReconciliationMarkerClear(error) => Some(error),
+            Self::ReconciliationMarkerWrite { marker, .. } => Some(marker),
         }
     }
 }
@@ -219,6 +235,12 @@ impl SerializedStateWriter {
         let mut state = self.state.lock().await;
 
         if state.applied_commits.contains(&proposal.metadata.commit_id) {
+            if matches!(proposal.mutation, Mutation::CredentialRotation(_)) {
+                self.credential_port
+                    .clear_reconciliation_required(proposal.metadata.commit_id)
+                    .await
+                    .map_err(CommitError::ReconciliationMarkerClear)?;
+            }
             return Ok(CommitOutcome::Duplicate);
         }
         if proposal.metadata.class == MutationClass::GenerationScoped
@@ -262,13 +284,20 @@ impl SerializedStateWriter {
                     expected_version,
                     credentials: credentials.clone(),
                 };
-                if let Err(error) = self.credential_port.commit(commit).await {
-                    let _ = self
+                if let Err(operation) = self.credential_port.commit(commit).await {
+                    if let Err(marker) = self
                         .credential_port
                         .mark_reconciliation_required(proposal.metadata.commit_id)
-                        .await;
-                    return Err(CommitError::ReconciliationRequired(error));
+                        .await
+                    {
+                        return Err(CommitError::ReconciliationMarkerWrite { operation, marker });
+                    }
+                    return Err(CommitError::ReconciliationRequired(operation));
                 }
+                self.credential_port
+                    .clear_reconciliation_required(proposal.metadata.commit_id)
+                    .await
+                    .map_err(CommitError::ReconciliationMarkerClear)?;
                 state.account_id = Some(credentials.account_id);
                 state.credential_version = Some(credentials.version);
             }
@@ -294,6 +323,19 @@ impl SerializedStateWriter {
 
         state.applied_commits.insert(proposal.metadata.commit_id);
         Ok(CommitOutcome::Applied)
+    }
+
+    /// Persist an uncertain network outcome before returning control to the UI.
+    pub async fn mark_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+        operation: crate::PortError,
+    ) -> Result<(), CommitError> {
+        let _state = self.state.lock().await;
+        self.credential_port
+            .mark_reconciliation_required(commit_id)
+            .await
+            .map_err(|marker| CommitError::ReconciliationMarkerWrite { operation, marker })
     }
 }
 

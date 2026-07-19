@@ -10,7 +10,7 @@ pub mod operation;
 
 pub use agent::{AgentChoice, AgentEvent, AgentFailure};
 pub use auth::{
-    AccountId, CredentialVersion, RefreshRequest, RefreshResult, SensitiveString,
+    AccountId, CredentialVersion, RefreshOutcome, RefreshRequest, RefreshResult, SensitiveString,
     SessionCredentials, SessionSnapshot,
 };
 pub use config::{ClientConfig, ConfigRevision};

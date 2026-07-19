@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use heyfood_core::{AgentEvent, CommitId, RefreshRequest};
+use heyfood_core::{AgentEvent, CommitId, RefreshOutcome, RefreshRequest};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -43,7 +43,9 @@ pub enum RunTurnOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RunTurnError {
     InvalidRequest(&'static str),
+    UnresolvedReconciliation,
     Service(PortError),
+    ServiceReconciliationRequired(PortError),
     State(CommitError),
     EventConsumerClosed,
     StreamEndedWithoutTerminalEvent,
@@ -53,7 +55,14 @@ impl fmt::Display for RunTurnError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidRequest(message) => formatter.write_str(message),
+            Self::UnresolvedReconciliation => formatter.write_str(
+                "credentials have an unresolved refresh outcome; reconciliation is required",
+            ),
             Self::Service(error) => write!(formatter, "service operation failed: {error}"),
+            Self::ServiceReconciliationRequired(error) => write!(
+                formatter,
+                "service operation outcome is uncertain and requires reconciliation: {error}"
+            ),
             Self::State(error) => write!(formatter, "state operation failed: {error}"),
             Self::EventConsumerClosed => formatter.write_str("turn event consumer closed"),
             Self::StreamEndedWithoutTerminalEvent => {
@@ -66,7 +75,7 @@ impl fmt::Display for RunTurnError {
 impl std::error::Error for RunTurnError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Service(error) => Some(error),
+            Self::Service(error) | Self::ServiceReconciliationRequired(error) => Some(error),
             Self::State(error) => Some(error),
             _ => None,
         }
@@ -105,6 +114,9 @@ impl RunTurn {
                 "turn prompt must not be empty",
             ));
         }
+        if snapshot.session.reconciliation_required {
+            return Err(RunTurnError::UnresolvedReconciliation);
+        }
 
         let needs_refresh = match request.refresh {
             RefreshPolicy::Never => false,
@@ -117,14 +129,31 @@ impl RunTurn {
         let mut server_accepted = false;
 
         if needs_refresh {
-            let refresh = self.service.refresh_session(
-                RefreshRequest::from(&credentials),
-                cancellation.child_token(),
-            );
-            let Some(accepted) = cancellation.run_until_cancelled(refresh).await else {
+            if cancellation.is_cancelled() {
                 return Ok(RunTurnOutcome::CancelledBeforeServerAcceptance);
+            }
+            let reconciliation_id = CommitId::new();
+            let accepted = match self
+                .service
+                .refresh_session(
+                    RefreshRequest::from(&credentials),
+                    cancellation.child_token(),
+                )
+                .await
+            {
+                Ok(RefreshOutcome::Refreshed(accepted)) => accepted,
+                Ok(RefreshOutcome::CancelledBeforeDispatch) => {
+                    return Ok(RunTurnOutcome::CancelledBeforeServerAcceptance);
+                }
+                Err(error) if error.outcome_uncertain => {
+                    self.writer
+                        .mark_reconciliation_required(reconciliation_id, error.clone())
+                        .await
+                        .map_err(RunTurnError::State)?;
+                    return Err(RunTurnError::ServiceReconciliationRequired(error));
+                }
+                Err(error) => return Err(RunTurnError::Service(error)),
             };
-            let accepted = accepted.map_err(RunTurnError::Service)?;
 
             // Successful authenticated response is the acceptance boundary.
             // Commit rotation without observing cancellation.
@@ -132,7 +161,7 @@ impl RunTurn {
             server_accepted = true;
             let proposal = MutationProposal::credential_rotation(
                 &snapshot,
-                CommitId::new(),
+                reconciliation_id,
                 credentials.clone(),
             );
             self.writer

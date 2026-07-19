@@ -5,8 +5,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use heyfood_core::{
-    AgentEvent, BrowserUrl, ClientConfig, CommitId, CredentialVersion, RefreshRequest,
-    RefreshResult, SessionCredentials,
+    AgentEvent, BrowserUrl, ClientConfig, CommitId, CredentialVersion, RefreshOutcome,
+    RefreshRequest, SessionCredentials,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -66,7 +66,7 @@ pub trait ServicePort: Send + Sync {
         &self,
         request: RefreshRequest,
         cancellation: CancellationToken,
-    ) -> BoxFuture<'_, Result<RefreshResult, PortError>>;
+    ) -> BoxFuture<'_, Result<RefreshOutcome, PortError>>;
 
     fn open_turn(
         &self,
@@ -90,6 +90,12 @@ pub trait CredentialPort: Send + Sync {
     fn commit(&self, commit: CredentialCommit) -> BoxFuture<'_, Result<(), PortError>>;
 
     fn mark_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>>;
+
+    /// Clear only a marker written for this exact idempotent commit.
+    fn clear_reconciliation_required(
         &self,
         commit_id: CommitId,
     ) -> BoxFuture<'_, Result<(), PortError>>;
