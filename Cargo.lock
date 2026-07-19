@@ -1142,7 +1142,11 @@ dependencies = [
  "heyfood-platform",
  "heyfood-tui",
  "heyfood-voice",
+ "portable-pty",
+ "ratatui",
+ "serde_json",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

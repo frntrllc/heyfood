@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "repository": "https://github.com/frntrllc/heyfood.git",
+    "commit_sha": "9c6b91929143180252ad1b644aea273729a1f1b9",
+    "source_path": "tests/test_client.py",
+    "pytest_node_id": "tests/test_client.py::test_stream_agent_emits_lifecycle_without_payload",
+    "export": "The event name and JSON payload are the exact Python baseline oracle; controlled transport/auth fields are qualification-only values."
+  },
+  "request": {
+    "prompt": "private dietary request"
+  },
+  "sse_lines": [
+    "event: result",
+    "data: {\"message\":\"done\"}",
+    ""
+  ]
+}

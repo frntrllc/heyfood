@@ -38,6 +38,18 @@ fn main() {
                 report.assets, report.pending_reviews
             )
         }),
+        Some("verify-assets-approved") => xtask::verify_assets_approved(root).map(|report| {
+            format!(
+                "asset provenance has independent exact-SHA approval: {} assets",
+                report.assets
+            )
+        }),
+        Some("verify-phase0-evidence") => xtask::verify_phase0_evidence(root).map(|report| {
+            format!(
+                "Phase 0 inventory valid: {} requirements, {} blockers, approval {}",
+                report.requirements, report.blockers, report.review_status
+            )
+        }),
         _ => usage(),
     };
 
@@ -52,7 +64,7 @@ fn main() {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: cargo xtask <dependency-dag|verify-migration-ledger|verify-contracts|verify-assets>"
+        "usage: cargo xtask <dependency-dag|verify-migration-ledger|verify-contracts|verify-assets|verify-assets-approved|verify-phase0-evidence>"
     );
     std::process::exit(2);
 }

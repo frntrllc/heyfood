@@ -34,6 +34,13 @@ pub struct AssetReport {
     pub pending_reviews: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Phase0EvidenceReport {
+    pub requirements: usize,
+    pub blockers: usize,
+    pub review_status: String,
+}
+
 const FROZEN_COMPATIBILITY_SHA: &str = "9c6b91929143180252ad1b644aea273729a1f1b9";
 const FROZEN_COMPATIBILITY_TREE: &str = "b3cf49317b7ccbb42389411c819a925d3e8be3b9";
 const FROZEN_COMPATIBILITY_DIGEST: &str =
@@ -568,6 +575,236 @@ pub fn verify_assets(root: &Path) -> Result<AssetReport, String> {
     })
 }
 
+/// Require the same byte/provenance checks as [`verify_assets`], plus an
+/// independent reviewer and the exact commit they reviewed. This command is
+/// intentionally separate from the freeze-integrity command: pending metadata
+/// is honest during preparation, but it can never pass an approval gate.
+pub fn verify_assets_approved(root: &Path) -> Result<AssetReport, String> {
+    let report = verify_assets(root)?;
+    if report.pending_reviews != 0 {
+        return Err(format!(
+            "{} asset provenance reviews remain pending; record an independent reviewer and the exact reviewed commit before approval",
+            report.pending_reviews
+        ));
+    }
+    Ok(report)
+}
+
+/// Validate the machine-readable Phase 0 inventory without turning an
+/// unresolved external dependency into an invented contract.
+pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, String> {
+    let document = read_json(
+        root,
+        "docs/release-evidence/rust-phase0/phase0-inventory.json",
+    )?;
+    let inventory = document.object("Phase 0 inventory")?;
+    exact_keys(
+        inventory,
+        &[
+            "schema_version",
+            "evidence_date",
+            "rust_lineage",
+            "requirements",
+            "external_contracts",
+            "review",
+        ],
+        "Phase 0 inventory",
+    )?;
+    expect_usize(inventory, "schema_version", 1, "Phase 0 inventory")?;
+    required_nonempty_string(inventory, "evidence_date", "Phase 0 inventory")?;
+
+    let lineage =
+        field(inventory, "rust_lineage", "Phase 0 inventory")?.object("Phase 0 rust_lineage")?;
+    exact_keys(
+        lineage,
+        &[
+            "repository",
+            "branch",
+            "code_commit_sha",
+            "evidence_commit_sha",
+        ],
+        "Phase 0 rust_lineage",
+    )?;
+    for name in ["repository", "branch"] {
+        required_nonempty_string(lineage, name, "Phase 0 rust_lineage")?;
+    }
+    validate_git_sha(
+        required_string(lineage, "code_commit_sha", "Phase 0 rust_lineage")?,
+        "rust_lineage.code_commit_sha",
+    )?;
+    if !matches!(
+        field(lineage, "evidence_commit_sha", "Phase 0 rust_lineage")?,
+        Json::Null
+    ) {
+        validate_git_sha(
+            required_string(lineage, "evidence_commit_sha", "Phase 0 rust_lineage")?,
+            "rust_lineage.evidence_commit_sha",
+        )?;
+    }
+
+    let requirements =
+        field(inventory, "requirements", "Phase 0 inventory")?.array("Phase 0 requirements")?;
+    if requirements.is_empty() {
+        return Err("Phase 0 requirements must not be empty".to_owned());
+    }
+    let mut ids = BTreeSet::new();
+    let mut blockers = 0;
+    for (index, requirement) in requirements.iter().enumerate() {
+        let context = format!("Phase 0 requirements[{index}]");
+        let requirement = requirement.object(&context)?;
+        exact_keys(
+            requirement,
+            &["id", "status", "evidence", "blocker"],
+            &context,
+        )?;
+        let id = required_nonempty_string(requirement, "id", &context)?;
+        if !ids.insert(id) {
+            return Err(format!("duplicate Phase 0 requirement ID {id:?}"));
+        }
+        let evidence = field(requirement, "evidence", &context)?.array("requirement evidence")?;
+        if evidence.is_empty() {
+            return Err(format!("{context}.evidence must not be empty"));
+        }
+        for value in evidence {
+            required_path_exists(root, value.string("requirement evidence")?, &context)?;
+        }
+        match required_string(requirement, "status", &context)? {
+            "satisfied" => {
+                if !matches!(field(requirement, "blocker", &context)?, Json::Null) {
+                    return Err(format!(
+                        "{context} satisfied requirement must not have a blocker"
+                    ));
+                }
+            }
+            "blocked" => {
+                blockers += 1;
+                required_nonempty_string(requirement, "blocker", &context)?;
+            }
+            status => return Err(format!("{context}.status has invalid value {status:?}")),
+        }
+    }
+
+    let contracts = field(inventory, "external_contracts", "Phase 0 inventory")?
+        .object("Phase 0 external_contracts")?;
+    exact_keys(
+        contracts,
+        &["hellofood_repository", "grocery"],
+        "Phase 0 external_contracts",
+    )?;
+    required_nonempty_string(
+        contracts,
+        "hellofood_repository",
+        "Phase 0 external_contracts",
+    )?;
+    let grocery = field(contracts, "grocery", "Phase 0 external_contracts")?
+        .object("Phase 0 grocery contract")?;
+    exact_keys(
+        grocery,
+        &[
+            "observed_branch",
+            "observed_head_sha",
+            "merged_prerequisite_shas",
+            "phase_a_status",
+            "authoritative_contract_sha",
+            "authoritative_contract_digest",
+            "blocker",
+        ],
+        "Phase 0 grocery contract",
+    )?;
+    required_nonempty_string(grocery, "observed_branch", "Phase 0 grocery contract")?;
+    validate_git_sha(
+        required_string(grocery, "observed_head_sha", "Phase 0 grocery contract")?,
+        "grocery.observed_head_sha",
+    )?;
+    let prerequisites = field(
+        grocery,
+        "merged_prerequisite_shas",
+        "Phase 0 grocery contract",
+    )?
+    .array("grocery prerequisite SHAs")?;
+    if prerequisites.len() != 4 {
+        return Err("grocery merged_prerequisite_shas must record C1-C4".to_owned());
+    }
+    for sha in prerequisites {
+        validate_git_sha(
+            sha.string("grocery prerequisite SHA")?,
+            "grocery prerequisite SHA",
+        )?;
+    }
+    match required_string(grocery, "phase_a_status", "Phase 0 grocery contract")? {
+        "blocked_uncommitted" => {
+            if !null_fields(
+                grocery,
+                &[
+                    "authoritative_contract_sha",
+                    "authoritative_contract_digest",
+                ],
+            )? {
+                return Err(
+                    "blocked grocery Phase A must not claim an authoritative SHA or digest"
+                        .to_owned(),
+                );
+            }
+            required_nonempty_string(grocery, "blocker", "Phase 0 grocery contract")?;
+        }
+        "reviewed" => {
+            validate_git_sha(
+                required_string(
+                    grocery,
+                    "authoritative_contract_sha",
+                    "Phase 0 grocery contract",
+                )?,
+                "grocery.authoritative_contract_sha",
+            )?;
+            validate_sha256(
+                required_string(
+                    grocery,
+                    "authoritative_contract_digest",
+                    "Phase 0 grocery contract",
+                )?,
+                "grocery.authoritative_contract_digest",
+            )?;
+            if !matches!(
+                field(grocery, "blocker", "Phase 0 grocery contract")?,
+                Json::Null
+            ) {
+                return Err("reviewed grocery Phase A must not have a blocker".to_owned());
+            }
+        }
+        status => {
+            return Err(format!(
+                "grocery.phase_a_status has invalid value {status:?}"
+            ));
+        }
+    }
+
+    let review = field(inventory, "review", "Phase 0 inventory")?.object("Phase 0 review")?;
+    let pending = validate_review(
+        field(inventory, "review", "Phase 0 inventory")?,
+        "Phase 0 review",
+    )?;
+    let review_status = required_string(review, "status", "Phase 0 review")?;
+    if !pending && blockers != 0 {
+        return Err("Phase 0 inventory cannot be approved while blockers remain".to_owned());
+    }
+    Ok(Phase0EvidenceReport {
+        requirements: requirements.len(),
+        blockers,
+        review_status: review_status.to_owned(),
+    })
+}
+
+fn required_path_exists(root: &Path, value: &str, context: &str) -> Result<(), String> {
+    let path = safe_relative_path(value)?;
+    if !root.join(&path).exists() {
+        return Err(format!(
+            "{context} evidence does not exist: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 fn validate_metadata(metadata: &Metadata) -> Result<(), String> {
     let expected = expected_workspace_dependencies();
     let workspace_ids: BTreeSet<_> = metadata.workspace_members.iter().collect();
@@ -589,6 +826,23 @@ fn validate_metadata(metadata: &Metadata) -> Result<(), String> {
         .iter()
         .filter(|package| workspace_ids.contains(&package.id))
     {
+        if package.version.to_string() != "0.4.0" {
+            return Err(format!(
+                "{} has internal version {}; expected exact workspace version 0.4.0",
+                package.name, package.version
+            ));
+        }
+        let manifest_parent = package
+            .manifest_path
+            .parent()
+            .ok_or_else(|| format!("{} manifest has no parent", package.name))?;
+        let crates_root = metadata.workspace_root.join("crates");
+        if manifest_parent.parent() != Some(crates_root.as_ref()) {
+            return Err(format!(
+                "{} is outside the direct workspace crates/ containment boundary: {}",
+                package.name, package.manifest_path
+            ));
+        }
         let actual: BTreeSet<_> = package
             .dependencies
             .iter()
@@ -603,6 +857,38 @@ fn validate_metadata(metadata: &Metadata) -> Result<(), String> {
                 "{} has unapproved workspace dependency edges:\n  expected: {approved:?}\n  actual:   {actual:?}",
                 package.name
             ));
+        }
+        for dependency in package
+            .dependencies
+            .iter()
+            .filter(|dependency| workspace_names.contains(dependency.name.as_str()))
+        {
+            if dependency.req.to_string() != "=0.4.0" {
+                return Err(format!(
+                    "{} -> {} must use exact internal version =0.4.0; found {}",
+                    package.name, dependency.name, dependency.req
+                ));
+            }
+            if dependency.source.is_some() {
+                return Err(format!(
+                    "{} -> {} must be a workspace-contained path source",
+                    package.name, dependency.name
+                ));
+            }
+            let path = dependency.path.as_ref().ok_or_else(|| {
+                format!(
+                    "{} -> {} is missing its required internal path source",
+                    package.name, dependency.name
+                )
+            })?;
+            if path.parent() != Some(crates_root.as_ref())
+                || path.file_name() != Some(dependency.name.as_str())
+            {
+                return Err(format!(
+                    "{} -> {} escapes or aliases the workspace crates boundary: {path}",
+                    package.name, dependency.name
+                ));
+            }
         }
     }
     Ok(())
@@ -1456,7 +1742,8 @@ fn set_difference(context: &str, expected: &BTreeSet<String>, actual: &BTreeSet<
 mod tests {
     use super::{
         FROZEN_COMPATIBILITY_DIGEST, FROZEN_COMPATIBILITY_SHA, FROZEN_COMPATIBILITY_TREE,
-        validate_dependency_dag, verify_assets, verify_migration_ledger, verify_stable_contracts,
+        validate_dependency_dag, verify_assets, verify_assets_approved, verify_migration_ledger,
+        verify_phase0_evidence, verify_stable_contracts,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1510,6 +1797,10 @@ mod tests {
         assert_eq!(ledger.unmapped, ledger.entries);
         assert_eq!(verify_stable_contracts(&root()).unwrap().endpoints, 26);
         assert_eq!(verify_assets(&root()).unwrap().pending_reviews, 2);
+        assert!(verify_assets_approved(&root()).is_err());
+        let phase0 = verify_phase0_evidence(&root()).expect("Phase 0 inventory must validate");
+        assert!(phase0.blockers > 0);
+        assert_eq!(phase0.review_status, "pending");
     }
 
     #[test]

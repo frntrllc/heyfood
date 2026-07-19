@@ -22,5 +22,12 @@ heyfood-tui = { version = "=0.4.0", path = "../heyfood-tui" }
 heyfood-voice = { version = "=0.4.0", path = "../heyfood-voice" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 
+[dev-dependencies]
+portable-pty.workspace = true
+ratatui = { workspace = true, features = ["crossterm"] }
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+
 [lints]
 workspace = true

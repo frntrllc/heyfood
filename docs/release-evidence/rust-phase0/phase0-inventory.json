@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "evidence_date": "2026-07-19",
+  "rust_lineage": {
+    "repository": "https://github.com/frntrllc/heyfood.git",
+    "branch": "codex/rust-big-bang",
+    "code_commit_sha": "3c6447e8b5e15c5c39756b1d8786f45bb464dd5b",
+    "evidence_commit_sha": null
+  },
+  "requirements": [
+    {
+      "id": "P0-1-language-neutral-contracts",
+      "status": "satisfied",
+      "evidence": ["fixtures/contracts/called-endpoints.json"],
+      "blocker": null
+    },
+    {
+      "id": "P0-2-python-migration-freeze",
+      "status": "satisfied",
+      "evidence": ["tests/migration/python-test-ledger.json"],
+      "blocker": null
+    },
+    {
+      "id": "P0-3-runtime-assets",
+      "status": "blocked",
+      "evidence": ["assets/dietary/provenance.json", "assets/brand/provenance.json"],
+      "blocker": "Both byte-level provenance records are valid but independent exact-SHA review remains pending."
+    },
+    {
+      "id": "P0-4-workspace-policy",
+      "status": "satisfied",
+      "evidence": ["Cargo.toml", "deny.toml", ".github/workflows/rust-ci.yml"],
+      "blocker": null
+    },
+    {
+      "id": "P0-5-dg-r1-vertical",
+      "status": "blocked",
+      "evidence": ["crates/heyfood-bin/tests/phase0_qualification.rs"],
+      "blocker": "The internal qualification harness has local controlled-service evidence; hosted PTY/signal results and independent review are not yet recorded."
+    },
+    {
+      "id": "P0-6-three-os-ci",
+      "status": "blocked",
+      "evidence": [".github/workflows/rust-ci.yml"],
+      "blocker": "The updated exact lineage has not yet completed its hosted Ubuntu/macOS/Windows jobs."
+    },
+    {
+      "id": "P0-7-native-state-and-importer",
+      "status": "blocked",
+      "evidence": ["docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md"],
+      "blocker": "Native controlled file creation is exercised, but the optional read-only Python importer is not evaluated."
+    },
+    {
+      "id": "P0-8-backend-idempotency-and-metrics",
+      "status": "blocked",
+      "evidence": ["docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md"],
+      "blocker": "No independently reviewed endpoint-by-endpoint idempotency and release-metrics baseline is frozen."
+    },
+    {
+      "id": "P0-9-grocery-companion-contract",
+      "status": "blocked",
+      "evidence": ["docs/release-evidence/rust-phase0/external-contract-status.md"],
+      "blocker": "Grocery Phase A exists only as uncommitted work, so no authoritative reviewed SHA or digest can be recorded."
+    },
+    {
+      "id": "P0-10-grok-provenance",
+      "status": "blocked",
+      "evidence": ["docs/release-evidence/rust-phase0/reference-provenance-inventory.md"],
+      "blocker": "No reviewed Grok source commit, license conclusion, or pattern-origin ledger exists."
+    },
+    {
+      "id": "P0-11-platform-and-trust-prerequisites",
+      "status": "blocked",
+      "evidence": ["docs/release-evidence/rust-phase0/dependency-platform-trust-inventory.md"],
+      "blocker": "Platform minimums, release hardware ownership, protected environment, and Sigstore identity expressions are not approved."
+    },
+    {
+      "id": "P0-12-measured-spike-report",
+      "status": "blocked",
+      "evidence": ["docs/release-evidence/rust-phase0/spike-report.md"],
+      "blocker": "Reproducible qualification/performance evidence must be regenerated from the remediation code commit and pass hosted review."
+    }
+  ],
+  "external_contracts": {
+    "hellofood_repository": "/Users/justinhambleton/Dev/hellofood",
+    "grocery": {
+      "observed_branch": "feat/grocery-phase-a-backend",
+      "observed_head_sha": "9e1011d75be9b919452c82cc7dd849bc3f5823a2",
+      "merged_prerequisite_shas": [
+        "4b7bcdfaf80053c087f5aa68fea8bd5f78732160",
+        "fa23437c324b4e5d3d1c433b9c933b9f2dc2cbca",
+        "9e0a9f220751270da56996ba7004ae25e67b06d0",
+        "9e1011d75be9b919452c82cc7dd849bc3f5823a2"
+      ],
+      "phase_a_status": "blocked_uncommitted",
+      "authoritative_contract_sha": null,
+      "authoritative_contract_digest": null,
+      "blocker": "The grocery Phase A worktree contains modified and untracked schema/fixture files; mutable working-tree bytes are not an authoritative contract."
+    }
+  },
+  "review": {
+    "status": "pending",
+    "reviewer": null,
+    "reviewed_commit_sha": null
+  }
+}
