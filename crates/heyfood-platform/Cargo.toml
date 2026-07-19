@@ -1,0 +1,37 @@
+[package]
+name = "heyfood-platform"
+description = "Native configuration, credential, browser, clock, and signal adapters."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+native-credentials = ["dep:keyring"]
+
+[dependencies]
+directories.workspace = true
+fs2.workspace = true
+heyfood-application = { path = "../heyfood-application" }
+heyfood-core = { path = "../heyfood-core" }
+tokio = { workspace = true, features = ["fs", "io-util", "net", "process", "signal", "sync", "time"] }
+tracing = { workspace = true, features = ["attributes", "std"] }
+webbrowser = { workspace = true, features = ["hardened"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { workspace = true, optional = true, features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { workspace = true, optional = true, features = ["crypto-rust", "linux-native-sync-persistent"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { workspace = true, optional = true, features = ["windows-native"] }
+
+[dev-dependencies]
+proptest = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

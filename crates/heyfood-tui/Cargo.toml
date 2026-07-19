@@ -1,0 +1,27 @@
+[package]
+name = "heyfood-tui"
+description = "Interactive terminal presentation for heyfood."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
+heyfood-application = { path = "../heyfood-application" }
+heyfood-core = { path = "../heyfood-core" }
+ratatui = { workspace = true, features = ["crossterm"] }
+tokio = { workspace = true, features = ["sync", "time"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+crossterm = { workspace = true, features = ["windows"] }
+
+[dev-dependencies]
+insta.workspace = true
+portable-pty.workspace = true
+proptest = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

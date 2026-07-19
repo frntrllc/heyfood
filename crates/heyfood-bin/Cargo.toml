@@ -1,0 +1,26 @@
+[package]
+name = "heyfood-bin"
+description = "Native heyfood executable composition root."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "heyfood"
+path = "src/main.rs"
+
+[dependencies]
+heyfood-agent-runtime = { path = "../heyfood-agent-runtime" }
+heyfood-application = { path = "../heyfood-application" }
+heyfood-cli = { path = "../heyfood-cli" }
+heyfood-core = { path = "../heyfood-core" }
+heyfood-platform = { path = "../heyfood-platform" }
+heyfood-tui = { path = "../heyfood-tui" }
+heyfood-voice = { path = "../heyfood-voice" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+
+[lints]
+workspace = true
