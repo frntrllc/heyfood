@@ -34,6 +34,13 @@ pub struct AssetReport {
     pub pending_reviews: usize,
 }
 
+const FROZEN_COMPATIBILITY_SHA: &str = "9c6b91929143180252ad1b644aea273729a1f1b9";
+const FROZEN_COMPATIBILITY_TREE: &str = "b3cf49317b7ccbb42389411c819a925d3e8be3b9";
+const FROZEN_COMPATIBILITY_DIGEST: &str =
+    "11986e9dbfdfd415f6da5183321e1614ea15c1f3be12af7f32a3e5578423e1e9";
+const FROZEN_COMPATIBILITY_BLOB: &[u8] =
+    include_bytes!("../fixtures/called_endpoints.9c6b919.json");
+
 /// Validate the checked-out workspace against the approved crate dependency DAG.
 pub fn validate_dependency_dag(manifest_path: &Path) -> Result<(), String> {
     let mut command = MetadataCommand::new();
@@ -360,13 +367,17 @@ pub fn verify_stable_contracts(root: &Path) -> Result<ContractReport, String> {
         ],
         "contract provenance",
     )?;
-    validate_git_sha(
-        required_string(provenance, "baseline_sha", "contract provenance")?,
-        "provenance.baseline_sha",
+    expect_string(
+        provenance,
+        "baseline_sha",
+        FROZEN_COMPATIBILITY_SHA,
+        "contract provenance",
     )?;
-    validate_git_sha(
-        required_string(provenance, "baseline_tree", "contract provenance")?,
-        "provenance.baseline_tree",
+    expect_string(
+        provenance,
+        "baseline_tree",
+        FROZEN_COMPATIBILITY_TREE,
+        "contract provenance",
     )?;
     required_nonempty_string(provenance, "capture_tool", "contract provenance")?;
     expect_usize(provenance, "capture_tool_version", 1, "contract provenance")?;
@@ -376,7 +387,6 @@ pub fn verify_stable_contracts(root: &Path) -> Result<ContractReport, String> {
         "compatibility_fixture",
         "contract provenance",
     )?)?;
-    let compatibility_bytes = read_bytes(root, &compatibility_path)?;
     let compatibility_hash = required_string(
         provenance,
         "compatibility_fixture_sha256",
@@ -386,67 +396,81 @@ pub fn verify_stable_contracts(root: &Path) -> Result<ContractReport, String> {
         compatibility_hash,
         "provenance.compatibility_fixture_sha256",
     )?;
+    if compatibility_hash != FROZEN_COMPATIBILITY_DIGEST {
+        return Err(format!(
+            "provenance.compatibility_fixture_sha256 must name the frozen baseline blob {FROZEN_COMPATIBILITY_DIGEST}"
+        ));
+    }
     expect_hash(
-        &compatibility_bytes,
+        FROZEN_COMPATIBILITY_BLOB,
         compatibility_hash,
-        &compatibility_path,
+        Path::new("crates/xtask/fixtures/called_endpoints.9c6b919.json"),
     )?;
-    let compatibility = json::parse(
-        std::str::from_utf8(&compatibility_bytes)
-            .map_err(|error| format!("{} is not UTF-8: {error}", compatibility_path.display()))?,
+    let frozen_compatibility = json::parse(
+        std::str::from_utf8(FROZEN_COMPATIBILITY_BLOB)
+            .map_err(|error| format!("embedded compatibility baseline is not UTF-8: {error}"))?,
     )?;
-    let compatibility = compatibility.object("compatibility fixture")?;
+    let frozen_compatibility = frozen_compatibility.object("embedded compatibility baseline")?;
     exact_keys(
-        compatibility,
+        frozen_compatibility,
         &["$comment", "schema_version", "endpoints"],
-        "compatibility fixture",
+        "embedded compatibility baseline",
     )?;
-    expect_usize(compatibility, "schema_version", 1, "compatibility fixture")?;
-    let compatibility_endpoints = field(compatibility, "endpoints", "compatibility fixture")?
-        .array("compatibility endpoints")?;
+    expect_usize(
+        frozen_compatibility,
+        "schema_version",
+        1,
+        "embedded compatibility baseline",
+    )?;
+    let frozen_endpoints = field(
+        frozen_compatibility,
+        "endpoints",
+        "embedded compatibility baseline",
+    )?
+    .array("frozen compatibility endpoints")?;
     let declared_compatibility_count = field(
         provenance,
         "compatibility_endpoint_count",
         "contract provenance",
     )?
     .usize("provenance.compatibility_endpoint_count")?;
-    if compatibility_endpoints.len() != declared_compatibility_count {
+    if frozen_endpoints.len() != declared_compatibility_count {
         return Err(format!(
-            "compatibility endpoint count differs: declared {declared_compatibility_count}, actual {}",
-            compatibility_endpoints.len()
+            "frozen compatibility endpoint count differs: declared {declared_compatibility_count}, actual {}",
+            frozen_endpoints.len()
         ));
     }
+
+    // Python CI independently proves this embedded oracle is the exact blob at
+    // baseline_sha. Rust keeps the same byte-level oracle locally so shallow
+    // and CRLF checkouts can still enforce exact frozen-row preservation.
+    let compatibility = read_json_path(root, &compatibility_path)?;
+    let compatibility = compatibility.object("live compatibility fixture")?;
+    exact_keys(
+        compatibility,
+        &["$comment", "schema_version", "endpoints"],
+        "live compatibility fixture",
+    )?;
+    expect_usize(
+        compatibility,
+        "schema_version",
+        1,
+        "live compatibility fixture",
+    )?;
+    let compatibility_endpoints = field(compatibility, "endpoints", "live compatibility fixture")?
+        .array("live compatibility endpoints")?;
 
     let endpoints =
         field(contract, "endpoints", "called-endpoints contract")?.array("endpoints")?;
     validate_endpoint_rows(endpoints, "endpoints")?;
-    validate_endpoint_rows(compatibility_endpoints, "compatibility endpoints")?;
-    let stable_keys = endpoint_keys(endpoints)?;
-    let compatibility_keys = endpoint_keys(compatibility_endpoints)?;
-    if !compatibility_keys.is_subset(&stable_keys) {
-        return Err(set_difference(
-            "stable endpoint coverage",
-            &compatibility_keys,
-            &stable_keys,
-        ));
-    }
-    for compatibility_row in compatibility_endpoints {
-        let compatibility_row = compatibility_row.object("compatibility endpoint")?;
-        let method = required_string(compatibility_row, "method", "compatibility endpoint")?;
-        let endpoint = required_string(compatibility_row, "endpoint", "compatibility endpoint")?;
-        let stable_row = endpoints.iter().find(|row| {
-            row.object("stable endpoint").is_ok_and(|row| {
-                required_string(row, "method", "stable endpoint") == Ok(method)
-                    && required_string(row, "endpoint", "stable endpoint") == Ok(endpoint)
-            })
-        });
-        if stable_row.and_then(|row| row.object("stable endpoint").ok()) != Some(compatibility_row)
-        {
-            return Err(format!(
-                "stable contract changed frozen compatibility row {method} {endpoint}"
-            ));
-        }
-    }
+    validate_endpoint_rows(frozen_endpoints, "frozen compatibility endpoints")?;
+    validate_endpoint_rows(compatibility_endpoints, "live compatibility endpoints")?;
+    require_exact_endpoint_rows(endpoints, frozen_endpoints, "stable contract")?;
+    require_exact_endpoint_rows(
+        compatibility_endpoints,
+        frozen_endpoints,
+        "live compatibility fixture",
+    )?;
 
     let browser = field(contract, "browser_navigations", "called-endpoints contract")?
         .array("browser_navigations")?;
@@ -1113,6 +1137,39 @@ fn endpoint_keys(rows: &[Json]) -> Result<BTreeSet<String>, String> {
     Ok(keys)
 }
 
+fn require_exact_endpoint_rows(
+    candidate_rows: &[Json],
+    frozen_rows: &[Json],
+    context: &str,
+) -> Result<(), String> {
+    let candidate_keys = endpoint_keys(candidate_rows)?;
+    let frozen_keys = endpoint_keys(frozen_rows)?;
+    if !frozen_keys.is_subset(&candidate_keys) {
+        return Err(set_difference(
+            &format!("{context} frozen endpoint coverage"),
+            &frozen_keys,
+            &candidate_keys,
+        ));
+    }
+    for frozen_row in frozen_rows {
+        let frozen_row = frozen_row.object("frozen endpoint")?;
+        let method = required_string(frozen_row, "method", "frozen endpoint")?;
+        let endpoint = required_string(frozen_row, "endpoint", "frozen endpoint")?;
+        let candidate = candidate_rows.iter().find(|row| {
+            row.object(context).is_ok_and(|row| {
+                required_string(row, "method", context) == Ok(method)
+                    && required_string(row, "endpoint", context) == Ok(endpoint)
+            })
+        });
+        if candidate.and_then(|row| row.object(context).ok()) != Some(frozen_row) {
+            return Err(format!(
+                "{context} changed frozen compatibility row {method} {endpoint}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_object_rows(rows: &[Json], keys: &[&str], context: &str) -> Result<(), String> {
     if rows.is_empty() {
         return Err(format!("{context} must not be empty"));
@@ -1398,6 +1455,7 @@ fn set_difference(context: &str, expected: &BTreeSet<String>, actual: &BTreeSet<
 #[cfg(test)]
 mod tests {
     use super::{
+        FROZEN_COMPATIBILITY_DIGEST, FROZEN_COMPATIBILITY_SHA, FROZEN_COMPATIBILITY_TREE,
         validate_dependency_dag, verify_assets, verify_migration_ledger, verify_stable_contracts,
     };
     use std::fs;
@@ -1497,10 +1555,84 @@ mod tests {
         ] {
             copy(path, &scratch);
         }
+        let contract = scratch.join("fixtures/contracts/called-endpoints.json");
+        let corrupted = fs::read_to_string(&contract).unwrap().replacen(
+            FROZEN_COMPATIBILITY_DIGEST,
+            "01986e9dbfdfd415f6da5183321e1614ea15c1f3be12af7f32a3e5578423e1e9",
+            1,
+        );
+        fs::write(contract, corrupted).unwrap();
+        assert!(verify_stable_contracts(&scratch).is_err());
+        fs::remove_dir_all(scratch).unwrap();
+    }
+
+    #[test]
+    fn contract_validator_rejects_baseline_identity_corruption() {
+        for (label, original, corrupted) in [
+            (
+                "sha",
+                FROZEN_COMPATIBILITY_SHA,
+                "0c6b91929143180252ad1b644aea273729a1f1b9",
+            ),
+            (
+                "tree",
+                FROZEN_COMPATIBILITY_TREE,
+                "03cf49317b7ccbb42389411c819a925d3e8be3b9",
+            ),
+        ] {
+            let scratch = scratch(&format!("contract-{label}-corruption"));
+            for path in [
+                "fixtures/contracts/called-endpoints.json",
+                "tests/fixtures/called_endpoints.json",
+            ] {
+                copy(path, &scratch);
+            }
+            let contract = scratch.join("fixtures/contracts/called-endpoints.json");
+            let corrupted = fs::read_to_string(&contract)
+                .unwrap()
+                .replacen(original, corrupted, 1);
+            fs::write(contract, corrupted).unwrap();
+            assert!(verify_stable_contracts(&scratch).is_err());
+            fs::remove_dir_all(scratch).unwrap();
+        }
+    }
+
+    #[test]
+    fn contract_validator_rejects_live_frozen_row_mutation() {
+        let scratch = scratch("contract-live-row-corruption");
+        for path in [
+            "fixtures/contracts/called-endpoints.json",
+            "tests/fixtures/called_endpoints.json",
+        ] {
+            copy(path, &scratch);
+        }
         let fixture = scratch.join("tests/fixtures/called_endpoints.json");
-        let mut bytes = fs::read(&fixture).unwrap();
-        bytes.push(b'\n');
-        fs::write(fixture, bytes).unwrap();
+        let corrupted = fs::read_to_string(&fixture).unwrap().replacen(
+            "/v1/auth/capabilities",
+            "/v1/auth/capabilities-v2",
+            1,
+        );
+        fs::write(fixture, corrupted).unwrap();
+        assert!(verify_stable_contracts(&scratch).is_err());
+        fs::remove_dir_all(scratch).unwrap();
+    }
+
+    #[test]
+    fn contract_validator_rejects_stable_frozen_row_mutation() {
+        let scratch = scratch("contract-stable-row-corruption");
+        for path in [
+            "fixtures/contracts/called-endpoints.json",
+            "tests/fixtures/called_endpoints.json",
+        ] {
+            copy(path, &scratch);
+        }
+        let contract = scratch.join("fixtures/contracts/called-endpoints.json");
+        let corrupted = fs::read_to_string(&contract).unwrap().replacen(
+            "/v1/auth/capabilities",
+            "/v1/auth/capabilities-v2",
+            1,
+        );
+        fs::write(contract, corrupted).unwrap();
         assert!(verify_stable_contracts(&scratch).is_err());
         fs::remove_dir_all(scratch).unwrap();
     }
@@ -1515,7 +1647,7 @@ mod tests {
             convert_to_crlf(path, &scratch);
         }
         verify_stable_contracts(&scratch)
-            .expect("CRLF checkout must preserve compatibility fixture digests");
+            .expect("CRLF checkout must preserve frozen compatibility semantics");
         fs::remove_dir_all(scratch).unwrap();
     }
 
