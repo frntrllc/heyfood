@@ -99,3 +99,29 @@ def test_channels_disconnect_noninteractive_requires_explicit_yes(monkeypatch):
         "ok": False,
     }
     assert "\x1b[" not in result.stdout
+
+
+def test_channels_disconnect_invalid_link_id_preserves_json_contract(monkeypatch):
+    monkeypatch.setattr(main, "HelloFoodClient", _Client)
+    runner = CliRunner(mix_stderr=False)
+
+    for link_id, expected_message in (
+        ("   ", "Link ID must not be empty."),
+        ("x" * 256, "Link ID must be at most 255 characters."),
+    ):
+        result = runner.invoke(
+            main.app,
+            ["channels", "disconnect", link_id, "--yes", "--json"],
+            prog_name="heyfood",
+        )
+
+        assert result.exit_code == 2
+        assert json.loads(result.stdout) == {
+            "error": {
+                "message": expected_message,
+                "type": "invalid_input",
+            },
+            "ok": False,
+        }
+        assert "\x1b[" not in result.stdout
+        assert result.stderr == ""

@@ -11,7 +11,6 @@ from ..main import (
     _fail,
     _json_mode,
     _raise_command_error,
-    _validated,
     _write_result,
     channels_app,
     typer,
@@ -93,9 +92,19 @@ def channels_disconnect(
 ) -> None:
     """Disconnect one AI channel and revoke every token issued for that link."""
     json_mode = _json_mode(json_output, raw)
-    normalized_link_id = _validated(
-        lambda: validation.required_text(link_id, label="Link ID", max_length=255)
-    )
+    try:
+        normalized_link_id = validation.required_text(
+            link_id,
+            label="Link ID",
+            max_length=255,
+        )
+    except validation.ValidationError as exc:
+        _fail(
+            str(exc),
+            kind="invalid_input",
+            json_mode=json_mode,
+            exit_code=2,
+        )
 
     if not yes:
         if json_mode or no_input or not main._interactive_terminal():
