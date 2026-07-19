@@ -12,6 +12,8 @@ use heyfood_application::{BoxFuture, BrowserPort, ClockPort, PortError};
 use heyfood_core::{BrowserUrl, NetworkPolicy, ServiceUrl};
 use tokio::sync::mpsc;
 
+#[cfg(all(windows, feature = "native-credentials"))]
+pub use persistence::WindowsCredentialStore;
 pub use persistence::{AtomicFile, FileCredentialStore, NativeConfigStore};
 
 /// The package version shared by the native workspace.

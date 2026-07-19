@@ -6,13 +6,14 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use heyfood_application::{
-    ConfigCommit, ConfigMutation, ConfigPort, CredentialCommit, CredentialPort,
-};
-use heyfood_core::{
-    AccountId, ClientConfig, CommitId, ConfigRevision, CredentialVersion, NetworkPolicy,
-    SensitiveString, ServiceUrl, SessionCredentials,
-};
+use heyfood_application::{ConfigCommit, ConfigMutation, ConfigPort};
+#[cfg(any(not(windows), feature = "native-credentials"))]
+use heyfood_application::{CredentialCommit, CredentialPort};
+#[cfg(any(not(windows), feature = "native-credentials"))]
+use heyfood_core::{AccountId, CredentialVersion, SensitiveString, SessionCredentials};
+use heyfood_core::{ClientConfig, CommitId, ConfigRevision, NetworkPolicy, ServiceUrl};
+#[cfg(all(windows, feature = "native-credentials"))]
+use heyfood_platform::WindowsCredentialStore;
 use heyfood_platform::{AtomicFile, FileCredentialStore, NativeConfigStore};
 
 struct ThreadWake(thread::Thread);
@@ -67,6 +68,7 @@ fn config(context: &str, revision: u64) -> ClientConfig {
     }
 }
 
+#[cfg(any(not(windows), feature = "native-credentials"))]
 fn credentials(version: u64) -> SessionCredentials {
     SessionCredentials::from_unix_expiry(
         AccountId::parse("account-fixture").unwrap(),
@@ -79,6 +81,7 @@ fn credentials(version: u64) -> SessionCredentials {
 }
 
 #[test]
+#[cfg(not(windows))]
 fn credential_rotation_is_versioned_idempotent_and_owner_only() {
     let root = TempRoot::new("credentials");
     let store = FileCredentialStore::open(&root.0).unwrap();
@@ -124,19 +127,117 @@ fn credential_rotation_is_versioned_idempotent_and_owner_only() {
 }
 
 #[test]
+#[cfg(not(windows))]
 fn reconciliation_marker_is_durable_and_cleared_by_verified_rotation() {
     let root = TempRoot::new("reconciliation");
     let store = FileCredentialStore::open(&root.0).unwrap();
     store.initialize(&credentials(1)).unwrap();
-    block_on(store.mark_reconciliation_required(CommitId::new())).unwrap();
+    let commit_id = CommitId::new();
+    block_on(store.mark_reconciliation_required(commit_id)).unwrap();
     assert!(store.reconciliation_required().unwrap());
+    block_on(store.commit(CredentialCommit {
+        commit_id,
+        expected_version: CredentialVersion::new(1),
+        credentials: credentials(2),
+    }))
+    .unwrap();
+    assert!(!store.reconciliation_required().unwrap());
+}
+
+#[test]
+#[cfg(not(windows))]
+fn unrelated_rotation_preserves_another_commits_reconciliation_marker() {
+    let root = TempRoot::new("reconciliation-unrelated");
+    let store = FileCredentialStore::open(&root.0).unwrap();
+    store.initialize(&credentials(1)).unwrap();
+    block_on(store.mark_reconciliation_required(CommitId::new())).unwrap();
+
     block_on(store.commit(CredentialCommit {
         commit_id: CommitId::new(),
         expected_version: CredentialVersion::new(1),
         credentials: credentials(2),
     }))
     .unwrap();
+
+    assert!(store.reconciliation_required().unwrap());
+}
+
+#[test]
+#[cfg(not(windows))]
+fn reconciliation_clear_is_idempotent_and_commit_specific() {
+    let root = TempRoot::new("reconciliation-specific-clear");
+    let store = FileCredentialStore::open(&root.0).unwrap();
+    let marked = CommitId::new();
+    block_on(store.mark_reconciliation_required(marked)).unwrap();
+
+    block_on(store.clear_reconciliation_required(CommitId::new())).unwrap();
+    assert!(store.reconciliation_required().unwrap());
+    block_on(store.clear_reconciliation_required(marked)).unwrap();
+    block_on(store.clear_reconciliation_required(marked)).unwrap();
+
     assert!(!store.reconciliation_required().unwrap());
+}
+
+#[test]
+#[cfg(not(windows))]
+fn idempotent_replay_clears_a_stale_reconciliation_marker() {
+    let root = TempRoot::new("reconciliation-replay");
+    let store = FileCredentialStore::open(&root.0).unwrap();
+    store.initialize(&credentials(1)).unwrap();
+    let commit = CredentialCommit {
+        commit_id: CommitId::new(),
+        expected_version: CredentialVersion::new(1),
+        credentials: credentials(2),
+    };
+    block_on(store.commit(commit.clone())).unwrap();
+    block_on(store.mark_reconciliation_required(commit.commit_id)).unwrap();
+    assert!(store.reconciliation_required().unwrap());
+
+    block_on(store.commit(commit)).unwrap();
+
+    assert!(!store.reconciliation_required().unwrap());
+}
+
+#[test]
+#[cfg(windows)]
+fn reversible_file_credentials_fail_closed_on_windows() {
+    let root = TempRoot::new("windows-file-credentials");
+    let error = FileCredentialStore::open(&root.0).unwrap_err();
+    assert_eq!(error.code, "credential_file_unsupported");
+    assert!(!root.0.join("credentials.native").exists());
+}
+
+#[test]
+#[cfg(all(windows, feature = "native-credentials"))]
+fn windows_credential_manager_rotates_and_reconciles_without_token_files() {
+    struct Cleanup<'a>(&'a WindowsCredentialStore);
+
+    impl Drop for Cleanup<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.delete();
+        }
+    }
+
+    let root = TempRoot::new("windows-credential-manager");
+    let store = WindowsCredentialStore::open(&root.0).unwrap();
+    store.delete().unwrap();
+    let _cleanup = Cleanup(&store);
+    store.initialize(&credentials(1)).unwrap();
+    let commit = CredentialCommit {
+        commit_id: CommitId::new(),
+        expected_version: CredentialVersion::new(1),
+        credentials: credentials(2),
+    };
+    block_on(store.commit(commit.clone())).unwrap();
+    block_on(store.mark_reconciliation_required(commit.commit_id)).unwrap();
+    block_on(store.commit(commit)).unwrap();
+
+    let reopened = WindowsCredentialStore::open(&root.0).unwrap();
+    let loaded = block_on(reopened.load()).unwrap().unwrap();
+    assert_eq!(loaded.version, CredentialVersion::new(2));
+    assert_eq!(loaded.refresh_token.expose_secret(), "refresh-2");
+    assert!(!store.reconciliation_required().unwrap());
+    assert!(!root.0.join("credentials.native").exists());
 }
 
 #[test]

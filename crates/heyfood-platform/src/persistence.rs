@@ -248,6 +248,7 @@ pub struct FileCredentialStore {
 }
 
 impl FileCredentialStore {
+    #[cfg(not(windows))]
     pub fn open(root: impl AsRef<Path>) -> Result<Self, PortError> {
         let root = root.as_ref();
         create_private_dir(root)?;
@@ -256,6 +257,17 @@ impl FileCredentialStore {
             lock_path: root.join("credentials.lock"),
             reconciliation_path: root.join("credentials.reconciliation"),
         })
+    }
+
+    /// Reversible credential files are not permitted on Windows because the
+    /// standard library cannot enforce a private owner-only ACL. Use
+    /// [`WindowsCredentialStore`] with the `native-credentials` feature.
+    #[cfg(windows)]
+    pub fn open(_root: impl AsRef<Path>) -> Result<Self, PortError> {
+        Err(PortError::new(
+            "credential_file_unsupported",
+            "file credential storage is disabled on Windows; enable native-credentials",
+        ))
     }
 
     pub fn initialize(&self, credentials: &SessionCredentials) -> Result<(), PortError> {
@@ -300,39 +312,14 @@ impl CredentialPort for FileCredentialStore {
                 PortError::new("credentials_missing", "credentials are not initialized")
             })?;
             if state.applied.contains(&commit.commit_id) {
+                clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id)?;
                 return Ok(());
             }
-            if state.credentials.version != commit.expected_version {
-                return Err(PortError::new(
-                    "credential_version_conflict",
-                    "stored credential version does not match the expected version",
-                ));
-            }
-            if state.credentials.account_id != commit.credentials.account_id {
-                return Err(PortError::new(
-                    "credential_account_conflict",
-                    "credential rotation cannot change accounts",
-                ));
-            }
-            if commit.credentials.version <= commit.expected_version {
-                return Err(PortError::new(
-                    "credential_version_conflict",
-                    "credential rotation must advance the version",
-                ));
-            }
+            validate_credential_commit(&state.credentials, &commit)?;
             state.credentials = commit.credentials;
             state.applied.insert(commit.commit_id);
             AtomicFile::replace(&self.state_path, &state.encode())?;
-            if self.reconciliation_path.exists() {
-                fs::remove_file(&self.reconciliation_path)
-                    .map_err(|error| PortError::new("reconciliation_clear", error.to_string()))?;
-                if let Some(parent) = self.reconciliation_path.parent() {
-                    sync_directory(parent).map_err(|error| {
-                        PortError::new("reconciliation_clear", error.to_string())
-                    })?;
-                }
-            }
-            Ok(())
+            clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id)
         })
     }
 
@@ -348,6 +335,195 @@ impl CredentialPort for FileCredentialStore {
             )
         })
     }
+
+    fn clear_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async move {
+            let _lock = FileLock::acquire(&self.lock_path, true)?;
+            clear_reconciliation_marker(&self.reconciliation_path, commit_id)
+        })
+    }
+}
+
+#[cfg(all(windows, feature = "native-credentials"))]
+const WINDOWS_CREDENTIAL_SERVICE: &str = "ai.frntr.heyfood";
+
+/// Windows Credential Manager-backed session storage.
+///
+/// The complete credential document is stored as one Generic Credential so a
+/// file containing reversible access or refresh tokens is never created.
+#[cfg(all(windows, feature = "native-credentials"))]
+#[derive(Clone, Debug)]
+pub struct WindowsCredentialStore {
+    target: String,
+    lock_path: PathBuf,
+    reconciliation_path: PathBuf,
+}
+
+#[cfg(all(windows, feature = "native-credentials"))]
+impl WindowsCredentialStore {
+    pub fn open(root: impl AsRef<Path>) -> Result<Self, PortError> {
+        use std::os::windows::ffi::OsStrExt;
+
+        let root = root.as_ref();
+        fs::create_dir_all(root)
+            .map_err(|error| PortError::new("native_directory", error.to_string()))?;
+        let mut identity = Vec::new();
+        for unit in root.as_os_str().encode_wide() {
+            identity.extend_from_slice(&unit.to_le_bytes());
+        }
+        Ok(Self {
+            target: format!("{WINDOWS_CREDENTIAL_SERVICE}:{}", hex_encode(&identity)),
+            lock_path: root.join("credentials.lock"),
+            reconciliation_path: root.join("credentials.reconciliation"),
+        })
+    }
+
+    pub fn initialize(&self, credentials: &SessionCredentials) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.read_unlocked()?.is_some() {
+            return Err(PortError::new(
+                "credentials_exist",
+                "credentials have already been initialized",
+            ));
+        }
+        self.write_unlocked(&CredentialState::new(credentials.clone()))
+    }
+
+    pub fn reconciliation_required(&self) -> Result<bool, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, false)?;
+        Ok(self.reconciliation_path.exists())
+    }
+
+    /// Delete the native credential. This is also the logout/test-cleanup seam.
+    pub fn delete(&self) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        match self.entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(keyring_error("credential_manager_delete", error)),
+        }
+    }
+
+    fn entry(&self) -> Result<keyring::Entry, PortError> {
+        keyring::Entry::new_with_target(&self.target, WINDOWS_CREDENTIAL_SERVICE, "session")
+            .map_err(|error| keyring_error("credential_manager_entry", error))
+    }
+
+    fn read_unlocked(&self) -> Result<Option<CredentialState>, PortError> {
+        match self.entry()?.get_secret() {
+            Ok(document) => CredentialState::decode(&document).map(Some),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(keyring_error("credential_manager_read", error)),
+        }
+    }
+
+    fn write_unlocked(&self, state: &CredentialState) -> Result<(), PortError> {
+        self.entry()?
+            .set_secret(&state.encode())
+            .map_err(|error| keyring_error("credential_manager_write", error))
+    }
+}
+
+#[cfg(all(windows, feature = "native-credentials"))]
+impl CredentialPort for WindowsCredentialStore {
+    fn load(&self) -> BoxFuture<'_, Result<Option<SessionCredentials>, PortError>> {
+        Box::pin(async move {
+            let _lock = FileLock::acquire(&self.lock_path, false)?;
+            Ok(self.read_unlocked()?.map(|state| state.credentials))
+        })
+    }
+
+    fn commit(&self, commit: CredentialCommit) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async move {
+            let _lock = FileLock::acquire(&self.lock_path, true)?;
+            let mut state = self.read_unlocked()?.ok_or_else(|| {
+                PortError::new("credentials_missing", "credentials are not initialized")
+            })?;
+            if state.applied.contains(&commit.commit_id) {
+                clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id)?;
+                return Ok(());
+            }
+            validate_credential_commit(&state.credentials, &commit)?;
+            state.credentials = commit.credentials;
+            state.applied.insert(commit.commit_id);
+            self.write_unlocked(&state)?;
+            clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id)
+        })
+    }
+
+    fn mark_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async move {
+            let _lock = FileLock::acquire(&self.lock_path, true)?;
+            AtomicFile::replace(
+                &self.reconciliation_path,
+                format!("{}\n", commit_id.as_uuid()).as_bytes(),
+            )
+        })
+    }
+
+    fn clear_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async move {
+            let _lock = FileLock::acquire(&self.lock_path, true)?;
+            clear_reconciliation_marker(&self.reconciliation_path, commit_id)
+        })
+    }
+}
+
+fn validate_credential_commit(
+    current: &SessionCredentials,
+    commit: &CredentialCommit,
+) -> Result<(), PortError> {
+    if current.version != commit.expected_version {
+        return Err(PortError::new(
+            "credential_version_conflict",
+            "stored credential version does not match the expected version",
+        ));
+    }
+    if current.account_id != commit.credentials.account_id {
+        return Err(PortError::new(
+            "credential_account_conflict",
+            "credential rotation cannot change accounts",
+        ));
+    }
+    if commit.credentials.version <= commit.expected_version {
+        return Err(PortError::new(
+            "credential_version_conflict",
+            "credential rotation must advance the version",
+        ));
+    }
+    Ok(())
+}
+
+fn clear_reconciliation_marker(path: &Path, commit_id: CommitId) -> Result<(), PortError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let marker = read_limited(path, 128)
+        .map_err(|error| PortError::new("reconciliation_read", error.to_string()))?;
+    let expected = format!("{}\n", commit_id.as_uuid());
+    if marker != expected.as_bytes() {
+        return Ok(());
+    }
+    fs::remove_file(path)
+        .map_err(|error| PortError::new("reconciliation_clear", error.to_string()))?;
+    if let Some(parent) = path.parent() {
+        sync_directory(parent)
+            .map_err(|error| PortError::new("reconciliation_clear", error.to_string()))?;
+    }
+    Ok(())
+}
+
+#[cfg(all(windows, feature = "native-credentials"))]
+fn keyring_error(code: &'static str, error: keyring::Error) -> PortError {
+    PortError::new(code, error.to_string())
 }
 
 struct CredentialState {
