@@ -8,6 +8,7 @@ from ..main import (
     Confirm,
     HelloFoodError,
     LoginRequired,
+    _fail,
     _json_mode,
     _raise_command_error,
     _validated,
@@ -98,8 +99,11 @@ def channels_disconnect(
 
     if not yes:
         if json_mode or no_input or not main._interactive_terminal():
-            raise typer.BadParameter(
-                "Pass --yes to disconnect an AI channel non-interactively."
+            _fail(
+                "Pass --yes to disconnect an AI channel non-interactively.",
+                kind="confirmation_required",
+                json_mode=json_mode,
+                exit_code=2,
             )
         if not Confirm.ask(
             "Disconnect this AI channel and revoke its access?",

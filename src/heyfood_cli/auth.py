@@ -688,6 +688,7 @@ def _save_authenticated_config(
         {
             "api_url": api_url,
             "auth_url": auth_url,
+            "credential_api_url": api_url.rstrip("/"),
             "api_key": api_key,
             "device_id": device_id,
             "oauth": {

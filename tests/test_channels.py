@@ -91,4 +91,11 @@ def test_channels_disconnect_noninteractive_requires_explicit_yes(monkeypatch):
     )
 
     assert result.exit_code == 2
-    assert "Pass --yes" in result.output
+    assert json.loads(result.stdout) == {
+        "error": {
+            "message": "Pass --yes to disconnect an AI channel non-interactively.",
+            "type": "confirmation_required",
+        },
+        "ok": False,
+    }
+    assert "\x1b[" not in result.stdout
