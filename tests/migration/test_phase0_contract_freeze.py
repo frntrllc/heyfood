@@ -24,12 +24,17 @@ def test_frozen_evidence_and_assets_verify_without_private_repository() -> None:
 
 
 def test_legacy_endpoint_fixture_is_preserved_while_stable_contract_closes_gap() -> None:
+    tool = _tool()
+    baseline = json.loads(tool.git_blob("tests/fixtures/called_endpoints.json"))
     compatibility = json.loads((ROOT / "tests/fixtures/called_endpoints.json").read_text())
     stable = json.loads((ROOT / "fixtures/contracts/called-endpoints.json").read_text())
-    assert len(compatibility["endpoints"]) == 25
-    assert stable["endpoints"][:-1] == compatibility["endpoints"]
+    assert len(baseline["endpoints"]) == 25
+    assert stable["endpoints"][:-1] == baseline["endpoints"]
     assert stable["endpoints"][-1]["endpoint"] == "/.well-known/oauth-authorization-server"
     assert len(stable["endpoints"]) == 26
+    assert all(endpoint in compatibility["endpoints"] for endpoint in baseline["endpoints"])
+    assert stable["provenance"]["baseline_sha"] == tool.BASELINE_SHA
+    assert stable["provenance"]["compatibility_endpoint_count"] == 25
 
 
 def test_initial_ledger_is_complete_but_truthfully_unmapped() -> None:

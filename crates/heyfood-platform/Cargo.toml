@@ -17,7 +17,7 @@ directories.workspace = true
 fs2.workspace = true
 heyfood-application = { version = "=0.4.0", path = "../heyfood-application" }
 heyfood-core = { version = "=0.4.0", path = "../heyfood-core" }
-tokio = { workspace = true, features = ["fs", "io-util", "net", "process", "signal", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "signal", "sync", "time"] }
 tracing = { workspace = true, features = ["attributes", "std"] }
 webbrowser = { workspace = true, features = ["hardened"] }
 

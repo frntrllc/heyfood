@@ -1319,7 +1319,12 @@ fn validate_git_sha(value: &str, context: &str) -> Result<(), String> {
 }
 
 fn expect_hash(bytes: &[u8], expected: &str, path: &Path) -> Result<(), String> {
-    let actual = sha256::digest_hex(bytes);
+    let actual = sha256::repository_text_digest_hex(bytes).map_err(|error| {
+        format!(
+            "cannot hash non-UTF-8 repository text {}: {error}",
+            path.display()
+        )
+    })?;
     if actual == expected {
         Ok(())
     } else {
@@ -1419,6 +1424,17 @@ mod tests {
         fs::copy(root().join(relative), destination).unwrap();
     }
 
+    fn convert_to_crlf(relative: &str, destination_root: &std::path::Path) {
+        copy(relative, destination_root);
+        let destination = destination_root.join(relative);
+        let text = fs::read_to_string(&destination).unwrap();
+        fs::write(
+            destination,
+            text.replace("\r\n", "\n").replace('\n', "\r\n"),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn checked_in_workspace_matches_approved_dependency_dag() {
         validate_dependency_dag(&root().join("Cargo.toml"))
@@ -1458,6 +1474,21 @@ mod tests {
     }
 
     #[test]
+    fn ledger_validator_accepts_windows_checkout_line_endings() {
+        let scratch = scratch("ledger-crlf");
+        for path in [
+            "schemas/migration-ledger.v1.schema.json",
+            "tests/migration/python-test-ledger.json",
+            "tests/migration/python-node-ids.txt",
+            "tests/migration/non-pytest-invariants.json",
+        ] {
+            convert_to_crlf(path, &scratch);
+        }
+        verify_migration_ledger(&scratch).expect("CRLF checkout must preserve ledger digests");
+        fs::remove_dir_all(scratch).unwrap();
+    }
+
+    #[test]
     fn contract_validator_rejects_provenance_hash_corruption() {
         let scratch = scratch("contract-corruption");
         for path in [
@@ -1471,6 +1502,20 @@ mod tests {
         bytes.push(b'\n');
         fs::write(fixture, bytes).unwrap();
         assert!(verify_stable_contracts(&scratch).is_err());
+        fs::remove_dir_all(scratch).unwrap();
+    }
+
+    #[test]
+    fn contract_validator_accepts_windows_checkout_line_endings() {
+        let scratch = scratch("contract-crlf");
+        for path in [
+            "fixtures/contracts/called-endpoints.json",
+            "tests/fixtures/called_endpoints.json",
+        ] {
+            convert_to_crlf(path, &scratch);
+        }
+        verify_stable_contracts(&scratch)
+            .expect("CRLF checkout must preserve compatibility fixture digests");
         fs::remove_dir_all(scratch).unwrap();
     }
 
@@ -1510,6 +1555,29 @@ mod tests {
         );
         fs::write(schema, corrupted).unwrap();
         assert!(verify_assets(&scratch).is_err());
+        fs::remove_dir_all(scratch).unwrap();
+    }
+
+    #[test]
+    fn asset_validator_accepts_windows_checkout_line_endings() {
+        let scratch = scratch("asset-crlf");
+        for path in [
+            "schemas/dietary-options.v2.schema.json",
+            "schemas/banner-palette.v1.schema.json",
+            "schemas/banner-frames.v1.schema.json",
+            "assets/dietary/dietary_options.v2.json",
+            "assets/dietary/provenance.json",
+            "assets/brand/banner.txt",
+            "assets/brand/banner.palette.json",
+            "assets/brand/banner.frames.json",
+            "assets/brand/provenance.json",
+            "docs/references/banner.txt",
+            "docs/references/banner.palette.json",
+            "docs/references/banner.ts",
+        ] {
+            convert_to_crlf(path, &scratch);
+        }
+        verify_assets(&scratch).expect("CRLF checkout must preserve asset digests");
         fs::remove_dir_all(scratch).unwrap();
     }
 }

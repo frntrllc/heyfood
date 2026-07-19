@@ -66,6 +66,21 @@ pub(crate) fn digest_hex(input: &[u8]) -> String {
     state.iter().map(|word| format!("{word:08x}")).collect()
 }
 
+/// Hash repository text using Git's canonical LF representation.
+///
+/// Git may materialize tracked text with CRLF line endings on Windows. The
+/// frozen digests describe the repository content, so checkout-specific CRLF
+/// pairs are normalized before hashing. Lone carriage returns remain part of
+/// the content and therefore still change the digest.
+pub(crate) fn repository_text_digest_hex(input: &[u8]) -> Result<String, std::str::Utf8Error> {
+    let text = std::str::from_utf8(input)?;
+    if text.contains("\r\n") {
+        Ok(digest_hex(text.replace("\r\n", "\n").as_bytes()))
+    } else {
+        Ok(digest_hex(input))
+    }
+}
+
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -79,7 +94,7 @@ const K: [u32; 64] = [
 
 #[cfg(test)]
 mod tests {
-    use super::digest_hex;
+    use super::{digest_hex, repository_text_digest_hex};
 
     #[test]
     fn standard_vectors() {
@@ -90,6 +105,19 @@ mod tests {
         assert_eq!(
             digest_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn repository_text_hash_ignores_checkout_line_endings_only() {
+        let expected = digest_hex(b"first\nsecond\n");
+        assert_eq!(
+            repository_text_digest_hex(b"first\r\nsecond\r\n").unwrap(),
+            expected
+        );
+        assert_ne!(
+            repository_text_digest_hex(b"first\rsecond\n").unwrap(),
+            expected
         );
     }
 }

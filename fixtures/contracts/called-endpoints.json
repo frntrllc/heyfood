@@ -1,5 +1,5 @@
 {
-  "$comment": "Stable language-neutral inventory of outbound HTTP requests plus browser and loopback listener surfaces reachable from the Python 0.3.2 client. The legacy 25-row backend fixture remains byte-for-byte at tests/fixtures/called_endpoints.json during consumer migration.",
+  "$comment": "Stable language-neutral inventory of outbound HTTP requests plus browser and loopback listener surfaces reachable from the Python 0.3.2 client. The 25-row compatibility fixture is frozen from tests/fixtures/called_endpoints.json at provenance.baseline_sha; the live fixture may continue to evolve during consumer migration.",
   "schema_version": 1,
   "provenance": {
     "baseline_sha": "9c6b91929143180252ad1b644aea273729a1f1b9",

@@ -321,7 +321,7 @@ def write_endpoint_contract() -> None:
         }
     )
     contract = {
-        "$comment": "Stable language-neutral inventory of outbound HTTP requests plus browser and loopback listener surfaces reachable from the Python 0.3.2 client. The legacy 25-row backend fixture remains byte-for-byte at tests/fixtures/called_endpoints.json during consumer migration.",
+        "$comment": "Stable language-neutral inventory of outbound HTTP requests plus browser and loopback listener surfaces reachable from the Python 0.3.2 client. The 25-row compatibility fixture is frozen from tests/fixtures/called_endpoints.json at provenance.baseline_sha; the live fixture may continue to evolve during consumer migration.",
         "schema_version": 1,
         "provenance": {
             "baseline_sha": BASELINE_SHA,
@@ -506,12 +506,17 @@ def verify() -> None:
             if entry["disposition"] is not None or entry["replacements"]:
                 raise AssertionError(f'unmapped entry claims replacement evidence: {entry["invariant_id"]}')
 
+    baseline_compatibility_bytes = git_blob("tests/fixtures/called_endpoints.json")
+    baseline_compatibility = json.loads(baseline_compatibility_bytes)
     compatibility = json.loads(COMPAT_ENDPOINT_PATH.read_text(encoding="utf-8"))
     stable = json.loads(STABLE_ENDPOINT_PATH.read_text(encoding="utf-8"))
-    if len(compatibility["endpoints"]) != 25:
-        raise AssertionError("legacy compatibility endpoint fixture must remain at 25 rows")
-    if stable["endpoints"][:-1] != compatibility["endpoints"]:
-        raise AssertionError("stable endpoint contract no longer preserves the compatibility rows")
+    frozen_endpoints = baseline_compatibility["endpoints"]
+    if len(frozen_endpoints) != 25:
+        raise AssertionError("baseline compatibility endpoint fixture must contain 25 rows")
+    if stable["endpoints"][:-1] != frozen_endpoints:
+        raise AssertionError("stable endpoint contract no longer preserves the frozen compatibility rows")
+    if not all(endpoint in compatibility["endpoints"] for endpoint in frozen_endpoints):
+        raise AssertionError("live compatibility endpoint fixture no longer preserves the frozen rows")
     metadata_endpoint = stable["endpoints"][-1]
     if (metadata_endpoint["method"], metadata_endpoint["endpoint"]) != (
         "GET",
@@ -519,8 +524,12 @@ def verify() -> None:
     ):
         raise AssertionError("stable endpoint contract is missing RFC 8414 metadata discovery")
     provenance = stable["provenance"]
-    if provenance["compatibility_fixture_sha256"] != file_sha256(COMPAT_ENDPOINT_PATH):
-        raise AssertionError("endpoint compatibility provenance is stale")
+    if provenance["baseline_sha"] != BASELINE_SHA or provenance["baseline_tree"] != BASELINE_TREE:
+        raise AssertionError("endpoint compatibility provenance does not name the frozen baseline")
+    if provenance["compatibility_fixture_sha256"] != sha256(baseline_compatibility_bytes):
+        raise AssertionError("endpoint compatibility provenance is stale for the frozen baseline")
+    if provenance["compatibility_endpoint_count"] != len(frozen_endpoints):
+        raise AssertionError("endpoint compatibility provenance has a stale baseline row count")
 
     installer_checksum = (ROOT / "install.sh.sha256").read_text(encoding="utf-8").split()[0]
     if installer_checksum != file_sha256(ROOT / "install.sh"):
