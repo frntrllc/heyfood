@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "evidence_date": "2026-07-19",
+  "code_commit_sha": "72d5b3b2f1b11b807c2f7ba71690291f29c6cccf",
+  "source_tree_clean": true,
+  "host": {
+    "os": "macOS 26.5 (25F71)",
+    "architecture": "aarch64",
+    "rustc": "1.94.0 (4a4ef493e 2026-03-02)",
+    "cargo": "1.94.0 (85eff7c80 2026-01-15)"
+  },
+  "qualification": {
+    "command": "cargo test --locked --package heyfood-bin --test phase0_qualification -- --nocapture --test-threads=1",
+    "passed": 4,
+    "failed": 0,
+    "ignored_helper": 1,
+    "wall_seconds": 16.63,
+    "unix_signals": ["SIGINT", "SIGTERM", "SIGHUP"],
+    "terminal_restoration": [
+      "alternate_screen_left",
+      "bracketed_paste_disabled",
+      "canonical_mode_restored"
+    ],
+    "cancellation_join_deadline_seconds": 3,
+    "windows_console_control_event": "not_run_local"
+  },
+  "performance": {
+    "backend": "ratatui_test_backend",
+    "first_frame_samples": 30,
+    "first_frame_p95_microseconds": 1289,
+    "input_frame_samples": 2000,
+    "input_frame_p95_microseconds": 7456,
+    "semantic_scrollback_entries": 500,
+    "release_process_or_real_terminal_measurement": false
+  },
+  "artifacts": [
+    {
+      "name": "debug_heyfood_fail_closed",
+      "path": "target/debug/heyfood",
+      "shipped": false,
+      "bytes": 444104,
+      "sha256": "d8ac6a19428b20264843b7badc603786b90f14cd1cfeed7af6527b07f1767797",
+      "build_command": "cargo build --locked --package heyfood-bin"
+    },
+    {
+      "name": "release_heyfood_fail_closed",
+      "path": "target/release/heyfood",
+      "shipped": false,
+      "bytes": 333520,
+      "sha256": "230b902310654f5d7ff6a5b3b674dc0af1ce3885c6cd486220309d6e8eba6be8",
+      "build_command": "cargo build --locked --release --package heyfood-bin"
+    },
+    {
+      "name": "release_internal_qualification_test",
+      "path": "target/release/deps/phase0_qualification-3873faa2679d69b6",
+      "shipped": false,
+      "bytes": 4054608,
+      "sha256": "cdfdd0b7aba7dd2f70d5b56577794a7c1d21962b68ede26ba850a0cc38876d62",
+      "build_command": "cargo test --locked --release --package heyfood-bin --test phase0_qualification --no-run"
+    }
+  ],
+  "security": {
+    "cargo_audit_version": "0.22.2",
+    "cargo_audit_command": "cargo audit --deny warnings",
+    "cargo_audit_result": "passed",
+    "cargo_deny_version": "0.20.2",
+    "cargo_deny_command": "cargo deny check",
+    "cargo_deny_result": "passed_with_nonfatal_policy_warnings"
+  }
+}

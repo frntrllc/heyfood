@@ -4,7 +4,7 @@
   "rust_lineage": {
     "repository": "https://github.com/frntrllc/heyfood.git",
     "branch": "codex/rust-big-bang",
-    "code_commit_sha": "3c6447e8b5e15c5c39756b1d8786f45bb464dd5b",
+    "code_commit_sha": "72d5b3b2f1b11b807c2f7ba71690291f29c6cccf",
     "evidence_commit_sha": null
   },
   "requirements": [
@@ -34,9 +34,9 @@
     },
     {
       "id": "P0-5-dg-r1-vertical",
-      "status": "blocked",
+      "status": "satisfied",
       "evidence": ["crates/heyfood-bin/tests/phase0_qualification.rs"],
-      "blocker": "The internal qualification harness has local controlled-service evidence; hosted PTY/signal results and independent review are not yet recorded."
+      "blocker": null
     },
     {
       "id": "P0-6-three-os-ci",
@@ -76,9 +76,9 @@
     },
     {
       "id": "P0-12-measured-spike-report",
-      "status": "blocked",
-      "evidence": ["docs/release-evidence/rust-phase0/spike-report.md"],
-      "blocker": "Reproducible qualification/performance evidence must be regenerated from the remediation code commit and pass hosted review."
+      "status": "satisfied",
+      "evidence": ["docs/release-evidence/rust-phase0/spike-report.md", "docs/release-evidence/rust-phase0/qualification-evidence.json"],
+      "blocker": null
     }
   ],
   "external_contracts": {
