@@ -25,12 +25,13 @@ fn main() {
                 report.unmapped
             )
         }),
-        Some("verify-stable-contracts") => xtask::verify_stable_contracts(root).map(|report| {
+        Some("verify-contracts" | "verify-stable-contracts") =>
+            xtask::verify_stable_contracts(root).map(|report| {
             format!(
                 "stable contracts valid: {} endpoints, {} browser navigations, {} local listeners",
                 report.endpoints, report.browser_navigations, report.local_listeners
             )
-        }),
+            }),
         Some("verify-assets") => xtask::verify_assets(root).map(|report| {
             format!(
                 "asset schemas, hashes, and provenance valid: {} assets; {} provenance reviews pending",
@@ -51,7 +52,7 @@ fn main() {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: cargo xtask <dependency-dag|verify-migration-ledger|verify-stable-contracts|verify-assets>"
+        "usage: cargo xtask <dependency-dag|verify-migration-ledger|verify-contracts|verify-assets>"
     );
     std::process::exit(2);
 }
