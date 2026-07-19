@@ -21,8 +21,10 @@ from heyfood_cli.auth import (
     perform_login,
     pkce_pair,
     poll_device_authorization,
+    resolve_oauth_client_id,
     start_device_authorization,
 )
+from heyfood_cli.config import OFFICIAL_CLI_OAUTH_CLIENT_ID
 
 
 def _full_capabilities(*_args, **_kwargs) -> LoginCapabilities:
@@ -122,9 +124,35 @@ def test_device_login_persists_both_token_bundles(monkeypatch):
         "ABCD-EFGH",
     )
     assert result["oauth"]["access_token"] == "hf_ct_test"
+    assert result["oauth"]["client_id"] == OFFICIAL_CLI_OAUTH_CLIENT_ID
     assert result["session"]["access_token"] == "hf_at_test"
     assert result["account_user_id"] == "user-a"
     store.save.assert_called_once_with(result)
+
+
+def test_official_service_uses_server_owned_public_client(monkeypatch):
+    register = MagicMock()
+    monkeypatch.setattr("heyfood_cli.auth.register_client", register)
+
+    assert resolve_oauth_client_id(
+        "https://api.hello.food/",
+        "http://127.0.0.1:54321/callback",
+    ) == OFFICIAL_CLI_OAUTH_CLIENT_ID
+    register.assert_not_called()
+
+
+def test_custom_service_retains_dynamic_client_registration(monkeypatch):
+    register = MagicMock(return_value={"client_id": "hf_cid_custom"})
+    monkeypatch.setattr("heyfood_cli.auth.register_client", register)
+
+    assert resolve_oauth_client_id(
+        "https://compatible.example",
+        "http://127.0.0.1:54321/callback",
+    ) == "hf_cid_custom"
+    register.assert_called_once_with(
+        "https://compatible.example",
+        "http://127.0.0.1:54321/callback",
+    )
 
 
 @pytest.mark.parametrize(
@@ -284,6 +312,58 @@ class FakeCallbackServer:
         if self.error:
             raise self.error
         return self.result
+
+
+def test_loopback_login_uses_fixed_client_and_explicit_port(monkeypatch):
+    store = MagicMock()
+    store.get_device_id.return_value = "device-1"
+    store.load.return_value = {}
+    authorize_url_callback = MagicMock()
+    exchange_code = MagicMock(
+        return_value={
+            "access_token": "hf_ct_test",
+            "refresh_token": "hf_cr_test",
+            "expires_in": 3600,
+        }
+    )
+    monkeypatch.setattr("heyfood_cli.auth.resolve_login_capabilities", _full_capabilities)
+    monkeypatch.setattr(
+        "heyfood_cli.auth.OAuthCallbackServer",
+        lambda: FakeCallbackServer({"state": "state-1", "code": "code-1"}),
+    )
+    monkeypatch.setattr("heyfood_cli.auth.pkce_pair", lambda: ("verifier-1", "challenge-1"))
+    monkeypatch.setattr("heyfood_cli.auth.secrets.token_urlsafe", lambda _: "state-1")
+    monkeypatch.setattr("heyfood_cli.auth.exchange_code", exchange_code)
+    monkeypatch.setattr(
+        "heyfood_cli.auth.exchange_cli_session",
+        lambda **_: {
+            "access_token": "hf_at_test",
+            "refresh_token": "hf_rt_test",
+            "user_id": "user-a",
+        },
+    )
+
+    result = perform_login(
+        store=store,
+        api_url="https://api.hello.food",
+        auth_url="https://auth.hello.food",
+        api_key=None,
+        open_browser=False,
+        timeout_seconds=10,
+        authorize_url_callback=authorize_url_callback,
+    )
+
+    authorize_params = parse_qs(urlparse(authorize_url_callback.call_args.args[0]).query)
+    assert authorize_params["client_id"] == [OFFICIAL_CLI_OAUTH_CLIENT_ID]
+    assert authorize_params["redirect_uri"] == ["http://127.0.0.1:8765/callback"]
+    exchange_code.assert_called_once_with(
+        api_url="https://api.hello.food",
+        client_id=OFFICIAL_CLI_OAUTH_CLIENT_ID,
+        code="code-1",
+        verifier="verifier-1",
+        redirect_uri="http://127.0.0.1:8765/callback",
+    )
+    assert result["oauth"]["client_id"] == OFFICIAL_CLI_OAUTH_CLIENT_ID
 
 
 def test_loopback_login_reports_browser_denial(monkeypatch):

@@ -81,6 +81,12 @@
       "note": "Daily meal summary."
     },
     {
+      "method": "GET",
+      "endpoint": "/v1/channel/links",
+      "auth": "session",
+      "note": "List account-owned ChatGPT and other AI-channel links."
+    },
+    {
       "method": "DELETE",
       "endpoint": "/v1/channel/links/{link_id}",
       "auth": "session",

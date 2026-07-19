@@ -1,0 +1,13 @@
+Usage: heyfood household [OPTIONS] COMMAND [ARGS]...
+
+ Manage the local household roster and active agent scope.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ list     List household members and the active conversational scope.                                                 │
+│ current  Show the locally active conversational household scope.                                                     │
+│ use      Persist the default household scope for ask, reply, chat, and log.                                          │
+│ label    Give an imported profile id a local name and relationship.                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

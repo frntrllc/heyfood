@@ -1,0 +1,11 @@
+Usage: heyfood channels [OPTIONS] COMMAND [ARGS]...
+
+ Inspect or disconnect ChatGPT and other AI-channel links.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ list        List account links used by ChatGPT, Gemini, Claude, and other channels.                                  │
+│ disconnect  Disconnect one AI channel and revoke every token issued for that link.                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

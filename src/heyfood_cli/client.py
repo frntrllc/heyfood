@@ -11,6 +11,7 @@ import httpx
 from . import __version__
 from .config import (
     APP_CLIENT_ID,
+    ConfigError,
     ConfigStore,
     DEFAULT_API_KEY,
     discover_local_api_key,
@@ -19,6 +20,7 @@ from .config import (
     is_expiring,
     resolve_service_urls,
     utcnow,
+    validate_service_url,
 )
 from . import diagnostics
 from . import household
@@ -87,6 +89,66 @@ class HelloFoodClient:
     def _save(self) -> None:
         self.store.save(self.config)
 
+    def _credential_material_present(self) -> bool:
+        if isinstance(self.config.get("api_key"), str) and self.config["api_key"]:
+            return True
+        return any(
+            isinstance(self.config.get(bundle), dict)
+            and any(
+                self.config[bundle].get(name)
+                for name in ("access_token", "refresh_token")
+            )
+            for bundle in ("oauth", "session")
+        )
+
+    def _assert_credentials_bound(self) -> None:
+        """Fail closed before credentials can cross API origins.
+
+        v0.3.x stored the API URL beside a single credential bundle but did not
+        write an explicit binding. Adopt that legacy binding only when the
+        stored URL exactly matches the currently resolved target; a context or
+        environment override can never supply the missing proof.
+        """
+        if not self._credential_material_present():
+            return
+        binding = self.config.get("credential_api_url")
+        if not isinstance(binding, str) or not binding.strip():
+            legacy = self.config.get("api_url")
+            if isinstance(legacy, str) and legacy.strip():
+                try:
+                    legacy = validate_service_url(
+                        legacy,
+                        field="Credential API URL",
+                    ).rstrip("/")
+                except ConfigError:
+                    legacy = ""
+            else:
+                legacy = ""
+            if legacy == self.api_url:
+                binding = legacy
+                self.config["credential_api_url"] = binding
+                self._save()
+            else:
+                raise LoginRequired(
+                    "Stored credentials are not bound to the active API context. "
+                    "Run `heyfood login` for this context."
+                )
+        try:
+            normalized_binding = validate_service_url(
+                binding,
+                field="Credential API URL",
+            ).rstrip("/")
+        except ConfigError as exc:
+            raise LoginRequired(
+                "Stored credentials have an invalid API binding. "
+                "Run `heyfood login` again."
+            ) from exc
+        if normalized_binding != self.api_url:
+            raise LoginRequired(
+                "Stored credentials belong to a different API context. "
+                "Switch back or run `heyfood login` for this context."
+            )
+
     def _ensure_local_api_key(self, *, persist: bool = True) -> None:
         if self.config.get("api_key"):
             return
@@ -94,7 +156,14 @@ class HelloFoodClient:
         if not api_key and is_local_api_url(self.api_url):
             api_key = discover_local_api_key() or ""
         if api_key:
+            # Session/channel credentials may already be bound to another
+            # context. Validate that binding before adding a discovered key;
+            # never let local discovery or HEYFOOD_API_KEY relabel existing
+            # bearer tokens for the active origin.
+            if self._credential_material_present():
+                self._assert_credentials_bound()
             self.config["api_key"] = api_key
+            self.config.setdefault("credential_api_url", self.api_url)
             if persist:
                 self._save()
 
@@ -113,6 +182,7 @@ class HelloFoodClient:
         }
         api_key = self.config.get("api_key")
         if isinstance(api_key, str) and api_key:
+            self._assert_credentials_bound()
             headers["X-API-Key"] = api_key
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -189,6 +259,7 @@ class HelloFoodClient:
         session = self.config.get("session")
         if not isinstance(session, dict) or not session.get("access_token"):
             raise LoginRequired("Run `heyfood login` first.")
+        self._assert_credentials_bound()
         if is_expiring(session.get("access_expires_at")):
             self.refresh_session()
             session = self.config.get("session") or {}
@@ -201,6 +272,7 @@ class HelloFoodClient:
         oauth = self.config.get("oauth")
         if not isinstance(oauth, dict) or not oauth.get("access_token"):
             raise LoginRequired("Run `heyfood login` first.")
+        self._assert_credentials_bound()
         if is_expiring(oauth.get("access_expires_at")):
             self.refresh_channel()
             oauth = self.config.get("oauth") or {}
@@ -214,6 +286,7 @@ class HelloFoodClient:
         oauth = self.config.get("oauth")
         if not isinstance(oauth, dict):
             return set()
+        self._assert_credentials_bound()
         scope = oauth.get("scope")
         if not isinstance(scope, str):
             return set()
@@ -230,6 +303,7 @@ class HelloFoodClient:
 
     def refresh_session(self) -> None:
         diagnostics.reporter.emit("auth.refresh_session", context=self.context_name)
+        self._assert_credentials_bound()
         session = self.config.get("session")
         refresh_token = session.get("refresh_token") if isinstance(session, dict) else None
         if not refresh_token:
@@ -282,6 +356,7 @@ class HelloFoodClient:
 
     def refresh_channel(self) -> None:
         diagnostics.reporter.emit("auth.refresh_channel", context=self.context_name)
+        self._assert_credentials_bound()
         oauth = self.config.get("oauth")
         if not isinstance(oauth, dict):
             raise LoginRequired("Run `heyfood login` first.")
@@ -330,6 +405,18 @@ class HelloFoodClient:
                 raise LoginRequired(
                     "Run `heyfood login` again to refresh this CLI session."
                 ) from retry_exc
+
+    def list_channel_links(self) -> dict[str, Any]:
+        """List ChatGPT and other AI-channel links for the signed-in account."""
+        return self._request("GET", "/v1/channel/links", auth="session")
+
+    def disconnect_channel_link(self, link_id: str) -> dict[str, Any]:
+        """Revoke one account-owned AI-channel link and all of its tokens."""
+        return self._request(
+            "DELETE",
+            f"/v1/channel/links/{link_id}",
+            auth="session",
+        )
 
     def profile_readiness(self) -> dict[str, Any]:
         """Return the strictly validated least-privilege first-run state."""

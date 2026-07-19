@@ -1,9 +1,15 @@
 """HTTPS-at-every-ingress enforcement (blocker 4 / invariants 7 and 11)."""
 from __future__ import annotations
 
-import pytest
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
+import pytest
+from typer.testing import CliRunner
+
+from heyfood_cli import main
 from heyfood_cli.config import (
+    ConfigStore,
     ConfigError,
     is_exact_loopback_host,
     is_local_api_url,
@@ -77,3 +83,68 @@ def test_resolve_service_urls_allows_local_context():
     api, auth, name = resolve_service_urls({"active_context": "local"})
     assert api == "http://localhost:8000"
     assert name == "local"
+
+
+@pytest.mark.parametrize("command", ["login", "register"])
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--api-url", "http://remote.example"),
+        ("--auth-url", "http://remote.example/authorize"),
+        ("--api-url", "http://localhost.evil.example"),
+        ("--auth-url", "http://127.0.0.1.evil.example/authorize"),
+        ("--api-url", "https://user:password@remote.example"),
+        ("--auth-url", "https://remote.example/authorize?token=secret"),
+        ("--api-url", "https://remote.example/#fragment"),
+    ],
+)
+def test_login_rejects_unsafe_command_url_overrides_before_network(
+    command, option, value, monkeypatch, tmp_path
+):
+    authenticate = MagicMock()
+    store = ConfigStore(tmp_path / "config.json", credential_store=None)
+    monkeypatch.setattr("heyfood_cli.commands.auth.ConfigStore", lambda: store)
+    monkeypatch.setattr(
+        "heyfood_cli.commands.auth._authenticate",
+        authenticate,
+    )
+
+    args = [command, option, value, "--no-browser"]
+    if command == "register":
+        args.extend(["--json", "--no-onboard"])
+    result = CliRunner().invoke(
+        main.app,
+        args,
+        prog_name="heyfood",
+    )
+
+    assert result.exit_code == 2
+    authenticate.assert_not_called()
+
+
+@pytest.mark.parametrize("command", ["login", "register"])
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--api-url", "http://localhost:8000/"),
+        ("--auth-url", "http://127.0.0.1:3002/authorize/"),
+        ("--api-url", "http://[::1]:8000/"),
+    ],
+)
+def test_auth_commands_allow_exact_loopback_overrides_and_normalize_trailing_slash(
+    command, option, value, monkeypatch, tmp_path
+):
+    store = ConfigStore(tmp_path / "config.json", credential_store=None)
+    authenticate = MagicMock(return_value=SimpleNamespace(capabilities=None))
+    monkeypatch.setattr("heyfood_cli.commands.auth.ConfigStore", lambda: store)
+    monkeypatch.setattr("heyfood_cli.commands.auth._authenticate", authenticate)
+
+    args = [command, option, value, "--no-browser"]
+    if command == "register":
+        args.extend(["--json", "--no-onboard"])
+    result = CliRunner().invoke(main.app, args, prog_name="heyfood")
+
+    assert result.exit_code == 0, result.output
+    assert authenticate.call_args.kwargs[
+        "api_url" if option == "--api-url" else "auth_url"
+    ] == value.rstrip("/")

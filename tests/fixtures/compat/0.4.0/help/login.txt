@@ -1,0 +1,14 @@
+Usage: heyfood login [OPTIONS]
+
+ Authenticate this machine with HelloFood.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --api-url           TEXT     Override the active context API URL.                                                    │
+│ --auth-url          TEXT     Override the active context auth URL.                                                   │
+│ --api-key           TEXT     API key for first-party app session refresh.                                            │
+│ --local                      Use the local Docker dev URLs.                                                          │
+│ --device                     Use short-code login for SSH/headless systems.                                          │
+│ --no-browser                 Print the login URL instead of opening a browser.                                       │
+│ --timeout           INTEGER  Seconds to wait for browser callback. [default: 180]                                    │
+│ --help                       Show this message and exit.                                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

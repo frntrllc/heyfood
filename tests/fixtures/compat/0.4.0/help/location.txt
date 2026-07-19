@@ -1,0 +1,14 @@
+Usage: heyfood location [OPTIONS] COMMAND [ARGS]...
+
+ Save a default location for restaurant searches.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --json          Print stable JSON.                                                                                   │
+│ --raw           Deprecated alias for --json.                                                                         │
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ show   Show the saved default location.                                                                              │
+│ set    Save a default location by place name, or directly with --lat/--lng.                                          │
+│ clear  Forget the saved default location.                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

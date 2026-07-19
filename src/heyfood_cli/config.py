@@ -20,6 +20,10 @@ except ImportError:  # pragma: no cover - Windows is not a release target yet.
 # exchange. The backend stamps this value itself; keep the two in sync
 # (channel_oauth.py exchange_cli_session).
 APP_CLIENT_ID = "heyfood-cli"
+OFFICIAL_API_URL = "https://api.hello.food"
+# Stable public OAuth identifier for the official native CLI. This is not a
+# secret: PKCE and the server-owned loopback redirect policy protect the flow.
+OFFICIAL_CLI_OAUTH_CLIENT_ID = "hf_cid_heyfood_cli"
 DEFAULT_API_URL = os.environ.get("HEYFOOD_API_URL", "https://api.hello.food")
 DEFAULT_AUTH_URL = os.environ.get(
     "HEYFOOD_AUTH_URL",
