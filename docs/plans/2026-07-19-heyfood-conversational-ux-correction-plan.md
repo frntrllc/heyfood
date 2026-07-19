@@ -1,8 +1,19 @@
 # heyfood conversational UX correction plan
 
-**Status:** Implementation complete; release verification in progress  
-**Release target:** next patch release after 0.3.1  
+**Status:** Complete — released and publicly verified as `0.3.2`
+**Release:** `0.3.2`
 **Primary user:** a person using `heyfood`, `heyfood ask`, `heyfood chat`, or voice input in an interactive terminal
+
+## Closure evidence
+
+- Merged by PR #15 at commit
+  `bc0bd5387c53db310c91d635c978e1d957042112` and tagged `v0.3.2`.
+- All 601 tests and the macOS/Linux, Python 3.11–3.13, installer, pipx,
+  voice-wheel, and distribution CI gates passed.
+- PyPI trusted publishing produced the wheel and sdist with provenance
+  attestations, and the matching GitHub release completed successfully.
+- Fresh isolated installs from both public PyPI and
+  `https://hey.food/install.sh` resolved to `heyfood 0.3.2`.
 
 ## Objective
 
