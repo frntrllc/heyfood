@@ -1,0 +1,42 @@
+Usage: heyfood onboard [OPTIONS] [PROFILE_TEXT]...
+
+ Build or update your hello.food dietary graph.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   profile_text      [PROFILE_TEXT]...  Optional natural-language dietary profile.                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --diet           -d                      TEXT                     Diet style. Repeat or comma-separate.              │
+│ --allergy        -a                      TEXT                     Allergy or restriction. Repeat or comma-separate.  │
+│ --condition      -c                      TEXT                     Health condition. Repeat or comma-separate.        │
+│ --avoid                                  TEXT                     Specific ingredient to avoid. Repeat or            │
+│                                                                   comma-separate.                                    │
+│ --cuisine                                TEXT                     Cuisine preference. Repeat or comma-separate.      │
+│ --activity                               TEXT                     Activity level id or label.                        │
+│ --notes                                  TEXT                     Additional dietary notes.                          │
+│ --severity                               INTEGER RANGE [1<=x<=5]  Condition severity from 1-5.                       │
+│ --member-id                              TEXT                     Synced profile member id. [default: _self]         │
+│ --replace                                                         Replace the existing profile instead of merging    │
+│                                                                   answered fields.                                   │
+│ --yes            -y                                               Grant sync consent and save without confirmation.  │
+│ --voice                                                           Capture your dietary profile by voice before       │
+│                                                                   extracting it.                                     │
+│ --voice-capture                          TEXT                     Voice capture mode: auto, native, browser, or      │
+│                                                                   typed.                                             │
+│                                                                   [default: auto]                                    │
+│ --audio-device                           TEXT                     Input device id or name for native voice capture.  │
+│ --voice-timeout                          INTEGER                  Seconds to wait for browser voice capture (browser │
+│                                                                   rung only).                                        │
+│                                                                   [default: 300]                                     │
+│ --no-browser                                                      With --voice, print the browser capture URL        │
+│                                                                   instead of opening it (browser rung only).         │
+│ --interactive        --no-interactive                             Prompt for missing fields. [default: interactive]  │
+│ --no-input                                                        Never prompt; fail if required input or approval   │
+│                                                                   is missing.                                        │
+│ --list-options                                                    Show accepted onboarding labels and ids.           │
+│ --dry-run                                                         Build and print the profile payload without        │
+│                                                                   saving.                                            │
+│ --json                                                            Print stable JSON.                                 │
+│ --raw                                                             Deprecated alias for --json.                       │
+│ --help                                                            Show this message and exit.                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

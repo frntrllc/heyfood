@@ -14,17 +14,16 @@ from typer.testing import CliRunner
 from heyfood_cli import main
 
 
-# Pinned to the current command-surface baseline (0.3.0): the live CLI's help
-# and raw output must match these fixtures byte-for-byte. Patch release 0.3.1
-# changes only account-deletion reconciliation and intentionally reuses this
-# interface baseline. 0.3.0 adds native voice (--voice /
+# Pinned to the current command-surface baseline (0.4.0): the live CLI's help
+# and raw output must match these fixtures byte-for-byte. 0.4.0 adds channel
+# link management over the immutable 0.3.0 baseline. 0.3.0 adds native voice (--voice /
 # --voice-capture / --audio-device on ask/log/onboard, the `voice` group with
 # devices/status/set/reset). The 0.1.0 and 0.2.0 baselines are kept on disk as
 # immutable historical evidence and are guarded by the historical tests below;
 # see COMPAT_ROOT / "0.2.0" for the reconstructed released-v0.2.0 (household, no
 # voice) snapshot.
 COMPAT_ROOT = Path(__file__).parent / "fixtures" / "compat"
-CURRENT_VERSION = "0.3.0"
+CURRENT_VERSION = "0.4.0"
 FIXTURE_ROOT = COMPAT_ROOT / CURRENT_VERSION
 HELP_ROOT = FIXTURE_ROOT / "help"
 RAW_OUTPUTS = json.loads((FIXTURE_ROOT / "raw_outputs.json").read_text())["outputs"]
@@ -83,6 +82,9 @@ HELP_COMMANDS = {
     "voice-reset": ("voice", "reset"),
     "account": ("account",),
     "account-delete": ("account", "delete"),
+    "channels": ("channels",),
+    "channels-list": ("channels", "list"),
+    "channels-disconnect": ("channels", "disconnect"),
 }
 
 
@@ -227,6 +229,7 @@ _PRE_VOICE_COMMANDS = {
     for name in HELP_COMMANDS
     if not name.startswith("voice")
     and not name.startswith("account")
+    and not name.startswith("channels")
     and name != "register"
 }
 
@@ -279,3 +282,21 @@ def test_current_baseline_adds_first_run_and_voice_over_0_2_0() -> None:
     }
     changed = {name for name in v020 if v030[name] != v020[name]}
     assert changed == {"root", "ask", "log", "onboard"}
+
+
+def test_0_4_0_adds_only_channel_management_over_0_3_0() -> None:
+    v030 = _help_files("0.3.0")
+    v040 = _help_files("0.4.0")
+    assert set(v030).issubset(set(v040))
+    assert set(v040) - set(v030) == {
+        "channels",
+        "channels-list",
+        "channels-disconnect",
+    }
+    changed = {name for name in v030 if v040[name] != v030[name]}
+    assert changed == {"root"}
+    assert (
+        COMPAT_ROOT / "0.4.0" / "raw_outputs.json"
+    ).read_bytes() == (
+        COMPAT_ROOT / "0.3.0" / "raw_outputs.json"
+    ).read_bytes()

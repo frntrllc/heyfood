@@ -1,0 +1,14 @@
+Usage: heyfood channels disconnect [OPTIONS] LINK_ID
+
+ Disconnect one AI channel and revoke every token issued for that link.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    link_id      TEXT  Link ID from `heyfood channels list`. [required]                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --yes       -y        Revoke without prompting.                                                                      │
+│ --no-input            Never prompt; requires --yes.                                                                  │
+│ --json                Print stable JSON.                                                                             │
+│ --raw                 Deprecated alias for --json.                                                                   │
+│ --help                Show this message and exit.                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

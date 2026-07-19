@@ -1,5 +1,14 @@
+from unittest.mock import MagicMock
+
+import pytest
+
 from heyfood_cli import diagnostics
-from heyfood_cli.client import ChannelToolUnavailable, HelloFoodClient, HelloFoodError
+from heyfood_cli.client import (
+    ChannelToolUnavailable,
+    HelloFoodClient,
+    HelloFoodError,
+    LoginRequired,
+)
 from heyfood_cli.config import ConfigStore
 
 
@@ -250,6 +259,36 @@ def test_list_profile_members_uses_session_endpoint(tmp_path, monkeypatch):
     ]
 
 
+def test_list_channel_links_uses_account_session(tmp_path, monkeypatch):
+    client = HelloFoodClient(store=ConfigStore(tmp_path / "config.json"))
+    calls = []
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kwargs: calls.append((method, path, kwargs))
+        or {"links": [], "total_count": 0},
+    )
+
+    assert client.list_channel_links() == {"links": [], "total_count": 0}
+    assert calls == [("GET", "/v1/channel/links", {"auth": "session"})]
+
+
+def test_disconnect_channel_link_revokes_owned_link(tmp_path, monkeypatch):
+    client = HelloFoodClient(store=ConfigStore(tmp_path / "config.json"))
+    calls = []
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kwargs: calls.append((method, path, kwargs))
+        or {"revoked": True, "link_id": "link-1"},
+    )
+
+    assert client.disconnect_channel_link("link-1")["revoked"] is True
+    assert calls == [
+        ("DELETE", "/v1/channel/links/link-1", {"auth": "session"})
+    ]
+
+
 def test_channel_whoami_requires_login_after_invalid_channel_token_retry(tmp_path, monkeypatch):
     from heyfood_cli.client import LoginRequired
 
@@ -355,7 +394,112 @@ def _client_with_tokens(tmp_path, monkeypatch):
         "client_id": "client-1",
         "access_expires_at": "2999-01-01T00:00:00+00:00",
     }
+    client.config["credential_api_url"] = client.api_url
     return client
+
+
+def test_context_switch_cannot_send_production_session_token(tmp_path, monkeypatch):
+    store = ConfigStore(tmp_path / "config.json", credential_store=None)
+    store.save(
+        {
+            "active_context": "custom",
+            "contexts": {
+                "custom": {
+                    "api_url": "https://custom.example",
+                    "auth_url": "https://auth.custom.example/authorize",
+                }
+            },
+            "credential_api_url": "https://api.hello.food",
+            "session": {
+                "access_token": "production-session-secret",
+                "access_expires_at": "2999-01-01T00:00:00+00:00",
+            },
+        }
+    )
+    request = MagicMock()
+    monkeypatch.setattr("heyfood_cli.client.httpx.Client.request", request)
+    client = HelloFoodClient(store=store, create_device=False)
+
+    with pytest.raises(LoginRequired, match="different API context"):
+        client.list_channel_links()
+
+    request.assert_not_called()
+
+
+def test_environment_override_cannot_send_bound_channel_or_api_key(
+    tmp_path, monkeypatch
+):
+    store = ConfigStore(tmp_path / "config.json", credential_store=None)
+    store.save(
+        {
+            "api_url": "https://api.hello.food",
+            "auth_url": "https://auth.hello.food/authorize",
+            "credential_api_url": "https://api.hello.food",
+            "api_key": "production-api-key",
+            "oauth": {
+                "access_token": "production-channel-secret",
+                "access_expires_at": "2999-01-01T00:00:00+00:00",
+            },
+        }
+    )
+    monkeypatch.setenv("HEYFOOD_API_URL", "https://custom.example")
+    monkeypatch.setenv("HEYFOOD_AUTH_URL", "https://auth.custom.example/authorize")
+    request = MagicMock()
+    monkeypatch.setattr("heyfood_cli.client.httpx.Client.request", request)
+    client = HelloFoodClient(store=store, create_device=False)
+
+    with pytest.raises(LoginRequired, match="different API context"):
+        client.channel_whoami()
+    with pytest.raises(LoginRequired, match="different API context"):
+        client._request("GET", "/public", auth=None)
+
+    request.assert_not_called()
+
+
+def test_discovered_api_key_cannot_rebind_existing_production_tokens(
+    tmp_path, monkeypatch
+):
+    store = ConfigStore(tmp_path / "config.json", credential_store=None)
+    store.save(
+        {
+            "active_context": "local",
+            "credential_api_url": "https://api.hello.food",
+            "oauth": {
+                "access_token": "production-channel-secret",
+                "access_expires_at": "2999-01-01T00:00:00+00:00",
+            },
+        }
+    )
+    monkeypatch.setattr("heyfood_cli.client.DEFAULT_API_KEY", "local-api-key")
+    request = MagicMock()
+    monkeypatch.setattr("heyfood_cli.client.httpx.Client.request", request)
+
+    with pytest.raises(LoginRequired, match="different API context"):
+        HelloFoodClient(store=store, create_device=False)
+
+    persisted = store.load()
+    assert persisted["credential_api_url"] == "https://api.hello.food"
+    assert "api_key" not in persisted
+    assert persisted["oauth"]["access_token"] == "production-channel-secret"
+    request.assert_not_called()
+
+
+def test_legacy_credentials_adopt_only_the_exact_stored_api_origin(tmp_path):
+    store = ConfigStore(tmp_path / "config.json", credential_store=None)
+    store.save(
+        {
+            "api_url": "https://api.hello.food/",
+            "auth_url": "https://auth.hello.food/authorize",
+            "session": {
+                "access_token": "legacy-session",
+                "access_expires_at": "2999-01-01T00:00:00+00:00",
+            },
+        }
+    )
+    client = HelloFoodClient(store=store, create_device=False)
+
+    assert client.session_access_token() == "legacy-session"
+    assert store.load()["credential_api_url"] == "https://api.hello.food"
 
 
 def test_refresh_session_falls_back_to_channel_reexchange(tmp_path, monkeypatch):

@@ -1,0 +1,9 @@
+Usage: heyfood channels list [OPTIONS]
+
+ List account links used by ChatGPT, Gemini, Claude, and other channels.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --json          Print stable JSON.                                                                                   │
+│ --raw           Deprecated alias for --json.                                                                         │
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

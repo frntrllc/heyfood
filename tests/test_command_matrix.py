@@ -11,6 +11,11 @@ from heyfood_cli import main
 
 AUTHENTICATED_JSON_CASES = (
     ("status", ("status", "--json")),
+    ("channels-list", ("channels", "list", "--json")),
+    (
+        "channels-disconnect",
+        ("channels", "disconnect", "link-1", "--yes", "--no-input", "--json"),
+    ),
     ("profile", ("profile", "--json")),
     ("members-list", ("members", "list", "--json")),
     ("ask", ("ask", "hello", "--no-location", "--json")),
@@ -40,6 +45,8 @@ class _UnauthenticatedClient:
 
     me = _login_required
     channel_whoami = _login_required
+    list_channel_links = _login_required
+    disconnect_channel_link = _login_required
     profile_consent_status = _login_required
     list_profile_members = _login_required
     channel_tool = _login_required
@@ -74,6 +81,12 @@ class _SuccessfulClient(_UnauthenticatedClient):
 
     def channel_whoami(self):
         return {"channel": "hellofood_cli", "scopes": ["profile:read"]}
+
+    def list_channel_links(self):
+        return {"links": [], "total_count": 0}
+
+    def disconnect_channel_link(self, link_id):
+        return {"revoked": True, "link_id": link_id}
 
     def profile_consent_status(self):
         return {"has_consent": True}
@@ -166,6 +179,7 @@ def test_authenticated_command_happy_paths_emit_one_json_document(
     "args",
     (
         ("profile", "--member-id", "", "--json"),
+        ("channels", "disconnect", "link-1", "--no-input", "--json"),
         ("ask",),
         ("reply",),
         ("conversation", "resume"),
@@ -189,4 +203,4 @@ def test_invalid_command_matrix_exits_two_without_traceback(args):
 
 def test_authenticated_command_matrix_has_no_duplicate_or_missing_labels():
     names = [name for name, _args in AUTHENTICATED_JSON_CASES]
-    assert len(names) == len(set(names)) == 16
+    assert len(names) == len(set(names)) == 18

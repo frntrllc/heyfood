@@ -31,6 +31,7 @@ def _client_with_channel_token(tmp_path, monkeypatch):
         "client_id": "client-1",
         "access_expires_at": "2999-01-01T00:00:00+00:00",
     }
+    client.config["credential_api_url"] = client.api_url
     return client
 
 

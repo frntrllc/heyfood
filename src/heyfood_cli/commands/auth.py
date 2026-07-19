@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from .. import auth_application
 from .. import main
+from ..config import ConfigError, validate_service_url
 from ..main import (
     Any,
     ConfigStore,
@@ -37,10 +38,24 @@ def _auth_urls(
     auth_url: str | None,
     local: bool,
 ) -> tuple[str, str]:
-    configured_api, configured_auth, _ = resolve_service_urls(store.load())
+    try:
+        configured_api, configured_auth, _ = resolve_service_urls(store.load())
+    except ConfigError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     if local:
         return local_urls()
-    return api_url or configured_api, auth_url or configured_auth
+    try:
+        selected_api = validate_service_url(
+            api_url or configured_api,
+            field="API URL",
+        )
+        selected_auth = validate_service_url(
+            auth_url or configured_auth,
+            field="Auth URL",
+        )
+    except ConfigError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    return selected_api.rstrip("/"), selected_auth.rstrip("/")
 
 
 def _authenticate(
