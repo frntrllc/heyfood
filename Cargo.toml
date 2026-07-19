@@ -15,7 +15,7 @@ cargo_metadata = { version = "0.23", default-features = false }
 clap = { version = "4", default-features = false }
 clap_complete = { version = "4", default-features = false }
 cpal = { version = "0.16", default-features = false }
-crossterm = { version = "0.28", default-features = false }
+crossterm = { version = "0.29", default-features = false }
 directories = { version = "6", default-features = false }
 eventsource-stream = { version = "0.2", default-features = false }
 fs2 = { version = "0.4", default-features = false }
@@ -24,7 +24,7 @@ insta = { version = "1", default-features = false }
 keyring = { version = "3", default-features = false }
 portable-pty = { version = "0.9", default-features = false }
 proptest = { version = "1", default-features = false }
-ratatui = { version = "0.29", default-features = false }
+ratatui = { version = "0.30.2", default-features = false }
 reqwest = { version = "0.12", default-features = false }
 secrecy = { version = "0.10", default-features = false }
 serde = { version = "1", default-features = false }

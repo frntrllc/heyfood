@@ -13,13 +13,13 @@ name = "heyfood"
 path = "src/main.rs"
 
 [dependencies]
-heyfood-agent-runtime = { path = "../heyfood-agent-runtime" }
-heyfood-application = { path = "../heyfood-application" }
-heyfood-cli = { path = "../heyfood-cli" }
-heyfood-core = { path = "../heyfood-core" }
-heyfood-platform = { path = "../heyfood-platform" }
-heyfood-tui = { path = "../heyfood-tui" }
-heyfood-voice = { path = "../heyfood-voice" }
+heyfood-agent-runtime = { version = "=0.4.0", path = "../heyfood-agent-runtime" }
+heyfood-application = { version = "=0.4.0", path = "../heyfood-application" }
+heyfood-cli = { version = "=0.4.0", path = "../heyfood-cli" }
+heyfood-core = { version = "=0.4.0", path = "../heyfood-core" }
+heyfood-platform = { version = "=0.4.0", path = "../heyfood-platform" }
+heyfood-tui = { version = "=0.4.0", path = "../heyfood-tui" }
+heyfood-voice = { version = "=0.4.0", path = "../heyfood-voice" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 
 [lints]
