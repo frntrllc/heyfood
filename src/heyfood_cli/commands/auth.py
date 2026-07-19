@@ -18,7 +18,6 @@ from ..main import (
     _raise_command_error,
     _write_result,
     app,
-    banner,
     configured_config_path,
     local_urls,
     output,
@@ -210,7 +209,6 @@ def login(
         auth_url=auth_url,
         local=local,
     )
-    banner.controller.loading(main.stderr_console)
     main.stderr_console.print("[bold]Opening hello.food login...[/bold]")
     try:
         _authenticate(
@@ -281,7 +279,6 @@ def register(
             exit_code=2,
         )
 
-    banner.controller.loading(main.stderr_console, json_mode=json_mode)
     if not json_mode:
         main.stderr_console.print("[bold]Checking hello.food registration...[/bold]")
     try:

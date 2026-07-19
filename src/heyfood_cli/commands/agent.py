@@ -17,7 +17,6 @@ from ..main import (
     _validated,
     _write_result,
     app,
-    banner,
     conversation_app,
     household,
     output,
@@ -107,7 +106,6 @@ def _ask_agent(
         use_saved=use_saved_location,
         json_mode=json_mode,
     )
-    banner.controller.loading(main.stderr_console, json_mode=json_mode)
     if continue_last and conversation_id is None:
         conversation_id = client.last_conversation_id()
         if conversation_id is None:
@@ -239,7 +237,7 @@ def _ask_agent(
             visible_effect = effects.get("household_result") or effects.get("household_local_first")
             if isinstance(visible_effect, dict):
                 render.household_mutation_effect(main.console, visible_effect)
-        if show_continue_hint and not json_mode:
+        if show_continue_hint and not json_mode and not render.agent_result_is_error(final_result):
             conversation_id = final_result.get("conversation_id")
             if conversation_id:
                 main.stderr_console.print(
@@ -473,12 +471,10 @@ def chat(
     except (LoginRequired, HelloFoodError) as exc:
         _raise_command_error(exc, json_mode=False)
     chat_scope = str(initial_scope.get("id") or checking_for or "") or None
-    main.console.print(
-        "[bold green]hello.food chat[/bold green] "
-        "[dim](type /exit, /new, /household, or /for NAME)[/dim]"
-    )
+    render.chat_header(main.console)
     if initial_scope:
         render.household_scope(main.console, initial_scope)
+    render.chat_turn_gap(main.console)
 
     first_message = " ".join(initial).strip() if initial else ""
     active_choices: Optional[dict[str, Any]] = None
@@ -486,11 +482,9 @@ def chat(
         if first_message:
             text = first_message
             first_message = ""
-            line = Text("you", style="bold")
-            line.append(f" {text}")
-            main.console.print(line)
+            render.chat_user(main.console, text)
         else:
-            text = Prompt.ask("[bold]you[/bold]").strip()
+            text = Prompt.ask(render.CHAT_PROMPT, prompt_suffix="  ").strip()
 
         if not text:
             continue
@@ -552,6 +546,7 @@ def chat(
         conversation_id = client.last_conversation_id()
         choices = result.get("choices")
         active_choices = choices if isinstance(choices, dict) else None
+        render.chat_turn_gap(main.console)
 
 
 @app.command()

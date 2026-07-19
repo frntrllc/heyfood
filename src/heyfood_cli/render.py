@@ -13,6 +13,54 @@ from rich.text import Text
 from . import onboarding
 from . import banner
 from . import presentation as p
+from .theme import HEYFOOD_COLORS
+
+
+CHAT_PROMPT = f"[bold {HEYFOOD_COLORS['accent']}]you[/]"
+
+
+def chat_header(console: Console) -> None:
+    line = Text()
+    line.append("hello.food chat", style=f"bold {HEYFOOD_COLORS['accent']}")
+    line.append(
+        "  /exit · /new · /household · /for NAME",
+        style=HEYFOOD_COLORS["muted"],
+    )
+    console.print(line)
+
+
+def chat_user(console: Console, message: str) -> None:
+    line = Text()
+    line.append("you", style=f"bold {HEYFOOD_COLORS['accent']}")
+    line.append(f"  {message}", style=HEYFOOD_COLORS["bright"])
+    console.print(line)
+
+
+def chat_turn_gap(console: Console) -> None:
+    console.print()
+
+
+def agent_result_is_error(data: dict[str, Any]) -> bool:
+    status = str(data.get("status") or "").strip().casefold()
+    structured = data.get("structured")
+    structured_type = (
+        str(structured.get("type") or "").strip().casefold()
+        if isinstance(structured, dict)
+        else ""
+    )
+    return (
+        data.get("ok") is False
+        or isinstance(data.get("error"), (dict, str))
+        or status in {"error", "failed", "failure"}
+        or structured_type in {"error", "agent_error", "failure"}
+    )
+
+
+def agent_message(console: Console, message: str, *, error: bool = False) -> None:
+    if error:
+        p.render(console, [p.text_line(message, "danger")])
+        return
+    console.print(Markdown(message, style=HEYFOOD_COLORS["bright"]))
 
 
 def intro(console: Console) -> None:
@@ -463,11 +511,23 @@ def agent_result(console: Console, data: dict[str, Any]) -> None:
         "recipe_search",
         "recipe_details",
     }
+    if agent_result_is_error(data):
+        error = data.get("error")
+        if isinstance(error, dict):
+            message = error.get("message") or text or "hello.food could not complete that request."
+            hint = error.get("hint") or data.get("hint")
+        else:
+            message = error or text or "hello.food could not complete that request."
+            hint = data.get("hint")
+        agent_message(console, str(message), error=True)
+        if hint:
+            p.render(console, [p.text_line(str(hint), "muted")])
+        return
     if text and structured_type not in structured_renderers:
         if structured_type == "general_response" and isinstance(structured, dict) and structured.get("meal_nutrition"):
             p.render(console, [p.text_line(text, "accent", bold=True)])
         else:
-            console.print(Markdown(str(text)))
+            agent_message(console, str(text))
     if isinstance(structured, dict):
         if agent_structured(console, structured):
             return

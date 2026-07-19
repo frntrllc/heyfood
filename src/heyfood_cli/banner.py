@@ -1,4 +1,4 @@
-"""Terminal-safe hey.food banner rendering and once-per-process lifecycle."""
+"""Terminal-safe hey.food branding for the interactive bare-command startup."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -88,26 +88,6 @@ class BannerController:
 
     def configure(self, *, disabled: bool) -> None:
         self.disabled = disabled
-
-    def loading(
-        self,
-        console: Console,
-        *,
-        json_mode: bool = False,
-        no_input: bool = False,
-    ) -> bool:
-        if (
-            self.rendered
-            or self.disabled
-            or banner_disabled()
-            or json_mode
-            or no_input
-            or not supports_banner(console)
-        ):
-            return False
-        console.print(banner_text(color="NO_COLOR" not in os.environ))
-        self.rendered = True
-        return True
 
     def welcome(self, console: Console) -> bool:
         if (

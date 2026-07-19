@@ -57,7 +57,7 @@ def test_full_tty_banner_has_exact_plain_geometry_and_palette(monkeypatch):
     _clear_terminal_env(monkeypatch)
     console, stream = _terminal_console(width=44)
     controller = banner.BannerController()
-    assert controller.loading(console) is True
+    assert controller.welcome(console) is True
     rendered = stream.getvalue()
     assert ANSI.sub("", rendered).rstrip("\n") == banner.plain_banner()
     assert "\x1b[38;2;155;197;61m" in rendered
@@ -68,32 +68,23 @@ def test_no_color_keeps_geometry_without_ansi(monkeypatch):
     _clear_terminal_env(monkeypatch)
     monkeypatch.setenv("NO_COLOR", "1")
     console, stream = _terminal_console(width=80, color=False)
-    assert banner.BannerController().loading(console) is True
+    assert banner.BannerController().welcome(console) is True
     assert stream.getvalue().rstrip("\n") == banner.plain_banner()
     assert "\x1b" not in stream.getvalue()
 
 
-def test_loading_banner_is_suppressed_for_machine_and_inaccessible_surfaces(monkeypatch):
+def test_startup_banner_is_suppressed_for_inaccessible_surfaces(monkeypatch):
     _clear_terminal_env(monkeypatch)
-    cases = (
-        {"json_mode": True},
-        {"no_input": True},
-    )
-    for kwargs in cases:
-        console, stream = _terminal_console()
-        assert banner.BannerController().loading(console, **kwargs) is False
-        assert stream.getvalue() == ""
-
     for name, value in (("CI", "1"), ("TERM", "dumb"), ("HEYFOOD_NO_BANNER", "1")):
         monkeypatch.setenv(name, value)
         console, stream = _terminal_console()
-        assert banner.BannerController().loading(console) is False
+        assert banner.BannerController().welcome(console) is False
         assert stream.getvalue() == ""
         monkeypatch.delenv(name)
 
     stream = StringIO()
     console = Console(file=stream, force_terminal=False, width=80)
-    assert banner.BannerController().loading(console) is False
+    assert banner.BannerController().welcome(console) is False
     assert stream.getvalue() == ""
 
 
@@ -129,18 +120,18 @@ def test_welcome_suppresses_branding_on_noninteractive_surfaces(monkeypatch):
         monkeypatch.delenv(name)
 
 
-def test_loading_banner_renders_once_and_uses_no_live_cursor_controls(monkeypatch):
+def test_startup_banner_renders_once_and_uses_no_live_cursor_controls(monkeypatch):
     _clear_terminal_env(monkeypatch)
     console, stream = _terminal_console()
     controller = banner.BannerController()
-    assert controller.loading(console) is True
-    assert controller.loading(console) is False
+    assert controller.welcome(console) is True
+    assert controller.welcome(console) is False
     rendered = stream.getvalue()
     assert ANSI.sub("", rendered).count(banner.plain_banner()) == 1
     assert "\x1b[?25" not in rendered
 
 
-def test_agent_loading_banner_uses_stderr_and_json_suppresses_it(monkeypatch):
+def test_agent_never_renders_startup_banner(monkeypatch):
     from heyfood_cli import main
 
     _clear_terminal_env(monkeypatch)
@@ -164,7 +155,7 @@ def test_agent_loading_banner_uses_stderr_and_json_suppresses_it(monkeypatch):
     banner.controller = banner.BannerController()
     monkeypatch.setattr(main.banner, "controller", banner.controller)
     main._ask_agent("hello", show_continue_hint=False)
-    assert banner.plain_banner() in ANSI.sub("", stderr.getvalue())
+    assert banner.plain_banner() not in ANSI.sub("", stderr.getvalue())
     assert banner.plain_banner() not in stdout.getvalue()
 
     stdout = StringIO()
@@ -205,7 +196,7 @@ def test_agent_interrupt_restores_terminal_without_live_cursor_state(monkeypatch
         raise AssertionError("expected KeyboardInterrupt")
 
     rendered = stderr.getvalue()
-    assert banner.plain_banner() in ANSI.sub("", rendered)
+    assert banner.plain_banner() not in ANSI.sub("", rendered)
     assert rendered.count("\x1b[?25l") == rendered.count("\x1b[?25h") == 1
     assert rendered.rfind("\x1b[?25h") > rendered.rfind("\x1b[?25l")
     assert "\x1b[?1049" not in rendered

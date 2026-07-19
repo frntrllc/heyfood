@@ -8,6 +8,22 @@ authentication contracts are stabilized.
 
 _Nothing yet._
 
+## 0.3.2 - 2026-07-19
+
+### Changed
+
+- The full hey.food ASCII banner is now reserved for the interactive bare
+  `heyfood` startup journey. It no longer interrupts `ask`, `reply`, `chat`,
+  accepted voice input, authentication, registration, or menu progress.
+- Interactive chat now follows the hey.food terminal presentation contract:
+  accent-colored user prompts, bright response text, muted secondary context,
+  and deliberate spacing between turns.
+
+### Fixed
+
+- Explicit failed-agent results render as failures and no longer receive the
+  success-oriented `Continue with:` hint.
+
 ## 0.3.1 - 2026-07-18
 
 ### Fixed
