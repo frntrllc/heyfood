@@ -2,14 +2,13 @@
 
 #![forbid(unsafe_code)]
 
-fn main() {
-    let _ = (
-        heyfood_core::VERSION,
-        heyfood_application::VERSION,
-        heyfood_agent_runtime::VERSION,
-        heyfood_platform::VERSION,
-        heyfood_voice::VERSION,
-        heyfood_cli::VERSION,
-        heyfood_tui::VERSION,
-    );
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    // Phase 0 deliberately has no public fake-service or credential bootstrap
+    // switch. The released Python artifact remains authoritative until the
+    // native cutover gates provide explicit validated inputs to
+    // `run_qualified_session`.
+    eprintln!("{}", heyfood_bin::QUALIFICATION_MESSAGE);
+    ExitCode::from(78)
 }

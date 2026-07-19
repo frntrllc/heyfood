@@ -1,0 +1,22 @@
+---
+source: crates/heyfood-tui/src/render.rs
+expression: rendered
+---
+ hey.food  Ask about food, meals, restaurants, or recipes · working
+You
+Pad thai for lunch
+
+hey.food
+Pad thai can vary by preparation. Ask about fish sauce and peanut cross-contact before ordering.
+
+Responding…
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Can you suggest another option?
+
+ Enter send · Shift+Enter newline · PageUp/PageDown scroll · Ctrl+C stop · Ctrl+D exit
