@@ -1,0 +1,231 @@
+{
+  "$comment": "Stable language-neutral inventory of outbound HTTP requests plus browser and loopback listener surfaces reachable from the Python 0.3.2 client. The legacy 25-row backend fixture remains byte-for-byte at tests/fixtures/called_endpoints.json during consumer migration.",
+  "schema_version": 1,
+  "provenance": {
+    "baseline_sha": "9c6b91929143180252ad1b644aea273729a1f1b9",
+    "baseline_tree": "b3cf49317b7ccbb42389411c819a925d3e8be3b9",
+    "compatibility_fixture": "tests/fixtures/called_endpoints.json",
+    "compatibility_fixture_sha256": "11986e9dbfdfd415f6da5183321e1614ea15c1f3be12af7f32a3e5578423e1e9",
+    "compatibility_endpoint_count": 25,
+    "capture_tool": "scripts/phase0/export_contract_freeze.py",
+    "capture_tool_version": 1
+  },
+  "endpoints": [
+    {
+      "method": "GET",
+      "endpoint": "/v1/auth/capabilities",
+      "auth": "none",
+      "note": "Public, versioned registration and authorization capability preflight before any browser or OAuth action."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v1/channel/tools/profile/readiness",
+      "auth": "channel",
+      "note": "Least-privilege first-run classification without returning dietary profile contents."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v1/auth/me",
+      "auth": "session",
+      "note": "Session identity lookup (login, doctor, status)."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/auth/account-deletion/begin",
+      "auth": "session",
+      "note": "Begin browser-confirmed account deletion; requires account:delete authority."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/auth/account-deletion/status",
+      "auth": "status_capability",
+      "note": "Poll deletion state using the in-memory one-purpose status capability."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/auth/account-deletion/cancel",
+      "auth": "status_capability",
+      "note": "Cancel an active deletion transaction using its one-purpose status capability."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v1/channel/oauth/whoami",
+      "auth": "channel",
+      "note": "Channel token identity/health probe."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v1/profile/sync/members",
+      "auth": "session",
+      "note": "Household member reconciliation (household list). The v0.2.0 least-privilege regression was this endpoint returning 403 for real CLI sessions."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v1/profile/sync",
+      "auth": "session",
+      "note": "Download a member's dietary profile."
+    },
+    {
+      "method": "PUT",
+      "endpoint": "/v1/profile/sync",
+      "auth": "session",
+      "note": "Upload/merge a member's dietary profile."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v1/profile/consent",
+      "auth": "session",
+      "note": "Profile-sync consent status."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/profile/consent",
+      "auth": "session",
+      "note": "Grant profile-sync consent."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v1/meals/daily-summary",
+      "auth": "session",
+      "note": "Daily meal summary."
+    },
+    {
+      "method": "DELETE",
+      "endpoint": "/v1/channel/links/{link_id}",
+      "auth": "session",
+      "note": "Best-effort channel-link teardown on logout."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/agent/converse",
+      "auth": "session",
+      "note": "Streaming conversational agent (ask, reply, chat, log, item)."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/audio/transcriptions",
+      "auth": "channel",
+      "note": "Native voice capture: multipart WAV upload; requires the audio:transcribe scope."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/channel/tools/{name}",
+      "auth": "channel",
+      "note": "Channel-tool dispatch (search_restaurant, geocode, get_menu, recommend, search_recipes, save_recipe, list_saved_recipes, and other named tools)."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/auth/session/refresh",
+      "auth": "none",
+      "note": "Refresh the CLI session access token."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/auth/session/revoke",
+      "auth": "session",
+      "note": "Server-side session teardown on logout."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/auth/device/revoke",
+      "auth": "session",
+      "note": "Device-record teardown on logout."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/channel/oauth/cli/session",
+      "auth": "channel",
+      "note": "Exchange the channel grant for a CLI session (login and re-exchange)."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/channel/oauth/token",
+      "auth": "none",
+      "note": "Channel token issuance and refresh."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/channel/oauth/register",
+      "auth": "none",
+      "note": "Dynamic client registration during login."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/channel/oauth/device/authorize",
+      "auth": "none",
+      "note": "RFC 8628 device-authorization request (headless login)."
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v1/channel/oauth/device/token",
+      "auth": "none",
+      "note": "RFC 8628 device-token polling (headless login)."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/.well-known/oauth-authorization-server",
+      "auth": "none",
+      "note": "RFC 8414 authorization-server metadata discovery used before login; fail-soft and bounded by a five-second timeout."
+    }
+  ],
+  "browser_navigations": [
+    {
+      "source": "oauth_authorization_url",
+      "scheme_policy": "https_or_exact_loopback_http",
+      "origin": "configured_auth_url",
+      "note": "Loopback PKCE authorization page; URL is also printed when browser opening is disabled or fails."
+    },
+    {
+      "source": "device_verification_url",
+      "scheme_policy": "server_provided_validated_service_url",
+      "origin": "device_authorization_response",
+      "note": "RFC 8628 user verification page."
+    },
+    {
+      "source": "account_deletion_browser_url",
+      "scheme_policy": "https_or_exact_loopback_http",
+      "origin": "account_deletion_begin_response",
+      "note": "Browser identity-confirmation page for account deletion."
+    },
+    {
+      "source": "voice_capture_url",
+      "scheme_policy": "exact_127_0_0_1_http",
+      "origin": "local_voice_listener",
+      "note": "Ephemeral one-shot browser speech capture page carrying an unguessable state query."
+    }
+  ],
+  "local_listeners": [
+    {
+      "name": "oauth_callback",
+      "bind": "127.0.0.1",
+      "port_policy": "8765_then_ephemeral",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/callback"
+        }
+      ],
+      "note": "One-shot PKCE callback validating OAuth state before code exchange."
+    },
+    {
+      "name": "voice_capture",
+      "bind": "127.0.0.1",
+      "port_policy": "ephemeral",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/"
+        },
+        {
+          "method": "POST",
+          "path": "/submit"
+        },
+        {
+          "method": "POST",
+          "path": "/cancel"
+        }
+      ],
+      "note": "Hardened one-shot listener requiring exact Host, state, and same-origin POST checks."
+    }
+  ]
+}
