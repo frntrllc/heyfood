@@ -456,6 +456,34 @@ def test_environment_override_cannot_send_bound_channel_or_api_key(
     request.assert_not_called()
 
 
+def test_discovered_api_key_cannot_rebind_existing_production_tokens(
+    tmp_path, monkeypatch
+):
+    store = ConfigStore(tmp_path / "config.json", credential_store=None)
+    store.save(
+        {
+            "active_context": "local",
+            "credential_api_url": "https://api.hello.food",
+            "oauth": {
+                "access_token": "production-channel-secret",
+                "access_expires_at": "2999-01-01T00:00:00+00:00",
+            },
+        }
+    )
+    monkeypatch.setattr("heyfood_cli.client.DEFAULT_API_KEY", "local-api-key")
+    request = MagicMock()
+    monkeypatch.setattr("heyfood_cli.client.httpx.Client.request", request)
+
+    with pytest.raises(LoginRequired, match="different API context"):
+        HelloFoodClient(store=store, create_device=False)
+
+    persisted = store.load()
+    assert persisted["credential_api_url"] == "https://api.hello.food"
+    assert "api_key" not in persisted
+    assert persisted["oauth"]["access_token"] == "production-channel-secret"
+    request.assert_not_called()
+
+
 def test_legacy_credentials_adopt_only_the_exact_stored_api_origin(tmp_path):
     store = ConfigStore(tmp_path / "config.json", credential_store=None)
     store.save(

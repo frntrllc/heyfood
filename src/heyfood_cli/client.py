@@ -156,8 +156,14 @@ class HelloFoodClient:
         if not api_key and is_local_api_url(self.api_url):
             api_key = discover_local_api_key() or ""
         if api_key:
+            # Session/channel credentials may already be bound to another
+            # context. Validate that binding before adding a discovered key;
+            # never let local discovery or HEYFOOD_API_KEY relabel existing
+            # bearer tokens for the active origin.
+            if self._credential_material_present():
+                self._assert_credentials_bound()
             self.config["api_key"] = api_key
-            self.config["credential_api_url"] = self.api_url
+            self.config.setdefault("credential_api_url", self.api_url)
             if persist:
                 self._save()
 
