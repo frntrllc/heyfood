@@ -1,9 +1,10 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v3 — big-bang architecture review findings folded in; execution requires independent approval
+**Status:** Draft v4 — grocery client scope and accelerated execution amendment; exact-SHA re-review required
 **Baseline:** `frntrllc/heyfood` `main` at `9c6b91929143180252ad1b644aea273729a1f1b9` (`heyfood 0.3.2`)
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`
+**Active companion:** `frntrllc/hellofood` Platform P0 and Grocery Phase A directives dated 2026-07-19
 **Primary user:** a developer using hello.food throughout the working day from a terminal
 **Replacement target:** `0.4.0`, released only when the complete Rust client passes every gate
 **License:** Apache-2.0
@@ -41,6 +42,11 @@ parallel public channel, or gradual command-by-command migration.
 The Rust artifact is not released until it passes every parity, security,
 platform, installation, and end-to-end gate. Internal build artifacts may be
 used for qualification, but users never receive a partial Rust client.
+
+For grocery, this plan supersedes every Python/PyPI/released-`0.3.x` client
+implementation clause in the historical grocery CLI surface directive. That
+document remains product/contract input only; Platform P0 and Grocery Phase A
+stay backend-owned, while all terminal implementation ships in native `0.4.0`.
 
 Upon independent approval, this plan supersedes the Python/`prompt_toolkit`
 implementation choice in the reference plan. The reference plan's product,
@@ -98,6 +104,23 @@ The rewrite must port behavior and contracts, not translate files line by line.
 The current `_ask_agent()` combines validation, scope resolution, payload
 construction, SSE consumption, household effects, persistence, and rendering.
 The Rust design separates those responsibilities before building breadth.
+
+Phase 0's pre-scaffold audit verified the baseline independently: 601 collected
+node IDs and 601 passes; normalized node-ID SHA-256
+`4a37719d66f501c7603ccd366dafb894c56061325322afd5c01da4d4ae4b2ade`;
+43 command leaves; and 53 normalized `0.3.0` help fixtures. The current exporter
+omits three help entries and does not export complete JSON/API/SSE contracts, so
+it must be repaired before use. The 25-row called-endpoint fixture also omits the
+real `GET /.well-known/oauth-authorization-server` request because its extractor
+accepts only `/v1/`; Phase 0 expands the inventory to network requests, browser
+navigations, and local listeners rather than perpetuating that blind spot.
+
+The exact current asset hashes are recorded in the migration evidence, with
+private canonical provenance pinned to clean monorepo commit
+`27cab29dd3d17bb844462c8ec5340585b859b0ae`: dietary options
+`40a26e22d7e729289ef5bf4052af841adc76029711d89c89f046eba87d533556`,
+banner text `8f97c59f5eba7075891cb1aa31c300ea776a0ac57117ef290a7f7c6a07e4c50e`,
+and palette `22978be9dd03ca5a194617940d0b78a495bdf7f3ecc40729af2f1322cca0d73e`.
 
 ## Product contract
 
@@ -233,8 +256,8 @@ and resize during selection.
    stopping HTTP, auth, audio, or persistence.
 7. **Privacy by default.** Prompt history is process-memory-only; secrets and
    dietary content never enter logs.
-8. **The terminal is borrowed.** Every normal, cancelled, panicked, signaled,
-   and suspended path restores it.
+8. **The terminal is borrowed.** Every normal, cancelled, panicked, catchably
+   signaled, and suspended path restores it.
 9. **Compatibility is measured.** Rust behavior is proven against language-
    neutral fixtures exported from the Python baseline.
 10. **One complete cutover.** Python is a temporary development oracle, then
@@ -293,7 +316,7 @@ heyfood-installer ──> heyfood-core  # standalone bootstrap/manifest verifier
 - `heyfood-core` has no workspace dependencies.
 - `heyfood-application -> heyfood-core` and defines `ServicePort`,
   `CredentialPort`, `ConfigPort`, `BrowserPort`, `ClockPort`, and
-  `AudioCapturePort` traits plus use-case DTOs.
+  `AudioCapturePort` and `ClipboardPort` traits plus use-case DTOs.
 - `heyfood-agent-runtime -> heyfood-application + heyfood-core`; it implements
   authenticated API and transcription upload. It never imports CLI/TUI/platform.
 - `heyfood-platform -> heyfood-application + heyfood-core`; it implements
@@ -308,6 +331,11 @@ heyfood-installer ──> heyfood-core  # standalone bootstrap/manifest verifier
   artifact. It imports no application, API, TUI, voice, or credential code.
 - `heyfood-bin` is the only crate that depends on all implementations and
   constructs trait objects/generic compositions.
+- `heyfood-platform` emits dependency-neutral `SignalEvent` and
+  `NetworkPolicy` values defined in core/application; `heyfood-bin` translates
+  signals into TUI actions and passes network policy into the runtime. The TUI
+  retains sole ownership of terminal RAII, and runtime/platform never import
+  one another.
 - No lower layer imports a surface crate, and no adapter imports another
   adapter. `cargo metadata` plus a repository dependency-policy test enforces
   the DAG in CI.
@@ -396,6 +424,8 @@ Owns UI-independent use cases and state coordination:
 - profile readiness, onboarding, and explicit profile-sync consent;
 - ask, reply, conversation, confirmation, and household targeting;
 - meals, items, restaurants, menus, recommendations, and recipes;
+- grocery capability discovery, screened-list reads, optimistic mutations,
+  confirmation, exclusions, weekly proposals, export, and item references;
 - configuration/context/location operations;
 - single-flight workflow supervisor;
 - immutable operation snapshots and generation IDs;
@@ -411,6 +441,9 @@ Owns platform-specific adapters behind traits:
 - atomic file persistence and cross-platform locks;
 - macOS Keychain, Linux Secret Service, and Windows Credential Manager;
 - browser launch and loopback callback binding;
+- bounded native clipboard access with capability detection, explicit maximum
+  size, no background reads, sensitive-code confirmation, and a copy-mode/
+  manual-selection fallback; OSC 52 is disabled unless separately reviewed;
 - TTY/capability/SSH detection;
 - Unix signals and Windows console control events;
 - native certificate roots and enterprise proxy behavior;
@@ -694,8 +727,9 @@ schema, documentation, and installed-artifact invariant. Each ledger entry has:
   qualification IDs;
 - rationale, owner, reviewer, and reviewed commit SHA.
 
-`cargo xtask verify-migration-ledger` checks that every collected Python node
-and inventory invariant has exactly one reviewed disposition, every referenced
+The checked-in alias makes `cargo xtask verify-migration-ledger` equivalent to
+`cargo run -p xtask -- verify-migration-ledger`. It checks every collected
+Python node and inventory invariant has exactly one reviewed disposition, every referenced
 replacement exists, there are no dangling/duplicate mappings, and retirement
 entries carry approval. The committed baseline collection and generated count
 are immutable review evidence. DG-R5 requires zero unmapped items; aggregate
@@ -762,6 +796,48 @@ Rust GA includes the existing families:
 - `config path/show/validate`;
 - `account delete`.
 
+The replacement also includes the active grocery client surface when the
+deployed backend advertises `capabilities.grocery = "v1"`:
+
+- `grocery show` (default), `add`, `remove`, `bought`, `weekly`, `export`, and
+  `never`, plus the shared `confirm` continuation;
+- stable `--json` documents for every operation and headless confirmation;
+- conversational and voice grocery turns through the existing agent path;
+- version-bound item-index convenience with server IDs always available;
+- per-member informational safety annotations, substitutions,
+  `intended_for`, provenance, and ingredient-basis label guidance.
+
+Deterministic grammar is `grocery add "<item>"...`; recipe expansion uses
+`grocery add --recipe <ref>...`; non-interactive/JSON `grocery weekly` requires
+explicit `--recipe <ref>...`, while the TUI may offer a saved-recipe picker.
+Free-form dish language routes through the shared agent turn, never a REST
+parser pretending to understand it. The item index cache is owner-only,
+account/list/version-bound, expiring, cleared on account switch, and never
+authoritative; server item IDs always work. Unknown capability versions are
+unsupported rather than guessed compatible with v1.
+
+The backend/platform grocery team owns `HouseholdContextResolver`, typed
+safety-result metadata, generalized confirmation, optional scope tiers,
+capabilities, the grocery domain/application service, tools, and REST APIs.
+The Rust program owns all CLI grammar, TUI/voice interaction, rendering,
+fixtures consumed by the client, and released-artifact qualification. No
+Python grocery client is implemented or published during the transition.
+
+Crate ownership is explicit: core owns versioned grocery wire/semantic types;
+agent-runtime owns capability discovery, scoped REST calls, and grocery tool
+events; application owns optimistic-list and confirmation use cases; CLI owns
+grammar/JSON/classic output; TUI owns list/card interaction and presentation.
+Voice remains a generic input adapter and contains no grocery-specific code.
+Python `0.3.2` cannot be a differential oracle for this net-new behavior;
+authoritative backend fixtures plus reviewed Rust client snapshots are the
+source of truth.
+
+Rust requests `grocery:read`/`grocery:write` only after deployed RFC 8414 scope
+intersection and versioned application-capability discovery prove support.
+Capability absence is an ordinary typed unavailable state; an existing session
+missing optional grocery scopes receives an explicit re-authentication path,
+never a raw 403 or a broken ordinary conversation.
+
 No command is silently dropped because it is not visible in the TUI. One-shot
 commands remain a first-class developer interface.
 
@@ -821,7 +897,7 @@ requirements independent of whether the optional Python importer exists:
 | macOS Intel | `x86_64-apple-darwin` | signed/notarized tarball |
 | Linux x86-64 | `x86_64-unknown-linux-gnu` | tarball |
 | Linux ARM64 | `aarch64-unknown-linux-gnu` | tarball |
-| Windows x86-64 | `x86_64-pc-windows-msvc` | signed zip/MSI or installer package |
+| Windows x86-64 | `x86_64-pc-windows-msvc` | Authenticode-signed `heyfood.exe` in a Sigstore-attested zip, installed per-user by `install.ps1` |
 
 Windows ARM64 and musl/static Linux are follow-up targets after demand and
 dependency qualification. GA documentation must not claim them early.
@@ -891,7 +967,8 @@ their hashes and Sigstore bundles are published beside them.
 
 The scripts contain a reviewed per-target SHA-256 table for a small immutable
 `heyfood-installer` bootstrap binary. They download that binary from an exact
-GitHub release URL, verify its bootstrap hash before execution, and never fetch
+GitHub release URL, verify its bootstrap hash and the applicable macOS Developer
+ID/notarization or Windows Authenticode signature before execution, and never fetch
 or execute a dynamic `cosign`, package manager, arbitrary URL, or shell token.
 The native bootstrap has the pinned identities/trust roots above and performs:
 
@@ -1004,6 +1081,7 @@ features, telemetry, services, or internal dependencies.
 | `Cargo.toml` | Workspace members, shared dependency/features/profile policy |
 | `Cargo.lock` | Committed exact dependency graph |
 | `rust-toolchain.toml` | Pinned stable toolchain and components |
+| `.cargo/config.toml` | Portable `cargo xtask` alias to `cargo run -p xtask --` |
 | `deny.toml` | License, source, advisory, duplicate policy |
 | `crates/heyfood-core/**` | Domain/wire/config/presentation/error contracts |
 | `crates/heyfood-agent-runtime/**` | Authenticated HTTP/SSE/cancellation runtime |
@@ -1032,6 +1110,8 @@ features, telemetry, services, or internal dependencies.
 | `scripts/verify_artifacts.py` | Temporary helper, then replaced by native archive/manifest/SBOM/provenance verification |
 | `fixtures/compat/**` | Language-neutral Python/Rust interface fixtures |
 | `fixtures/api/**` | Requests, responses, SSE streams, error/timeout cases |
+| `fixtures/contracts/grocery-backend/**` | Mirrored authoritative capability, scope, entity, confirmation, conflict, safety, tool, and export wire contracts with backend source SHA/provenance |
+| `fixtures/grocery-client/**` | Rust-owned `--json`, semantic presentation, TUI, classic, and error snapshots |
 | `fixtures/config/**` | Native schema plus optional one-time Python import fixtures |
 | `fixtures/presentation/**` | Semantic documents and renderer snapshots |
 | `fixtures/contracts/called-endpoints.json` | Stable client/backend API and auth contract inventory |
@@ -1040,6 +1120,7 @@ features, telemetry, services, or internal dependencies.
 | `crates/heyfood-core/tests/**` | Schema, validation, redaction, presentation parity |
 | `crates/heyfood-agent-runtime/tests/**` | Wire, SSE, timeout, cancellation, no-replay tests |
 | `crates/heyfood-application/tests/**` | Use-case, single-flight, generation, overlap tests |
+| `crates/heyfood-application/tests/grocery_*` | Grocery optimistic-concurrency, confirmation, capability, and no-auto-write tests |
 | `crates/heyfood-platform/tests/**` | Credentials, permissions, atomic writes, signals |
 | `crates/heyfood-voice/tests/**` | Capture/transcribe/review/consent/cancel tests |
 | `crates/heyfood-cli/tests/**` | Help, grammar, JSON, exits, differential fixtures |
@@ -1177,10 +1258,18 @@ and evidence receive independent review.
 7. Prove native config/credential creation and evaluate the optional read-only
    Python importer without making it an exit dependency.
 8. Inventory backend idempotency and release metrics.
-9. Pin the Grok reference/provenance record.
-10. Record dependency licenses, platform minimums, system-library requirements,
-    release-hardware ownership, and signing/trust-bootstrap prerequisites.
-11. Produce a written spike result with measured startup, input latency,
+9. Establish the grocery contract import/provenance tool and fixture namespace;
+   consume Platform P0 C3/C4 schemas as they land and record C1–C4 plus Grocery
+   Phase A as external dependencies without serializing the Rust spike behind
+   unfinished backend work. Authoritative Phase A fixtures must be frozen before
+   Phase 2 grocery implementation, and the deployed `grocery: "v1"` capability
+   is mandatory before Phase 6 cutover.
+10. Pin the Grok reference/provenance record.
+11. Record dependency licenses, platform minimums, system-library requirements,
+    release-hardware ownership, and signing/trust-bootstrap prerequisites,
+    including the exact protected GitHub environment name and OIDC subject/
+    audience expressions used by the pinned Sigstore identity.
+12. Produce a written spike result with measured startup, input latency,
    cancellation, restoration, artifact size, and unresolved platform gaps.
 
 **Exit gate:** DG-R1 passes; no terminal/resource leak exists; the migration
@@ -1202,6 +1291,10 @@ security review. If rejected, stop before broad port.
 5. Build temporary Rust/Python differential harnesses from exported fixtures.
 6. Prove clean native state, account switching, interrupted-write recovery, and
    secret/file permissions on every platform; test optional import separately.
+7. Add grocery capability/entity/safety/confirmation/error types and semantic
+   documents from mirrored backend contracts, plus application DTOs and the
+   account-bound item-reference cache policy; do not duplicate backend
+   canonicalization, screening, retention, or purchase-history models.
 
 **Exit gate:** DG-R3 passes; core fixtures match Python; no secret/dietary data
 enters logs; state races, interrupted persistence, refresh-token rotation, and
@@ -1217,6 +1310,10 @@ review approves the foundation.
 4. Match command help, arguments, JSON, errors, exit codes, endpoints, payloads,
    scope, location, household, and confirmation fixtures.
 5. Add shell completion and classic chat.
+6. Implement the capability-gated `grocery` command family, optimistic list
+   versioning, stable item IDs/index map, export, and structured headless
+   confirmation against fixtures; do not enable it against an unadvertised
+   backend.
 
 **Exit gate:** DG-R2 is recorded; all one-shot command families meet the
 approved parity matrix or carry an explicit blocking exception; JSON is one
@@ -1232,10 +1329,14 @@ passes.
    household scope, location, new/resume conversation, errors, and retry
    uncertainty guidance.
 3. Enforce single-flight behavior and queued-draft explicit resubmission.
-4. Add PTY/ConPTY tests for resize, narrow width, paste, key fallbacks, panic,
+4. Add the screened grocery-list viewport and confirmation/edit/cancel flow:
+   visible provenance, ingredient-basis disclaimer, per-member informational
+   annotations, substitutions, intended-for emphasis, stale-list conflict, and
+   narrow-terminal behavior. No mutation commits on natural-language assent.
+5. Add PTY/ConPTY tests for resize, narrow width, paste, key fallbacks, panic,
    signals, suspend/resume, restoration, scroll/follow-tail, unseen indicators,
    copy, focus, long wrapped/code/list content, choices, and error states.
-5. Add classic/`NO_COLOR`/no-animation/no-TUI accessibility paths.
+6. Add classic/`NO_COLOR`/no-animation/no-TUI accessibility paths.
 
 **Exit gate:** the internal qualification binary delivers a responsive
 persistent TUI; terminal restoration and resource budgets pass every platform;
@@ -1251,6 +1352,9 @@ TUI/product/accessibility review passes.
 3. Preserve one-shot command parity for every workflow.
 4. Exercise clean-machine, returning, partial-profile, interrupted onboarding,
    account switch, SSH, offline, and service-failure journeys.
+5. Exercise typed conversational grocery journeys through the shared turn path,
+   including capability absence, missing optional scopes, household annotations,
+   confirmation, cancellation, and expiry.
 
 **Exit gate:** a net-new user runs one internal qualification binary,
 registers, authenticates, onboards, and completes a useful typed turn without
@@ -1261,14 +1365,17 @@ independent auth/privacy/UX review passes.
 
 1. Implement native/browser capture, processor consent, transcription, review,
    edit/re-record/type/cancel, and submission through the shared turn path.
-2. Qualify real hardware and permissions for the advertised matrix.
-3. Build the native bootstrap verifier, immutable `install.sh`/`install.ps1`,
+2. Exercise real-microphone grocery turns through that generic path, including
+   transcript review and structured confirmation; add no grocery-specific audio
+   capture or consent implementation.
+3. Qualify real hardware and permissions for the advertised matrix.
+4. Build the native bootstrap verifier, immutable `install.sh`/`install.ps1`,
    JCS manifest, Sigstore bundles, hashes, SBOMs, provenance, macOS signing/
    notarization, Windows signing, and Linux artifacts.
-4. Exercise clean install, exact version, same-version repair, downgrade-floor,
+5. Exercise clean install, exact version, same-version repair, downgrade-floor,
    manifest halt, `0.4.1` fix-forward rehearsal, uninstall, proxy/custom CA,
    offline limitations, trust-root/identity rotation, and no-admin paths.
-5. Build the complete DG-R5 repository/package/workflow deletion as a reviewed
+6. Build the complete DG-R5 repository/package/workflow deletion as a reviewed
    but not-yet-merged cutover change.
 
 **Exit gate:** DG-R4/R5/R6 pass; voice is one continuous TUI turn; public-style
@@ -1291,13 +1398,16 @@ release review passes.
    validate that the archived Python source tag is retrievable for an
    owner-authorized emergency change without treating it as a runtime fallback
    or supported product path.
-6. Merge the single DG-R5 cutover only after installed-artifact clean-user,
-   returning-user, one-shot JSON, interactive typed, and real-hardware voice
-   journeys pass.
-7. Cut `0.4.0` from the Rust-only repository state.
-8. Promote native `install.sh`/`install.ps1`, documentation, landing-page
+6. Verify Production advertises `capabilities.grocery = "v1"`, the deployed
+   Phase A contract digest matches the mirrored fixture provenance, and a
+   least-privilege released-candidate session receives the optional scopes.
+7. Merge the single DG-R5 cutover only after installed-artifact clean-user,
+   returning-user, one-shot JSON, interactive typed, real-hardware voice, and
+   capability-advertised grocery journeys pass.
+8. Cut `0.4.0` from the Rust-only repository state.
+9. Promote native `install.sh`/`install.ps1`, documentation, landing-page
    animations, and support runbooks atomically; retire PyPI guidance.
-9. Observe for 24 hours with named release owner `admin@frntr.ai` and recover
+10. Observe for 24 hours with named release owner `admin@frntr.ai` and recover
    or stop promotion on any critical journey failure, terminal restoration
    defect, installer/signature failure, or failure rate above both 5% and twice
    the baseline at 20+ events.
@@ -1350,6 +1460,10 @@ plan complete.
   local-first effect, scope/location change, and queued draft;
 - native/browser voice success, permissions, no device, scope loss, timeout,
   cancel, processor consent, and typed fallback;
+- grocery capability absent/present, optional-scope re-authentication, show,
+  add/remove/bought/weekly/never/export, list-version conflict, structured
+  accept/edit/cancel, idempotent replay, member annotations, ingredient-basis
+  wording, conversational and real-microphone voice journeys;
 - clean native state plus optional read-only Python config/keyring import.
 - manifest bootstrap, wrong issuer/repository/workflow/tag, tampered JCS,
   invalid/offline Rekor proof, target/hash/size mismatch, downgrade, halt,
@@ -1413,12 +1527,20 @@ plan complete.
     orphaned by Python deletion.
 22. The inaugural-release halt/fix-forward drill succeeds before `0.4.0`; the
     plan never claims a nonexistent prior-native rollback.
+23. Production advertises grocery v1 before `0.4.0` cutover, and the installed
+    Rust artifact provides the complete one-shot, JSON, TUI, conversational, and
+    voice grocery surface; every write requires generalized structured
+    confirmation and stale list versions fail without mutation. Capability-
+    absent behavior remains tested for development/older servers without
+    weakening ordinary CLI use.
 
 ## Risks and controls
 
 | Risk | Control |
 |---|---|
 | Big-bang cutover ships an incomplete client | No public partial release; full command/TUI/voice/platform parity and DG-R5 gate the single cutover |
+| Grocery backend and Rust client evolve against different assumptions | Backend team retains platform/domain ownership; versioned language-neutral fixtures and deployed capability gate every Rust surface |
+| Grocery work causes disposable Python implementation | Explicit prohibition on Python grocery client/release work; client effort starts in shared Rust application and presentation crates |
 | Rust scope expands into local agent platform | Explicit hosted-runtime boundary and non-goals |
 | TUI state becomes monolithic | Crate boundaries, pure dispatch, supervised effects, thin binary |
 | Terminal corruption | Sole terminal guard, ordered restoration, panic/signal/ConPTY PTY tests |
@@ -1437,6 +1559,29 @@ plan complete.
 | Critical defect in first native GA has no native rollback | Signed manifest halt, landing-page withdrawal, rehearsed `0.4.1` fix-forward, separately authorized emergency source recovery |
 | Grok source is copied indiscriminately | Pinned pattern-only default and origin-ledger/license gate |
 | Timeline pressure weakens gates | Phase exit reviews; slip moves release date, not acceptance criteria |
+
+## Accelerated execution challenge
+
+The team will attempt a 72-hour code-complete integration sprint using parallel,
+non-overlapping ownership. This is a delivery challenge, not permission to
+waive the phase exit gates:
+
+- **Day 1:** freeze ledger/contracts/assets; scaffold the enforced workspace;
+  land core semantic types, platform ports, fixture HTTP/SSE path, and a minimal
+  retained TUI shell.
+- **Day 2:** parallelize agent runtime plus one-shot JSON, terminal application,
+  auth/config/onboarding, and voice/grocery use cases; integrate continuously
+  behind shared fixtures rather than long-lived divergent branches.
+- **Day 3:** complete command registry breadth, wire the single-command journey,
+  run differential/PTY/platform tests, resolve integration findings, and produce
+  an internal installed-artifact candidate plus an exact remaining-gap ledger.
+
+The sprint succeeds only if the repository contains one coherent implementation
+and every unclosed acceptance criterion is explicit. It may produce the full
+candidate faster than the planning estimate; it cannot declare GA while signing,
+real-hardware, backend-deployment, security, or installed-artifact evidence is
+missing. Agents own disjoint files/crates, never delete the Python oracle before
+DG-R5, and every integration phase receives independent review.
 
 ## Effort and staffing reality
 
