@@ -1,6 +1,6 @@
 # heyfood interactive terminal session plan
 
-**Status:** Draft v1 — committed review candidate; execution requires independent approval
+**Status:** Draft v2 — first review findings folded in; execution requires independent approval
 **Baseline:** `frntrllc/heyfood` `main` at `9c6b91929143180252ad1b644aea273729a1f1b9` (`heyfood 0.3.2`)
 **Primary user:** a developer running bare `heyfood` in an interactive terminal
 **Release target:** `0.4.0` after all gates pass
@@ -70,8 +70,9 @@ such as Claude Code or Grok Build.
 
 ### Grok Build reference implementation
 
-The local Apache-2.0 Grok Build source at `~/Dev/grok-build` demonstrates the
-interaction patterns worth adapting:
+The local Apache-2.0 Grok Build source at `~/Dev/grok-build`, reviewed at exact
+commit `b189869b7755d2b482969acf6c92da3ecfeffd36`, demonstrates the interaction
+patterns worth adapting:
 
 - a thin event loop delegates input, state, and drawing to an application view;
 - explicit application states replace scattered booleans;
@@ -88,9 +89,11 @@ interaction patterns worth adapting:
   presentation modes over shared session behavior.
 
 heyfood must not copy Grok's coding-agent scope, Rust architecture, source
-layout, or complexity. We are learning from interaction and reliability
-patterns. Any future direct source adaptation requires a provenance note and
-Apache-2.0 attribution/NOTICE review before merge.
+layout, or complexity. The default is pattern-only learning with no copied
+source. Any direct adaptation requires separate approval plus an origin ledger
+naming the Grok source path and commit, heyfood destination, modifications,
+applicable copyright/attribution, and review of Grok's `LICENSE` and relevant
+third-party notices before adapted code enters a commit.
 
 ## Product contract
 
@@ -191,10 +194,14 @@ security- or capability-gated commands fail closed.
 
 ### A1 — `prompt_toolkit` is the terminal application foundation
 
-Add `prompt-toolkit>=3.0,<4` as a core dependency. It provides the Python-native
-primitives required here: an application loop, retained layout, buffer,
-keybindings, completion, resize handling, formatted text, async invalidation,
-alternate-screen support, bracketed paste, and terminal restoration.
+Add `prompt-toolkit` as a core dependency. Phase 0 begins with a provisional
+`>=3.0,<4` evaluation range, then records a tested minimum and a bounded minor
+upper range before implementation dependencies are committed. Test both bounds
+on Python 3.11–3.13 and record package license metadata. It provides the
+Python-native primitives required here: an application loop, retained layout,
+buffer, keybindings, completion, resize handling, formatted text, async
+invalidation, alternate-screen support, bracketed paste, and terminal
+restoration.
 
 Textual is not selected for this iteration because heyfood needs a focused
 conversation surface rather than a general widget framework, and its larger
@@ -214,8 +221,10 @@ engine.
 - `heyfood chat` launches the same application by default.
 - `heyfood chat --classic` preserves a line-oriented, accessible fallback for
   at least one minor release.
-- `HEYFOOD_NO_TUI=1`, `TERM=dumb`, an unsupported terminal, or a screen-reader
-  preference selects classic mode.
+- `HEYFOOD_NO_TUI=1`, `TERM=dumb`, or an unsupported terminal selects classic
+  mode. There is no portable automatic screen-reader detector; documentation
+  and first-run help explicitly identify `--classic` and `HEYFOOD_NO_TUI=1` as
+  the accessibility opt-outs.
 - Non-TTY bare invocation remains side-effect-free and prints concise help; it
   never starts browser auth, registration, or onboarding.
 
@@ -228,7 +237,11 @@ Refactor `_ask_agent()` into a UI-independent `TurnService` that owns:
 
 - payload construction and validated context;
 - conversation and target selection;
-- idempotency/request identifiers;
+- a new tracing `X-Request-ID` for each transport attempt;
+- a stable logical-operation ID, idempotency key, and request fingerprint
+  across an explicitly safe replay, when the backend contract supports them;
+- preservation of any server-issued pending-confirmation ID/key as a separate
+  contract;
 - client streaming and event normalization;
 - explicit service failure recognition;
 - conversation ID persistence;
@@ -236,9 +249,41 @@ Refactor `_ask_agent()` into a UI-independent `TurnService` that owns:
 - redacted diagnostics.
 
 The existing one-shot renderer subscribes synchronously. The session app runs
-the blocking HTTP iterator in a worker thread and forwards typed `SessionEvent`
-objects through an async queue. The UI event loop must never block on HTTP,
+blocking work outside the UI loop and forwards typed `SessionEvent` objects
+through bounded async queues. The UI event loop must never block on HTTP,
 browser auth, keyring, microphone capture, transcription, or file I/O.
+
+Operation IDs and late-event suppression are defense-in-depth, not
+cancellation. Phase 0 defines a `CancellableOperation` contract for agent SSE,
+loopback auth, device polling, browser voice, native capture, and
+transcription. Each operation owns:
+
+- a cancellation token/event;
+- finite connect/read/write/pool or polling deadlines;
+- the close handle for its HTTP response/client, callback server, poller, or
+  microphone stream;
+- a bounded event queue with an explicit backpressure/coalescing policy;
+- an idempotent `cancel()` that closes the owned resource;
+- a bounded join/exit deadline and a terminal outcome of completed, cancelled,
+  timed out, or failed.
+
+The initial close budget is 500 ms for microphone capture, 2 seconds for an
+HTTP stream/callback server/device poller, and 3 seconds for total application
+exit. HTTP connects, writes, and pool acquisition use finite deadlines; an SSE
+read uses a finite heartbeat/inactivity deadline agreed with the service rather
+than `timeout=None`. Phase 0 may tighten these values with evidence but may not
+make them unbounded.
+
+The session may not rely on cancelling an `asyncio` future to stop a blocking
+thread. Exit tests must prove there are no surviving operation threads,
+sockets, callback listeners, pollers, or microphone streams.
+
+`X-Request-ID` is tracing, not replay protection. Until Production
+`/v1/agent/converse` is verified to accept a stable idempotency key plus
+fingerprint, heyfood performs no automatic conversational POST retry after an
+uncertain response. If the server lacks this contract, a separately reviewed
+backend prerequisite must add it before reconnect/retry is enabled; the CLI
+may still provide a user-initiated new turn with clear uncertainty guidance.
 
 ### A4 — State is explicit and reducible
 
@@ -254,20 +299,31 @@ Define a single session state model with, at minimum:
 - `STREAMING`;
 - `VOICE_STARTING`;
 - `VOICE_RECORDING`;
+- `TRANSCRIBING`;
 - `VOICE_REVIEW`;
 - `CANCELLING`;
 - `ERROR`;
 - `EXITING`.
 
 Events and actions are typed. Each background operation carries an operation
-ID; late events from cancelled or replaced work are ignored. State transitions
-are unit-testable without a terminal or network.
+ID and the cancellable resource contract from A3; late events from cancelled
+or replaced work are ignored. State transitions are unit-testable without a
+terminal or network.
 
 ### A5 — Presentation remains semantic
 
-`presentation.py` remains the shared semantic result model. Add an interactive
-adapter that converts trusted presentation blocks and Markdown into
-`prompt_toolkit` formatted text. Keep Rich for one-shot output.
+Replace the current partial presentation seam with a UI-neutral
+`PresentationDocument` builder. Every supported agent result type, error,
+choice, progress event, and continuation side effect must become a semantic
+document before rendering. Semantic selection accepts no `Console`, performs
+no writes, and imports neither Rich nor `prompt_toolkit`.
+
+Rich and interactive formatted-text renderers are leaf adapters over identical
+documents. Add fixtures asserting document equality before renderer-specific
+goldens. Service Markdown is restricted to an explicit allowlist (paragraphs,
+emphasis, lists, code, and validated links); unsupported constructs degrade to
+literal/plain text. No renderer may independently rediscover dietary result
+types or success/failure semantics.
 
 Service text is always data:
 
@@ -309,14 +365,25 @@ Rich prompts so the TUI can present them as stateful panels/overlays.
 - A net-new user sees `Create account` as the primary action and `Sign in` as
   the secondary action.
 - Successful registration proceeds immediately to onboarding.
-- Browser/device authorization uses `prompt_toolkit` terminal suspension or
-  `run_in_terminal()` so the browser can open without corrupting the frame.
+- Only the `webbrowser.open` handoff uses `prompt_toolkit` terminal suspension
+  or `run_in_terminal()`. Authorization waiting remains a cancellable
+  background operation with live in-session status.
+- A local desktop TTY defaults to loopback PKCE. SSH, headless use, loopback
+  bind failure, or suppression of browser launch selects/offers RFC 8628-style
+  device authorization instead; the CLI never tries to launch a local browser
+  for a remote callback.
+- The verification URL and short code remain visible and copyable until the
+  operation completes, expires, or is cancelled.
+- Cancellation closes the loopback callback server or device poller within the
+  A3 exit bound.
 - The app redraws on return and clearly handles expired, denied, or abandoned
   codes.
 - The canonical public origin is `https://auth.hello.food`; deployment-provider
   hostnames must never appear in normal user journeys.
 - Existing fail-closed scope, capability, HTTPS, token-storage, and onboarding
   contracts remain unchanged.
+- Profile-sync consent is a distinct, explicit, tested action. It is never
+  implied by account creation, authentication, or onboarding submission.
 
 ### A8 — Voice is a first-class composer input
 
@@ -326,7 +393,11 @@ Integrate the existing voice modules behind a session `VoiceController`.
 - Recording state and elapsed time are visible without scrolling the composer
   away.
 - `Esc` cancels; the same voice binding or `Enter` stops capture.
-- Partial/final transcription updates are tied to the initiating operation ID.
+- `0.4.0` uses the capabilities that exist today:
+  `VOICE_RECORDING -> TRANSCRIBING -> VOICE_REVIEW`, with elapsed recording
+  time and one final transcript tied to the initiating operation ID. Partial
+  transcription is not promised. A future streaming-transcription path needs
+  a separately reviewed backend/client deliverable.
 - The transcript enters an in-session review surface with Accept, Edit, Record
   again, Type instead, and Cancel.
 - Accepting a transcript populates/submits through the same turn service as
@@ -334,6 +405,9 @@ Integrate the existing voice modules behind a session `VoiceController`.
 - Missing hardware, missing optional dependencies, denied permissions, lost
   scope, timeout, and transcription failure keep the session usable and offer
   typed fallback.
+- The current default-no browser-vendor consent disclosure is preserved. The
+  session never silently switches voice processors, and `Esc`/exit closes the
+  microphone immediately through the A3 cancellation contract.
 - Real-microphone release qualification remains mandatory on supported macOS
   hardware; a no-microphone test alone is insufficient.
 
@@ -351,16 +425,32 @@ state contract; message content may not be added to it by this project.
 
 ### A10 — Terminal ownership and recovery are centralized
 
-Create one `TerminalSession` lifecycle boundary responsible for:
+`prompt_toolkit.Application` and its renderer are the sole owners of terminal
+mode sequences. `TerminalSession` composes and supervises the application; it
+must not duplicate raw/alternate-screen operations or install competing input
+readers.
 
-- capability detection before raw-mode takeover;
-- alternate-screen entry and exit;
-- cursor visibility;
-- bracketed paste and optional mouse modes;
-- resize and redraw;
-- browser/editor/child suspension and restoration;
-- `SIGINT`, `SIGTERM`, `SIGHUP`, and suspend/resume behavior where supported;
-- final restoration in `finally`, including unexpected exceptions.
+| Responsibility | Sole owner |
+|---|---|
+| Raw/cooked mode, alternate screen, cursor, bracketed paste | `prompt_toolkit` application/renderer |
+| Resize detection, invalidation, frame drawing | `prompt_toolkit` application/renderer |
+| Capability selection before application launch | `TerminalSession` |
+| Background operation supervision and cancellation | `TerminalSession` + A3 operation handles |
+| Browser/child suspension coordination | `TerminalSession` through supported `prompt_toolkit` APIs |
+| State-normalized exit and post-restore crash output | `TerminalSession` |
+
+Signal behavior is explicit:
+
+- `SIGINT`/`Ctrl+C` follows the composer/active-turn contract and exits `130`
+  only after the confirmed idle-exit path;
+- `SIGTERM` cancels resources, lets the application restore, and exits `143`;
+- `SIGHUP` cancels resources, restores where the TTY remains available, and
+  exits `129`;
+- `SIGTSTP`/resume uses supported application suspension on Unix and forces a
+  capability/redraw check after resume;
+- platforms or embedding environments where handlers cannot be installed use
+  `prompt_toolkit` defaults plus `finally` cleanup and record that limitation in
+  the terminal matrix.
 
 Crash reporting happens only after terminal restoration and remains redacted.
 No feature module may write ANSI mode sequences directly.
@@ -389,19 +479,91 @@ src/heyfood_cli/
     └── voice.py              # session voice controller
 ```
 
-Exact modules may be consolidated during Phase 0 if responsibilities stay
-separate. Do not create one monolithic `tui.py` or move network/business rules
-into widgets.
+Phase 0 may propose a path change, but it must update this table and receive
+review before implementation. Do not create one monolithic `tui.py` or move
+network/business rules into widgets.
 
-Expected existing-file changes include `pyproject.toml`, `main.py`,
-`commands/agent.py`, `commands/auth.py`, `presentation.py`, `render.py`,
-`banner.py`, `README.md`, and release documentation.
+### Exact deliverables map
+
+| Path | Change | Review responsibility |
+|---|---|---|
+| `pyproject.toml` | Add bounded `prompt-toolkit` dependency and PTY/performance test dependencies | Packaging and supply chain |
+| `src/heyfood_cli/main.py` | Lazy TUI launch, root-option forwarding, classic/capability selection | CLI compatibility |
+| `src/heyfood_cli/commands/agent.py` | Delegate ask/reply/chat behavior to shared turn/session services; preserve option contracts | Command compatibility |
+| `src/heyfood_cli/commands/auth.py` | Delegate registration/login/onboarding operations without duplicating prompts | Auth compatibility |
+| `src/heyfood_cli/client.py` | Cancellable SSE ownership, finite timeouts, separate tracing/idempotency headers after contract verification | Transport/security |
+| `src/heyfood_cli/auth.py` | Expose cancellable loopback/device primitives and deterministic resource close | Auth/security |
+| `src/heyfood_cli/auth_application.py` | Add transport selection and UI-neutral auth state operations | Auth architecture |
+| `src/heyfood_cli/onboarding.py` | Expose UI-neutral onboarding actions and explicit profile-sync consent | Privacy/product |
+| `src/heyfood_cli/presentation.py` | Define complete `PresentationDocument` builders for every supported result/event | Safety/presentation |
+| `src/heyfood_cli/render.py` | Become the Rich leaf adapter over semantic documents | One-shot UX |
+| `src/heyfood_cli/banner.py` | Expose canonical non-blocking animation frames/timing without owning terminal mode | Brand/terminal safety |
+| `src/heyfood_cli/voice_capture.py` | Extract cancellable capture/transcribe/review operations; preserve processor consent | Voice/privacy |
+| `src/heyfood_cli/voice_native.py` | Guarantee immediate idempotent microphone close on cancellation | Voice/resource safety |
+| `src/heyfood_cli/application/__init__.py` | Application-layer package boundary | Architecture |
+| `src/heyfood_cli/application/auth_flow.py` | UI-neutral registration/login operations and outcomes | Auth architecture |
+| `src/heyfood_cli/application/onboarding_flow.py` | UI-neutral onboarding operations and outcomes | Product architecture |
+| `src/heyfood_cli/application/turns.py` | `TurnService`, logical operations, normalized events, cancellation | Transport/product |
+| `src/heyfood_cli/session/__init__.py` | Lazy interactive-session public entry point | Import isolation |
+| `src/heyfood_cli/session/app.py` | Composition root and application loop | TUI architecture |
+| `src/heyfood_cli/session/state.py` | State, reducer, operation identities | State correctness |
+| `src/heyfood_cli/session/events.py` | Typed input/background/session events | State correctness |
+| `src/heyfood_cli/session/layout.py` | Responsive retained layout | UX/accessibility |
+| `src/heyfood_cli/session/composer.py` | Editing, paste, memory-only history, completion | Input/privacy |
+| `src/heyfood_cli/session/commands.py` | Slash registry, availability, argument parsers, handlers | Command UX |
+| `src/heyfood_cli/session/scrollback.py` | Bounded semantic transcript | Memory/privacy |
+| `src/heyfood_cli/session/renderer.py` | `PresentationDocument` formatted-text leaf adapter | Presentation parity |
+| `src/heyfood_cli/session/terminal.py` | Capability selection, application supervision, suspension, signal outcomes | Terminal safety |
+| `src/heyfood_cli/session/auth.py` | TUI auth/registration controller | Auth UX |
+| `src/heyfood_cli/session/onboarding.py` | TUI onboarding controller | Onboarding UX |
+| `src/heyfood_cli/session/voice.py` | TUI voice state/controller | Voice UX |
+| `tests/test_session_state.py` | Reducer, operation identity, late-event tests | State gate |
+| `tests/test_session_cancellation.py` | Thread/socket/server/poller/microphone teardown fault tests | Resource gate |
+| `tests/test_session_terminal_pty.py` | Launch, keys, paste, resize, signals, suspend, restoration | Terminal gate |
+| `tests/test_session_layout.py` | Width/theme/motion/accessibility golden tests | Visual gate |
+| `tests/test_session_commands.py` | Registry, completion, aliases, availability, parsing | Command gate |
+| `tests/test_presentation_documents.py` | Complete result mapping and semantic parity fixtures | Safety/presentation gate |
+| `tests/test_auth_transport_selection.py` | Desktop/SSH/headless/bind-failure/device selection and cancellation | Auth gate |
+| `tests/test_session_onboarding.py` | New, partial, consent, resume, and failure states | Onboarding gate |
+| `tests/test_session_voice.py` | Recording/transcribing/review/cancel/processor-consent behavior | Voice gate |
+| `tests/test_session_compatibility.py` | Root/chat option, lazy import, classic, exit-code compatibility | CLI gate |
+| `tests/test_output_contract.py` | Extend real/simulated-TTY JSON isolation assertions | Automation gate |
+| `tests/test_package_metadata.py` | Dependency bounds, licenses, wheel/sdist contents | Packaging gate |
+| `tests/test_installer.py` | `pipx`, hosted installer, upgrade, rollback artifact | Release gate |
+| `docs/interactive-session.md` | Keyboard, commands, terminal support, privacy, accessibility fallback | User documentation |
+| `README.md` | Bare-command journey and classic fallback | Public documentation |
+| `CHANGELOG.md` | `0.4.0` behavior and compatibility | Release documentation |
+| `RELEASING.md` | Qualification, monitoring, rollback drill | Operations |
+| `docs/references/grok-build-provenance.md` | Pinned SHA, pattern-only record, or approved origin ledger | License/provenance |
+
+### Existing option compatibility map
+
+| Existing surface | `0.4.0` behavior |
+|---|---|
+| bare `heyfood` | Launch TUI only on a supported interactive TTY; otherwise retain concise non-interactive intro with no side effects |
+| root `--version` | Exit before importing `prompt_toolkit` or any session module |
+| root `--no-banner` | Launch TUI without the startup banner/animation; never affect response rendering |
+| root `--verbose` | Preserve redacted stderr diagnostics; no prompt/body content and no direct writes over the active frame |
+| `heyfood chat [INITIAL...]` | Launch TUI and queue the joined initial message only after readiness; render it as user input |
+| `chat --new` | Clear the existing conversation ID before the first session turn |
+| `chat --no-input` | Continue to reject with the existing automation guidance and exit semantics |
+| `chat --lat/--lng` | Require the valid pair and set initial session location exactly as today |
+| `chat --near` | Resolve initial location before the first turn without blocking the UI loop |
+| `chat --no-location` | Suppress saved location for session turns |
+| `chat --for` | Resolve initial household scope before the first turn and preserve fresh-conversation behavior when scope changes |
+| `chat --json` / deprecated `--raw` | Continue to reject interactive JSON and direct automation to `ask`/`reply --json` |
+| `heyfood chat --classic` | New explicit line-oriented fallback over shared services |
+
+All session and `prompt_toolkit` imports are lazy. One-shot commands, `--json`,
+`--version`, non-TTY help, and shell completion must not initialize terminal
+state or pay the interactive dependency's import/startup path.
 
 ## Deliverables
 
 ### D1 — Terminal foundation and capability contract
 
-- Pin the supported `prompt_toolkit` range.
+- Select and pin a tested minimum plus bounded minor `prompt_toolkit` range,
+  test both bounds, and record its license metadata.
 - Prove full-screen launch, resize, paste, suspend/resume, exception recovery,
   and fallback behavior across the supported Python matrix.
 - Add explicit TTY/capability selection and `--classic`/`HEYFOOD_NO_TUI`.
@@ -409,8 +571,8 @@ Expected existing-file changes include `pyproject.toml`, `main.py`,
 
 ### D2 — Session kernel
 
-- Implement typed state, events, actions, operation IDs, reducer, and
-  demand-driven invalidation.
+- Implement typed state, events, actions, operation IDs, reducer, cancellable
+  resource supervision, bounded queues/joins, and demand-driven invalidation.
 - Centralize terminal lifecycle and signal behavior.
 - Bound scrollback and avoid redraw busy loops.
 
@@ -420,15 +582,20 @@ Expected existing-file changes include `pyproject.toml`, `main.py`,
   and footer/help surfaces.
 - Add multi-line editing, memory-only history, paste safety, and accessible
   focus behavior.
-- Adapt semantic presentation blocks and the existing palette.
+- Build both leaf renderers over the complete UI-neutral
+  `PresentationDocument` contract and existing palette.
 - Add the contained startup animation from canonical banner assets.
 
 ### D4 — Turn orchestration and streaming
 
-- Extract `TurnService` from `_ask_agent()` without changing server contracts.
+- Extract `TurnService` from `_ask_agent()` while preserving server contracts,
+  except for any separately reviewed idempotency prerequisite identified in
+  Phase 0.
 - Stream typed events to one-shot and interactive renderers.
-- Add cancellation, late-event suppression, explicit failure handling, and
-  connection recovery messaging.
+- Add real resource cancellation, late-event suppression, explicit failure
+  handling, and connection uncertainty messaging.
+- Keep tracing request IDs distinct from logical idempotency and confirmation
+  keys; prohibit automatic retry until server replay protection is verified.
 - Preserve conversation and household target semantics.
 
 ### D5 — Command registry and discoverability
@@ -441,15 +608,17 @@ Expected existing-file changes include `pyproject.toml`, `main.py`,
 
 - Move existing prompt-independent logic into reusable application flows.
 - Present create-account/sign-in and onboarding within the session journey.
-- Safely suspend/redraw around browser device authorization.
+- Suspend only for `webbrowser.open`; keep loopback/device waiting visible and
+  cancellable, then redraw after handoff.
 - Verify net-new, returning, expired-code, denied-code, offline, and partial
   profile paths against existing services.
 
 ### D7 — Voice integration
 
-- Integrate capture, transcription, transcript review, edit, retry, and typed
-  fallback into the composer lifecycle.
+- Integrate recording, a non-streaming transcribing state, final transcript
+  review, edit, retry, and typed fallback into the composer lifecycle.
 - Preserve `audio:transcribe`, HTTPS, privacy, timeout, and device policy.
+- Preserve explicit processor consent and immediate microphone close.
 - Complete the real-hardware qualification.
 
 ### D8 — Compatibility, security, and release
@@ -472,27 +641,44 @@ summary.
 1. Add a throwaway or test-only `prompt_toolkit` spike for viewport, composer,
    resize, bracketed paste, background event delivery, browser suspension, and
    terminal restoration.
-2. Write the session state/event contract and renderer boundary.
-3. Define classic-mode selection and supported terminal matrix.
-4. Map `_ask_agent()`, auth, onboarding, voice, and presentation code into the
+2. Select the tested dependency bounds, record license metadata, and run the
+   spike on Python 3.11–3.13 at both bounds.
+3. Write the session state/event contract, terminal ownership table,
+   `CancellableOperation` contract, queue bounds, close/join deadlines, and
+   complete `PresentationDocument` inventory.
+4. Inspect Production/backend source for `/v1/agent/converse` idempotency-key
+   and fingerprint support. Record verified headers/schema and replay
+   semantics, or create a separate backend prerequisite and retain the strict
+   no-automatic-retry policy.
+5. Define classic-mode selection and supported terminal matrix.
+6. Map `_ask_agent()`, auth, onboarding, voice, and presentation code into the
    shared application layer with no duplicated business behavior.
-5. Record the Grok-derived patterns and source-provenance decision.
+7. Record the pinned Grok SHA and pattern-only source-provenance decision.
+8. Freeze the exact deliverables map or commit reviewed path amendments.
+9. Map the Phase 6 aggregate metrics to existing privacy-safe backend logs or
+   monitoring. If any required signal is absent, create a separately reviewed
+   backend observability prerequisite; do not add covert CLI telemetry.
 
 **Exit gate:** the spike proves the foundation on macOS and Linux CI, the
 architecture has no network work on the UI loop, and an independent reviewer
-approves the dependency, state model, privacy model, and migration seam.
+approves dependency bounds, resource cancellation, terminal ownership,
+idempotency posture, semantic renderer completeness, privacy, and migration
+seams.
 
 ### Phase 1 — Session kernel and terminal safety
 
 1. Implement `TerminalSession`, state, reducer, events, operation IDs, task
-   supervision, and demand-driven invalidation.
+   supervision, bounded queues, cancellable resource handles, and
+   demand-driven invalidation.
 2. Add safe launch/exit, signals, resize, suspend/resume, and crash restoration.
 3. Add bounded semantic scrollback with no sensitive disk persistence.
 4. Add deterministic unit and PTY tests before visual features.
 
 **Exit gate:** every intentional and injected abnormal exit restores the
-terminal; idle CPU is effectively zero; late events cannot mutate replacement
-operations; independent safety review passes.
+terminal; cancel/exit leaves zero live operation threads, HTTP streams,
+callback listeners, device pollers, or microphone streams after the defined
+join bound; idle CPU meets the measured budget; late events cannot mutate
+replacement operations; independent safety review passes.
 
 ### Phase 2 — Interactive shell and presentation
 
@@ -512,10 +698,15 @@ passes.
 
 1. Extract and integrate `TurnService`.
 2. Render incremental response and progress events without blocking input.
-3. Implement cancellation, retry guidance, explicit service failures, target
-   context, `/new`, `/for`, `/household`, `/profile`, `/location`, and `/status`.
+3. Implement resource-closing cancellation, uncertainty guidance, explicit
+   service failures, target context, `/new`, `/for`, `/household`, `/profile`,
+   `/location`, and `/status`.
 4. Preserve one-shot `ask`, `reply`, and classic chat behavior through the same
    service.
+5. Enable no automatic POST replay. If the separately reviewed backend
+   idempotency prerequisite is delivered, test the stable logical key and
+   fingerprint across an intentionally replayed transport attempt before any
+   retry behavior is proposed.
 
 **Exit gate:** typed turns work end to end against a controlled service;
 cancellation is reliable; service failures never look successful; safety
@@ -527,8 +718,12 @@ and code review passes.
 1. Integrate registration, login, browser/device authorization, code expiry,
    profile readiness, and onboarding state.
 2. Make create-account direction primary for users without an account.
-3. Return from browser authorization to the same intact viewport.
-4. Exercise clean-machine and partial-state journeys.
+3. Suspend only for browser launch; keep loopback/device waiting cancellable and
+   visible inside the intact viewport.
+4. Enforce desktop-loopback and SSH/headless/bind-failure device-flow selection,
+   with copyable URL/code and deterministic callback/poller closure.
+5. Keep profile-sync consent distinct from registration/auth/onboarding.
+6. Exercise clean-machine and partial-state journeys.
 
 **Exit gate:** a person with no account can run only `heyfood`, register,
 authenticate, onboard, and ask a useful first question without learning command
@@ -537,15 +732,17 @@ review passes.
 
 ### Phase 5 — Voice inside the session
 
-1. Add voice bindings, recording status, transcript review, edit/retry, and
-   submission through `TurnService`.
+1. Add voice bindings, elapsed recording status, explicit transcribing state,
+   one final transcript, review, edit/retry, and submission through
+   `TurnService`.
 2. Validate missing dependencies/hardware, denied permissions, scope loss,
    timeout, cancellation, and terminal restoration.
 3. Qualify a real microphone on macOS and preserve classic/one-shot voice.
 
 **Exit gate:** voice and typed prompts are two inputs to the same composer and
-turn path; no terminal corruption or sensitive persistence occurs; independent
-voice/privacy review passes.
+turn path; cancel immediately closes the microphone; processor consent never
+changes silently; no terminal corruption or sensitive persistence occurs;
+independent voice/privacy review passes.
 
 ### Phase 6 — Default switch and public release
 
@@ -555,17 +752,32 @@ voice/privacy review passes.
    upgrade from `0.3.2`, and classic fallback tests.
 3. Make the TUI the default for bare `heyfood` and `heyfood chat` only after all
    gates pass.
-4. Publish `0.4.0` through protected PyPI trusted publishing.
+4. Publish `0.4.0` through protected PyPI trusted publishing under the named
+   FRNTR, LLC CLI release owner, `admin@frntr.ai`.
 5. Verify PyPI attestations, GitHub release, hosted `install.sh`, clean public
    installation, and real production registration/login/onboarding/typed/voice
    smoke tests.
 6. Update the landing-page animated examples only from verified shipped
    behavior.
+7. Run a 30-minute pre-public installed-artifact observation and a 24-hour
+   post-public observation using backend-only, privacy-safe aggregate metrics:
+   auth start/complete/failure by transport, agent-converse HTTP/SSE
+   completion/failure, and transcription completion/failure. Record the prior
+   24-hour backend baseline where volume exists. Signals come from the Phase 0
+   inventory of existing logs/monitoring or an independently approved backend
+   observability prerequisite; never add CLI prompt content, dietary content,
+   transcript content, or a new device identifier.
+8. Trigger rollback when any clean installed-artifact critical journey fails,
+   terminal restoration fails, or—at a minimum of 20 events—a monitored
+   failure rate exceeds both 5% and twice its prior baseline. Low-volume periods
+   remain governed by synthetic clean-user tests rather than inconclusive
+   percentages.
 
 **Exit gate:** the public artifact—not a source checkout—passes the entire
-journey on supported terminals; rollback to `0.3.2` is documented; monitoring
-shows no auth, turn, or transcription regression; release review closes the
-plan.
+journey on supported terminals; a prepared classic-default patch and installed
+artifact rollback drill are verified; the defined observation shows no auth,
+turn, transcription, terminal-restoration, or installer regression; release
+review closes the plan.
 
 ## Test and quality matrix
 
@@ -575,8 +787,12 @@ plan.
 - returning user: launch -> restored target/context -> turn;
 - incomplete profile and interrupted onboarding recovery;
 - email/device code expiration, denial, and browser abandonment;
+- local loopback, SSH/headless device selection, loopback bind failure, and
+  cancellation with callback/poller teardown;
 - streaming success, structured result, explicit failure, timeout, disconnect,
   retry guidance, and cancellation;
+- injected cancellation during blocked SSE reads, auth waits, transcription,
+  and microphone capture with zero surviving owned resources;
 - slash parsing, aliases, completion, invalid arguments, unavailable commands;
 - voice success, review/edit/rerecord, missing mic, missing dependency,
   permission denial, scope loss, timeout, and cancellation.
@@ -600,6 +816,9 @@ plan.
 - existing HTTPS enforcement, credential storage, scopes, and capability gates
   remain fail closed;
 - service text cannot inject terminal escapes or markup;
+- tracing IDs, logical idempotency keys/fingerprints, and pending-confirmation
+  keys remain separate contracts; no uncertain conversational POST is retried
+  automatically without verified replay protection;
 - no prompt/transcript content is written to local history or diagnostics;
 - wheel and sdist contain canonical banner/palette resources and required
   license files;
@@ -607,14 +826,29 @@ plan.
 
 ### Performance budgets
 
-- first visible frame within 250 ms on a warm local launch, excluding network;
-- local keystroke-to-frame latency below 50 ms at p95 under normal load;
-- rendering capped at 30 frames/second, with slower animation ticks and no idle
-  ticks;
+- Benchmark with a reproducible `pexpect`/PTY plus VT-screen parser harness on
+  GitHub-hosted `macos-14` and `ubuntu-24.04`, Python 3.11–3.13. Record runner
+  image, Python, dependency bound, terminal dimensions, and raw samples.
+- First visible frame is within 250 ms at p95 across 20 warm launches,
+  excluding network and browser authorization.
+- Keystroke-to-frame latency is below 50 ms at p95 across 1,000 synthetic
+  keystrokes with 500 retained scrollback entries and a concurrent simulated
+  SSE turn.
+- Rendering is capped at 30 frames/second, startup animation at 12 frames/
+  second or less, and an idle session averages below 1% of one CPU core over 60
+  seconds, median of three runs.
 - composer remains responsive during HTTP, auth, onboarding, and transcription;
-- scrollback is bounded by entries and rendered lines, with a documented policy
-  for folding or dropping the oldest visible entries;
-- no unbounded task, queue, event, or response-fragment accumulation.
+- scrollback is capped at 1,000 semantic entries and 20,000 rendered lines,
+  dropping the oldest completed entries with one visible truncation marker;
+- each background event queue is capped at 256 events; replaceable progress
+  events coalesce to the newest value, response chunks coalesce before enqueue,
+  and non-replaceable terminal/error events apply backpressure rather than
+  dropping;
+- total RSS stays below 150 MiB and grows by less than 25 MiB while cycling
+  10,000 bounded synthetic events after warm-up;
+- cancellation meets the 500 ms/2 second resource-close and 3 second total-exit
+  budgets in every fault-injection test;
+- no unbounded task, queue, event, response-fragment, or history accumulation.
 
 ## Acceptance criteria
 
@@ -644,22 +878,30 @@ plan.
     same independently verified `0.4.0` artifact.
 14. The released installed wheel passes clean-machine registration, login,
     onboarding, typed-turn, and real-hardware voice smoke tests.
+15. Cancelling or exiting closes every owned network/auth/voice resource within
+    the defined budget; late-event suppression is not used as a substitute.
+16. SSH/headless login selects the short-code device flow and never launches a
+    browser against a remote loopback callback.
+17. Every result and progress type becomes one renderer-neutral semantic
+    document used by both Rich and the TUI.
+18. Release and rollback decisions use the named owner, windows, privacy-safe
+    metrics, thresholds, and installed-artifact drill in Phase 6.
 
 ## Risks and controls
 
 | Risk | Control |
 |---|---|
 | Terminal corruption on crash or browser handoff | One terminal lifecycle boundary, `finally` restoration, PTY fault injection, no direct ANSI mode writes elsewhere |
-| UI freezes during sync client or microphone work | Worker-thread adapters, typed queues, operation IDs, no blocking work on application loop |
+| UI freezes or resources survive cancellation | Cancellable resource owners, bounded queues/joins, operation IDs, no blocking work on application loop, teardown fault tests |
 | TUI and one-shot behavior drift | Shared application services and semantic presentation fixtures |
 | Health/dietary content leaks through history or logs | Memory-only history, redacted diagnostics, explicit future review for persistence |
 | Terminal escape/markup injection from service content | Control sanitization, literal service text, validated links, bounded content |
 | Key chords vary by emulator | Capability matrix and documented fallback chords |
 | Accessibility regression from alternate screen | `--classic`, `HEYFOOD_NO_TUI`, no-TUI detection, keyboard-only operation, review with screen-reader workflow |
 | Startup animation becomes repeated branding/noise | Once-per-process lifecycle and negative tests on every command/turn path |
-| New dependency expands supply-chain risk | Pin major range, dependency/license/security review, lock/test release artifacts, trusted publishing |
+| New dependency expands supply-chain risk | Tested minimum and bounded minor range, both-bound CI, dependency/license/security review, release artifact checks, trusted publishing |
 | Registration or auth regression | Reuse established services, retain fail-closed gates, live clean-user release smoke |
-| Over-copying Grok Build | Pattern-only adaptation by default; provenance and NOTICE gate for any direct source adaptation |
+| Over-copying Grok Build | Pinned reference SHA, pattern-only default, and approved path/commit origin ledger plus license/notice review for any direct adaptation |
 | Scope expands into a coding-agent harness | Enforce non-goals and phase deliverables; separate future proposals |
 
 ## Rollout and rollback
@@ -670,9 +912,17 @@ plan.
   first-run users to an unfinished shell.
 - Keep `heyfood chat --classic` and `HEYFOOD_NO_TUI=1` through at least the
   first `0.4.x` minor window.
-- A rollback republishes no existing version. It releases a new patch restoring
-  classic default behavior while preserving user credentials and conversation
-  identifiers.
+- Before `0.4.0`, prepare and dry-run (without publishing) the exact change that
+  makes classic mode default. A rollback republishes and requires no downgrade
+  to `0.3.2`; the FRNTR, LLC CLI release owner (`admin@frntr.ai`) cuts a new
+  `0.4.1` or later patch restoring classic default behavior while preserving
+  user credentials and conversation identifiers.
+- The rollback drill installs the built patch into a clean `pipx` home, proves
+  bare/classic/JSON behavior, verifies the hosted installer resolves the new
+  PyPI patch, and records GitHub/PyPI artifact hashes and attestations.
+- Release decisions use the 30-minute/24-hour backend aggregate observations
+  and thresholds in Phase 6 plus installed-artifact synthetic journeys. The CLI
+  adds no telemetry to support this rollout.
 - No backend rollback, auth weakening, scope widening, or data migration is
   authorized by this CLI rollback plan.
 
@@ -683,7 +933,9 @@ plan.
 - Copying Grok Build's Rust implementation or recreating all of its features.
 - Replacing Typer or Rich for one-shot commands.
 - Changing backend dietary evaluation, safety vocabulary, profile semantics,
-  authentication policy, or production infrastructure.
+  authentication policy, or production infrastructure. A missing converse
+  idempotency contract is handled only through a separate reviewed backend
+  prerequisite, not silently inside this CLI plan.
 - Persisting full prompt or transcript history locally.
 - Making mouse interaction required.
 - Rendering the full banner during responses or one-shot commands.
