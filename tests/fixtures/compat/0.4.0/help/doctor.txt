@@ -1,0 +1,9 @@
+Usage: heyfood doctor [OPTIONS]
+
+ Check local config, auth refresh, and API reachability.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --json          Print stable JSON diagnostics.                                                                       │
+│ --raw           Deprecated alias for --json.                                                                         │
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

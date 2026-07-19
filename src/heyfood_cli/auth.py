@@ -22,6 +22,8 @@ from .config import (
     DEFAULT_AUTH_URL,
     DEFAULT_LOCAL_API_URL,
     DEFAULT_LOCAL_AUTH_URL,
+    OFFICIAL_API_URL,
+    OFFICIAL_CLI_OAUTH_CLIENT_ID,
     discover_local_api_key,
     expires_in_to_iso,
     bind_config_to_account,
@@ -299,8 +301,7 @@ def perform_login(
         # backend that has not yet deployed newer scopes/intent is not sent a
         # request it will reject with 400/422.
         capabilities = resolve_login_capabilities(api_url)
-        client_registration = register_client(api_url, redirect_uri)
-        client_id = client_registration["client_id"]
+        client_id = resolve_oauth_client_id(api_url, redirect_uri)
         authorize_url = build_authorize_url(
             auth_url=auth_url,
             client_id=client_id,
@@ -382,8 +383,10 @@ def perform_device_login(
     # backend that has not yet deployed newer scopes/intent is not sent a
     # request it will reject with 400/422.
     capabilities = resolve_login_capabilities(api_url)
-    registration = register_client(api_url, "http://127.0.0.1:1/device-unused")
-    client_id = str(registration["client_id"])
+    client_id = resolve_oauth_client_id(
+        api_url,
+        "http://127.0.0.1:1/device-unused",
+    )
     authorization = start_device_authorization(
         api_url,
         client_id,
@@ -741,6 +744,14 @@ def register_client(api_url: str, redirect_uri: str) -> dict[str, Any]:
     if not isinstance(data, dict) or not data.get("client_id"):
         raise LoginFlowError("OAuth client registration returned an unexpected response.")
     return data
+
+
+def resolve_oauth_client_id(api_url: str, redirect_uri: str) -> str:
+    """Use the classified production identity; retain DCR for other servers."""
+    if api_url.rstrip("/") == OFFICIAL_API_URL:
+        return OFFICIAL_CLI_OAUTH_CLIENT_ID
+    registration = register_client(api_url, redirect_uri)
+    return str(registration["client_id"])
 
 
 def build_authorize_url(

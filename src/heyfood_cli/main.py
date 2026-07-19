@@ -85,6 +85,11 @@ account_app = typer.Typer(
     help="Manage your hello.food account.",
 )
 app.add_typer(account_app, name="account")
+channels_app = typer.Typer(
+    add_completion=False,
+    help="Inspect or disconnect ChatGPT and other AI-channel links.",
+)
+app.add_typer(channels_app, name="channels")
 console = Console(theme=HEYFOOD_THEME)
 stderr_console = Console(stderr=True, theme=HEYFOOD_THEME, highlight=False)
 MENU_POLL_INTERVAL_SECONDS = 3.0
@@ -396,6 +401,7 @@ from .commands.auth import (  # noqa: E402,F401
     run_bare_first_run,
 )
 from .commands.account import account_delete  # noqa: E402,F401
+from .commands.channels import channels_disconnect, channels_list  # noqa: E402,F401
 from .commands.profiles import (  # noqa: E402,F401
     members_list,
     household_list,

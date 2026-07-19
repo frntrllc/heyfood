@@ -8,6 +8,20 @@ authentication contracts are stabilized.
 
 _Nothing yet._
 
+## 0.4.0 - 2026-07-19
+
+### Added
+
+- `heyfood channels list` and `heyfood channels disconnect` let signed-in
+  users inspect and revoke account-owned ChatGPT, Gemini, Claude, and other
+  AI-channel links without exposing channel tokens.
+
+### Changed
+
+- Fresh logins to the official production service use the server-owned,
+  classified `hf_cid_heyfood_cli` public OAuth client with PKCE. Custom and
+  local compatible services retain dynamic client registration.
+
 ## 0.3.2 - 2026-07-19
 
 ### Changed

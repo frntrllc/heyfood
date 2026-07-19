@@ -331,6 +331,18 @@ class HelloFoodClient:
                     "Run `heyfood login` again to refresh this CLI session."
                 ) from retry_exc
 
+    def list_channel_links(self) -> dict[str, Any]:
+        """List ChatGPT and other AI-channel links for the signed-in account."""
+        return self._request("GET", "/v1/channel/links", auth="session")
+
+    def disconnect_channel_link(self, link_id: str) -> dict[str, Any]:
+        """Revoke one account-owned AI-channel link and all of its tokens."""
+        return self._request(
+            "DELETE",
+            f"/v1/channel/links/{link_id}",
+            auth="session",
+        )
+
     def profile_readiness(self) -> dict[str, Any]:
         """Return the strictly validated least-privilege first-run state."""
         from .auth_application import AuthContractError, validate_profile_readiness

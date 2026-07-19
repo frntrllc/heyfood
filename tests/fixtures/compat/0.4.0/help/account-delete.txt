@@ -1,0 +1,11 @@
+Usage: heyfood account delete [OPTIONS]
+
+ Permanently delete your hello.food account after browser confirmation.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --yes         -y                                 Acknowledge the destructive browser confirmation step.              │
+│ --no-browser                                     Print the confirmation URL instead of opening it.                   │
+│ --timeout             INTEGER RANGE [1<=x<=600]  Seconds to wait for browser confirmation. [default: 300]            │
+│ --json                                           Print one stable JSON receipt and never prompt or open a browser.   │
+│ --help                                           Show this message and exit.                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

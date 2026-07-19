@@ -1,0 +1,14 @@
+Usage: heyfood item [OPTIONS] NAME...
+
+ Assess a food or menu item against your HelloFood profile.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ *    name      NAME...  Food or menu item to evaluate. [required]                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --restaurant  -r      TEXT  Restaurant context.                                                                      │
+│ --at                  TEXT  Restaurant index from the last search.                                                   │
+│ --json                      Print stable JSON.                                                                       │
+│ --raw                       Deprecated alias for --json.                                                             │
+│ --help                      Show this message and exit.                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

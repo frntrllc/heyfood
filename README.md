@@ -48,7 +48,7 @@ mutable endpoint does not protect against that endpoint being compromised.
 To select an exact release or add operating-system credential-vault support:
 
 ```bash
-curl -fsSL https://hey.food/install.sh | HEYFOOD_VERSION=0.2.0 bash
+curl -fsSL https://hey.food/install.sh | HEYFOOD_VERSION=0.4.0 bash
 curl -fsSL https://hey.food/install.sh | HEYFOOD_WITH_KEYRING=1 bash
 curl -fsSL https://hey.food/install.sh | HEYFOOD_WITH_VOICE=1 bash
 ```
@@ -138,6 +138,18 @@ CLI credentials securely. On an SSH/headless machine, use the short-code flow:
 ```bash
 heyfood login --device --no-browser
 ```
+
+Manage AI-channel links owned by the same signed-in hello.food account:
+
+```bash
+heyfood channels list
+heyfood channels list --json
+heyfood channels disconnect LINK_ID
+heyfood channels disconnect LINK_ID --yes --no-input --json
+```
+
+Disconnecting a link revokes its server-side channel tokens. The CLI lists
+link metadata only and never stores or prints another channel's credentials.
 
 Account deletion is a separate, deliberately destructive flow. It requires a
 fresh CLI session with `account:delete`, explicit local acknowledgement, and a

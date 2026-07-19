@@ -1,0 +1,9 @@
+Usage: heyfood logout [OPTIONS]
+
+ Forget local credentials and revoke the current app session.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --json          Print stable JSON teardown results.                                                                  │
+│ --raw           Deprecated alias for --json.                                                                         │
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

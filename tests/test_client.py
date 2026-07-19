@@ -250,6 +250,36 @@ def test_list_profile_members_uses_session_endpoint(tmp_path, monkeypatch):
     ]
 
 
+def test_list_channel_links_uses_account_session(tmp_path, monkeypatch):
+    client = HelloFoodClient(store=ConfigStore(tmp_path / "config.json"))
+    calls = []
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kwargs: calls.append((method, path, kwargs))
+        or {"links": [], "total_count": 0},
+    )
+
+    assert client.list_channel_links() == {"links": [], "total_count": 0}
+    assert calls == [("GET", "/v1/channel/links", {"auth": "session"})]
+
+
+def test_disconnect_channel_link_revokes_owned_link(tmp_path, monkeypatch):
+    client = HelloFoodClient(store=ConfigStore(tmp_path / "config.json"))
+    calls = []
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, **kwargs: calls.append((method, path, kwargs))
+        or {"revoked": True, "link_id": "link-1"},
+    )
+
+    assert client.disconnect_channel_link("link-1")["revoked"] is True
+    assert calls == [
+        ("DELETE", "/v1/channel/links/link-1", {"auth": "session"})
+    ]
+
+
 def test_channel_whoami_requires_login_after_invalid_channel_token_retry(tmp_path, monkeypatch):
     from heyfood_cli.client import LoginRequired
 

@@ -1,0 +1,11 @@
+Usage: heyfood voice set [OPTIONS]
+
+ Persist a voice capture preference (mode and/or device).
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --mode          TEXT  Persist a capture mode: auto, native, browser, or typed.                                       │
+│ --device        TEXT  Persist a default input device id or name.                                                     │
+│ --json                Print stable JSON.                                                                             │
+│ --raw                 Deprecated alias for --json.                                                                   │
+│ --help                Show this message and exit.                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

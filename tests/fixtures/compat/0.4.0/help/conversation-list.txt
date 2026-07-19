@@ -1,0 +1,9 @@
+Usage: heyfood conversation list [OPTIONS]
+
+ Show the last conversation id remembered on this machine.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --json          Print stable JSON.                                                                                   │
+│ --raw           Deprecated alias for --json.                                                                         │
+│ --help          Show this message and exit.                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
