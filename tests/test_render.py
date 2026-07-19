@@ -4,11 +4,71 @@ import pytest
 from rich.console import Console
 
 from heyfood_cli import presentation, render
+from heyfood_cli.theme import HEYFOOD_THEME
 
 
 def _console() -> tuple[Console, StringIO]:
     output = StringIO()
-    return Console(file=output, force_terminal=False, width=120), output
+    return Console(
+        file=output,
+        force_terminal=False,
+        width=120,
+        theme=HEYFOOD_THEME,
+    ), output
+
+
+def _terminal_console() -> tuple[Console, StringIO]:
+    output = StringIO()
+    return Console(
+        file=output,
+        force_terminal=True,
+        color_system="truecolor",
+        width=120,
+        theme=HEYFOOD_THEME,
+    ), output
+
+
+def test_chat_chrome_matches_landing_page_hierarchy(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    console, output = _terminal_console()
+
+    render.chat_header(console)
+    render.chat_turn_gap(console)
+    render.chat_user(console, "I ate a hamburger for lunch")
+    render.agent_message(console, "I can help you log that.")
+
+    rendered = output.getvalue()
+    assert "hello.food chat" in rendered
+    assert "you" in rendered
+    assert "I ate a hamburger for lunch" in rendered
+    assert "I can help you log that." in rendered
+    assert "38;2;155;197;61m" in rendered
+    assert "38;2;237;234;224m" in rendered
+    assert "\n\n" in rendered
+
+
+def test_explicit_agent_failure_uses_failure_contract_not_prose_matching(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    console, output = _terminal_console()
+    failed = {
+        "ok": False,
+        "error": {
+            "message": "Request could not be completed.",
+            "hint": "Try again in a moment.",
+        },
+        "conversation_id": "conv-error",
+    }
+
+    assert render.agent_result_is_error(failed) is True
+    assert render.agent_result_is_error({"message": "Sorry about the delay."}) is False
+    render.agent_result(console, failed)
+
+    rendered = output.getvalue()
+    assert "Request could not be completed." in rendered
+    assert "Try again in a moment." in rendered
+    assert "38;2;241;124;117m" in rendered
 
 
 def test_action_confirmation_renders_meal_card():

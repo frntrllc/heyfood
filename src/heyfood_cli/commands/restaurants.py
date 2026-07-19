@@ -18,7 +18,6 @@ from ..main import (
     _validated,
     _write_result,
     app,
-    banner,
     location_app,
     nullcontext,
     output,
@@ -345,7 +344,6 @@ def _poll_menu_until_terminal(
     started_at = time.monotonic()
     deadline = started_at + MENU_POLL_TIMEOUT_SECONDS
     latest = initial
-    banner.controller.loading(main.stderr_console, json_mode=json_mode)
     warned = False
     status_context = (
         main.stderr_console.status("[dim]Fetching and checking the menu…[/dim]")

@@ -463,12 +463,12 @@ configuration and doctor commands do not mint a device id or create config.
 
 ## Terminal branding and accessibility
 
-The full hey.food banner appears only on compatible interactive terminals while
-a genuinely slow operation is starting, and at most once per process. It is
-never written to JSON/result stdout, never adds a delay, and is suppressed for
-CI, redirected output, `TERM=dumb`, and non-interactive input. Terminals narrower
-than 44 columns or unable to encode the block glyphs use a compact `hey.food`
-welcome instead.
+The full hey.food banner is reserved for the interactive bare `heyfood` startup
+journey. It never appears before an ordinary command or conversational response,
+is never written to JSON/result stdout, and never adds a delay. It is suppressed
+for CI, redirected output, `TERM=dumb`, and non-interactive input. Terminals
+narrower than 44 columns or unable to encode the block glyphs use a compact
+`hey.food` welcome instead.
 
 Use either control to disable decorative branding for screen readers or personal
 preference:

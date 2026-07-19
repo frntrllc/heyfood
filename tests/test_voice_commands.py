@@ -5,7 +5,7 @@ import json
 
 from typer.testing import CliRunner
 
-from heyfood_cli import main
+from heyfood_cli import banner, main
 from heyfood_cli import voice_capture
 from heyfood_cli.voice_capture import VoiceOutcome
 
@@ -105,6 +105,8 @@ def test_ask_voice_keeps_capture_ui_off_stdout(monkeypatch):
 
     assert result.exit_code == 0
     assert "Recording" not in result.stdout
+    assert banner.plain_banner() not in result.stdout
+    assert banner.plain_banner() not in result.stderr
 
 
 def test_log_voice_routes_through_agent(monkeypatch):

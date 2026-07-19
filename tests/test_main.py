@@ -310,6 +310,47 @@ def test_ask_agent_only_persists_completed_progress_events(monkeypatch):
     assert "restaurant resolved: Thai Taste Restaurant" in progress_output.getvalue()
 
 
+def test_ask_agent_failure_result_suppresses_success_continuation_hint(monkeypatch):
+    from io import StringIO
+
+    from rich.console import Console
+
+    from heyfood_cli import main as main_mod
+
+    class FakeClient:
+        def saved_location(self):
+            return None
+
+        def stream_agent(self, _payload):
+            yield "result", {
+                "ok": False,
+                "error": {"message": "Request failed."},
+                "conversation_id": "conv-error",
+            }
+
+        def remember_conversation(self, _result):
+            pass
+
+    stdout = StringIO()
+    stderr = StringIO()
+    monkeypatch.setattr(main_mod, "HelloFoodClient", lambda: FakeClient())
+    monkeypatch.setattr(
+        main_mod,
+        "console",
+        Console(file=stdout, force_terminal=False, width=120),
+    )
+    monkeypatch.setattr(
+        main_mod,
+        "stderr_console",
+        Console(file=stderr, force_terminal=False, width=120),
+    )
+
+    main_mod._ask_agent("hello")
+
+    assert "Request failed." in stdout.getvalue()
+    assert "Continue with:" not in stderr.getvalue()
+
+
 def test_ask_agent_raw_output_excludes_progress_and_continue_hint(monkeypatch):
     import json
     from contextlib import redirect_stdout
