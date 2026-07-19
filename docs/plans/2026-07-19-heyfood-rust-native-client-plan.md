@@ -811,10 +811,32 @@ Deterministic grammar is `grocery add "<item>"...`; recipe expansion uses
 `grocery add --recipe <ref>...`; non-interactive/JSON `grocery weekly` requires
 explicit `--recipe <ref>...`, while the TUI may offer a saved-recipe picker.
 Free-form dish language routes through the shared agent turn, never a REST
-parser pretending to understand it. The item index cache is owner-only,
-account/list/version-bound, expiring, cleared on account switch, and never
-authoritative; server item IDs always work. Unknown capability versions are
-unsupported rather than guessed compatible with v1.
+parser pretending to understand it. The item index cache is owner-only, bound
+to API origin/context + account + list ID + list version, and expires after 15
+minutes. It clears on context switch, logout/account switch, active-list
+replacement, successful mutation, and expiry, and is never authoritative;
+server item IDs always work. Unknown capability versions are unsupported rather
+than guessed compatible with v1.
+
+Grocery scope requirements are command-specific:
+
+| Operation | Required authority |
+|---|---|
+| capability discovery | none/session metadata only |
+| `show`, `export`, exclusions read | `grocery:read` |
+| prepare add/remove/bought/weekly/exclusion mutation | `grocery:write` plus `grocery:read` when the response or precondition reads list state |
+| confirmation accept/edit/cancel | authority frozen into the prepared confirmation; write is always required for a commit |
+
+Read-only users retain useful list/export access. The client requests write
+authority only for a write-capable session or explicit re-authentication, and
+tests absent/read-only/write-only/read+write combinations against the backend
+contract rather than treating the two scopes as interchangeable.
+
+`grocery export --out FILE` handles dietary/member annotations as sensitive
+local data: owner-only creation, exclusive create by default, explicit
+overwrite, symlink/reparse-point-safe destination handling, same-directory
+atomic replacement, no content logging, and cleanup on failure. `--json`
+continues to emit exactly one value on stdout; file progress/errors use stderr.
 
 The backend/platform grocery team owns `HouseholdContextResolver`, typed
 safety-result metadata, generalized confirmation, optional scope tiers,
@@ -1177,10 +1199,22 @@ terminal, cancellation, platform, or compatibility gates.
 
 ### DG-R2 — Idempotency and retry
 
-Verify whether Production `/v1/agent/converse` accepts a stable idempotency key
-and request fingerprint. `X-Request-ID` is tracing only. Until replay protection
-is documented and tested, Rust performs no automatic retry after an uncertain
-conversational POST. Existing pending-confirmation IDs remain separate.
+Verify every expensive or mutating POST, including `/v1/agent/converse` and
+grocery prepare/add/remove/state/weekly/screening/confirmation operations.
+Mirrored contracts distinguish logical operation ID, idempotency key, request
+fingerprint, expected list version, and confirmation ID; `X-Request-ID` remains
+tracing only. Each endpoint explicitly declares whether identical-key replay is
+safe, whether fingerprint mismatch is rejected, and where server acceptance
+occurs. Existing pending-confirmation IDs do not substitute for proposal-
+creation idempotency.
+
+Until an endpoint's replay protection is deployed, mirrored, and tested, Rust
+performs no automatic retry after an uncertain POST. It reports unknown outcome
+and reconciles by a safe read/status operation when the contract provides one.
+Tests cover timeout before acceptance, timeout after grocery proposal creation,
+disconnect during confirmation, identical-key replay, fingerprint mismatch,
+replayed accept, stale list/context version, and cancellation at every boundary;
+they prove no duplicate screening cost, proposal, or committed mutation.
 
 ### DG-R3 — Credential and native file safety
 
@@ -1264,6 +1298,9 @@ and evidence receive independent review.
    unfinished backend work. Authoritative Phase A fixtures must be frozen before
    Phase 2 grocery implementation, and the deployed `grocery: "v1"` capability
    is mandatory before Phase 6 cutover.
+   Phase 0 records the independently reviewed companion directive commit SHA
+   and contract digest before Phase 1 creates grocery wire types; Phase 2 also
+   requires the authoritative generated backend fixtures and their source SHA.
 10. Pin the Grok reference/provenance record.
 11. Record dependency licenses, platform minimums, system-library requirements,
     release-hardware ownership, and signing/trust-bootstrap prerequisites,
@@ -1388,8 +1425,9 @@ release review passes.
 
 1. Produce signed internal release-candidate artifacts and run the complete
    platform/terminal matrix without publishing a supported partial product.
-2. Compare privacy-safe backend aggregate auth, agent SSE, and transcription
-   success/failure with the pre-cutover baseline; add no prompt/content
+2. Compare privacy-safe backend aggregate auth, agent SSE, transcription, and
+   grocery capability/REST/confirmation/conflict/screening success/failure with
+   the pre-cutover baseline; add no prompt, grocery-item, member, or content
    telemetry.
 3. Resolve every P0/P1 qualification finding and repeat affected review gates.
 4. Tag/archive the final Python baseline and verify exported fixtures are
@@ -1409,8 +1447,9 @@ release review passes.
    animations, and support runbooks atomically; retire PyPI guidance.
 10. Observe for 24 hours with named release owner `admin@frntr.ai` and recover
    or stop promotion on any critical journey failure, terminal restoration
-   defect, installer/signature failure, or failure rate above both 5% and twice
-   the baseline at 20+ events.
+   defect, installer/signature failure, wrong-list grocery mutation, broken or
+   bypassed confirmation, or failure rate above both 5% and twice the baseline
+   at 20+ events.
 
 **Exit gate:** public installed bytes match signed reviewed artifacts; the
 repository and supported product are Rust-only; native installers are the sole
@@ -1464,6 +1503,9 @@ plan complete.
   add/remove/bought/weekly/never/export, list-version conflict, structured
   accept/edit/cancel, idempotent replay, member annotations, ingredient-basis
   wording, conversational and real-microphone voice journeys;
+- grocery unknown capability, absent/read-only/write-only/read+write scope
+  combinations, origin/account/list/version/expiry cache invalidation, secure
+  export create/overwrite/symlink/failure behavior, and uncertain-POST outcomes;
 - clean native state plus optional read-only Python config/keyring import.
 - manifest bootstrap, wrong issuer/repository/workflow/tag, tampered JCS,
   invalid/offline Rekor proof, target/hash/size mismatch, downgrade, halt,
@@ -1562,26 +1604,35 @@ plan complete.
 
 ## Accelerated execution challenge
 
-The team will attempt a 72-hour code-complete integration sprint using parallel,
-non-overlapping ownership. This is a delivery challenge, not permission to
-waive the phase exit gates:
+The team will attempt a 72-hour **active-engineering** challenge using parallel,
+non-overlapping ownership. Review/dependency wait time pauses the challenge
+clock. Phase N+1 work cannot begin, merge, or be retained as assumed production
+design until the exact Phase N commit, evidence, and artifacts receive the
+mandatory independent approval. A rejected or pending gate stops every later
+lane; agents may improve the rejected phase only.
 
-- **Day 1:** freeze ledger/contracts/assets; scaffold the enforced workspace;
-  land core semantic types, platform ports, fixture HTTP/SSE path, and a minimal
-  retained TUI shell.
-- **Day 2:** parallelize agent runtime plus one-shot JSON, terminal application,
-  auth/config/onboarding, and voice/grocery use cases; integrate continuously
-  behind shared fixtures rather than long-lived divergent branches.
-- **Day 3:** complete command registry breadth, wire the single-command journey,
-  run differential/PTY/platform tests, resolve integration findings, and produce
-  an internal installed-artifact candidate plus an exact remaining-gap ledger.
+The expedited checkpoints are:
 
-The sprint succeeds only if the repository contains one coherent implementation
-and every unclosed acceptance criterion is explicit. It may produce the full
-candidate faster than the planning estimate; it cannot declare GA while signing,
-real-hardware, backend-deployment, security, or installed-artifact evidence is
-missing. Agents own disjoint files/crates, never delete the Python oracle before
-DG-R5, and every integration phase receives independent review.
+| Active target | Allowed work | Required checkpoint and stop condition |
+|---|---|---|
+| Hours 0–12 | Phase 0 contracts, ledger, assets, workspace policy, and DG-R1 vertical spike only | Exact Phase 0 SHA, spike report, CI/artifacts, DG-R1 review. Stop until approved. |
+| Hours 12–28 | Phase 1 core/application/platform foundation only | Exact Phase 1 SHA, DG-R3 evidence including durable-token cancellation. Stop until approved. |
+| Hours 28–44 | Phase 2 runtime/one-shot/JSON/command breadth; grocery only after authoritative reviewed companion fixtures are pinned | Exact Phase 2 SHA, DG-R2 evidence for converse and every grocery POST, compatibility review. Stop until approved. |
+| Hours 44–56 | Phase 3 retained TUI, typed conversation, grocery list/cards | Exact Phase 3 SHA, PTY/accessibility/product review. Stop until approved. |
+| Hours 56–64 | Phase 4 auth, registration, onboarding, complete typed workflows | Exact Phase 4 SHA, auth/privacy/UX review. Stop until approved. |
+| Hours 64–72 | Phase 5 generic voice and internal signed-distribution candidate | Exact Phase 5 SHA, DG-R4/R5/R6 evidence and voice/supply-chain review. Stop until approved. |
+
+Unfinished or unreviewed Grocery Phase A contracts stop the grocery portion at
+the Phase 2 boundary; workers do not encode mutable draft assumptions. Phase 6
+cutover remains outside the sprint until Production capability, signing,
+hardware, installed-artifact, and release evidence exist. The 72-hour challenge
+therefore targets an approved internal candidate, not a pre-authorized GA.
+
+The sprint succeeds only if each retained phase was independently approved and
+every unclosed acceptance criterion is explicit. Agents own disjoint files/
+crates, integrate only within the currently authorized phase, and never delete
+the Python oracle before DG-R5. If expedited review cannot complete, the sprint
+pauses rather than working around the gate.
 
 ## Effort and staffing reality
 
@@ -1593,11 +1644,13 @@ The current planning estimate is:
 | Architecture/compatibility spike | 2–3 engineer-weeks |
 | Rust MVP: auth, one turn, basic TUI, config | 8–12 cumulative engineer-weeks |
 | Full commands and TUI, excluding complete voice/platform release | 18–26 cumulative engineer-weeks |
-| Full parity, voice, Windows, installers, signing, qualification | **32–48 cumulative engineer-weeks** |
+| Full parity, grocery, voice, Windows, installers, signing, qualification | **36–54 cumulative engineer-weeks** |
 
 For two experienced engineers with access to release hardware and signing
-owners, this is approximately 18–28 calendar weeks; for one experienced
-engineer, approximately 8–12 months. The range includes explicit contingency
+owners, this is approximately 20–30 calendar weeks; for one experienced
+engineer, approximately 9–13 months. Grocery adds explicit contingency for
+backend contract coordination, optimistic concurrency, confirmation, client
+surfaces, and live qualification. The range also includes contingency
 for 601-test migration, release-review rework, Sigstore/bootstrap design,
 Apple/Windows signing queues, real ARM/Intel hardware, Linux audio/keyring
 variance, installer trust tests, and inaugural recovery rehearsal. Automation
