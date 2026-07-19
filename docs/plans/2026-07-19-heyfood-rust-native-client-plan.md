@@ -1,12 +1,11 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v1 — committed review candidate; execution requires independent approval
+**Status:** Draft v2 — owner-directed big-bang replacement; execution requires independent approval
 **Baseline:** `frntrllc/heyfood` `main` at `9c6b91929143180252ad1b644aea273729a1f1b9` (`heyfood 0.3.2`)
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`
 **Primary user:** a developer using hello.food throughout the working day from a terminal
-**Preview target:** `0.4.0-alpha.N`
-**GA replacement target:** `0.4.0`, only after compatibility and release gates pass
+**Replacement target:** `0.4.0`, released only when the complete Rust client passes every gate
 **License:** Apache-2.0
 
 ## Executive decision
@@ -32,10 +31,16 @@ hello.food. “Agent runtime” in this plan means the native client runtime aro
 the existing authenticated `/v1/agent/converse` SSE service. It does not mean
 embedding a local model, shell executor, coding agent, or plugin/tool runtime.
 
-The released Python `0.3.x` CLI remains operational and supportable throughout
-the migration. It is the behavioral reference and rollback path until the Rust
-artifact passes every parity, security, platform, installation, and real-user
-gate. No public user is moved to a partial Rust client.
+This is an owner-directed big-bang replacement. The Python source remains in
+the development branch only long enough to export contracts and act as a test
+oracle. The completed cutover removes the Python implementation, packaging,
+and release workflows in the same reviewed change that installs the Rust
+workspace as the sole heyfood product. There is no supported split runtime,
+parallel public channel, or gradual command-by-command migration.
+
+The Rust artifact is not released until it passes every parity, security,
+platform, installation, and end-to-end gate. Internal build artifacts may be
+used for qualification, but users never receive a partial Rust client.
 
 Upon independent approval, this plan supersedes the Python/`prompt_toolkit`
 implementation choice in the reference plan. The reference plan's product,
@@ -197,10 +202,11 @@ application use cases; they never re-enter the Clap parser or spawn `heyfood`.
    dietary content never enter logs.
 8. **The terminal is borrowed.** Every normal, cancelled, panicked, signaled,
    and suspended path restores it.
-9. **Compatibility is measured.** Rust parity is proven against language-
-   neutral fixtures and the installed Python reference.
-10. **No partial public replacement.** Python remains the default until Rust
-    passes installed-artifact gates.
+9. **Compatibility is measured.** Rust behavior is proven against language-
+   neutral fixtures exported from the Python baseline.
+10. **One complete cutover.** Python is a temporary development oracle, then
+    the repository, installer, documentation, and release system switch to Rust
+    together.
 
 ## Cargo workspace architecture
 
@@ -507,30 +513,41 @@ Rust GA includes the existing families:
 No command is silently dropped because it is not visible in the TUI. One-shot
 commands remain a first-class developer interface.
 
-### Local state migration
+### Native local state
 
-- Read the existing `~/.config/heyfood/config.json` and XDG equivalent.
-- Preserve the legacy `~/.config/hellofood/config.json` move behavior.
-- Preserve owner-only permissions and existing keyring service/account lookup.
-- Keep credentials, account binding, conversation ID, household roster,
-  profile outbox, location, and context semantics.
-- Write a `config_schema_version` before Rust performs any new-format mutation.
-- Every migration is atomic, idempotent, backward-read-compatible during the
-  preview window, and covered by old/new/rollback fixtures.
-- Never make Python `0.3.x` unable to read state merely by running a Rust alpha.
-- Rust preview state additions use an extension namespace ignored by Python.
+There is no current-user backward-compatibility gate. Rust owns the final
+configuration and credential schema.
 
-### Python coexistence and rollback
+- Use the platform/XDG `heyfood` config directory and a versioned native schema.
+- Preserve owner-only permissions/ACLs, account binding, secret separation,
+  atomic writes, and redacted inspection.
+- Provide a one-time best-effort importer for a local Python `0.3.2` config and
+  its keyring entry as developer convenience, not as a GA blocker.
+- Import is read-only against the source, explicit, idempotent, and never
+  deletes the Python file/keyring entry.
+- A failed or ambiguous import starts a clean Rust login journey rather than
+  weakening credential or file protections.
+- Rust does not maintain backward-write compatibility with Python.
 
-- Public Python `0.3.x` remains unchanged by Rust alpha development.
-- Rust previews install into isolated directories or use an explicit preview
-  channel; they never overwrite the public `heyfood` binary without consent.
-- Preview users can switch back to the Python client with the same compatible
-  state.
-- GA rollback is a new signed patch restoring the Python launcher/default or a
-  prior native artifact; no immutable release is republished.
-- Backend, scopes, profile data, and production infrastructure are not rolled
-  back by a client rollback.
+### Big-bang repository and product cutover
+
+- Development may temporarily keep Python beside Rust solely to export fixtures
+  and run differential tests. No production code path shells out to Python.
+- Before deletion, tag the exact final Python baseline for historical recovery
+  and preserve its language-neutral contracts.
+- The cutover PR removes `src/heyfood_cli`, Python-only tests, `pyproject.toml`,
+  Python packaging scripts, and Python release workflows after Rust parity is
+  proven.
+- The same reviewed cutover makes Cargo the repository root, native installers
+  canonical, Rust documentation authoritative, and the native binary the only
+  supported `heyfood` implementation.
+- There is one public replacement release. Internal artifacts are qualification
+  inputs, not a separate supported preview product.
+- Operational rollback means publishing or re-promoting a previously reviewed
+  native artifact. Restoring the archived Python tag is an emergency source
+  recovery option, not a supported compatibility promise.
+- Backend, scopes, profile data, and production infrastructure are unaffected by
+  the client-language cutover.
 
 ## Distribution strategy
 
@@ -565,22 +582,14 @@ dependency qualification. GA documentation must not claim them early.
 Homebrew and WinGet are desirable follow-up channels, not substitutes for the
 first-party signed installer.
 
-### PyPI compatibility
+### PyPI retirement
 
-Existing `pipx install heyfood-cli` users must not be silently abandoned.
-Phase 0/1 proves one of these reviewed paths before GA:
-
-1. **Preferred:** platform-specific `py3-none-*` compatibility wheels that
-   contain the exact already-built native binary plus a minimal launcher. The
-   wheel performs no install-time download; the embedded binary hash matches
-   the signed GitHub release artifact; pipx remains a compatibility channel,
-   while native installation requires no Python.
-2. **Fallback requiring owner decision:** keep PyPI `0.3.x` security-supported
-   for a documented transition window and direct users to the native installer.
-
-Do not publish a wheel that downloads and executes an unpinned binary at
-install/runtime. Do not publish an sdist that unexpectedly compiles the Rust
-client on user machines.
+PyPI is not a Rust distribution target. `heyfood-cli 0.3.2` remains an immutable
+historical artifact, but the native release does not publish a compatibility
+wheel, launcher, install-time downloader, or sdist. The public website, README,
+GitHub release, and support guidance switch to the signed native installers in
+the same cutover. `pipx install heyfood-cli` is no longer a supported install
+path after `0.4.0`.
 
 ### Signing and provenance
 
@@ -642,16 +651,16 @@ features, telemetry, services, or internal dependencies.
 
 | Path | Deliverable |
 |---|---|
-| `src/heyfood_cli/**` | Retained Python behavioral reference and security-fix line during migration; no Rust logic embedded here |
-| `pyproject.toml` | Preserve Python reference packaging until DG-R5; later describe only an approved compatibility launcher if selected |
+| `src/heyfood_cli/**` | Temporary fixture/test oracle, then removed by the reviewed cutover |
+| `pyproject.toml` | Temporary Python test packaging, then removed by the reviewed cutover |
 | `schemas/v1/heyfood-output.schema.json` | Stable machine-output schema consumed by Rust tests |
 | `schemas/v1/transcription.schema.json` | Stable transcription contract consumed by Rust tests |
 | `scripts/regenerate_compat_fixtures.py` | Extend into deterministic language-neutral fixture exporter |
-| `scripts/smoke_installed_cli.py` | Run against Python, native, and PyPI-launcher installed artifacts |
-| `scripts/verify_artifacts.py` | Verify native archives, manifests, SBOM/provenance, and any compatibility wheels |
+| `scripts/smoke_installed_cli.py` | Temporary differential helper, then replaced by native installed-artifact smoke tooling |
+| `scripts/verify_artifacts.py` | Temporary helper, then replaced by native archive/manifest/SBOM/provenance verification |
 | `fixtures/compat/**` | Language-neutral Python/Rust interface fixtures |
 | `fixtures/api/**` | Requests, responses, SSE streams, error/timeout cases |
-| `fixtures/config/**` | Python old/current, Rust preview, migration/rollback state |
+| `fixtures/config/**` | Native schema plus optional one-time Python import fixtures |
 | `fixtures/presentation/**` | Semantic documents and renderer snapshots |
 | `crates/heyfood-core/tests/**` | Schema, validation, redaction, presentation parity |
 | `crates/heyfood-agent-runtime/tests/**` | Wire, SSE, timeout, cancellation, no-replay tests |
@@ -661,7 +670,7 @@ features, telemetry, services, or internal dependencies.
 | `crates/heyfood-cli/tests/**` | Help, grammar, JSON, exits, differential fixtures |
 | `crates/heyfood-tui/tests/**` | Reducer, layout, input, restoration, PTY tests |
 | `tests/rust_python_differential/**` | Installed Python versus Rust contract runner |
-| `tests/release/**` | Artifact, installer, migration, rollback, signature tests |
+| `tests/release/**` | Artifact, installer, signature, exact-upgrade, and prior-native recovery tests |
 | `tests/hardware/**` | Recorded real microphone and platform qualification protocol |
 
 ### Release, installer, and documentation
@@ -671,24 +680,23 @@ features, telemetry, services, or internal dependencies.
 | `.github/workflows/rust-ci.yml` | fmt/clippy/test/audit/deny/platform matrix |
 | `.github/workflows/rust-release.yml` | signed native artifact build/promotion |
 | `.github/workflows/rust-post-release-smoke.yml` | installed public artifact matrix |
-| `.github/workflows/ci.yml` | Keep Python reference CI; invoke Rust CI only after workspace review without weakening current gates |
-| `.github/workflows/release.yml` | Keep Python release protected during migration; retire/replace only in reviewed GA cutover |
-| `.github/workflows/post-release-smoke.yml` | Preserve Python public smoke and add explicit native-channel equivalent |
+| `.github/workflows/ci.yml` | Temporary Python oracle CI, removed/replaced by Rust CI in the cutover |
+| `.github/workflows/release.yml` | Python/PyPI release workflow removed in the cutover |
+| `.github/workflows/post-release-smoke.yml` | Python/PyPI smoke removed in favor of native public smoke |
 | `install.sh` | Native macOS/Linux verified installer |
 | `install.ps1` | Native Windows verified installer |
 | `scripts/release-manifest.*` | Signed manifest generation/verification |
-| `packaging/pypi/**` | Optional native-binary compatibility wheel proof |
 | `packaging/macos/**` | signing/notarization packaging |
 | `packaging/windows/**` | Authenticode/installer packaging |
 | `docs/CLI_CONTRACT.md` | Language-independent public CLI contract |
 | `docs/COMMAND_GRAMMAR.md` | Clap/one-shot/slash grammar |
 | `docs/interactive-session.md` | TUI keys, commands, accessibility, privacy |
 | `docs/platform-support.md` | Exact platform/terminal/audio matrix |
-| `docs/rust-migration.md` | Python coexistence, config, preview, rollback |
+| `docs/rust-cutover.md` | Big-bang source/package/installer/release cutover and emergency recovery |
 | `docs/references/grok-build-provenance.md` | Pinned pattern/adaptation ledger |
 | `README.md` | Native install and single-command journey |
-| `CHANGELOG.md` | Preview and GA compatibility notes |
-| `RELEASING.md` | Signing, qualification, promotion, rollback runbook |
+| `CHANGELOG.md` | Complete Rust replacement and removed PyPI path |
+| `RELEASING.md` | Signing, qualification, promotion, and prior-native recovery runbook |
 
 ## Decision gates
 
@@ -696,18 +704,17 @@ features, telemetry, services, or internal dependencies.
 
 Before broad porting, prove one complete Rust path:
 
-1. read an existing Python config without mutation;
-2. load an existing credential through the qualified platform adapter;
-3. authenticate/refresh against a controlled service;
-4. open `/v1/agent/converse` SSE;
-5. render incremental text in a minimal Ratatui viewport;
-6. keep the composer responsive;
-7. cancel and prove the connection/task/resources close;
-8. restore after normal exit, panic, keyboard cancel, Unix signal, and Windows
+1. create/read the native config and credential state safely;
+2. authenticate/refresh against a controlled service;
+3. open `/v1/agent/converse` SSE;
+4. render incremental text in a minimal Ratatui viewport;
+5. keep the composer responsive;
+6. cancel and prove the connection/task/resources close;
+7. restore after normal exit, panic, keyboard cancel, Unix signal, and Windows
    console event;
-9. run on the initial target CI matrix;
-10. build checksummed native artifacts;
-11. compare the operation's request/events/result/config with Python fixtures.
+8. run on the initial target CI matrix;
+9. build checksummed native artifacts;
+10. compare the operation's request/events/result with Python-exported fixtures.
 
 Failure returns the architecture to review. It does not authorize bypassing
 terminal, cancellation, platform, or compatibility gates.
@@ -719,16 +726,17 @@ and request fingerprint. `X-Request-ID` is tracing only. Until replay protection
 is documented and tested, Rust performs no automatic retry after an uncertain
 conversational POST. Existing pending-confirmation IDs remain separate.
 
-### DG-R3 — Credential and file compatibility
+### DG-R3 — Credential and native file safety
 
 Prove macOS Keychain, Linux Secret Service/headless fallback, and Windows
 Credential Manager behavior, including timeouts/prompts, process isolation if
-needed, atomic config mutation, file locking, owner permissions/ACLs, old-state
-read, and Python rollback-read compatibility.
+needed, atomic config mutation, file locking, owner permissions/ACLs, and clean
+recovery after interruption. The optional Python importer is evaluated
+separately and cannot weaken the native schema or credential policy.
 
 ### DG-R4 — Native signing ownership
 
-Before public beta, FRNTR, LLC must have:
+Before GA, FRNTR, LLC must have:
 
 - Apple Developer ID/notarization credentials in a protected GitHub environment;
 - a Windows signing path acceptable to SmartScreen/enterprise users;
@@ -738,11 +746,13 @@ Before public beta, FRNTR, LLC must have:
 Signing credentials are never committed or exposed to untrusted pull-request
 jobs.
 
-### DG-R5 — PyPI transition
+### DG-R5 — Big-bang cutover completeness
 
-Prove the native-binary compatibility wheel or record the owner-approved legacy
-PyPI transition. GA cannot silently strand `pipx install heyfood-cli` users or
-replace their executable without migration guidance and rollback.
+Prove one reviewed change removes the Python implementation, Python tests and
+packaging, PyPI workflows, and Python installer behavior; makes Cargo/Rust CI
+authoritative; promotes native installers/documentation; preserves the final
+Python tag and exported fixtures; and leaves no runtime or release path that can
+silently invoke the obsolete Python client.
 
 ### DG-R6 — Voice platform matrix
 
@@ -764,7 +774,8 @@ and evidence receive independent review.
 2. Create the Cargo workspace skeleton and dependency/security policy.
 3. Implement only enough core/platform/runtime/TUI code for DG-R1.
 4. Run the spike on macOS, Linux, and Windows CI.
-5. Prove existing config/credential read without mutation.
+5. Prove native config/credential creation and evaluate the optional read-only
+   Python importer without making it an exit dependency.
 6. Inventory backend idempotency and release metrics.
 7. Pin the Grok reference/provenance record.
 8. Record dependency licenses and platform system-library requirements.
@@ -777,15 +788,15 @@ independent architecture/security review. If rejected, stop before broad port.
 
 ### Phase 1 — Core, platform, and compatibility foundation
 
-1. Implement `heyfood-core` schemas, errors, validation, redaction, config
-   migrations, and presentation documents.
+1. Implement `heyfood-core` schemas, errors, validation, redaction, native
+   config versioning, and presentation documents.
 2. Implement platform paths, locks, atomic writer, credential stores/broker,
    browser, TTY, TLS/proxy, and signal abstraction.
 3. Implement the application supervisor, immutable snapshots, generations, and
    single state writer.
-4. Build Rust/Python differential harnesses.
-5. Prove old/current config read, preview write, Python rollback read, account
-   switching, and secret/file permissions on every platform.
+4. Build temporary Rust/Python differential harnesses from exported fixtures.
+5. Prove clean native state, account switching, interrupted-write recovery, and
+   secret/file permissions on every platform; test optional import separately.
 
 **Exit gate:** DG-R3 passes; core fixtures match Python; no secret/dietary data
 enters logs; state races and interrupted persistence tests pass; independent
@@ -819,9 +830,10 @@ passes.
    signals, suspend/resume, and restoration.
 5. Add classic/`NO_COLOR`/no-animation/no-TUI accessibility paths.
 
-**Exit gate:** bare preview `heyfood` delivers a responsive persistent TUI;
-terminal restoration and resource budgets pass every platform; semantic output
-matches one-shot behavior; independent TUI/product/accessibility review passes.
+**Exit gate:** the internal qualification binary delivers a responsive
+persistent TUI; terminal restoration and resource budgets pass every platform;
+semantic output matches one-shot behavior; independent
+TUI/product/accessibility review passes.
 
 ### Phase 4 — Registration, onboarding, and complete workflows
 
@@ -833,10 +845,10 @@ matches one-shot behavior; independent TUI/product/accessibility review passes.
 4. Exercise clean-machine, returning, partial-profile, interrupted onboarding,
    account switch, SSH, offline, and service-failure journeys.
 
-**Exit gate:** a net-new user runs one preview command, registers, authenticates,
-onboards, and completes a useful typed turn without command-topology knowledge;
-all command families are parity-complete; independent auth/privacy/UX review
-passes.
+**Exit gate:** a net-new user runs one internal qualification binary,
+registers, authenticates, onboards, and completes a useful typed turn without
+command-topology knowledge; all command families are parity-complete;
+independent auth/privacy/UX review passes.
 
 ### Phase 5 — Voice and native distribution
 
@@ -845,35 +857,43 @@ passes.
 2. Qualify real hardware and permissions for the advertised matrix.
 3. Build `install.sh`, `install.ps1`, signed manifest, hashes, SBOMs, provenance,
    macOS signing/notarization, Windows signing, and Linux artifacts.
-4. Prove optional PyPI compatibility wheels or close DG-R5 with owner decision.
-5. Exercise install, exact version, upgrade from Python, config reuse, rollback,
-   uninstall, proxy/custom CA, and no-admin paths.
+4. Exercise clean install, exact version, same-version repair, prior-native
+   recovery, uninstall, proxy/custom CA, and no-admin paths.
+5. Build the complete DG-R5 repository/package/workflow deletion as a reviewed
+   but not-yet-merged cutover change.
 
 **Exit gate:** DG-R4/R5/R6 pass; voice is one continuous TUI turn; public-style
-artifacts install and roll back without state loss; independent voice,
-supply-chain, and release review passes.
+native artifacts install and recover cleanly; the cutover removes every Python
+runtime/release path; independent voice, supply-chain, and release review
+passes.
 
-### Phase 6 — Public beta, cutover, and GA
+### Phase 6 — Final qualification, big-bang cutover, and GA
 
-1. Publish signed `0.4.0-alpha.N` native artifacts without replacing public
-   Python defaults.
-2. Run an opt-in beta across the full platform/terminal matrix.
-3. Compare privacy-safe backend aggregate auth, agent SSE, and transcription
-   success/failure with the Python baseline; add no prompt/content telemetry.
-4. Resolve every P0/P1 beta finding and repeat affected review gates.
-5. Prepare and drill exact native-to-Python/prior-native rollback.
-6. Cut `0.4.0` only after installed-artifact clean-user, returning-user,
-   one-shot JSON, interactive typed, and real-hardware voice journeys pass.
-7. Promote native `install.sh`/`install.ps1`, PyPI compatibility decision,
-   documentation, landing-page animations, and support runbooks atomically.
-8. Observe for 24 hours with named release owner `admin@frntr.ai` and rollback
-   on any critical journey failure, terminal restoration defect, installer/
-   signature failure, or failure rate above both 5% and twice the baseline at
-   20+ events.
+1. Produce signed internal release-candidate artifacts and run the complete
+   platform/terminal matrix without publishing a supported partial product.
+2. Compare privacy-safe backend aggregate auth, agent SSE, and transcription
+   success/failure with the pre-cutover baseline; add no prompt/content
+   telemetry.
+3. Resolve every P0/P1 qualification finding and repeat affected review gates.
+4. Tag/archive the final Python baseline and verify exported fixtures are
+   complete.
+5. Drill prior-native artifact recovery and emergency restoration of the
+   archived Python source tag without treating it as a supported product path.
+6. Merge the single DG-R5 cutover only after installed-artifact clean-user,
+   returning-user, one-shot JSON, interactive typed, and real-hardware voice
+   journeys pass.
+7. Cut `0.4.0` from the Rust-only repository state.
+8. Promote native `install.sh`/`install.ps1`, documentation, landing-page
+   animations, and support runbooks atomically; retire PyPI guidance.
+9. Observe for 24 hours with named release owner `admin@frntr.ai` and recover
+   or stop promotion on any critical journey failure, terminal restoration
+   defect, installer/signature failure, or failure rate above both 5% and twice
+   the baseline at 20+ events.
 
 **Exit gate:** public installed bytes match signed reviewed artifacts; the
-native client is the default; Python remains a tested rollback path for the
-documented support window; release review marks this plan complete.
+repository and supported product are Rust-only; native installers are the sole
+public path; no Python/PyPI workflow remains active; release review marks this
+plan complete.
 
 ## Test and qualification matrix
 
@@ -885,7 +905,7 @@ documented support window; release review marks this plan complete.
 - `cargo audit` and `cargo deny check`;
 - no unsafe code by default; any `unsafe` platform boundary is isolated,
   documented with invariants, and independently reviewed;
-- property tests for validation, config migrations, SSE parsing, and command
+- property tests for validation, native config/import, SSE parsing, and command
   grammar;
 - deterministic snapshots for semantic documents and terminal frames.
 
@@ -910,7 +930,7 @@ documented support window; release review marks this plan complete.
   local-first effect, scope/location change, and queued draft;
 - native/browser voice success, permissions, no device, scope loss, timeout,
   cancel, processor consent, and typed fallback;
-- Python config/keyring migration and rollback.
+- clean native state plus optional read-only Python config/keyring import.
 
 ### Resource and performance budgets
 
@@ -949,12 +969,14 @@ documented support window; release review marks this plan complete.
     state pass the approved compatibility matrix.
 14. `--json` emits exactly one ANSI-free JSON value on stdout in real and
     simulated TTY conditions.
-15. Rust preview does not make Python rollback unable to read state.
+15. The reviewed cutover removes the Python implementation, Python packaging,
+    PyPI workflows, and every runtime fallback to Python.
 16. Native signed artifacts exist for the declared macOS, Linux, and Windows
     matrix.
 17. First-party installers verify signed manifests, hashes, provenance, and
     install atomically without Python or administrator access.
-18. Existing pipx users receive a tested compatibility or transition path.
+18. Native `install.sh` and `install.ps1` are the sole supported public install
+    paths; documentation no longer presents pipx/PyPI as current.
 19. Public installed artifacts—not source checkouts—pass clean-user,
     returning-user, JSON, typed TUI, and real-hardware voice qualification.
 20. The local intelligence boundary remains unchanged: proprietary backend,
@@ -964,19 +986,18 @@ documented support window; release review marks this plan complete.
 
 | Risk | Control |
 |---|---|
-| Big-bang rewrite strands users | Python remains default/reference/rollback until installed Rust GA gates pass |
+| Big-bang cutover ships an incomplete client | No public partial release; full command/TUI/voice/platform parity and DG-R5 gate the single cutover |
 | Rust scope expands into local agent platform | Explicit hosted-runtime boundary and non-goals |
 | TUI state becomes monolithic | Crate boundaries, pure dispatch, supervised effects, thin binary |
 | Terminal corruption | Sole terminal guard, ordered restoration, panic/signal/ConPTY PTY tests |
 | Cancellation drops UI but leaks work | Owned cancellation tokens/resources, bounded joins, no late mutation |
 | Concurrent effects corrupt scope/config | Single-flight use cases, immutable snapshots, generation-checked state writer |
-| Config/keyring migration loses access | Old/new fixtures, atomic migration, platform credential qualification, Python rollback read |
+| Native config/keyring loses access or corrupts state | Versioned schema, atomic writes, platform credential qualification, interruption tests; optional importer is non-destructive |
 | Sensitive data leaks into logs/history | secrecy/redaction types, memory-only history, content-free diagnostics, tests |
 | Service output injects terminal controls | Semantic allowlist parser and CSI/OSC sanitization |
-| Rust and Python contracts drift | Language-neutral fixtures and installed differential runner |
+| Rust behavior drifts from proven Python contracts during rewrite | Frozen language-neutral fixtures and temporary differential runner before Python deletion |
 | Windows support is assumed rather than built | Explicit MSVC/ConPTY/credential/signing/audio gates |
 | Linux native dependencies reduce portability | Record glibc/audio/system requirements, artifact qualification, defer musl claims |
-| PyPI users are abandoned | Compatibility wheel proof or explicit owner-approved support transition |
 | Installer supply-chain compromise | Signed manifest, Sigstore identity, hashes, pinned Actions, protected release |
 | Grok source is copied indiscriminately | Pinned pattern-only default and origin-ledger/license gate |
 | Timeline pressure weakens gates | Phase exit reviews; slip moves release date, not acceptance criteria |
@@ -991,10 +1012,10 @@ The current planning estimate is:
 | Architecture/compatibility spike | 2–3 engineer-weeks |
 | Rust MVP: auth, one turn, basic TUI, config | 8–12 cumulative engineer-weeks |
 | Full commands and TUI, excluding complete voice/platform release | 16–22 cumulative engineer-weeks |
-| Full parity, voice, Windows, installers, signing, qualification | **25–36 cumulative engineer-weeks** |
+| Full parity, voice, Windows, installers, signing, qualification | **22–32 cumulative engineer-weeks** |
 
-For two experienced engineers, this is approximately 15–20 calendar weeks;
-for one experienced engineer, approximately 6–9 months. Automation and focused
+For two experienced engineers, this is approximately 13–18 calendar weeks;
+for one experienced engineer, approximately 5–8 months. Automation and focused
 parallel work may reduce elapsed time, but this plan does not trade away
 compatibility, privacy, signing, or installed-artifact qualification to meet an
 arbitrary date.
@@ -1013,7 +1034,8 @@ arbitrary date.
 - Removing one-shot CLI or JSON in favor of TUI-only behavior.
 - Claiming Windows ARM64, musl Linux, or unsupported terminals before testing.
 - Publishing an unsigned Windows GA or unnotarized macOS GA.
-- Replacing the public Python CLI with an incomplete preview.
+- Publishing any incomplete/parallel preview instead of the single qualified
+  replacement.
 
 ## Independent review protocol
 
@@ -1028,7 +1050,8 @@ SHA and validates:
 6. registration/auth/onboarding and profile-consent behavior;
 7. voice/platform adapter feasibility;
 8. privacy, credential, escape-injection, and supply-chain security;
-9. installers, signing, PyPI transition, rollback, and release gates;
+9. installers, signing, Python/PyPI deletion, big-bang cutover, and recovery
+   gates;
 10. scope, estimates, phases, and whether the plan actually delivers the
     requested delightful developer experience.
 
