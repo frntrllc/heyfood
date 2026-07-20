@@ -11,25 +11,31 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 from pathlib import Path
+from pathlib import PurePosixPath
 import subprocess
 import sys
+import tarfile
+import tempfile
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
-BASELINE_SHA = "9c6b91929143180252ad1b644aea273729a1f1b9"
-BASELINE_TREE = "b3cf49317b7ccbb42389411c819a925d3e8be3b9"
-EXPECTED_NODE_COUNT = 601
-EXPECTED_NODE_SHA256 = "4a37719d66f501c7603ccd366dafb894c56061325322afd5c01da4d4ae4b2ade"
+BASELINE_SHA = "73494a57468dac83b4904ce6c390e36926f5c6fe"
+BASELINE_TREE = "4c265cd9ae0623442dd8eba1f6f4388c4ebf5adf"
+BASELINE_VERSION = "0.4.0"
+EXPECTED_NODE_COUNT = 643
+EXPECTED_NODE_SHA256 = "49e6fe5429174a9ad8f6cf47d209365ca852ebed5b6f6fa7f86b824dfa4b0cd3"
+EXPECTED_ENDPOINT_COUNT = 26
 HELLOFOOD_SHA = "27cab29dd3d17bb844462c8ec5340585b859b0ae"
 HELLOFOOD_REPOSITORY = "https://github.com/frntrllc/hellofood.git"
 DIETARY_SHA256 = "40a26e22d7e729289ef5bf4052af841adc76029711d89c89f046eba87d533556"
 BANNER_SHA256 = "8f97c59f5eba7075891cb1aa31c300ea776a0ac57117ef290a7f7c6a07e4c50e"
 PALETTE_SHA256 = "22978be9dd03ca5a194617940d0b78a495bdf7f3ecc40729af2f1322cca0d73e"
 BANNER_TS_SHA256 = "49fe8509eeb0b3b4511b97cf81b383140ccae1d29b93bc7ca68ac07dd1d9da84"
-TOOL_VERSION = 1
+TOOL_VERSION = 2
 
 NODE_PATH = ROOT / "tests/migration/python-node-ids.txt"
 NODE_METADATA_PATH = ROOT / "tests/migration/python-node-ids.metadata.json"
@@ -66,13 +72,27 @@ def git_blob(path: str, *, repository: Path = ROOT, commit: str = BASELINE_SHA) 
 
 
 def collect_node_ids(python: str) -> list[str]:
-    result = subprocess.run(
-        [python, "-m", "pytest", "--collect-only", "-q"],
+    archive = subprocess.run(
+        ["git", "archive", "--format=tar", BASELINE_SHA],
         cwd=ROOT,
         check=True,
         capture_output=True,
-        text=True,
-    )
+    ).stdout
+    with tempfile.TemporaryDirectory(prefix="heyfood-python-oracle-") as directory:
+        checkout = Path(directory)
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source:
+            for member in source.getmembers():
+                path = PurePosixPath(member.name)
+                if path.is_absolute() or ".." in path.parts:
+                    raise AssertionError(f"unsafe baseline archive path: {member.name}")
+            source.extractall(checkout)
+        result = subprocess.run(
+            [python, "-m", "pytest", "--collect-only", "-q"],
+            cwd=checkout,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
     return [line for line in result.stdout.splitlines() if line.startswith("tests/")]
 
 
@@ -224,13 +244,13 @@ def write_migration_evidence(node_ids: list[str]) -> None:
         "schema_version": 1,
         "baseline_sha": BASELINE_SHA,
         "baseline_tree": BASELINE_TREE,
-        "baseline_version": "0.3.2",
+        "baseline_version": BASELINE_VERSION,
         "capture_command": "python -m pytest --collect-only -q",
         "normalization": "Keep stdout lines beginning with tests/, preserve collection order, UTF-8, LF, final LF.",
         "node_count": len(node_ids),
         "normalized_sha256": sha256(node_data),
         "reviewed_environment": {
-            "python": "3.11.10",
+            "python": "3.11.15",
             "pytest": "9.1.1",
             "click": "8.1.8",
             "httpx": "0.28.1",
@@ -291,7 +311,7 @@ def write_migration_evidence(node_ids: list[str]) -> None:
         "baseline": {
             "commit_sha": BASELINE_SHA,
             "tree_sha": BASELINE_TREE,
-            "python_version": "0.3.2",
+            "python_version": BASELINE_VERSION,
             "pytest_node_ids_path": "tests/migration/python-node-ids.txt",
             "pytest_node_count": len(node_ids),
             "pytest_node_ids_sha256": sha256(node_data),
@@ -321,7 +341,7 @@ def write_endpoint_contract() -> None:
         }
     )
     contract = {
-        "$comment": "Stable language-neutral inventory of outbound HTTP requests plus browser and loopback listener surfaces reachable from the Python 0.3.2 client. The 25-row compatibility fixture is frozen from tests/fixtures/called_endpoints.json at provenance.baseline_sha; the live fixture may continue to evolve during consumer migration.",
+        "$comment": "Stable language-neutral inventory of outbound HTTP requests plus browser and loopback listener surfaces reachable from the final unpublished Python 0.4.0 candidate. The compatibility fixture is frozen from tests/fixtures/called_endpoints.json at provenance.baseline_sha; public Python releases ended at 0.3.2 and the live fixture may continue to evolve during consumer migration.",
         "schema_version": 1,
         "provenance": {
             "baseline_sha": BASELINE_SHA,
@@ -511,8 +531,10 @@ def verify() -> None:
     compatibility = json.loads(COMPAT_ENDPOINT_PATH.read_text(encoding="utf-8"))
     stable = json.loads(STABLE_ENDPOINT_PATH.read_text(encoding="utf-8"))
     frozen_endpoints = baseline_compatibility["endpoints"]
-    if len(frozen_endpoints) != 25:
-        raise AssertionError("baseline compatibility endpoint fixture must contain 25 rows")
+    if len(frozen_endpoints) != EXPECTED_ENDPOINT_COUNT:
+        raise AssertionError(
+            f"baseline compatibility endpoint fixture must contain {EXPECTED_ENDPOINT_COUNT} rows"
+        )
     if stable["endpoints"][:-1] != frozen_endpoints:
         raise AssertionError("stable endpoint contract no longer preserves the frozen compatibility rows")
     if not all(endpoint in compatibility["endpoints"] for endpoint in frozen_endpoints):

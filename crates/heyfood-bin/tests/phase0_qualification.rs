@@ -142,7 +142,7 @@ async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratat
         serde_json::from_str(PYTHON_AUTH_FIXTURE).expect("valid Python auth fixture");
     assert_eq!(
         fixture["provenance"]["commit_sha"],
-        "9c6b91929143180252ad1b644aea273729a1f1b9"
+        "73494a57468dac83b4904ce6c390e36926f5c6fe"
     );
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

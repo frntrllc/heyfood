@@ -32,7 +32,7 @@
     }
   ],
   "export_tool": "scripts/phase0/export_contract_freeze.py",
-  "export_tool_version": 1,
+  "export_tool_version": 2,
   "review": {
     "status": "pending",
     "reviewer": null,

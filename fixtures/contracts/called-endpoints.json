@@ -1,14 +1,14 @@
 {
-  "$comment": "Stable language-neutral inventory of outbound HTTP requests plus browser and loopback listener surfaces reachable from the Python 0.3.2 client. The 25-row compatibility fixture is frozen from tests/fixtures/called_endpoints.json at provenance.baseline_sha; the live fixture may continue to evolve during consumer migration.",
+  "$comment": "Stable language-neutral inventory of outbound HTTP requests plus browser and loopback listener surfaces reachable from the final unpublished Python 0.4.0 candidate. The compatibility fixture is frozen from tests/fixtures/called_endpoints.json at provenance.baseline_sha; public Python releases ended at 0.3.2 and the live fixture may continue to evolve during consumer migration.",
   "schema_version": 1,
   "provenance": {
-    "baseline_sha": "9c6b91929143180252ad1b644aea273729a1f1b9",
-    "baseline_tree": "b3cf49317b7ccbb42389411c819a925d3e8be3b9",
+    "baseline_sha": "73494a57468dac83b4904ce6c390e36926f5c6fe",
+    "baseline_tree": "4c265cd9ae0623442dd8eba1f6f4388c4ebf5adf",
     "compatibility_fixture": "tests/fixtures/called_endpoints.json",
-    "compatibility_fixture_sha256": "11986e9dbfdfd415f6da5183321e1614ea15c1f3be12af7f32a3e5578423e1e9",
-    "compatibility_endpoint_count": 25,
+    "compatibility_fixture_sha256": "aeb4339da0cb1c73d36892c7d57d4c8b412aa2f8efcb0aec8c855fe88f835957",
+    "compatibility_endpoint_count": 26,
     "capture_tool": "scripts/phase0/export_contract_freeze.py",
-    "capture_tool_version": 1
+    "capture_tool_version": 2
   },
   "endpoints": [
     {
@@ -88,6 +88,12 @@
       "endpoint": "/v1/meals/daily-summary",
       "auth": "session",
       "note": "Daily meal summary."
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v1/channel/links",
+      "auth": "session",
+      "note": "List account-owned ChatGPT and other AI-channel links."
     },
     {
       "method": "DELETE",

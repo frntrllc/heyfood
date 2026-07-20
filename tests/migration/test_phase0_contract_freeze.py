@@ -28,23 +28,23 @@ def test_legacy_endpoint_fixture_is_preserved_while_stable_contract_closes_gap()
     baseline = json.loads(tool.git_blob("tests/fixtures/called_endpoints.json"))
     compatibility = json.loads((ROOT / "tests/fixtures/called_endpoints.json").read_text())
     stable = json.loads((ROOT / "fixtures/contracts/called-endpoints.json").read_text())
-    assert len(baseline["endpoints"]) == 25
+    assert len(baseline["endpoints"]) == 26
     assert stable["endpoints"][:-1] == baseline["endpoints"]
     assert stable["endpoints"][-1]["endpoint"] == "/.well-known/oauth-authorization-server"
-    assert len(stable["endpoints"]) == 26
+    assert len(stable["endpoints"]) == 27
     assert all(endpoint in compatibility["endpoints"] for endpoint in baseline["endpoints"])
     assert stable["provenance"]["baseline_sha"] == tool.BASELINE_SHA
-    assert stable["provenance"]["compatibility_endpoint_count"] == 25
+    assert stable["provenance"]["compatibility_endpoint_count"] == 26
 
 
 def test_initial_ledger_is_complete_but_truthfully_unmapped() -> None:
     ledger = json.loads((ROOT / "tests/migration/python-test-ledger.json").read_text())
-    assert ledger["baseline"]["pytest_node_count"] == 601
+    assert ledger["baseline"]["pytest_node_count"] == 643
     assert ledger["baseline"]["non_pytest_invariant_count"] == 32
     assert ledger["summary"] == {
-        "entry_count": 633,
+        "entry_count": 675,
         "mapped_count": 0,
-        "unmapped_count": 633,
+        "unmapped_count": 675,
     }
     assert all(entry["migration_status"] == "unmapped" for entry in ledger["entries"])
     assert all(entry["disposition"] is None for entry in ledger["entries"])

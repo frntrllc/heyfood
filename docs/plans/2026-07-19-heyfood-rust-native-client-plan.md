@@ -1,10 +1,10 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v4 — grocery client scope and accelerated execution amendment; exact-SHA re-review required
-**Baseline:** `frntrllc/heyfood` `main` at `9c6b91929143180252ad1b644aea273729a1f1b9` (`heyfood 0.3.2`)
+**Status:** Draft v5 — final Python-oracle, health, and Phase A hardening reconciliation; exact-SHA re-review required
+**Baseline:** final unpublished Python `0.4.0` candidate at `73494a57468dac83b4904ce6c390e36926f5c6fe`; the last public Python release remains `0.3.2`
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`
-**Active companion:** `frntrllc/hellofood` Platform P0 and Grocery Phase A directives dated 2026-07-19
+**Active companion:** `frntrllc/hellofood` Platform P0, Grocery Phase A/Kroger, Security D2, and Health H1-H3 workstreams dated 2026-07-19
 **Primary user:** a developer using hello.food throughout the working day from a terminal
 **Replacement target:** `0.4.0`, released only when the complete Rust client passes every gate
 **License:** Apache-2.0
@@ -48,6 +48,13 @@ implementation clause in the historical grocery CLI surface directive. That
 document remains product/contract input only; Platform P0 and Grocery Phase A
 stay backend-owned, while all terminal implementation ships in native `0.4.0`.
 
+For health, the Rust program owns H1/H2 one-shot and TUI surfaces over the
+server-backed Oura contracts and later consumes provider-neutral Apple Health
+H3 rollups. The CLI never reads HealthKit directly and never stores provider
+OAuth tokens. Health H1/H2 is part of the native client program; H3 remains
+capability-gated on separately reviewed mobile/backend consent, upload,
+retention, encryption, and deletion contracts.
+
 Upon independent approval, this plan supersedes the Python/`prompt_toolkit`
 implementation choice in the reference plan. The reference plan's product,
 privacy, cancellation, auth, voice, compatibility, testing, and rollout
@@ -80,12 +87,14 @@ adapters and qualification.
 
 ## Current-system facts the rewrite must preserve
 
-The `0.3.2` Python release is a mature compatibility surface, not a prototype:
+The final Python oracle is a mature compatibility surface, not a prototype. It
+includes all public `0.3.2` behavior plus the merged-but-unpublished
+`channels list/disconnect` and official production OAuth-client behavior:
 
 - approximately 13,000 production Python lines and 9,000 test lines;
-- 43 command handlers across agent, auth, profile, household, restaurant,
+- 45 command handlers across agent, auth, channels, profile, household, restaurant,
   recipe, meal, voice, configuration, conversation, and account workflows;
-- 601 passing tests at the audited baseline;
+- 643 passing tests at the audited baseline;
 - stable `--json` output, error envelopes, exit codes, and deprecated `--raw`
   compatibility;
 - registration intent, loopback PKCE, RFC 8628-style device flow, session
@@ -96,6 +105,7 @@ The `0.3.2` Python release is a mature compatibility surface, not a prototype:
   consent policy;
 - restaurant/menu polling, recipes, meals, account deletion, diagnostics, and
   named local/production contexts;
+- account-owned AI-channel listing and disconnection;
 - HTTPS enforcement and exact-loopback-only development exceptions;
 - OS keyring support with a documented owner-only `0600` file fallback;
 - PyPI trusted publishing, `pipx`, and the hosted `install.sh` channel.
@@ -105,15 +115,16 @@ The current `_ask_agent()` combines validation, scope resolution, payload
 construction, SSE consumption, household effects, persistence, and rendering.
 The Rust design separates those responsibilities before building breadth.
 
-Phase 0's pre-scaffold audit verified the baseline independently: 601 collected
-node IDs and 601 passes; normalized node-ID SHA-256
-`4a37719d66f501c7603ccd366dafb894c56061325322afd5c01da4d4ae4b2ade`;
-43 command leaves; and 53 normalized `0.3.0` help fixtures. The current exporter
-omits three help entries and does not export complete JSON/API/SSE contracts, so
-it must be repaired before use. The 25-row called-endpoint fixture also omits the
-real `GET /.well-known/oauth-authorization-server` request because its extractor
-accepts only `/v1/`; Phase 0 expands the inventory to network requests, browser
-navigations, and local listeners rather than perpetuating that blind spot.
+Phase 0's rebaseline audit verified the final oracle independently: 643
+collected node IDs and 643 passes; normalized node-ID SHA-256
+`49e6fe5429174a9ad8f6cf47d209365ca852ebed5b6f6fa7f86b824dfa4b0cd3`;
+45 command leaves; 56 versioned `0.4.0` help fixtures; and the legacy `0.3.0`
+fixture set. The current exporter does not yet export complete JSON/API/SSE
+contracts, so it must be repaired before use. The 26-row called-endpoint fixture includes
+channel listing but omits the real `GET /.well-known/oauth-authorization-server`
+request because its extractor accepts only `/v1/`; the stable Phase 0 contract
+therefore contains 27 HTTP rows plus browser navigations and local listeners
+rather than perpetuating that blind spot.
 
 The exact current asset hashes are recorded in the migration evidence, with
 private canonical provenance pinned to clean monorepo commit
@@ -390,6 +401,8 @@ Owns dependency-light product contracts:
 - configuration schema and migrations;
 - authentication/session/profile/household/location/conversation value types;
 - API request/response and SSE event types;
+- provider-neutral health connection, freshness, trend, and integration-state
+  values; no HealthKit or provider-token representation;
 - safety status vocabulary;
 - normalized error and exit categories;
 - `PresentationDocument` and semantic blocks;
@@ -405,6 +418,7 @@ Owns async service communication:
 - Reqwest client construction with Rustls and platform root policy;
 - metadata/capability discovery;
 - session refresh and authenticated requests;
+- finalized H1/H2 health-context and integration-management REST contracts;
 - `/v1/agent/converse` SSE parsing and normalized runtime events;
 - tracing `X-Request-ID` per attempt;
 - logical operation ID, verified idempotency key/fingerprint, and existing
@@ -426,6 +440,9 @@ Owns UI-independent use cases and state coordination:
 - meals, items, restaurants, menus, recommendations, and recipes;
 - grocery capability discovery, screened-list reads, optimistic mutations,
   confirmation, exclusions, weekly proposals, export, and item references;
+- health status/context, Oura connect/sync/disconnect, completion polling, and
+  health-aware turn preparation without making optional health scopes a
+  prerequisite for ordinary conversation;
 - configuration/context/location operations;
 - single-flight workflow supervisor;
 - immutable operation snapshots and generation IDs;
@@ -479,6 +496,8 @@ for every advertised platform.
 Owns Clap and one-shot presentation:
 
 - the complete existing command tree and option grammar;
+- `channels list/disconnect`, H1 `health status/show`, and H2
+  `health connect/sync/disconnect oura`;
 - human ANSI renderer over `PresentationDocument`;
 - JSON renderer and stable error envelopes;
 - exit-code mapping;
@@ -499,6 +518,7 @@ Owns the retained terminal application:
 - bounded scrollback and semantic rendering;
 - composer, current-process history, paste, completion, slash registry;
 - auth/onboarding/voice panels and modals;
+- provider-neutral health status/trend cards and Oura connection lifecycle;
 - demand-driven animation ticks and invalidation;
 - focus, responsive layout, accessibility/classic handoff;
 - terminal guard, panic restoration, resize, suspend/resume, and signals.
@@ -695,7 +715,8 @@ word “safe.”
 
 ### Language-neutral fixture freeze
 
-Before porting behavior, export reviewed fixtures from Python `0.3.2` for:
+Before porting behavior, export reviewed fixtures from the final Python oracle
+at `73494a57468dac83b4904ce6c390e36926f5c6fe` for:
 
 - command tree, help, arguments, options, aliases, and deprecations;
 - exit codes and error categories;
@@ -714,7 +735,7 @@ note, and independent review.
 
 ### Python test-migration ledger
 
-The statement “601 tests passed” is not deletion evidence. Before any Python
+The statement “643 tests passed” is not deletion evidence. Before any Python
 test or implementation file is removed, freeze
 `tests/migration/python-test-ledger.json` from the committed baseline using the
 exact `pytest --collect-only` node IDs plus every non-pytest CI, release-script,
@@ -786,6 +807,7 @@ Rust GA includes the existing families:
 
 - `ask`, `reply`, `chat`, `log`, `item`;
 - `login`, `register`, `logout`, `status`, `doctor`;
+- `channels list/disconnect`;
 - `profile`, `onboard`, `members`, `household`;
 - `search`, `menu`, `get-menu`, `recommend`, `location`;
 - `recipes search/save/saved`;
@@ -845,12 +867,30 @@ The Rust program owns all CLI grammar, TUI/voice interaction, rendering,
 fixtures consumed by the client, and released-artifact qualification. No
 Python grocery client is implemented or published during the transition.
 
+Platform P0 C1-C4 are merged, but Phase A cannot treat C1 as a safety boundary
+until a narrow hardening change preserves native household inputs instead of
+collapsing them to `_self`, reports complete consent truth, surfaces persisted
+single-profile versions, and makes hashing independent of input/member order.
+Phase A must pass the authoritative `HouseholdContextSnapshot` unchanged
+through REST, conversation tools, screening, and confirmation; reconstructing
+a weaker snapshot from `DietaryContext` or using a profile-only hash is
+prohibited.
+
+Every grocery proposal freezes the real list UUID, exact list version, and
+authoritative context hash. Precondition evaluation is read-only: it cannot use
+an active-list sentinel, create a missing list, or silently follow a replacement
+list. Missing, replaced, stale, consent-revoked, or context-changed state fails
+without mutation. Rust may build provisional application/presentation seams
+while Phase A hardens, but it pins wire DTOs, fixtures, and provenance only to
+the corrected reviewed Phase A merge SHA and deployed capability.
+
 Crate ownership is explicit: core owns versioned grocery wire/semantic types;
 agent-runtime owns capability discovery, scoped REST calls, and grocery tool
 events; application owns optimistic-list and confirmation use cases; CLI owns
 grammar/JSON/classic output; TUI owns list/card interaction and presentation.
 Voice remains a generic input adapter and contains no grocery-specific code.
-Python `0.3.2` cannot be a differential oracle for this net-new behavior;
+The final Python oracle cannot be a differential oracle for this net-new
+grocery behavior;
 authoritative backend fixtures plus reviewed Rust client snapshots are the
 source of truth.
 
@@ -860,14 +900,58 @@ Capability absence is an ordinary typed unavailable state; an existing session
 missing optional grocery scopes receives an explicit re-authentication path,
 never a raw 403 or a broken ordinary conversation.
 
+Kroger is the first retailer provider. Provider-token persistence is prohibited
+until Security D2 delivers purpose-specific versioned integration keys,
+bounded re-encryption, rollback compatibility, and reconnect reconciliation.
+The backend sequence is corrected Phase A plus Security D2 live, then B1
+provider foundations, then B2 Kroger binding. No current Rust work assumes an
+Instacart-first contract or moves provider OAuth tokens into the client.
+
+### Health integration contract
+
+H1/H2 is an additive native surface over the server-backed health and
+integration APIs:
+
+- `health status` reports connected providers and honest
+  connected/stale/not-connected state;
+- `health show` renders provider-neutral freshness, rolling values, labels,
+  and goals without persisting health content locally;
+- `health connect oura` opens the server authorization URL and performs a
+  bounded CLI completion poll;
+- `health sync oura` requests a server-side refresh and reconciles its terminal
+  state without retaining provider credentials;
+- `health disconnect oura` uses explicit confirmation and returns an honest
+  deletion/revocation result;
+- health-aware asks use the ordinary agent path and remain functional when
+  optional health scopes or providers are absent.
+
+H1 reads require `health:read`; H2 management requires
+`integrations:manage`. These scopes are requested only after RFC 8414
+intersection proves the deployed server supports them. A real authenticated
+production canary must prove the endpoints, least-privilege session, and
+redirect/poll lifecycle before H1/H2 is declared releasable.
+
+Apple Health H3 is provider-neutral from the Rust client's perspective.
+HealthKit authorization and collection remain mobile-owned; mobile uploads
+explicitly consented daily aggregates; the backend owns encrypted storage,
+retention, provider merging, revocation, and deletion. Rust consumes only a
+versioned server response after those contracts ship. Direct HealthKit access,
+raw sample ingestion, and Apple credentials in the CLI are prohibited.
+
+The final Python oracle cannot cover H1-H3 because its health CLI slice was
+deliberately not implemented. Reviewed backend fixtures and installed-client
+canaries are the source of truth for these additive commands.
+
 No command is silently dropped because it is not visible in the TUI. One-shot
 commands remain a first-class developer interface.
 
 ### Native local state
 
-There is no current-user backward-compatibility gate. Rust owns the final
-configuration and credential schema. The following native invariants are GA
-requirements independent of whether the optional Python importer exists:
+Returning-user continuity is a GA gate for supported non-secret and local-only
+state. Rust owns the final configuration and credential schema, but the
+replacement cannot silently discard child profiles, repair outbox entries,
+household/context/location selection, conversation pointers, or pending
+confirmation state. The following native invariants apply:
 
 - Use the platform/XDG `heyfood` config directory and a versioned native schema.
 - Enforce owner-only permissions/ACLs, account binding, secret separation,
@@ -880,12 +964,15 @@ requirements independent of whether the optional Python importer exists:
 - A new install, interrupted first write, schema upgrade, corrupt/truncated
   file, concurrent processes, unavailable keyring, and disk-full/permission
   failure each have deterministic fail-closed behavior and recovery guidance.
-- Provide a one-time best-effort importer for a local Python `0.3.2` config and
-  its keyring entry as developer convenience, not as a GA blocker.
+- Provide a one-time importer for supported local Python `0.3.2` state. Preserve
+  non-secret/local-only state; require a fresh login when secret/keyring import
+  cannot be proven safe.
 - Import is read-only against the source, explicit, idempotent, and never
   deletes the Python file/keyring entry.
-- A failed or ambiguous import starts a clean Rust login journey rather than
-  weakening credential or file protections.
+- A failed or ambiguous secret import starts a clean Rust login journey rather
+  than weakening credential or file protections. Unsupported non-secret records
+  produce an actionable, redacted disposition report and block returning-user
+  qualification rather than disappearing silently.
 - Rust does not maintain backward-write compatibility with Python.
 
 ### Big-bang repository and product cutover
@@ -1134,7 +1221,9 @@ features, telemetry, services, or internal dependencies.
 | `fixtures/api/**` | Requests, responses, SSE streams, error/timeout cases |
 | `fixtures/contracts/grocery-backend/**` | Mirrored authoritative capability, scope, entity, confirmation, conflict, safety, tool, and export wire contracts with backend source SHA/provenance |
 | `fixtures/grocery-client/**` | Rust-owned `--json`, semantic presentation, TUI, classic, and error snapshots |
-| `fixtures/config/**` | Native schema plus optional one-time Python import fixtures |
+| `fixtures/contracts/health-backend/**` | H1/H2 provider-neutral context/integration contracts and later H3 capability fixtures with backend source SHA/provenance |
+| `fixtures/health-client/**` | Rust-owned health JSON, semantic presentation, TUI, classic, consent, and error snapshots |
+| `fixtures/config/**` | Native schema plus required one-time Python state-import fixtures and reauthentication dispositions |
 | `fixtures/presentation/**` | Semantic documents and renderer snapshots |
 | `fixtures/contracts/called-endpoints.json` | Stable client/backend API and auth contract inventory |
 | `tests/migration/python-test-ledger.json` | Exact Python node/invariant-to-Rust disposition ledger |
@@ -1143,6 +1232,7 @@ features, telemetry, services, or internal dependencies.
 | `crates/heyfood-agent-runtime/tests/**` | Wire, SSE, timeout, cancellation, no-replay tests |
 | `crates/heyfood-application/tests/**` | Use-case, single-flight, generation, overlap tests |
 | `crates/heyfood-application/tests/grocery_*` | Grocery optimistic-concurrency, confirmation, capability, and no-auto-write tests |
+| `crates/heyfood-application/tests/health_*` | Optional-scope, provider-state, polling, disconnect, and health-aware-turn tests |
 | `crates/heyfood-platform/tests/**` | Credentials, permissions, atomic writes, signals |
 | `crates/heyfood-voice/tests/**` | Capture/transcribe/review/consent/cancel tests |
 | `crates/heyfood-cli/tests/**` | Help, grammar, JSON, exits, differential fixtures |
@@ -1221,8 +1311,9 @@ they prove no duplicate screening cost, proposal, or committed mutation.
 Prove macOS Keychain, Linux Secret Service/headless fallback, and Windows
 Credential Manager behavior, including timeouts/prompts, process isolation if
 needed, atomic config mutation, file locking, owner permissions/ACLs, and clean
-recovery after interruption. The optional Python importer is evaluated
-separately and cannot weaken the native schema or credential policy.
+recovery after interruption. The required Python state importer is evaluated
+separately and cannot weaken the native schema or credential policy; unsafe
+secret transfer still requires reauthentication.
 
 ### DG-R4 — Native signing ownership
 
@@ -1252,7 +1343,7 @@ handwritten “remove Python” assertion. At minimum it accounts for:
 - `README.md`, `CHANGELOG.md`, `DEVELOPMENT.md`, `RELEASING.md`, `SUPPORT.md`,
   `SECURITY.md`, `LICENSE`, all `docs/**` CLI/command/dietary/JSON documents,
   issue templates, release notes, and repository metadata/topics;
-- the 601-node migration ledger, stable called-endpoint contract, embedded asset
+- the 675-entry migration ledger, stable called-endpoint contract, embedded asset
   schemas/provenance, final Python tag, and immutable historical release links.
 
 The Rust replacement must make Cargo/Rust CI authoritative, promote the native
@@ -1281,7 +1372,8 @@ and evidence receive independent review.
 
 **Estimated effort:** 2–3 calendar weeks for a focused experienced team.
 
-1. Freeze language-neutral contracts from Python `0.3.2`.
+1. Freeze language-neutral contracts from the final Python oracle at
+   `73494a57468dac83b4904ce6c390e36926f5c6fe`.
 2. Freeze the exact Python test/invariant migration ledger and stable
    called-endpoint contract before implementation changes collection results.
 3. Export dietary/banner assets with schemas, source hashes, and provenance.
@@ -1289,8 +1381,9 @@ and evidence receive independent review.
    matrix, toolchain, dependency/security policy, and installer-verifier crate.
 5. Implement only enough core/platform/runtime/TUI code for DG-R1.
 6. Run the spike on macOS, Linux, and Windows CI.
-7. Prove native config/credential creation and evaluate the optional read-only
-   Python importer without making it an exit dependency.
+7. Prove native config/credential creation and the read-only migration of
+   supported non-secret/local-only Python state; separately prove that unsafe
+   credential import falls back to reauthentication without source mutation.
 8. Inventory backend idempotency and release metrics.
 9. Establish the grocery contract import/provenance tool and fixture namespace;
    consume Platform P0 C3/C4 schemas as they land and record C1–C4 plus Grocery
@@ -1298,15 +1391,19 @@ and evidence receive independent review.
    unfinished backend work. Authoritative Phase A fixtures must be frozen before
    Phase 2 grocery implementation, and the deployed `grocery: "v1"` capability
    is mandatory before Phase 6 cutover.
-   Phase 0 records the independently reviewed companion directive commit SHA
-   and contract digest before Phase 1 creates grocery wire types; Phase 2 also
-   requires the authoritative generated backend fixtures and their source SHA.
-10. Pin the Grok reference/provenance record.
-11. Record dependency licenses, platform minimums, system-library requirements,
+   Phase 0 records the companion directive/PR state and marks current DTOs
+   provisional. Generic Phase 1 ports and semantic types may proceed, but final
+   wire types and Phase 2 grocery calls require authoritative generated backend
+   fixtures, the corrected Phase A source SHA, and aggregate digest.
+10. Freeze H1/H2 provider-neutral backend fixtures and production-scope/routing
+    evidence; record H3 mobile/backend contracts as a separately capability-
+    gated dependency rather than inventing Apple Health wire types.
+11. Pin the Grok reference/provenance record.
+12. Record dependency licenses, platform minimums, system-library requirements,
     release-hardware ownership, and signing/trust-bootstrap prerequisites,
     including the exact protected GitHub environment name and OIDC subject/
     audience expressions used by the pinned Sigstore identity.
-12. Produce a written spike result with measured startup, input latency,
+13. Produce a written spike result with measured startup, input latency,
    cancellation, restoration, artifact size, and unresolved platform gaps.
 
 **Exit gate:** DG-R1 passes; no terminal/resource leak exists; the migration
@@ -1327,11 +1424,16 @@ security review. If rejected, stop before broad port.
    boundary, including refresh-token rotation and local-first repair tests.
 5. Build temporary Rust/Python differential harnesses from exported fixtures.
 6. Prove clean native state, account switching, interrupted-write recovery, and
-   secret/file permissions on every platform; test optional import separately.
-7. Add grocery capability/entity/safety/confirmation/error types and semantic
-   documents from mirrored backend contracts, plus application DTOs and the
-   account-bound item-reference cache policy; do not duplicate backend
-   canonicalization, screening, retention, or purchase-history models.
+   secret/file permissions on every platform; test required non-secret/local-
+   only import and safe reauthentication dispositions separately.
+7. Add generic grocery capability/entity/safety/confirmation/error semantics,
+   provisional application ports, and the account-bound item-reference cache
+   policy. Generate final wire DTOs only from the corrected authoritative Phase
+   A fixtures; do not duplicate backend canonicalization, screening, retention,
+   or purchase-history models.
+8. Add provider-neutral health connection/freshness/trend semantics and H1/H2
+   application ports from reviewed backend contracts. Keep H3 behind an
+   unresolved capability boundary until its mobile/backend contract is final.
 
 **Exit gate:** DG-R3 passes; core fixtures match Python; no secret/dietary data
 enters logs; state races, interrupted persistence, refresh-token rotation, and
@@ -1351,6 +1453,9 @@ review approves the foundation.
    versioning, stable item IDs/index map, export, and structured headless
    confirmation against fixtures; do not enable it against an unadvertised
    backend.
+7. Implement H1/H2 `health status/show/connect/sync/disconnect` against frozen
+   provider-neutral fixtures, with bounded polling, explicit confirmation, and
+   optional-scope reauthentication.
 
 **Exit gate:** DG-R2 is recorded; all one-shot command families meet the
 approved parity matrix or carry an explicit blocking exception; JSON is one
@@ -1370,10 +1475,12 @@ passes.
    visible provenance, ingredient-basis disclaimer, per-member informational
    annotations, substitutions, intended-for emphasis, stale-list conflict, and
    narrow-terminal behavior. No mutation commits on natural-language assent.
-5. Add PTY/ConPTY tests for resize, narrow width, paste, key fallbacks, panic,
+5. Add provider-neutral health status/trend cards and the Oura connect/sync/
+   disconnect lifecycle without persisting health values in TUI history.
+6. Add PTY/ConPTY tests for resize, narrow width, paste, key fallbacks, panic,
    signals, suspend/resume, restoration, scroll/follow-tail, unseen indicators,
    copy, focus, long wrapped/code/list content, choices, and error states.
-6. Add classic/`NO_COLOR`/no-animation/no-TUI accessibility paths.
+7. Add classic/`NO_COLOR`/no-animation/no-TUI accessibility paths.
 
 **Exit gate:** the internal qualification binary delivers a responsive
 persistent TUI; terminal restoration and resource budgets pass every platform;
@@ -1392,6 +1499,8 @@ TUI/product/accessibility review passes.
 5. Exercise typed conversational grocery journeys through the shared turn path,
    including capability absence, missing optional scopes, household annotations,
    confirmation, cancellation, and expiry.
+6. Exercise H1/H2 first-connect, returning, stale, disconnected, missing-scope,
+   cancelled-browser, sync-failure, and health-aware-turn journeys.
 
 **Exit gate:** a net-new user runs one internal qualification binary,
 registers, authenticates, onboards, and completes a useful typed turn without
@@ -1425,9 +1534,10 @@ release review passes.
 
 1. Produce signed internal release-candidate artifacts and run the complete
    platform/terminal matrix without publishing a supported partial product.
-2. Compare privacy-safe backend aggregate auth, agent SSE, transcription, and
-   grocery capability/REST/confirmation/conflict/screening success/failure with
-   the pre-cutover baseline; add no prompt, grocery-item, member, or content
+2. Compare privacy-safe backend aggregate auth, agent SSE, transcription,
+   health context/integration management, and grocery capability/REST/
+   confirmation/conflict/screening success/failure with the pre-cutover
+   baseline; add no prompt, health value, grocery-item, member, or content
    telemetry.
 3. Resolve every P0/P1 qualification finding and repeat affected review gates.
 4. Tag/archive the final Python baseline and verify exported fixtures are
@@ -1439,6 +1549,9 @@ release review passes.
 6. Verify Production advertises `capabilities.grocery = "v1"`, the deployed
    Phase A contract digest matches the mirrored fixture provenance, and a
    least-privilege released-candidate session receives the optional scopes.
+   Also verify the released-candidate H1/H2 session receives only deployed
+   `health:read`/`integrations:manage` authority and completes the authenticated
+   provider-neutral canary.
 7. Merge the single DG-R5 cutover only after installed-artifact clean-user,
    returning-user, one-shot JSON, interactive typed, real-hardware voice, and
    capability-advertised grocery journeys pass.
@@ -1506,7 +1619,11 @@ plan complete.
 - grocery unknown capability, absent/read-only/write-only/read+write scope
   combinations, origin/account/list/version/expiry cache invalidation, secure
   export create/overwrite/symlink/failure behavior, and uncertain-POST outcomes;
-- clean native state plus optional read-only Python config/keyring import.
+- health not-connected/connected/stale, optional scope reauthentication, Oura
+  connect callback/poll/sync/disconnect, provider absence, literal rendering,
+  no local health persistence, and health-aware asks;
+- clean native state plus required non-secret/local-only Python state import and
+  safe credential reauthentication fallback;
 - manifest bootstrap, wrong issuer/repository/workflow/tag, tampered JCS,
   invalid/offline Rekor proof, target/hash/size mismatch, downgrade, halt,
   identity rotation, atomic replacement interruption, and `0.4.1` fix-forward.
@@ -1589,7 +1706,7 @@ plan complete.
 | Cancellation drops UI but leaks work | Owned cancellation tokens/resources, bounded joins, no late mutation |
 | Cancellation loses a rotated token or accepted local-first effect | Mutation classes, bounded non-cancellable durable commit, idempotent commit IDs, reconciliation-required state |
 | Concurrent effects corrupt scope/config | Single-flight use cases, immutable snapshots, serialized class-aware state writer |
-| Native config/keyring loses access or corrupts state | Versioned schema, atomic writes, platform credential qualification, interruption tests; optional importer is non-destructive |
+| Native config/keyring loses access or corrupts state | Versioned schema, atomic writes, platform credential qualification, interruption tests; required state importer is non-destructive and unsafe secret transfer requires reauthentication |
 | Sensitive data leaks into logs/history | secrecy/redaction types, memory-only history, content-free diagnostics, tests |
 | Service output injects terminal controls | Semantic allowlist parser and CSI/OSC sanitization |
 | Rust behavior drifts from proven Python contracts during rewrite | Frozen language-neutral fixtures and temporary differential runner before Python deletion |
@@ -1651,7 +1768,7 @@ owners, this is approximately 20–30 calendar weeks; for one experienced
 engineer, approximately 9–13 months. Grocery adds explicit contingency for
 backend contract coordination, optimistic concurrency, confirmation, client
 surfaces, and live qualification. The range also includes contingency
-for 601-test migration, release-review rework, Sigstore/bootstrap design,
+for the 675-entry migration ledger, release-review rework, Sigstore/bootstrap design,
 Apple/Windows signing queues, real ARM/Intel hardware, Linux audio/keyring
 variance, installer trust tests, and inaugural recovery rehearsal. Automation
 and focused parallel work may reduce elapsed time, but this plan does not trade

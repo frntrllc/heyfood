@@ -41,12 +41,12 @@ pub struct Phase0EvidenceReport {
     pub review_status: String,
 }
 
-const FROZEN_COMPATIBILITY_SHA: &str = "9c6b91929143180252ad1b644aea273729a1f1b9";
-const FROZEN_COMPATIBILITY_TREE: &str = "b3cf49317b7ccbb42389411c819a925d3e8be3b9";
+const FROZEN_COMPATIBILITY_SHA: &str = "73494a57468dac83b4904ce6c390e36926f5c6fe";
+const FROZEN_COMPATIBILITY_TREE: &str = "4c265cd9ae0623442dd8eba1f6f4388c4ebf5adf";
 const FROZEN_COMPATIBILITY_DIGEST: &str =
-    "11986e9dbfdfd415f6da5183321e1614ea15c1f3be12af7f32a3e5578423e1e9";
+    "aeb4339da0cb1c73d36892c7d57d4c8b412aa2f8efcb0aec8c855fe88f835957";
 const FROZEN_COMPATIBILITY_BLOB: &[u8] =
-    include_bytes!("../fixtures/called_endpoints.9c6b919.json");
+    include_bytes!("../fixtures/called_endpoints.73494a5.json");
 
 /// Validate the checked-out workspace against the approved crate dependency DAG.
 pub fn validate_dependency_dag(manifest_path: &Path) -> Result<(), String> {
@@ -387,7 +387,7 @@ pub fn verify_stable_contracts(root: &Path) -> Result<ContractReport, String> {
         "contract provenance",
     )?;
     required_nonempty_string(provenance, "capture_tool", "contract provenance")?;
-    expect_usize(provenance, "capture_tool_version", 1, "contract provenance")?;
+    expect_usize(provenance, "capture_tool_version", 2, "contract provenance")?;
 
     let compatibility_path = safe_relative_path(required_string(
         provenance,
@@ -411,7 +411,7 @@ pub fn verify_stable_contracts(root: &Path) -> Result<ContractReport, String> {
     expect_hash(
         FROZEN_COMPATIBILITY_BLOB,
         compatibility_hash,
-        Path::new("crates/xtask/fixtures/called_endpoints.9c6b919.json"),
+        Path::new("crates/xtask/fixtures/called_endpoints.73494a5.json"),
     )?;
     let frozen_compatibility = json::parse(
         std::str::from_utf8(FROZEN_COMPATIBILITY_BLOB)
@@ -975,7 +975,7 @@ fn validate_dietary_provenance(root: &Path) -> Result<bool, String> {
     for name in ["source_repository", "source_path", "export_tool"] {
         required_nonempty_string(provenance, name, "dietary provenance")?;
     }
-    expect_usize(provenance, "export_tool_version", 1, "dietary provenance")?;
+    expect_usize(provenance, "export_tool_version", 2, "dietary provenance")?;
     validate_sha256(
         required_string(provenance, "source_sha256", "dietary provenance")?,
         "dietary provenance.source_sha256",
@@ -1030,7 +1030,7 @@ fn validate_brand_provenance(root: &Path) -> Result<bool, String> {
     for name in ["source_repository", "export_tool"] {
         required_nonempty_string(provenance, name, "brand provenance")?;
     }
-    expect_usize(provenance, "export_tool_version", 1, "brand provenance")?;
+    expect_usize(provenance, "export_tool_version", 2, "brand provenance")?;
     for list in ["sources", "targets"] {
         let rows = field(provenance, list, "brand provenance")?.array(list)?;
         if rows.is_empty() {
@@ -1795,7 +1795,7 @@ mod tests {
         );
         assert_eq!(ledger.mapped, 0);
         assert_eq!(ledger.unmapped, ledger.entries);
-        assert_eq!(verify_stable_contracts(&root()).unwrap().endpoints, 26);
+        assert_eq!(verify_stable_contracts(&root()).unwrap().endpoints, 27);
         assert_eq!(verify_assets(&root()).unwrap().pending_reviews, 2);
         assert!(verify_assets_approved(&root()).is_err());
         let phase0 = verify_phase0_evidence(&root()).expect("Phase 0 inventory must validate");
@@ -1863,12 +1863,12 @@ mod tests {
             (
                 "sha",
                 FROZEN_COMPATIBILITY_SHA,
-                "0c6b91929143180252ad1b644aea273729a1f1b9",
+                "03494a57468dac83b4904ce6c390e36926f5c6fe",
             ),
             (
                 "tree",
                 FROZEN_COMPATIBILITY_TREE,
-                "03cf49317b7ccbb42389411c819a925d3e8be3b9",
+                "0c265cd9ae0623442dd8eba1f6f4388c4ebf5adf",
             ),
         ] {
             let scratch = scratch(&format!("contract-{label}-corruption"));

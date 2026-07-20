@@ -1,7 +1,7 @@
 {
   "$schema": "../../schemas/migration-ledger.v1.schema.json#/$defs/invariantInventoryDocument",
   "schema_version": 1,
-  "baseline_sha": "9c6b91929143180252ad1b644aea273729a1f1b9",
+  "baseline_sha": "73494a57468dac83b4904ce6c390e36926f5c6fe",
   "inventory_count": 32,
   "invariants": [
     {
@@ -121,7 +121,7 @@
       "category": "documentation",
       "source_path": "CHANGELOG.md",
       "source_locator": "$",
-      "source_sha256": "3cca21977fcb134daf260eb1d2b1e7b15043b3305920eec17b689ba9a4e7ce6d",
+      "source_sha256": "8c5d3c762b5a4b190e68dadf2158c11cff1bd5a76f03b2edeaef387e53f9ba41",
       "contract": "Published release history and compatibility notes remain available through the cutover."
     },
     {
@@ -153,7 +153,7 @@
       "category": "documentation",
       "source_path": "README.md",
       "source_locator": "$",
-      "source_sha256": "6324df993f0adc24568d328defea08e65e5b06b7a9cc073f92b1d6d0d3fd6fa8",
+      "source_sha256": "68bb52c629b893f070ed689e2454591959f1c578a2589105ef1e6026fb23b4e9",
       "contract": "Public installation, command, configuration, privacy, and compatibility guidance remains represented."
     },
     {

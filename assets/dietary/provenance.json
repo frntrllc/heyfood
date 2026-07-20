@@ -9,7 +9,7 @@
   "target_path": "assets/dietary/dietary_options.v2.json",
   "target_sha256": "40a26e22d7e729289ef5bf4052af841adc76029711d89c89f046eba87d533556",
   "export_tool": "scripts/phase0/export_contract_freeze.py",
-  "export_tool_version": 1,
+  "export_tool_version": 2,
   "review": {
     "status": "pending",
     "reviewer": null,
