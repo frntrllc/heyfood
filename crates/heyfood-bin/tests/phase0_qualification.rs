@@ -1012,13 +1012,17 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class HeyfoodConsoleSignal {
-    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool SetConsoleCtrlHandler(IntPtr handler, bool add);
+    public delegate bool HandlerRoutine(uint controlType);
+    private static readonly HandlerRoutine IgnoreHandler = IgnoreControlEvent;
+    [DllImport("kernel32.dll", SetLastError=true)] private static extern bool SetConsoleCtrlHandler(HandlerRoutine handler, bool add);
     [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GenerateConsoleCtrlEvent(uint signal, uint processGroupId);
+    public static bool InstallIgnoreHandler() { return SetConsoleCtrlHandler(IgnoreHandler, true); }
+    private static bool IgnoreControlEvent(uint controlType) { return true; }
 }
 '@
-if (-not [HeyfoodConsoleSignal]::SetConsoleCtrlHandler([IntPtr]::Zero, $true)) { exit 21 }
+if (-not [HeyfoodConsoleSignal]::InstallIgnoreHandler()) { exit 21 }
 Start-Sleep -Milliseconds 100
-if (-not [HeyfoodConsoleSignal]::GenerateConsoleCtrlEvent(0, 0)) { exit 22 }
+if (-not [HeyfoodConsoleSignal]::GenerateConsoleCtrlEvent(1, 0)) { exit 22 }
 Start-Sleep -Milliseconds 250
 "#;
     Command::new("pwsh")
