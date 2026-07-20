@@ -800,19 +800,13 @@ fn qualification_windows_console_signal_child() {
         .block_on(async { NativeSignalSource::install() })
         .expect("install Windows signal source");
     std::fs::write(&ready_path, b"ready").expect("publish Windows signal readiness");
-    let mut sender = spawn_windows_console_control_sender();
     let signal = runtime
-        .block_on(async { tokio::time::timeout(Duration::from_secs(3), signals.next()).await })
+        .block_on(async { tokio::time::timeout(Duration::from_secs(5), signals.next()).await })
         .expect("receive Windows console control event within the qualification bound")
         .expect("receive Windows console control event");
     runtime
         .block_on(signals.shutdown(Duration::from_secs(1)))
         .expect("Windows signal listeners stopped and joined");
-    let sender_status = wait_for_process_child(&mut sender, Duration::from_secs(2));
-    assert!(
-        sender_status.success(),
-        "Windows console-control sender failed: {sender_status}"
-    );
     std::fs::write(&result_path, format!("{signal:?}")).expect("publish Windows signal result");
     assert_eq!(signal, SignalEvent::Interrupt);
 }
@@ -1005,27 +999,93 @@ fn run_pty_child(signal: Option<&str>, expected: &str) {
 }
 
 #[cfg(windows)]
-fn spawn_windows_console_control_sender() -> std::process::Child {
+fn run_windows_console_control_child() {
     const SCRIPT: &str = r#"
-param()
+$ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
-public static class HeyfoodConsoleSignal {
+public static class HeyfoodConsoleHost {
     public delegate bool HandlerRoutine(uint controlType);
     private static readonly HandlerRoutine IgnoreHandler = IgnoreControlEvent;
+    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool AllocConsole();
+    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool FreeConsole();
     [DllImport("kernel32.dll", SetLastError=true)] private static extern bool SetConsoleCtrlHandler(HandlerRoutine handler, bool add);
     [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GenerateConsoleCtrlEvent(uint signal, uint processGroupId);
     public static bool InstallIgnoreHandler() { return SetConsoleCtrlHandler(IgnoreHandler, true); }
+    public static int LastError() { return Marshal.GetLastWin32Error(); }
     private static bool IgnoreControlEvent(uint controlType) { return true; }
 }
 '@
-if (-not [HeyfoodConsoleSignal]::InstallIgnoreHandler()) { exit 21 }
+
+[HeyfoodConsoleHost]::FreeConsole() | Out-Null
+if (-not [HeyfoodConsoleHost]::AllocConsole()) {
+    Write-Error "AllocConsole failed: $([HeyfoodConsoleHost]::LastError())"
+    exit 20
+}
+if (-not [HeyfoodConsoleHost]::InstallIgnoreHandler()) {
+    Write-Error "SetConsoleCtrlHandler failed: $([HeyfoodConsoleHost]::LastError())"
+    exit 21
+}
+
+$info = [System.Diagnostics.ProcessStartInfo]::new()
+$info.FileName = $env:HEYFOOD_QUALIFICATION_TEST_EXECUTABLE
+$info.UseShellExecute = $false
+$info.ArgumentList.Add('--exact')
+$info.ArgumentList.Add('qualification_windows_console_signal_child')
+$info.ArgumentList.Add('--ignored')
+$info.ArgumentList.Add('--nocapture')
+$info.Environment['HEYFOOD_QUALIFICATION_READY_FILE'] = $env:HEYFOOD_QUALIFICATION_READY_FILE
+$info.Environment['HEYFOOD_QUALIFICATION_RESULT_FILE'] = $env:HEYFOOD_QUALIFICATION_RESULT_FILE
+$child = [System.Diagnostics.Process]::Start($info)
+
+$readyDeadline = [DateTime]::UtcNow.AddSeconds(8)
+while (-not [System.IO.File]::Exists($env:HEYFOOD_QUALIFICATION_READY_FILE)) {
+    if ($child.HasExited) {
+        Write-Error "Rust signal child exited before readiness: $($child.ExitCode)"
+        exit 30
+    }
+    if ([DateTime]::UtcNow -ge $readyDeadline) {
+        $child.Kill($true)
+        Write-Error 'Rust signal child did not publish readiness within 8 seconds'
+        exit 31
+    }
+    Start-Sleep -Milliseconds 25
+}
+
 Start-Sleep -Milliseconds 100
-if (-not [HeyfoodConsoleSignal]::GenerateConsoleCtrlEvent(1, 0)) { exit 22 }
-Start-Sleep -Milliseconds 250
+if (-not [HeyfoodConsoleHost]::GenerateConsoleCtrlEvent(1, 0)) {
+    $child.Kill($true)
+    Write-Error "GenerateConsoleCtrlEvent failed: $([HeyfoodConsoleHost]::LastError())"
+    exit 22
+}
+
+$resultDeadline = [DateTime]::UtcNow.AddSeconds(8)
+while (-not [System.IO.File]::Exists($env:HEYFOOD_QUALIFICATION_RESULT_FILE)) {
+    if ($child.HasExited) {
+        Write-Error "Rust signal child exited before publishing its result: $($child.ExitCode)"
+        exit 32
+    }
+    if ([DateTime]::UtcNow -ge $resultDeadline) {
+        $child.Kill($true)
+        Write-Error 'Rust signal child did not publish its result within 8 seconds'
+        exit 33
+    }
+    Start-Sleep -Milliseconds 25
+}
+
+if (-not $child.WaitForExit(5000)) {
+    $child.Kill($true)
+    Write-Error 'Rust signal child did not exit within 5 seconds of publishing its result'
+    exit 34
+}
+exit $child.ExitCode
 "#;
-    Command::new("pwsh")
+    let root = scratch("windows-console-control");
+    std::fs::create_dir_all(&root).expect("create Windows console signal fixture");
+    let ready_path = root.join("ready");
+    let result_path = root.join("result");
+    let mut child = Command::new("pwsh")
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -1033,64 +1093,24 @@ Start-Sleep -Milliseconds 250
             "-Command",
             SCRIPT,
         ])
-        .spawn()
-        .expect("launch Windows console-control sender")
-}
-
-#[cfg(windows)]
-fn run_windows_console_control_child() {
-    use std::os::windows::process::CommandExt;
-
-    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-    let root = scratch("windows-console-control");
-    std::fs::create_dir_all(&root).expect("create Windows console signal fixture");
-    let ready_path = root.join("ready");
-    let result_path = root.join("result");
-    let mut child = Command::new(std::env::current_exe().expect("test executable"))
-        .args([
-            "--exact",
-            "qualification_windows_console_signal_child",
-            "--ignored",
-            "--nocapture",
-        ])
+        .env(
+            "HEYFOOD_QUALIFICATION_TEST_EXECUTABLE",
+            std::env::current_exe().expect("test executable"),
+        )
         .env("HEYFOOD_QUALIFICATION_READY_FILE", &ready_path)
         .env("HEYFOOD_QUALIFICATION_RESULT_FILE", &result_path)
-        .creation_flags(CREATE_NEW_CONSOLE)
         .spawn()
-        .expect("spawn isolated Windows console signal child");
-    wait_for_file(&ready_path, Duration::from_secs(5), &mut child);
-    wait_for_file(&result_path, Duration::from_secs(5), &mut child);
-    let status = wait_for_process_child(&mut child, Duration::from_secs(5));
+        .expect("spawn Windows console host");
+    let status = wait_for_process_child(&mut child, Duration::from_secs(25));
     assert!(
         status.success(),
-        "Windows console signal child failed: {status}"
+        "Windows console host or signal child failed: {status}"
     );
     assert_eq!(
         std::fs::read_to_string(&result_path).expect("read Windows signal result"),
         "Interrupt"
     );
     std::fs::remove_dir_all(root).expect("remove Windows signal fixture");
-}
-
-#[cfg(windows)]
-fn wait_for_file(path: &std::path::Path, timeout: Duration, child: &mut std::process::Child) {
-    let deadline = Instant::now() + timeout;
-    while !path.exists() {
-        if let Some(status) = child.try_wait().expect("poll Windows signal child") {
-            panic!(
-                "Windows signal child exited before {}: {status}",
-                path.display()
-            );
-        }
-        if Instant::now() >= deadline {
-            child
-                .kill()
-                .expect("terminate stalled Windows signal child");
-            let _ = child.wait();
-            panic!("Windows signal child did not create {}", path.display());
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
 }
 
 #[cfg(windows)]
