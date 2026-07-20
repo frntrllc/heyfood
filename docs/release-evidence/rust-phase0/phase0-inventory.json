@@ -4,7 +4,7 @@
   "rust_lineage": {
     "repository": "https://github.com/frntrllc/heyfood.git",
     "branch": "codex/rust-big-bang",
-    "code_commit_sha": "72d5b3b2f1b11b807c2f7ba71690291f29c6cccf",
+    "code_commit_sha": "cea3b72f8c0c2ffdc5cd90d218ecfbcb1d72c9fc",
     "evidence_commit_sha": null
   },
   "requirements": [
@@ -48,7 +48,7 @@
       "id": "P0-7-native-state-and-importer",
       "status": "blocked",
       "evidence": ["docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md"],
-      "blocker": "Native controlled file creation is exercised, but the optional read-only Python importer is not evaluated."
+      "blocker": "Native controlled file creation is exercised, but the required read-only importer for supported non-secret/local-only Python state and safe reauthentication dispositions is not implemented or evaluated."
     },
     {
       "id": "P0-8-backend-idempotency-and-metrics",
@@ -60,7 +60,7 @@
       "id": "P0-9-grocery-companion-contract",
       "status": "blocked",
       "evidence": ["docs/release-evidence/rust-phase0/external-contract-status.md"],
-      "blocker": "Grocery Phase A exists only as uncommitted work, so no authoritative reviewed SHA or digest can be recorded."
+      "blocker": "Grocery Phase A PR #90 is committed but conflicts with current main, fails PostgreSQL/aggregate gates, and still requires authoritative-household-snapshot, frozen-list-identity, and C1 hardening corrections; no reviewed merge SHA, deployed capability, or aggregate digest exists."
     },
     {
       "id": "P0-10-grok-provenance",
@@ -85,17 +85,29 @@
     "hellofood_repository": "/Users/justinhambleton/Dev/hellofood",
     "grocery": {
       "observed_branch": "feat/grocery-phase-a-backend",
-      "observed_head_sha": "9e1011d75be9b919452c82cc7dd849bc3f5823a2",
+      "observed_head_sha": "07303432e18cc1d6bfe943d6979c9091c7fbde9f",
+      "observed_main_sha": "d13f170f8290e88f9a6000a38ed1437e4ea06a56",
       "merged_prerequisite_shas": [
         "4b7bcdfaf80053c087f5aa68fea8bd5f78732160",
         "fa23437c324b4e5d3d1c433b9c933b9f2dc2cbca",
         "9e0a9f220751270da56996ba7004ae25e67b06d0",
         "9e1011d75be9b919452c82cc7dd849bc3f5823a2"
       ],
-      "phase_a_status": "blocked_uncommitted",
+      "phase_a_status": "open_conflicting_checks_failed_contract_corrections_required",
       "authoritative_contract_sha": null,
       "authoritative_contract_digest": null,
-      "blocker": "The grocery Phase A worktree contains modified and untracked schema/fixture files; mutable working-tree bytes are not an authoritative contract."
+      "blocker": "PR #90 must be rebased onto current main, receive the next migration revision, pass PostgreSQL/aggregate gates, and land the authoritative-snapshot/frozen-list/C1 corrections before its merge SHA and aggregate digest can be authoritative."
+    },
+    "kroger": {
+      "provider_foundation_pr": null,
+      "provider_binding_pr": null,
+      "security_d2_status": "required_before_provider_token_storage",
+      "status": "blocked_on_phase_a_and_security_d2"
+    },
+    "health": {
+      "h1_h2_implementation_pr": null,
+      "h3_implementation_pr": null,
+      "status": "wire_contracts_unavailable_provider_neutral_seams_permitted"
     }
   },
   "review": {

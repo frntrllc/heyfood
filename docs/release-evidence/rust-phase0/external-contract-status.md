@@ -1,6 +1,8 @@
 # Phase 0 external contract status
 
-Observed read-only on 2026-07-19 in `/Users/justinhambleton/Dev/hellofood` and its `grocery-phase-a` worktree.
+Observed read-only on 2026-07-19 from GitHub and the companion checkout. The
+local `/Users/justinhambleton/Dev/hellofood` worktree contains unrelated user
+changes and was not modified.
 
 The backend prerequisite contracts P0 C1–C4 are merged on the companion repository's `origin/main` lineage:
 
@@ -11,6 +13,46 @@ The backend prerequisite contracts P0 C1–C4 are merged on the companion reposi
 | C3 structured confirmation | `9e0a9f220751270da56996ba7004ae25e67b06d0` | merged |
 | C4 scope tiers/capabilities | `9e1011d75be9b919452c82cc7dd849bc3f5823a2` | merged |
 
-Grocery Phase A is **not an authoritative companion contract yet**. The `feat/grocery-phase-a-backend` worktree is based at C4 but contains modified and untracked grocery REST/entity/tool schemas and fixtures. Those bytes have no committed source SHA, reviewed directive SHA, or stable aggregate digest. They must not be copied into Rust fixtures or encoded as client wire types.
+## Grocery Phase A and Kroger
 
-Blocker: commit and independently review the companion Grocery Phase A contracts, then publish the authoritative contract paths, source commit SHA, digest algorithm/digest, and capability deployment status. Until then the Rust grocery boundary remains stopped; no backend contract was inferred or changed here.
+[Grocery Phase A PR #90](https://github.com/frntrllc/hellofood/pull/90)
+is a substantial committed candidate at
+`07303432e18cc1d6bfe943d6979c9091c7fbde9f`. It includes REST, entity, tool,
+confirmation, scope, export, conflict, and founding-scenario contracts. It is
+not authoritative yet:
+
+- its recorded base is C4 at `9e1011d75be9b919452c82cc7dd849bc3f5823a2`,
+  while current `main` is `d13f170f8290e88f9a6000a38ed1437e4ea06a56`;
+- GitHub reports the PR as conflicting (`mergeable_state: dirty`);
+- `postgres-migrations` and the aggregate `ci-gate` fail; the PR owns migration
+  `093` while current `main` already owns later migration history, so it must be
+  rebased and allocated the next post-main revision;
+- Grocery must receive the authoritative `HouseholdContextSnapshot` end-to-end
+  rather than reconstructing a profile-only approximation;
+- confirmation must freeze the real grocery-list UUID, exact list version, and
+  authoritative context hash, and precondition checks must be read-only;
+- C1 still requires its narrow hardening for native household inputs, complete
+  consent truth, persisted single-profile versions, and order-independent
+  context hashing.
+
+There is no visible B1 provider-foundation or B2 Kroger-binding PR. Security D2
+must deliver purpose-specific, versioned integration-key custody before Kroger
+OAuth tokens may be stored. The required backend sequence remains: correct and
+deploy Phase A plus Security D2, then B1, then B2.
+
+## Health H1-H3
+
+No visible H1/H2 Oura or H3 Apple Health implementation PR is available to pin
+as an authoritative Rust wire contract. Rust may define provider-neutral core
+semantics and application ports now. It must not invent production DTOs, read
+HealthKit directly, or store provider OAuth tokens. H1/H2 fixtures must pin a
+reviewed backend source SHA and deployed scopes; H3 remains capability-gated on
+the separately reviewed mobile/backend consent, aggregation, retention,
+encryption, revocation, and deletion contracts.
+
+Blocker: merge the C1 and Phase A corrections, obtain green PostgreSQL and
+aggregate gates, independently review the companion contracts, and publish the
+merge SHA, contract paths, digest algorithm/digest, deployed capability, and
+scope metadata. Until then Rust can implement only provider-neutral or generic
+semantic/application boundaries; no draft grocery or health wire contract is
+copied or treated as stable here.

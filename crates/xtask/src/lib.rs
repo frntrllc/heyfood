@@ -688,7 +688,7 @@ pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, Strin
         .object("Phase 0 external_contracts")?;
     exact_keys(
         contracts,
-        &["hellofood_repository", "grocery"],
+        &["hellofood_repository", "grocery", "kroger", "health"],
         "Phase 0 external_contracts",
     )?;
     required_nonempty_string(
@@ -703,6 +703,7 @@ pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, Strin
         &[
             "observed_branch",
             "observed_head_sha",
+            "observed_main_sha",
             "merged_prerequisite_shas",
             "phase_a_status",
             "authoritative_contract_sha",
@@ -715,6 +716,10 @@ pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, Strin
     validate_git_sha(
         required_string(grocery, "observed_head_sha", "Phase 0 grocery contract")?,
         "grocery.observed_head_sha",
+    )?;
+    validate_git_sha(
+        required_string(grocery, "observed_main_sha", "Phase 0 grocery contract")?,
+        "grocery.observed_main_sha",
     )?;
     let prerequisites = field(
         grocery,
@@ -732,7 +737,7 @@ pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, Strin
         )?;
     }
     match required_string(grocery, "phase_a_status", "Phase 0 grocery contract")? {
-        "blocked_uncommitted" => {
+        "blocked_uncommitted" | "open_conflicting_checks_failed_contract_corrections_required" => {
             if !null_fields(
                 grocery,
                 &[
@@ -777,6 +782,55 @@ pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, Strin
             ));
         }
     }
+
+    let kroger = field(contracts, "kroger", "Phase 0 external_contracts")?
+        .object("Phase 0 Kroger contract")?;
+    exact_keys(
+        kroger,
+        &[
+            "provider_foundation_pr",
+            "provider_binding_pr",
+            "security_d2_status",
+            "status",
+        ],
+        "Phase 0 Kroger contract",
+    )?;
+    if !null_fields(kroger, &["provider_foundation_pr", "provider_binding_pr"])? {
+        return Err(
+            "Kroger PR fields must remain null until an observed PR is recorded".to_owned(),
+        );
+    }
+    expect_string(
+        kroger,
+        "security_d2_status",
+        "required_before_provider_token_storage",
+        "Phase 0 Kroger contract",
+    )?;
+    expect_string(
+        kroger,
+        "status",
+        "blocked_on_phase_a_and_security_d2",
+        "Phase 0 Kroger contract",
+    )?;
+
+    let health = field(contracts, "health", "Phase 0 external_contracts")?
+        .object("Phase 0 health contract")?;
+    exact_keys(
+        health,
+        &["h1_h2_implementation_pr", "h3_implementation_pr", "status"],
+        "Phase 0 health contract",
+    )?;
+    if !null_fields(health, &["h1_h2_implementation_pr", "h3_implementation_pr"])? {
+        return Err(
+            "health PR fields must remain null until an observed PR is recorded".to_owned(),
+        );
+    }
+    expect_string(
+        health,
+        "status",
+        "wire_contracts_unavailable_provider_neutral_seams_permitted",
+        "Phase 0 health contract",
+    )?;
 
     let review = field(inventory, "review", "Phase 0 inventory")?.object("Phase 0 review")?;
     let pending = validate_review(
