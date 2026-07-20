@@ -1,0 +1,91 @@
+{
+  "$comment": "Language-neutral H1/H2 health integration freeze from the independently merged hellofood backend contract. Rust Phase 1 may consume these provider-neutral semantics and application boundaries; it must not read HealthKit, persist provider OAuth tokens, or expand the server scopes recorded here.",
+  "schema_version": 1,
+  "source_repository": "https://github.com/frntrllc/hellofood.git",
+  "source_commit": "7cfadc55c103257b588b237c65fe7b5031a3f745",
+  "source_pr": 79,
+  "auth": {
+    "principal": "bearer_session",
+    "static_api_key_allowed": false,
+    "read_scope": "health:read",
+    "manage_scope": "integrations:manage",
+    "agent_scope_envelope_includes_health_scopes": false
+  },
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/v1/health/context",
+      "scope": "health:read",
+      "semantics": "read_server_held_health_context",
+      "cache_control": "no-store"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations",
+      "scope": "health:read",
+      "semantics": "list_connections"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/authorize",
+      "scope": "integrations:manage",
+      "semantics": "create_provider_authorization_url"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/{provider}/sync",
+      "scope": "integrations:manage",
+      "semantics": "request_server_side_provider_sync"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/integrations/{provider}",
+      "scope": "integrations:manage",
+      "semantics": "disconnect_provider"
+    }
+  ],
+  "health_context": {
+    "status_enum": ["connected", "stale", "not_connected"],
+    "provider": ["oura", null],
+    "always_present_nullable_fields": [
+      "provider",
+      "stale_since",
+      "data_freshness_hours",
+      "sleep_avg",
+      "readiness_avg",
+      "activity_avg",
+      "sleep_label",
+      "readiness_label",
+      "activity_label",
+      "steps_avg",
+      "active_calories_avg",
+      "stress_label",
+      "deep_sleep_label"
+    ],
+    "always_present_fields": ["status", "goals"],
+    "goals_default": [],
+    "stale_marker_fields": ["status", "provider", "stale_since"]
+  },
+  "integration": {
+    "provider_enum": ["oura", "function_health", "apple_health"],
+    "implemented_manage_provider": "oura",
+    "status_enum": ["connected", "expired", "revoked", "disconnected"],
+    "redirect_target_enum": ["mobile", "cli"],
+    "cli_redirect_target": "cli",
+    "provider_token_custody": "server_only"
+  },
+  "rust_boundary": {
+    "allowed": [
+      "provider_neutral_connection_status",
+      "freshness_and_staleness_semantics",
+      "health_context_read_port",
+      "provider_management_application_port"
+    ],
+    "forbidden": [
+      "direct_healthkit_access",
+      "provider_oauth_token_storage",
+      "client_side_health_aggregation",
+      "invented_wire_fields_or_scopes"
+    ]
+  }
+}

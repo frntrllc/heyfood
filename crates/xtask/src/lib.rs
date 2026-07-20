@@ -737,7 +737,10 @@ pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, Strin
         )?;
     }
     match required_string(grocery, "phase_a_status", "Phase 0 grocery contract")? {
-        "blocked_uncommitted" | "open_conflicting_checks_failed_contract_corrections_required" => {
+        "blocked_uncommitted"
+        | "open_conflicting_checks_failed_contract_corrections_required"
+        | "open_conflicting_green_contract_corrections_and_migration_096_required"
+        | "superseded_by_pr_107_mergeable_096_candidate_hosted_gates_not_green" => {
             if !null_fields(
                 grocery,
                 &[
@@ -817,20 +820,54 @@ pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, Strin
         .object("Phase 0 health contract")?;
     exact_keys(
         health,
-        &["h1_h2_implementation_pr", "h3_implementation_pr", "status"],
+        &[
+            "h1_h2_implementation_pr",
+            "h1_h2_source_sha",
+            "h3_backend_implementation_pr",
+            "h3_backend_source_sha",
+            "h3_mobile_implementation_pr",
+            "h3_mobile_source_sha",
+            "provenance_path",
+            "status",
+        ],
         "Phase 0 health contract",
     )?;
-    if !null_fields(health, &["h1_h2_implementation_pr", "h3_implementation_pr"])? {
-        return Err(
-            "health PR fields must remain null until an observed PR is recorded".to_owned(),
-        );
+    for (name, value) in [
+        ("h1_h2_implementation_pr", 79),
+        ("h3_backend_implementation_pr", 96),
+        ("h3_mobile_implementation_pr", 95),
+    ] {
+        expect_usize(health, name, value, "Phase 0 health contract")?;
     }
+    for (name, value) in [
+        (
+            "h1_h2_source_sha",
+            "7cfadc55c103257b588b237c65fe7b5031a3f745",
+        ),
+        (
+            "h3_backend_source_sha",
+            "400c5cafb3beb0237e75f85e93d228fbbbd3dadf",
+        ),
+        (
+            "h3_mobile_source_sha",
+            "dbea9c3cc8af4610b7b6bf3f3e64ad44e7fe428a",
+        ),
+    ] {
+        expect_string(health, name, value, "Phase 0 health contract")?;
+    }
+    required_path_exists(
+        root,
+        required_string(health, "provenance_path", "Phase 0 health contract")?,
+        "Phase 0 health contract",
+    )?;
     expect_string(
         health,
         "status",
-        "wire_contracts_unavailable_provider_neutral_seams_permitted",
+        "merged_contracts_frozen_provider_neutral_seams_permitted_h3_capability_gated",
         "Phase 0 health contract",
     )?;
+    validate_health_contract_provenance(root)?;
+    validate_grok_pattern_provenance(root)?;
 
     let review = field(inventory, "review", "Phase 0 inventory")?.object("Phase 0 review")?;
     let pending = validate_review(
@@ -846,6 +883,212 @@ pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, Strin
         blockers,
         review_status: review_status.to_owned(),
     })
+}
+
+fn validate_health_contract_provenance(root: &Path) -> Result<(), String> {
+    let document = read_json(root, "fixtures/contracts/health-contract-provenance.json")?;
+    let provenance = document.object("health contract provenance")?;
+    exact_keys(
+        provenance,
+        &["schema_version", "source_repository", "contracts"],
+        "health contract provenance",
+    )?;
+    expect_usize(
+        provenance,
+        "schema_version",
+        1,
+        "health contract provenance",
+    )?;
+    required_nonempty_string(
+        provenance,
+        "source_repository",
+        "health contract provenance",
+    )?;
+    let contracts = field(provenance, "contracts", "health contract provenance")?
+        .array("health contract provenance.contracts")?;
+    if contracts.len() != 2 {
+        return Err("health contract provenance must contain H1/H2 and H3".to_owned());
+    }
+    let mut names = BTreeSet::new();
+    for (index, contract) in contracts.iter().enumerate() {
+        let context = format!("health contract provenance.contracts[{index}]");
+        let contract = contract.object(&context)?;
+        exact_keys(
+            contract,
+            &[
+                "name",
+                "source_pr",
+                "source_commit",
+                "source_pr_head",
+                "sources",
+                "target",
+                "freeze_kind",
+            ],
+            &context,
+        )?;
+        let name = required_nonempty_string(contract, "name", &context)?;
+        if !names.insert(name) {
+            return Err(format!(
+                "duplicate health contract provenance name {name:?}"
+            ));
+        }
+        match name {
+            "health_h1_h2" => expect_usize(contract, "source_pr", 79, &context)?,
+            "health_h3_daily_sync" => expect_usize(contract, "source_pr", 96, &context)?,
+            _ => return Err(format!("unknown health contract provenance name {name:?}")),
+        }
+        for field_name in ["source_commit", "source_pr_head"] {
+            validate_git_sha(
+                required_string(contract, field_name, &context)?,
+                &format!("{context}.{field_name}"),
+            )?;
+        }
+        let sources = field(contract, "sources", &context)?.array(&format!("{context}.sources"))?;
+        if sources.is_empty() {
+            return Err(format!("{context}.sources must not be empty"));
+        }
+        for (source_index, source) in sources.iter().enumerate() {
+            let source_context = format!("{context}.sources[{source_index}]");
+            let source = source.object(&source_context)?;
+            exact_keys(source, &["path", "sha256"], &source_context)?;
+            required_nonempty_string(source, "path", &source_context)?;
+            validate_sha256(
+                required_string(source, "sha256", &source_context)?,
+                &format!("{source_context}.sha256"),
+            )?;
+        }
+        let target = field(contract, "target", &context)?.object(&format!("{context}.target"))?;
+        exact_keys(target, &["path", "sha256"], &format!("{context}.target"))?;
+        let target_path = safe_relative_path(required_string(target, "path", &context)?)?;
+        let target_sha = required_string(target, "sha256", &context)?;
+        validate_sha256(target_sha, &format!("{context}.target.sha256"))?;
+        expect_hash(&read_bytes(root, &target_path)?, target_sha, &target_path)?;
+        match required_string(contract, "freeze_kind", &context)? {
+            "language_neutral_projection" => {}
+            "exact_copy" => {
+                let first_source = sources[0].object(&format!("{context}.sources[0]"))?;
+                if required_string(first_source, "sha256", &context)? != target_sha {
+                    return Err(format!(
+                        "{context} exact copy source and target hashes differ"
+                    ));
+                }
+            }
+            value => return Err(format!("{context}.freeze_kind has invalid value {value:?}")),
+        }
+    }
+    Ok(())
+}
+
+fn validate_grok_pattern_provenance(root: &Path) -> Result<(), String> {
+    let document = read_json(
+        root,
+        "docs/release-evidence/rust-phase0/grok-pattern-origin.json",
+    )?;
+    let provenance = document.object("Grok pattern provenance")?;
+    exact_keys(
+        provenance,
+        &[
+            "schema_version",
+            "source_repository",
+            "source_commit",
+            "source_license",
+            "license_path",
+            "license_sha256",
+            "copy_policy",
+            "origins",
+            "review",
+        ],
+        "Grok pattern provenance",
+    )?;
+    expect_usize(provenance, "schema_version", 1, "Grok pattern provenance")?;
+    expect_string(
+        provenance,
+        "source_repository",
+        "https://github.com/xai-org/grok-build.git",
+        "Grok pattern provenance",
+    )?;
+    expect_string(
+        provenance,
+        "source_commit",
+        "b189869b7755d2b482969acf6c92da3ecfeffd36",
+        "Grok pattern provenance",
+    )?;
+    expect_string(
+        provenance,
+        "source_license",
+        "Apache-2.0",
+        "Grok pattern provenance",
+    )?;
+    expect_string(
+        provenance,
+        "license_path",
+        "LICENSE",
+        "Grok pattern provenance",
+    )?;
+    validate_sha256(
+        required_string(provenance, "license_sha256", "Grok pattern provenance")?,
+        "Grok pattern provenance.license_sha256",
+    )?;
+    expect_string(
+        provenance,
+        "copy_policy",
+        "pattern_only_no_source_bytes",
+        "Grok pattern provenance",
+    )?;
+    let origins = field(provenance, "origins", "Grok pattern provenance")?
+        .array("Grok pattern provenance.origins")?;
+    if origins.is_empty() {
+        return Err("Grok pattern provenance origins must not be empty".to_owned());
+    }
+    for (index, origin) in origins.iter().enumerate() {
+        let context = format!("Grok pattern provenance.origins[{index}]");
+        let origin = origin.object(&context)?;
+        exact_keys(
+            origin,
+            &[
+                "pattern",
+                "source_paths",
+                "heyfood_paths",
+                "disposition",
+                "copied_bytes",
+            ],
+            &context,
+        )?;
+        for field_name in ["pattern", "disposition"] {
+            required_nonempty_string(origin, field_name, &context)?;
+        }
+        let sources =
+            field(origin, "source_paths", &context)?.array(&format!("{context}.source_paths"))?;
+        if sources.is_empty() {
+            return Err(format!("{context}.source_paths must not be empty"));
+        }
+        for (source_index, source) in sources.iter().enumerate() {
+            let source_context = format!("{context}.source_paths[{source_index}]");
+            let source = source.object(&source_context)?;
+            exact_keys(source, &["path", "sha256"], &source_context)?;
+            required_nonempty_string(source, "path", &source_context)?;
+            validate_sha256(
+                required_string(source, "sha256", &source_context)?,
+                &format!("{source_context}.sha256"),
+            )?;
+        }
+        let targets =
+            field(origin, "heyfood_paths", &context)?.array(&format!("{context}.heyfood_paths"))?;
+        if targets.is_empty() {
+            return Err(format!("{context}.heyfood_paths must not be empty"));
+        }
+        for target in targets {
+            required_path_exists(root, target.string(&context)?, &context)?;
+        }
+        if field(origin, "copied_bytes", &context)?.boolean(&context)? {
+            return Err(format!("{context} must not claim copied Grok source bytes"));
+        }
+    }
+    validate_review(
+        field(provenance, "review", "Grok pattern provenance")?,
+        "Grok pattern provenance.review",
+    )?;
+    Ok(())
 }
 
 fn required_path_exists(root: &Path, value: &str, context: &str) -> Result<(), String> {
@@ -1796,8 +2039,9 @@ fn set_difference(context: &str, expected: &BTreeSet<String>, actual: &BTreeSet<
 mod tests {
     use super::{
         FROZEN_COMPATIBILITY_DIGEST, FROZEN_COMPATIBILITY_SHA, FROZEN_COMPATIBILITY_TREE,
-        validate_dependency_dag, verify_assets, verify_assets_approved, verify_migration_ledger,
-        verify_phase0_evidence, verify_stable_contracts,
+        validate_dependency_dag, validate_grok_pattern_provenance,
+        validate_health_contract_provenance, verify_assets, verify_assets_approved,
+        verify_migration_ledger, verify_phase0_evidence, verify_stable_contracts,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1855,6 +2099,56 @@ mod tests {
         let phase0 = verify_phase0_evidence(&root()).expect("Phase 0 inventory must validate");
         assert!(phase0.blockers > 0);
         assert_eq!(phase0.review_status, "pending");
+    }
+
+    #[test]
+    fn health_contract_validator_rejects_target_corruption() {
+        let scratch = scratch("health-contract-corruption");
+        for path in [
+            "fixtures/contracts/health-contract-provenance.json",
+            "fixtures/contracts/health-h1h2.v1.json",
+            "fixtures/contracts/health-h3-daily-sync.v1.json",
+        ] {
+            copy(path, &scratch);
+        }
+        validate_health_contract_provenance(&scratch)
+            .expect("checked-in health contract provenance must validate");
+        let contract = scratch.join("fixtures/contracts/health-h1h2.v1.json");
+        let corrupted = fs::read_to_string(&contract).unwrap().replacen(
+            "\"oura\"",
+            "\"corrupted-provider\"",
+            1,
+        );
+        fs::write(contract, corrupted).unwrap();
+        assert!(validate_health_contract_provenance(&scratch).is_err());
+        fs::remove_dir_all(scratch).unwrap();
+    }
+
+    #[test]
+    fn grok_pattern_validator_rejects_copied_source_claim() {
+        let scratch = scratch("grok-pattern-corruption");
+        for path in [
+            "docs/release-evidence/rust-phase0/grok-pattern-origin.json",
+            "crates/heyfood-bin/src/main.rs",
+            "crates/heyfood-bin/src/lib.rs",
+            "crates/heyfood-tui/src/terminal.rs",
+            "crates/heyfood-tui/src/loop_driver.rs",
+            "crates/heyfood-bin/tests/phase0_qualification.rs",
+            "crates/heyfood-application/src/run_turn.rs",
+        ] {
+            copy(path, &scratch);
+        }
+        validate_grok_pattern_provenance(&scratch)
+            .expect("checked-in Grok pattern provenance must validate");
+        let provenance = scratch.join("docs/release-evidence/rust-phase0/grok-pattern-origin.json");
+        let corrupted = fs::read_to_string(&provenance).unwrap().replacen(
+            "\"copied_bytes\": false",
+            "\"copied_bytes\": true",
+            1,
+        );
+        fs::write(provenance, corrupted).unwrap();
+        assert!(validate_grok_pattern_provenance(&scratch).is_err());
+        fs::remove_dir_all(scratch).unwrap();
     }
 
     #[test]

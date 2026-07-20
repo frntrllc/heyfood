@@ -1,86 +1,143 @@
 # Rust Phase 0 remediation evidence
 
 **Evidence date:** 2026-07-20
+**Exact code lineage measured:** `08cecb3a00bff6bbd670faf066105205f6e93b0b`
+**Status:** local and exact hosted three-OS remediation evidence is green;
+asset/provenance approval and specialized Phase 0 approval are pending.
+Cutover and Phase 1 are not authorized by this report.
 
-**Exact code lineage measured:** `a105d285d6421bde58d312506a994c4f3dfa6a24`
+## What the spike now proves
 
-**Status:** local remediation evidence is green; updated hosted CI and independent Phase 0 approval are pending. Cutover is not authorized.
+The internal `phase0_qualification` Cargo test executable is not a `[[bin]]`
+target and cannot be installed as a user command. Its active-turn vertical
+composes real TUI input/effects, the qualified supervisor seam, `RunTurn`, the
+Reqwest/Rustls client, loopback HTTP/SSE, streaming UI delivery, Ctrl+C
+cancellation, peer-observed socket close, `TurnFinished`, bounded worker/server
+join, and PTY/ConPTY terminal restoration. The shipped `heyfood` executable
+remains fail-closed with exit 78.
 
-## What the remediation proves
+Additional direct proofs cover:
 
-The internal `phase0_qualification` Cargo test executable is not a `[[bin]]` target and cannot be installed as a user command. It composes the native file stores, frozen Python-compatible refresh and complete converse request contracts, `RunTurn`, the Reqwest client configured for Rustls, bounded SSE normalization, the Ratatui model/renderer, bounded cancellation and file-lock acquisition, task join, PTY/ConPTY terminal entry, catchable signals where the host exposes them, and terminal restoration. The shipped `heyfood` executable remains fail-closed with exit 78.
+- catchable release-profile panic restoration (`panic = "unwind"`) and
+  restoration-error propagation;
+- cancellation while the UI event channel is full;
+- 10,000-event/4 MiB turn-stream limits and 4 MiB UTF-8-safe semantic
+  scrollback bounds;
+- distinct presentation of before-acceptance, accepted, and
+  dispatched/outcome-unknown cancellation;
+- version-monotonic bounded credential replay, durable reconciliation, and
+  explicit supervisor/signal-listener shutdown and join;
+- owner-only Unix permissions and Windows DACL application;
+- read-only/idempotent supported Python local-state import on every platform,
+  with Python keyring secrets deliberately routed to reauthentication;
+- a Windows qualification split between the real user Ctrl+C ConPTY path and a
+  native `CREATE_NEW_CONSOLE` control-event delivery path.
 
-Controlled HTTP uses a loopback listener, so this evidence proves the Rustls-configured client composition but does not claim a live TLS handshake, production service, proxy, or public-root qualification.
+Controlled HTTP uses loopback, so this is a Rustls-configured client composition
+proof, not a public TLS/proxy/root-store qualification.
 
-The harness consumes:
+## Frozen inputs and current companion state
 
-- `crates/heyfood-agent-runtime/tests/fixtures/python_backend_refresh.json`, the auth lane's frozen Python/backend refresh and fallback oracle;
-- `crates/heyfood-bin/tests/fixtures/python-exported-turn.v1.json`, pinned to the final unpublished Python `0.4.0` oracle at `73494a57468dac83b4904ce6c390e36926f5c6fe` and its SSE lifecycle test.
+The harness consumes the frozen Python/backend refresh fixture and final
+unpublished Python `0.4.0` converse/SSE oracle at
+`73494a57468dac83b4904ce6c390e36926f5c6fe`.
 
-## Local results
+Companion backend main is
+`f752a057fb1cf75abe9bcb6ab4aafdc11687db73`: migration repair plus the
+certifi-backed verified-TLS correction are merged, production is postflight
+verified at sole head `095`, H1/H2 PR #79 and H3 backend/mobile PRs #96/#95 are
+merged, and their health contracts are frozen under `fixtures/contracts/`.
+Grocery PR #107 now supersedes PR #90 with a mergeable revision-096 candidate
+that claims the authoritative-snapshot/frozen-list/C1 corrections, but is
+behind current main with red hosted gates; final provenance remains gated on a
+green merge, production migration, and live canaries. Security PR #108 is
+merged and PR #109 remains active attestation hardening; no Kroger B1/B2 or
+Security D2 implementation is visible.
+`external-contract-status.md` records the exact boundaries.
 
-Host: macOS 26.5 (25F71), Apple Silicon arm64; `rustc 1.94.0 (4a4ef493e 2026-03-02)`; Cargo 1.94.0.
+## Clean local measurement
+
+Measured from a detached, clean worktree at the exact code SHA on macOS 26.5
+(25F71), Apple Silicon arm64; `rustc 1.94.0`; Cargo 1.94.0.
 
 | Gate | Result |
 |---|---|
-| Internal qualification executable | 4 passed; 1 ignored helper (the helper is executed by the parent PTY matrix) |
-| Python refresh contract -> persisted rotation -> SSE -> RunTurn -> Ratatui | passed |
-| Complete Python converse headers/body fixture | passed, including app/device/API-key/request-ID headers and household/location context |
-| Cancellation after peer-consumed POST body with withheld headers | passed; explicit dispatched/outcome-unknown result, no unsafe before-acceptance classification |
-| Cancellation after application-observed SSE acceptance | peer EOF/reset observed; turn and controlled server joined within 3 seconds |
-| SSE memory limits | typed line, event, and aggregate failures passed |
-| Durable lock acquisition | blocking work isolated from async executor and failed with typed timeout within 2 seconds under contention |
-| Credential commit replay after restart | passed against persistent commit identity with the original expected version |
-| TUI finishing/single-flight and render invalidation | terminal content renders while submission remains closed through `TurnFinished`; idle redraw removed and frame ceiling enforced |
-| macOS PTY catchable-signal matrix | SIGINT, SIGTERM, SIGHUP passed |
-| Terminal restoration | alternate screen left, bracketed paste disabled, canonical mode restored after every signal case |
-| Read-only Python local-state import | 5 passed: source immutability, account binding, local-state preservation, credential exclusion, idempotency/conflict refusal, keyring/unbound/unknown dispositions, malformed/symlink fail-closed behavior |
-| Windows credential cross-check | Reversible file credentials remain fail-closed; default and `native-credentials` platform targets pass cross-target Clippy, and the full Credential Manager vertical is selected by the hosted Windows qualification job |
-| Controlled first-frame probe | 30 warm samples; p95 1,942 µs |
-| Controlled input-to-frame probe | 2,000 samples with 500 semantic entries; p95 7,382 µs |
-| `cargo audit --deny warnings` | passed with Cargo Audit 0.22.2 |
-| `cargo deny check` | passed with Cargo Deny 0.20.2; non-fatal duplicate/unmatched-license warnings remain visible |
-| Dependency DAG | passed exact internal `=0.4.0` versions, path-only sources, exact edges, and direct `crates/` containment |
-| Asset integrity | passed; two independent provenance reviews remain pending |
-| Asset approval gate | failed closed as intended because those two reviews are pending |
-| Phase 0 inventory | valid; unresolved requirements remain blockers |
+| Internal qualification executable | 5 passed across the optimized functional and performance commands; 2 ignored helpers executed by their parent harnesses; 0 failed; 4.87 s combined test time |
+| Supervised TUI → HTTP/SSE → cancel/socket close/join | passed |
+| Python refresh/converse fixtures → persistence → SSE → RunTurn → Ratatui | passed |
+| Stream/scrollback memory limits | typed failures and UTF-8-safe truncation passed |
+| Cancellation with full UI channel | passed and returned the accepted-cancellation outcome |
+| Durable lock/rotation/reconciliation/restart replay | passed |
+| macOS PTY signal matrix | SIGINT, SIGTERM, SIGHUP passed |
+| Terminal restoration | alternate screen left, bracketed paste disabled, canonical mode restored |
+| Release-profile panic restoration | passed |
+| Read-only Python local-state import | 5 passed; source immutable; credentials excluded; keyring disposition requires reauthentication |
+| Windows target compile | platform default/native credential feature compiles; exact hosted runtime run pending |
+| First-frame controlled probe | 30 samples; optimized p95 104 µs |
+| Input-to-frame controlled probe | 2,000 samples with 500 semantic entries; optimized p95 470 µs |
+| Workspace format/strict Clippy/tests | passed locally |
+| Dependency DAG/contracts/assets/ledger/inventory validators | passed locally; asset review metadata remains pending |
 
-The timing probes use Ratatui's controlled `TestBackend`. They are repeatable regression checks for composition/render work, not release-process launch, real terminal paint, end-to-end network latency, idle CPU, or steady-state RSS evidence.
+The timing probes use Ratatui's controlled `TestBackend`; they are regression
+checks, not release-process startup, real terminal paint, network latency, idle
+CPU, or steady-state RSS measurements.
 
 ## Exact local artifacts
 
-Built with `cargo build --locked --package heyfood-bin`, `cargo build --locked --release --package heyfood-bin`, and `cargo test --locked --release --package heyfood-bin --test phase0_qualification --no-run` from a clean exact code checkout.
+Built from the clean exact worktree with the commands recorded in
+`qualification-evidence.json`.
 
 | Artifact | Shipped? | Bytes | SHA-256 |
 |---|---:|---:|---|
-| `target/debug/heyfood` | no | 444,104 | `de9463dbcdb7f0ae33e40d3f23e1c986552879d1bab54dcf3e18fd629f7549f5` |
-| `target/release/heyfood` | eventual public name, currently fail-closed | 333,520 | `4ccbd4c46b3f787cc1f620449d8effbcef21c565f430899b41e9110d183a7b0d` |
-| release `phase0_qualification` test executable | no | 4,087,792 | `faadacbb5e02e1b5bc1a54e5ad3b7b1a5e350052d95adb306ff23363eec93938` |
-
-The machine-readable companion record is `qualification-evidence.json`.
+| `target/debug/heyfood` | no | 444,344 | `b3439a86c557be5bcdb854fde0230536720a635e6d86559f6d0971022d5ed879` |
+| `target/release/heyfood` | no; currently fail-closed | 333,760 | `da520e525e69ef412310b667922968c031ea075a0d18b64ecf8c7f8505ceb4ac` |
+| release `phase0_qualification` executable | no | 4,237,056 | `8a1f0b0ccd17415203951bd25f47cf2cbaf414c3ddd6bed5c55ff059e820199c` |
 
 ## Hosted matrix
 
-The updated workflow defines:
+The immediate parent remediation SHA `be6695414abebc495e334b90551a958ccdb3af15`
+passed 44 Rust jobs, including Ubuntu/macOS qualification and Cargo Audit/Deny.
+Windows exposed three concrete issues: the SID parser omitted the leading `S`,
+the default-feature matrix invoked a native-credential helper, and a ConPTY
+process cannot be attached by its PID for `GenerateConsoleCtrlEvent`. Code SHA
+`05ccda2` fixed all three, then its Windows run proved ConPTY restoration but
+exposed an idle signal-supervisor join after the EOF path. Exact code SHA
+`cf6aaf7` added explicit cancellation for that no-signal path; its Windows run
+then reached the real-console child and exposed signal installation outside the
+Tokio runtime. Code SHA `3b5c057` installed the signal source inside the
+runtime. Code SHA `5851538` also follows the Windows console contract by
+broadcasting within the sender's attached isolated console instead of using an
+unsupported nonzero Ctrl+C process-group target. Code SHA
+`695528d` additionally runs the unchanged 25 ms input budget in an optimized
+build, avoiding invalid debug/shared-runner comparisons while retaining the
+budget. Code SHA `50d3533` also creates the isolated Windows control-test
+fixture before launching its child. Code SHA `d5c3558` moved the native sender
+into the child's isolated console and serialized terminal-owning qualification
+parents. Code SHA `580546f` switched to the programmatically supported
+`CTRL_BREAK_EVENT`. Code SHA `989c77e` made a PowerShell/.NET host allocate the
+real console before launching the Rust child; its hosted Windows run proved
+native event delivery, but exposed an active-TUI fixture race in which
+cancellation could precede the first streamed frame. Exact code SHA `08cecb3`
+synchronizes cancellation on the rendered SSE marker and passed ten consecutive
+optimized local repetitions. Its exact hosted run has 35 successful Rust CI
+jobs and one expected skipped protected-environment provenance-approval job;
+the companion CI workflow passed all 14 jobs. PR merge SHA `bd26707` and code
+head `08cecb3` have the identical tree `3b99bb0`.
 
-- the internal qualification executable on Ubuntu, macOS, and Windows;
-- Phase 0 inventory validation on all three hosts;
-- Cargo Audit with `--deny warnings` and Cargo Deny 0.20.2 via immutable action commit;
-- an explicit workflow-dispatch approval mode that fails unless asset provenance contains an independent reviewer and exact reviewed commit SHA.
+## Remaining Phase 0 gates
 
-No hosted result is claimed for `a105d28`; the jobs must run on the evidence descendant before review. At exact head `7710571`, Legacy CI and 34 of 36 Rust jobs passed. The two failing Windows jobs both exposed the same additional portability defect: `LockFileEx` reports normal contention as raw OS error 33, which Rust/fs2 did not classify as `WouldBlock`, so the bounded retry loop failed immediately. This code lineage maps that exact Windows condition into the existing bounded retry/timeout behavior. It also retains the fail-closed reversible-file default and selects Credential Manager only in the explicit Windows qualification feature job. On Unix runners the PTY matrix delivers SIGINT/SIGTERM/SIGHUP. On Windows it exercises ConPTY entry/restoration via Ctrl+D; a real Windows console-close/control-event matrix remains a blocker.
+The authoritative machine-readable inventory currently has one blocker:
 
-## Phase 0 blockers
+1. the specialized Rust reviewer must verify the two first-party asset
+   provenance records, the Grok pattern-only ledger, and the complete exact-SHA
+   Phase 0 result.
 
-The authoritative inventory is `phase0-inventory.json`. Important blockers are:
+The grocery correction/deployment sequence, Kroger B1/B2, Security D2, final
+wire DTOs, signed installers, real-hardware RCs, and all 675 migration-ledger
+mappings remain explicit later-phase or cutover gates. Per the authoritative
+plan, recording those unfinished external dependencies does not serialize the
+Phase 0 spike or generic Phase 1 foundation.
 
-- Grocery Phase A PR #90 has a substantial committed contract candidate, but it conflicts with current `main`, its PostgreSQL migration and aggregate CI gates fail, and the authoritative-household-snapshot and frozen-list-identity corrections remain required; there is no merge SHA, deployed capability, or approved aggregate digest;
-- backend endpoint-by-endpoint idempotency and release-metrics provenance is not frozen;
-- file-backed supported Python local state now has a read-only idempotent importer, and Windows reversible credential files remain fail-closed in favor of Credential Manager; selective reconciliation of local household state held in the Python keyring, application consumption/disposition UX, and hosted Windows native-credential evidence remain unresolved;
-- dietary and brand provenance each still require an independent exact-SHA review;
-- Grok source/provenance and license review is absent;
-- platform minimums, release-hardware owners, protected signing environment, and exact Sigstore identity expressions are absent;
-- real keychain, microphone, TLS/proxy, Windows control event, installed artifact, signing, and release hardware qualification remain incomplete;
-- all 675 Python migration entries remain unmapped, so DG-R5 and Python deletion are not authorized.
-
-The correct decision remains: retain the dormant Phase 0 foundation for exact-SHA review, run the updated hosted matrix, keep every blocker visible, and do not begin cutover or pin mutable grocery/health wire contracts. This evidence does not authorize Phase 1; Phase 1 belongs in a subsequent PR after the Phase 0 gates and independent review close.
+The next decision is mechanical: commit this exact evidence candidate and send
+it to the specialized reviewer. Only a GO verdict permits asking the owner to
+authorize Phase 1.

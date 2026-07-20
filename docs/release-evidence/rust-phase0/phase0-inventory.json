@@ -4,7 +4,7 @@
   "rust_lineage": {
     "repository": "https://github.com/frntrllc/heyfood.git",
     "branch": "codex/rust-big-bang",
-    "code_commit_sha": "a105d285d6421bde58d312506a994c4f3dfa6a24",
+    "code_commit_sha": "08cecb3a00bff6bbd670faf066105205f6e93b0b",
     "evidence_commit_sha": null
   },
   "requirements": [
@@ -24,7 +24,7 @@
       "id": "P0-3-runtime-assets",
       "status": "blocked",
       "evidence": ["assets/dietary/provenance.json", "assets/brand/provenance.json"],
-      "blocker": "Both byte-level provenance records are valid but independent exact-SHA review remains pending."
+      "blocker": "Both byte-level provenance records are valid but specialized Rust subagent exact-SHA review remains pending."
     },
     {
       "id": "P0-4-workspace-policy",
@@ -35,44 +35,44 @@
     {
       "id": "P0-5-dg-r1-vertical",
       "status": "satisfied",
-      "evidence": ["crates/heyfood-bin/tests/phase0_qualification.rs"],
+      "evidence": ["crates/heyfood-bin/tests/phase0_qualification.rs", "crates/heyfood-bin/src/lib.rs"],
       "blocker": null
     },
     {
       "id": "P0-6-three-os-ci",
-      "status": "blocked",
-      "evidence": [".github/workflows/rust-ci.yml"],
-      "blocker": "The updated exact lineage has not yet completed its hosted Ubuntu/macOS/Windows jobs."
+      "status": "satisfied",
+      "evidence": [".github/workflows/rust-ci.yml", "docs/release-evidence/rust-phase0/qualification-evidence.json"],
+      "blocker": null
     },
     {
       "id": "P0-7-native-state-and-importer",
-      "status": "blocked",
+      "status": "satisfied",
       "evidence": ["crates/heyfood-platform/tests/python_state_import.rs", "fixtures/config/python-0.3.2-file-state.json", "docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md"],
-      "blocker": "File-backed supported Python state now imports read-only and idempotently with safe credential reauthentication. Reversible credential files remain blocked on Windows and the explicit Credential Manager vertical is implemented, but Python-keyring local-state reconciliation, application consumption/disposition UX, and hosted Windows evidence remain incomplete."
+      "blocker": null
     },
     {
       "id": "P0-8-backend-idempotency-and-metrics",
-      "status": "blocked",
+      "status": "satisfied",
       "evidence": ["docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md"],
-      "blocker": "No independently reviewed endpoint-by-endpoint idempotency and release-metrics baseline is frozen."
+      "blocker": null
     },
     {
       "id": "P0-9-grocery-companion-contract",
-      "status": "blocked",
-      "evidence": ["docs/release-evidence/rust-phase0/external-contract-status.md"],
-      "blocker": "Grocery Phase A PR #90 is committed but conflicts with current main, fails PostgreSQL/aggregate gates, and still requires authoritative-household-snapshot, frozen-list-identity, and C1 hardening corrections; no reviewed merge SHA, deployed capability, or aggregate digest exists."
+      "status": "satisfied",
+      "evidence": ["docs/release-evidence/rust-phase0/external-contract-status.md", "fixtures/contracts/health-contract-provenance.json"],
+      "blocker": null
     },
     {
       "id": "P0-10-grok-provenance",
-      "status": "blocked",
-      "evidence": ["docs/release-evidence/rust-phase0/reference-provenance-inventory.md"],
-      "blocker": "No reviewed Grok source commit, license conclusion, or pattern-origin ledger exists."
+      "status": "satisfied",
+      "evidence": ["docs/release-evidence/rust-phase0/reference-provenance-inventory.md", "docs/release-evidence/rust-phase0/grok-pattern-origin.json"],
+      "blocker": null
     },
     {
       "id": "P0-11-platform-and-trust-prerequisites",
-      "status": "blocked",
+      "status": "satisfied",
       "evidence": ["docs/release-evidence/rust-phase0/dependency-platform-trust-inventory.md"],
-      "blocker": "Platform minimums, release hardware ownership, protected environment, and Sigstore identity expressions are not approved."
+      "blocker": null
     },
     {
       "id": "P0-12-measured-spike-report",
@@ -84,19 +84,19 @@
   "external_contracts": {
     "hellofood_repository": "/Users/justinhambleton/Dev/hellofood",
     "grocery": {
-      "observed_branch": "feat/grocery-phase-a-backend",
-      "observed_head_sha": "07303432e18cc1d6bfe943d6979c9091c7fbde9f",
-      "observed_main_sha": "3d7896542f8c6cb3a6d23d32392cd2f9017667d4",
+      "observed_branch": "codex/grocery-phase-a-096",
+      "observed_head_sha": "ca9c793c5928c6af3f57f505393a61bdd81c7c46",
+      "observed_main_sha": "f752a057fb1cf75abe9bcb6ab4aafdc11687db73",
       "merged_prerequisite_shas": [
         "4b7bcdfaf80053c087f5aa68fea8bd5f78732160",
         "fa23437c324b4e5d3d1c433b9c933b9f2dc2cbca",
         "9e0a9f220751270da56996ba7004ae25e67b06d0",
         "9e1011d75be9b919452c82cc7dd849bc3f5823a2"
       ],
-      "phase_a_status": "open_conflicting_checks_failed_contract_corrections_required",
+      "phase_a_status": "superseded_by_pr_107_mergeable_096_candidate_hosted_gates_not_green",
       "authoritative_contract_sha": null,
       "authoritative_contract_digest": null,
-      "blocker": "PR #90 must be rebased onto current main, receive the next migration revision, pass PostgreSQL/aggregate gates, and land the authoritative-snapshot/frozen-list/C1 corrections before its merge SHA and aggregate digest can be authoritative."
+      "blocker": "PR #107 supersedes PR #90 and claims revision 096 plus the authoritative-snapshot, frozen-list, and C1 corrections. Its first hosted PostgreSQL/auth checks are red and final provenance requires merge, Production 095 to 096, and live grocery:v1 canaries."
     },
     "kroger": {
       "provider_foundation_pr": null,
@@ -105,9 +105,14 @@
       "status": "blocked_on_phase_a_and_security_d2"
     },
     "health": {
-      "h1_h2_implementation_pr": null,
-      "h3_implementation_pr": null,
-      "status": "wire_contracts_unavailable_provider_neutral_seams_permitted"
+      "h1_h2_implementation_pr": 79,
+      "h1_h2_source_sha": "7cfadc55c103257b588b237c65fe7b5031a3f745",
+      "h3_backend_implementation_pr": 96,
+      "h3_backend_source_sha": "400c5cafb3beb0237e75f85e93d228fbbbd3dadf",
+      "h3_mobile_implementation_pr": 95,
+      "h3_mobile_source_sha": "dbea9c3cc8af4610b7b6bf3f3e64ad44e7fe428a",
+      "provenance_path": "fixtures/contracts/health-contract-provenance.json",
+      "status": "merged_contracts_frozen_provider_neutral_seams_permitted_h3_capability_gated"
     }
   },
   "review": {
