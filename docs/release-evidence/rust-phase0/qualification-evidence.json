@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "evidence_date": "2026-07-19",
-  "code_commit_sha": "16aa8bdb6296c4cad3f1586894766a5c0648732b",
+  "code_commit_sha": "dd853a64bb37c1c09ed2b743eb4e3be2ec511d1b",
   "source_tree_clean": true,
   "host": {
     "os": "macOS 26.5 (25F71)",
@@ -14,7 +14,7 @@
     "passed": 4,
     "failed": 0,
     "ignored_helper": 1,
-    "wall_seconds": 16.96,
+    "wall_seconds": 16.92,
     "unix_signals": ["SIGINT", "SIGTERM", "SIGHUP"],
     "terminal_restoration": [
       "alternate_screen_left",
@@ -36,9 +36,9 @@
   "performance": {
     "backend": "ratatui_test_backend",
     "first_frame_samples": 30,
-    "first_frame_p95_microseconds": 2249,
+    "first_frame_p95_microseconds": 2375,
     "input_frame_samples": 2000,
-    "input_frame_p95_microseconds": 8193,
+    "input_frame_p95_microseconds": 7635,
     "semantic_scrollback_entries": 500,
     "release_process_or_real_terminal_measurement": false
   },
@@ -48,7 +48,7 @@
       "path": "target/debug/heyfood",
       "shipped": false,
       "bytes": 444136,
-      "sha256": "e739945872a6210b9786befbe249a8a12b02da9a1994f08cb1d180da2f1d457f",
+      "sha256": "6a0f5aadf85089e25a6993c0f9d693e437ba711607462f7b9d886e3e8807c265",
       "build_command": "cargo build --locked --package heyfood-bin"
     },
     {
@@ -56,15 +56,15 @@
       "path": "target/release/heyfood",
       "shipped": false,
       "bytes": 333520,
-      "sha256": "bf343d4246ddea20b1f3cb1fce4a0774c6387ba9f9d11a8204b80089e84a580a",
+      "sha256": "39c9793e992493771124b25dfea330ddd229c0e341caf1d555fcd1897eb34b9b",
       "build_command": "cargo build --locked --release --package heyfood-bin"
     },
     {
       "name": "release_internal_qualification_test",
-      "path": "target/release/deps/phase0_qualification-3e6fa39d4cb7d534",
+      "path": "target/release/deps/phase0_qualification-4c362df8345b7c4b",
       "shipped": false,
-      "bytes": 4054608,
-      "sha256": "d320450fee6c6208d9f44cd4d12e088f0fdbf25cc7d032db655936e65742ea17",
+      "bytes": 4087792,
+      "sha256": "96337e67f66bb1bcd2d3d87dc60ca17905134cf9a5f3117df45b9c1267c77f75",
       "build_command": "cargo test --locked --release --package heyfood-bin --test phase0_qualification --no-run"
     }
   ],
