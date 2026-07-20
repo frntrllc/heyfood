@@ -97,7 +97,7 @@ impl FileLock {
             };
             match result {
                 Ok(()) => break,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(error) if lock_is_contended(&error) => {
                     if started.elapsed() >= LOCK_ACQUIRE_TIMEOUT {
                         return Err(PortError::new(
                             "lock_timeout",
@@ -120,6 +120,22 @@ impl FileLock {
             .await
             .map_err(|_| PortError::new("lock_task", "state lock worker did not complete"))?
     }
+}
+
+fn lock_is_contended(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        // LockFileEx reports ERROR_LOCK_VIOLATION when another process owns
+        // the requested byte range. Rust does not currently classify this as
+        // WouldBlock, but it is the Windows equivalent for this retry loop.
+        if error.raw_os_error() == Some(33) {
+            return true;
+        }
+    }
+    false
 }
 
 impl Drop for FileLock {
