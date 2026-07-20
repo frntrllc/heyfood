@@ -1,6 +1,6 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v5 — final Python-oracle, health, and Phase A hardening reconciliation; exact-SHA re-review required
+**Status:** Draft v6 — Grocery 095/096 execution reconciliation; exact-SHA re-review required
 **Baseline:** final unpublished Python `0.4.0` candidate at `73494a57468dac83b4904ce6c390e36926f5c6fe`; the last public Python release remains `0.3.2`
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`
@@ -47,6 +47,40 @@ For grocery, this plan supersedes every Python/PyPI/released-`0.3.x` client
 implementation clause in the historical grocery CLI surface directive. That
 document remains product/contract input only; Platform P0 and Grocery Phase A
 stay backend-owned, while all terminal implementation ships in native `0.4.0`.
+
+### Grocery execution reconciliation — 2026-07-20
+
+The companion backend migration history is now authoritative and linear at the
+product edge: PR #102 restored immutable Production history through revision
+`094`, revision `095` is the mandatory health-schema checkpoint, and Grocery
+Phase A must be the next migration as revision `096` with
+`down_revision = "095"`. The obsolete `089g1`/`089h1`/`089m1` topology and the
+old PR #90 merge base are not valid client or release inputs.
+
+At this plan revision, Production remains verified at `094`. The first bounded
+`094 -> 095` attempt failed before connecting and performed no DDL because the
+Render one-off runtime lacked a usable CA root. PR #103 retained
+`sslmode=verify-full` but its system-root approach also failed a read-only
+verifier. The certifi-root follow-up is separately reviewed and must pass hosted
+CI plus an exact-build read-only `alembic current` before the one authorized
+`alembic upgrade 095` submission. Neither failure permits weakening TLS to
+`require`, disabling certificate verification, or bypassing the preflight.
+
+Grocery Phase A remains a substantial backend implementation candidate in PR
+#90, but it must be reconstructed onto current `main`, retain its domain and
+contract work, replace its obsolete migration with `096 -> 095`, resolve every
+authoritative-context/list-confirmation finding, and pass fresh PostgreSQL,
+hermetic, aggregate, and independent review gates. Only its final reviewed
+merge SHA, fixture aggregate digest, deployed `capabilities.grocery = "v1"`,
+and live scope/behavior canaries may become Rust contract provenance.
+
+This dependency does not stop generic Rust work. Auth, state, terminal
+supervision, cancellation, rendering, generic voice, provisional semantic
+ports, and fixture-import machinery continue in parallel. Final grocery wire
+DTOs, REST/tool calls, and release qualification remain blocked until the
+corrected backend contract is frozen. Retailer-provider work remains ordered
+after Grocery Phase A and Security D2: B1 provider foundation, then B2 Kroger;
+provider OAuth credentials never move into the native client.
 
 For health, the Rust program owns H1/H2 one-shot and TUI surfaces over the
 server-backed Oura contracts and later consumes provider-neutral Apple Health
@@ -1394,7 +1428,10 @@ and evidence receive independent review.
    Phase 0 records the companion directive/PR state and marks current DTOs
    provisional. Generic Phase 1 ports and semantic types may proceed, but final
    wire types and Phase 2 grocery calls require authoritative generated backend
-   fixtures, the corrected Phase A source SHA, and aggregate digest.
+   fixtures, the corrected Phase A source SHA, and aggregate digest. Record the
+   release chain explicitly as Production `094 -> 095`, reviewed Grocery
+   `096 -> 095`, Grocery merge/deploy, `grocery:v1` canary, then Rust fixture
+   import; a stale PR #90 SHA or pre-reconstruction fixture is never pinnable.
 10. Freeze H1/H2 provider-neutral backend fixtures and production-scope/routing
     evidence; record H3 mobile/backend contracts as a separately capability-
     gated dependency rather than inventing Apple Health wire types.
