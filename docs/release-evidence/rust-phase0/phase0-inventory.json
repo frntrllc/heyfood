@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "evidence_date": "2026-07-19",
+  "evidence_date": "2026-07-20",
   "rust_lineage": {
     "repository": "https://github.com/frntrllc/heyfood.git",
     "branch": "codex/rust-big-bang",
-    "code_commit_sha": "dd853a64bb37c1c09ed2b743eb4e3be2ec511d1b",
+    "code_commit_sha": "c64935bcf73db42ff5f731f7fe15c30feeac9709",
     "evidence_commit_sha": null
   },
   "requirements": [
@@ -48,7 +48,7 @@
       "id": "P0-7-native-state-and-importer",
       "status": "blocked",
       "evidence": ["crates/heyfood-platform/tests/python_state_import.rs", "fixtures/config/python-0.3.2-file-state.json", "docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md"],
-      "blocker": "File-backed supported Python state now imports read-only and idempotently with safe credential reauthentication, but Python-keyring local-state reconciliation, application consumption/disposition UX, hosted-platform evidence, and a private Windows ACL writer remain incomplete."
+      "blocker": "File-backed supported Python state now imports read-only and idempotently with safe credential reauthentication. Reversible credential files remain blocked on Windows and the explicit Credential Manager vertical is implemented, but Python-keyring local-state reconciliation, application consumption/disposition UX, and hosted Windows evidence remain incomplete."
     },
     {
       "id": "P0-8-backend-idempotency-and-metrics",
@@ -86,7 +86,7 @@
     "grocery": {
       "observed_branch": "feat/grocery-phase-a-backend",
       "observed_head_sha": "07303432e18cc1d6bfe943d6979c9091c7fbde9f",
-      "observed_main_sha": "d13f170f8290e88f9a6000a38ed1437e4ea06a56",
+      "observed_main_sha": "3d7896542f8c6cb3a6d23d32392cd2f9017667d4",
       "merged_prerequisite_shas": [
         "4b7bcdfaf80053c087f5aa68fea8bd5f78732160",
         "fa23437c324b4e5d3d1c433b9c933b9f2dc2cbca",

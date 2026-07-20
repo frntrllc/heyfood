@@ -1,8 +1,8 @@
 # Rust Phase 0 remediation evidence
 
-**Evidence date:** 2026-07-19
+**Evidence date:** 2026-07-20
 
-**Exact code lineage measured:** `dd853a64bb37c1c09ed2b743eb4e3be2ec511d1b`
+**Exact code lineage measured:** `c64935bcf73db42ff5f731f7fe15c30feeac9709`
 
 **Status:** local remediation evidence is green; updated hosted CI and independent Phase 0 approval are pending. Cutover is not authorized.
 
@@ -35,9 +35,9 @@ Host: macOS 26.5 (25F71), Apple Silicon arm64; `rustc 1.94.0 (4a4ef493e 2026-03-
 | macOS PTY catchable-signal matrix | SIGINT, SIGTERM, SIGHUP passed |
 | Terminal restoration | alternate screen left, bracketed paste disabled, canonical mode restored after every signal case |
 | Read-only Python local-state import | 5 passed: source immutability, account binding, local-state preservation, credential exclusion, idempotency/conflict refusal, keyring/unbound/unknown dispositions, malformed/symlink fail-closed behavior |
-| Windows importer cross-check | `x86_64-pc-windows-msvc` test targets compile; an existing Python source fails closed until private Windows ACL persistence is implemented |
-| Controlled first-frame probe | 30 warm samples; p95 2,375 µs |
-| Controlled input-to-frame probe | 2,000 samples with 500 semantic entries; p95 7,635 µs |
+| Windows credential cross-check | Reversible file credentials remain fail-closed; default and `native-credentials` platform targets pass cross-target Clippy, and the full Credential Manager vertical is selected by the hosted Windows qualification job |
+| Controlled first-frame probe | 30 warm samples; p95 1,876 µs |
+| Controlled input-to-frame probe | 2,000 samples with 500 semantic entries; p95 7,404 µs |
 | `cargo audit --deny warnings` | passed with Cargo Audit 0.22.2 |
 | `cargo deny check` | passed with Cargo Deny 0.20.2; non-fatal duplicate/unmatched-license warnings remain visible |
 | Dependency DAG | passed exact internal `=0.4.0` versions, path-only sources, exact edges, and direct `crates/` containment |
@@ -53,9 +53,9 @@ Built with `cargo build --locked --package heyfood-bin`, `cargo build --locked -
 
 | Artifact | Shipped? | Bytes | SHA-256 |
 |---|---:|---:|---|
-| `target/debug/heyfood` | no | 444,136 | `6a0f5aadf85089e25a6993c0f9d693e437ba711607462f7b9d886e3e8807c265` |
-| `target/release/heyfood` | eventual public name, currently fail-closed | 333,520 | `39c9793e992493771124b25dfea330ddd229c0e341caf1d555fcd1897eb34b9b` |
-| release `phase0_qualification` test executable | no | 4,087,792 | `96337e67f66bb1bcd2d3d87dc60ca17905134cf9a5f3117df45b9c1267c77f75` |
+| `target/debug/heyfood` | no | 444,104 | `376692e3be7ee5f54f8d2a0b8262e029acfe1452fdbd724031512ad66a054155` |
+| `target/release/heyfood` | eventual public name, currently fail-closed | 333,520 | `4ccbd4c46b3f787cc1f620449d8effbcef21c565f430899b41e9110d183a7b0d` |
+| release `phase0_qualification` test executable | no | 4,087,792 | `cfdbcc6e10c2f46b234c2f54bf1ee7384c04ea582baf090d8d96eab123614d61` |
 
 The machine-readable companion record is `qualification-evidence.json`.
 
@@ -68,7 +68,7 @@ The updated workflow defines:
 - Cargo Audit with `--deny warnings` and Cargo Deny 0.20.2 via immutable action commit;
 - an explicit workflow-dispatch approval mode that fails unless asset provenance contains an independent reviewer and exact reviewed commit SHA.
 
-No hosted result is claimed for `dd853a6`; the jobs must run on the evidence descendant before review. The prior exact-head dispatches for `593f59a` ended in workflow `startup_failure` with zero jobs and therefore provide no platform evidence. On Unix runners the PTY matrix delivers SIGINT/SIGTERM/SIGHUP. On Windows it exercises ConPTY entry/restoration via Ctrl+D; a real Windows console-close/control-event matrix remains a blocker.
+No hosted result is claimed for `c64935b`; the jobs must run on the evidence descendant before review. At the prior exact head `1fb2285`, Legacy CI passed and all Ubuntu/macOS Rust lanes passed, while four Windows lanes exposed an unused Unix import, cfg-specific native-persistence imports, and selection of the intentionally disabled reversible file-credential store. This code lineage corrects those exact defects by retaining the fail-closed default and selecting Credential Manager only in the explicit Windows qualification feature job. On Unix runners the PTY matrix delivers SIGINT/SIGTERM/SIGHUP. On Windows it exercises ConPTY entry/restoration via Ctrl+D; a real Windows console-close/control-event matrix remains a blocker.
 
 ## Phase 0 blockers
 
@@ -76,7 +76,7 @@ The authoritative inventory is `phase0-inventory.json`. Important blockers are:
 
 - Grocery Phase A PR #90 has a substantial committed contract candidate, but it conflicts with current `main`, its PostgreSQL migration and aggregate CI gates fail, and the authoritative-household-snapshot and frozen-list-identity corrections remain required; there is no merge SHA, deployed capability, or approved aggregate digest;
 - backend endpoint-by-endpoint idempotency and release-metrics provenance is not frozen;
-- file-backed supported Python local state now has a read-only idempotent importer, but selective reconciliation of local household state held in the Python keyring, application consumption/disposition UX, and a private Windows ACL writer remain unresolved;
+- file-backed supported Python local state now has a read-only idempotent importer, and Windows reversible credential files remain fail-closed in favor of Credential Manager; selective reconciliation of local household state held in the Python keyring, application consumption/disposition UX, and hosted Windows native-credential evidence remain unresolved;
 - dietary and brand provenance each still require an independent exact-SHA review;
 - Grok source/provenance and license review is absent;
 - platform minimums, release-hardware owners, protected signing environment, and exact Sigstore identity expressions are absent;

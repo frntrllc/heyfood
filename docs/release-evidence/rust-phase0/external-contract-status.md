@@ -1,6 +1,6 @@
 # Phase 0 external contract status
 
-Observed read-only on 2026-07-19 from GitHub and the companion checkout. The
+Observed read-only on 2026-07-20 from GitHub and the companion checkout. The
 local `/Users/justinhambleton/Dev/hellofood` worktree contains unrelated user
 changes and was not modified.
 
@@ -13,6 +13,16 @@ The backend prerequisite contracts P0 C1–C4 are merged on the companion reposi
 | C3 structured confirmation | `9e0a9f220751270da56996ba7004ae25e67b06d0` | merged |
 | C4 scope tiers/capabilities | `9e1011d75be9b919452c82cc7dd849bc3f5823a2` | merged |
 
+The production platform P0 cutover through schema `094` is independently
+approved, and the dry-run blockers fixed by
+[PR #100](https://github.com/frntrllc/hellofood/pull/100) and
+[PR #101](https://github.com/frntrllc/hellofood/pull/101) are merged. This
+removes the database migration as a dependency for continued Rust Phase 0
+work. It does not authorize production writers: current backend `main` must
+still be deployed with the schema-094 encryption/audit gates enabled, and the
+broadly shared submission-storage AWS credential must be scoped and rotated
+before writers resume.
+
 ## Grocery Phase A and Kroger
 
 [Grocery Phase A PR #90](https://github.com/frntrllc/hellofood/pull/90)
@@ -22,7 +32,7 @@ confirmation, scope, export, conflict, and founding-scenario contracts. It is
 not authoritative yet:
 
 - its recorded base is C4 at `9e1011d75be9b919452c82cc7dd849bc3f5823a2`,
-  while current `main` is `d13f170f8290e88f9a6000a38ed1437e4ea06a56`;
+  while current `main` is `3d7896542f8c6cb3a6d23d32392cd2f9017667d4`;
 - GitHub reports the PR as conflicting (`mergeable_state: dirty`);
 - `postgres-migrations` and the aggregate `ci-gate` fail; the PR owns migration
   `093` while current `main` already owns later migration history, so it must be
