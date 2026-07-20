@@ -2,7 +2,7 @@
 
 **Evidence date:** 2026-07-20
 
-**Exact code lineage measured:** `c64935bcf73db42ff5f731f7fe15c30feeac9709`
+**Exact code lineage measured:** `a105d285d6421bde58d312506a994c4f3dfa6a24`
 
 **Status:** local remediation evidence is green; updated hosted CI and independent Phase 0 approval are pending. Cutover is not authorized.
 
@@ -36,8 +36,8 @@ Host: macOS 26.5 (25F71), Apple Silicon arm64; `rustc 1.94.0 (4a4ef493e 2026-03-
 | Terminal restoration | alternate screen left, bracketed paste disabled, canonical mode restored after every signal case |
 | Read-only Python local-state import | 5 passed: source immutability, account binding, local-state preservation, credential exclusion, idempotency/conflict refusal, keyring/unbound/unknown dispositions, malformed/symlink fail-closed behavior |
 | Windows credential cross-check | Reversible file credentials remain fail-closed; default and `native-credentials` platform targets pass cross-target Clippy, and the full Credential Manager vertical is selected by the hosted Windows qualification job |
-| Controlled first-frame probe | 30 warm samples; p95 1,876 µs |
-| Controlled input-to-frame probe | 2,000 samples with 500 semantic entries; p95 7,404 µs |
+| Controlled first-frame probe | 30 warm samples; p95 1,942 µs |
+| Controlled input-to-frame probe | 2,000 samples with 500 semantic entries; p95 7,382 µs |
 | `cargo audit --deny warnings` | passed with Cargo Audit 0.22.2 |
 | `cargo deny check` | passed with Cargo Deny 0.20.2; non-fatal duplicate/unmatched-license warnings remain visible |
 | Dependency DAG | passed exact internal `=0.4.0` versions, path-only sources, exact edges, and direct `crates/` containment |
@@ -53,9 +53,9 @@ Built with `cargo build --locked --package heyfood-bin`, `cargo build --locked -
 
 | Artifact | Shipped? | Bytes | SHA-256 |
 |---|---:|---:|---|
-| `target/debug/heyfood` | no | 444,104 | `376692e3be7ee5f54f8d2a0b8262e029acfe1452fdbd724031512ad66a054155` |
+| `target/debug/heyfood` | no | 444,104 | `de9463dbcdb7f0ae33e40d3f23e1c986552879d1bab54dcf3e18fd629f7549f5` |
 | `target/release/heyfood` | eventual public name, currently fail-closed | 333,520 | `4ccbd4c46b3f787cc1f620449d8effbcef21c565f430899b41e9110d183a7b0d` |
-| release `phase0_qualification` test executable | no | 4,087,792 | `cfdbcc6e10c2f46b234c2f54bf1ee7384c04ea582baf090d8d96eab123614d61` |
+| release `phase0_qualification` test executable | no | 4,087,792 | `faadacbb5e02e1b5bc1a54e5ad3b7b1a5e350052d95adb306ff23363eec93938` |
 
 The machine-readable companion record is `qualification-evidence.json`.
 
@@ -68,7 +68,7 @@ The updated workflow defines:
 - Cargo Audit with `--deny warnings` and Cargo Deny 0.20.2 via immutable action commit;
 - an explicit workflow-dispatch approval mode that fails unless asset provenance contains an independent reviewer and exact reviewed commit SHA.
 
-No hosted result is claimed for `c64935b`; the jobs must run on the evidence descendant before review. At the prior exact head `1fb2285`, Legacy CI passed and all Ubuntu/macOS Rust lanes passed, while four Windows lanes exposed an unused Unix import, cfg-specific native-persistence imports, and selection of the intentionally disabled reversible file-credential store. This code lineage corrects those exact defects by retaining the fail-closed default and selecting Credential Manager only in the explicit Windows qualification feature job. On Unix runners the PTY matrix delivers SIGINT/SIGTERM/SIGHUP. On Windows it exercises ConPTY entry/restoration via Ctrl+D; a real Windows console-close/control-event matrix remains a blocker.
+No hosted result is claimed for `a105d28`; the jobs must run on the evidence descendant before review. At exact head `7710571`, Legacy CI and 34 of 36 Rust jobs passed. The two failing Windows jobs both exposed the same additional portability defect: `LockFileEx` reports normal contention as raw OS error 33, which Rust/fs2 did not classify as `WouldBlock`, so the bounded retry loop failed immediately. This code lineage maps that exact Windows condition into the existing bounded retry/timeout behavior. It also retains the fail-closed reversible-file default and selects Credential Manager only in the explicit Windows qualification feature job. On Unix runners the PTY matrix delivers SIGINT/SIGTERM/SIGHUP. On Windows it exercises ConPTY entry/restoration via Ctrl+D; a real Windows console-close/control-event matrix remains a blocker.
 
 ## Phase 0 blockers
 

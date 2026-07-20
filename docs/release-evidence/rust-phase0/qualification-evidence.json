@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "evidence_date": "2026-07-20",
-  "code_commit_sha": "c64935bcf73db42ff5f731f7fe15c30feeac9709",
+  "code_commit_sha": "a105d285d6421bde58d312506a994c4f3dfa6a24",
   "source_tree_clean": true,
   "host": {
     "os": "macOS 26.5 (25F71)",
@@ -14,7 +14,7 @@
     "passed": 4,
     "failed": 0,
     "ignored_helper": 1,
-    "wall_seconds": 16.76,
+    "wall_seconds": 18.17,
     "unix_signals": ["SIGINT", "SIGTERM", "SIGHUP"],
     "terminal_restoration": [
       "alternate_screen_left",
@@ -37,9 +37,9 @@
   "performance": {
     "backend": "ratatui_test_backend",
     "first_frame_samples": 30,
-    "first_frame_p95_microseconds": 1876,
+    "first_frame_p95_microseconds": 1942,
     "input_frame_samples": 2000,
-    "input_frame_p95_microseconds": 7404,
+    "input_frame_p95_microseconds": 7382,
     "semantic_scrollback_entries": 500,
     "release_process_or_real_terminal_measurement": false
   },
@@ -49,7 +49,7 @@
       "path": "target/debug/heyfood",
       "shipped": false,
       "bytes": 444104,
-      "sha256": "376692e3be7ee5f54f8d2a0b8262e029acfe1452fdbd724031512ad66a054155",
+      "sha256": "de9463dbcdb7f0ae33e40d3f23e1c986552879d1bab54dcf3e18fd629f7549f5",
       "build_command": "cargo build --locked --package heyfood-bin"
     },
     {
@@ -65,7 +65,7 @@
       "path": "target/release/deps/phase0_qualification-b80037d10218e828",
       "shipped": false,
       "bytes": 4087792,
-      "sha256": "cfdbcc6e10c2f46b234c2f54bf1ee7384c04ea582baf090d8d96eab123614d61",
+      "sha256": "faadacbb5e02e1b5bc1a54e5ad3b7b1a5e350052d95adb306ff23363eec93938",
       "build_command": "cargo test --locked --release --package heyfood-bin --test phase0_qualification --no-run"
     }
   ],
