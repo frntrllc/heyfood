@@ -1003,7 +1003,7 @@ public static class HeyfoodConsoleSignal {
 [HeyfoodConsoleSignal]::FreeConsole() | Out-Null
 if (-not [HeyfoodConsoleSignal]::AttachConsole($TargetPid)) { exit 20 }
 if (-not [HeyfoodConsoleSignal]::SetConsoleCtrlHandler([IntPtr]::Zero, $true)) { exit 21 }
-if (-not [HeyfoodConsoleSignal]::GenerateConsoleCtrlEvent(0, $TargetPid)) { exit 22 }
+if (-not [HeyfoodConsoleSignal]::GenerateConsoleCtrlEvent(0, 0)) { exit 22 }
 Start-Sleep -Milliseconds 250
 [HeyfoodConsoleSignal]::FreeConsole() | Out-Null
 "#;
@@ -1029,7 +1029,6 @@ fn run_windows_console_control_child() {
     use std::os::windows::process::CommandExt;
 
     const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     let root = scratch("windows-console-control");
     let ready_path = root.join("ready");
     let result_path = root.join("result");
@@ -1042,7 +1041,7 @@ fn run_windows_console_control_child() {
         ])
         .env("HEYFOOD_QUALIFICATION_READY_FILE", &ready_path)
         .env("HEYFOOD_QUALIFICATION_RESULT_FILE", &result_path)
-        .creation_flags(CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP)
+        .creation_flags(CREATE_NEW_CONSOLE)
         .spawn()
         .expect("spawn isolated Windows console signal child");
     wait_for_file(&ready_path, Duration::from_secs(5), &mut child);
