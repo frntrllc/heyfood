@@ -847,7 +847,7 @@ fn windows_current_user_sid() -> std::io::Result<String> {
     let sid = output.stdout[start..]
         .iter()
         .copied()
-        .take_while(|byte| byte.is_ascii_digit() || *byte == b'-')
+        .take_while(|byte| byte.is_ascii_digit() || *byte == b'-' || *byte == b'S')
         .collect::<Vec<_>>();
     let sid = String::from_utf8(sid).map_err(|_| {
         std::io::Error::new(

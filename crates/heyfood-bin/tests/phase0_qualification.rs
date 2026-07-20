@@ -611,10 +611,6 @@ impl QualifiedTurnDriver for SupervisedQualificationDriver {
 
 #[test]
 #[ignore = "spawned under a PTY by supervised_tui_http_sse_cancel_and_join_vertical"]
-#[cfg_attr(
-    all(windows, not(feature = "native-credentials")),
-    ignore = "Windows vertical requires the native-credentials feature"
-)]
 fn qualification_active_turn_child() {
     let runtime = tokio::runtime::Runtime::new().expect("qualification runtime");
     let listener = runtime
@@ -719,6 +715,10 @@ fn qualification_active_turn_child() {
 }
 
 #[test]
+#[cfg_attr(
+    all(windows, not(feature = "native-credentials")),
+    ignore = "Windows vertical requires the native-credentials feature"
+)]
 fn supervised_tui_http_sse_cancel_and_join_vertical() {
     run_active_turn_pty_child();
 }
@@ -770,6 +770,29 @@ fn qualification_pty_child() {
 }
 
 #[test]
+#[cfg(windows)]
+#[ignore = "spawned with a real Windows console by qualification_pty_signal_and_restoration_matrix"]
+fn qualification_windows_console_signal_child() {
+    let ready_path = std::env::var_os("HEYFOOD_QUALIFICATION_READY_FILE")
+        .map(PathBuf::from)
+        .expect("Windows signal readiness path");
+    let result_path = std::env::var_os("HEYFOOD_QUALIFICATION_RESULT_FILE")
+        .map(PathBuf::from)
+        .expect("Windows signal result path");
+    let runtime = tokio::runtime::Runtime::new().expect("Windows signal runtime");
+    let mut signals = NativeSignalSource::install().expect("install Windows signal source");
+    std::fs::write(&ready_path, b"ready").expect("publish Windows signal readiness");
+    let signal = runtime
+        .block_on(signals.next())
+        .expect("receive Windows console control event");
+    runtime
+        .block_on(signals.shutdown(Duration::from_secs(1)))
+        .expect("Windows signal listeners stopped and joined");
+    std::fs::write(&result_path, format!("{signal:?}")).expect("publish Windows signal result");
+    assert_eq!(signal, SignalEvent::Interrupt);
+}
+
+#[test]
 fn qualification_pty_signal_and_restoration_matrix() {
     #[cfg(unix)]
     for (signal, expected) in [
@@ -781,7 +804,10 @@ fn qualification_pty_signal_and_restoration_matrix() {
     }
 
     #[cfg(windows)]
-    run_pty_child(Some("WINDOWS_CTRL_C"), "Interrupt");
+    {
+        run_pty_child(None, "Requested");
+        run_windows_console_control_child();
+    }
 }
 
 #[test]
@@ -920,9 +946,10 @@ fn run_pty_child(signal: Option<&str>, expected: &str) {
     }
     #[cfg(windows)]
     {
-        assert_eq!(signal, Some("WINDOWS_CTRL_C"));
-        let pid = child.process_id().expect("ConPTY child process ID");
-        send_windows_console_control(pid);
+        assert!(signal.is_none(), "ConPTY restoration uses a typed EOF");
+        let mut writer = writer.lock().expect("lock ConPTY writer");
+        writer.write_all(&[4]).expect("send Ctrl+D");
+        writer.flush().expect("flush Ctrl+D");
     }
 
     let status = wait_for_pty_child(&mut child, Duration::from_secs(10));
@@ -967,7 +994,7 @@ public static class HeyfoodConsoleSignal {
 [HeyfoodConsoleSignal]::FreeConsole() | Out-Null
 if (-not [HeyfoodConsoleSignal]::AttachConsole($TargetPid)) { exit 20 }
 if (-not [HeyfoodConsoleSignal]::SetConsoleCtrlHandler([IntPtr]::Zero, $true)) { exit 21 }
-if (-not [HeyfoodConsoleSignal]::GenerateConsoleCtrlEvent(0, 0)) { exit 22 }
+if (-not [HeyfoodConsoleSignal]::GenerateConsoleCtrlEvent(0, $TargetPid)) { exit 22 }
 Start-Sleep -Milliseconds 250
 [HeyfoodConsoleSignal]::FreeConsole() | Out-Null
 "#;
@@ -986,6 +1013,84 @@ Start-Sleep -Milliseconds 250
         status.success(),
         "Windows console-control delivery failed: {status:?}"
     );
+}
+
+#[cfg(windows)]
+fn run_windows_console_control_child() {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    let root = scratch("windows-console-control");
+    let ready_path = root.join("ready");
+    let result_path = root.join("result");
+    let mut child = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "qualification_windows_console_signal_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("HEYFOOD_QUALIFICATION_READY_FILE", &ready_path)
+        .env("HEYFOOD_QUALIFICATION_RESULT_FILE", &result_path)
+        .creation_flags(CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP)
+        .spawn()
+        .expect("spawn isolated Windows console signal child");
+    wait_for_file(&ready_path, Duration::from_secs(5), &mut child);
+    send_windows_console_control(child.id());
+    wait_for_file(&result_path, Duration::from_secs(5), &mut child);
+    let status = wait_for_process_child(&mut child, Duration::from_secs(5));
+    assert!(
+        status.success(),
+        "Windows console signal child failed: {status}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&result_path).expect("read Windows signal result"),
+        "Interrupt"
+    );
+    std::fs::remove_dir_all(root).expect("remove Windows signal fixture");
+}
+
+#[cfg(windows)]
+fn wait_for_file(path: &std::path::Path, timeout: Duration, child: &mut std::process::Child) {
+    let deadline = Instant::now() + timeout;
+    while !path.exists() {
+        if let Some(status) = child.try_wait().expect("poll Windows signal child") {
+            panic!(
+                "Windows signal child exited before {}: {status}",
+                path.display()
+            );
+        }
+        if Instant::now() >= deadline {
+            child
+                .kill()
+                .expect("terminate stalled Windows signal child");
+            let _ = child.wait();
+            panic!("Windows signal child did not create {}", path.display());
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(windows)]
+fn wait_for_process_child(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> std::process::ExitStatus {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().expect("poll Windows signal child") {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            child
+                .kill()
+                .expect("terminate stalled Windows signal child");
+            let _ = child.wait();
+            panic!("Windows signal child did not exit within {timeout:?}");
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn run_active_turn_pty_child() {
