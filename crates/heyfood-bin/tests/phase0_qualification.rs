@@ -728,9 +728,15 @@ fn supervised_tui_http_sse_cancel_and_join_vertical() {
 fn qualification_pty_child() {
     let runtime = tokio::runtime::Runtime::new().expect("signal runtime");
     let (sender, mut receiver) = mpsc::channel(8);
+    let signal_shutdown = CancellationToken::new();
+    let signal_task_shutdown = signal_shutdown.clone();
     let signal_task = runtime.spawn(async move {
         let mut signals = NativeSignalSource::install().expect("install native signal source");
-        if let Some(signal) = signals.next().await {
+        let signal = tokio::select! {
+            signal = signals.next() => signal,
+            () = signal_task_shutdown.cancelled() => None,
+        };
+        if let Some(signal) = signal {
             let reason = match signal {
                 SignalEvent::Interrupt => ExitReason::Interrupt,
                 SignalEvent::Terminate | SignalEvent::ConsoleClose => ExitReason::Terminate,
@@ -745,6 +751,7 @@ fn qualification_pty_child() {
     });
     eprintln!("QUALIFICATION_READY");
     let reason = run_terminal(&mut receiver, |_| Ok(())).expect("qualified terminal session");
+    signal_shutdown.cancel();
     runtime
         .block_on(async { tokio::time::timeout(Duration::from_secs(2), signal_task).await })
         .expect("native signal supervisor stopped within the qualification bound")
