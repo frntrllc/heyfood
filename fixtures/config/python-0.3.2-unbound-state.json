@@ -1,0 +1,9 @@
+{
+  "active_context": "production",
+  "device_id": "heyfood-cli-unbound-fixture",
+  "household_local_profiles": {
+    "child-fixture": {"restrictions": ["fixture-dairy"]}
+  },
+  "location": {"label": "Unbound Fixture City"},
+  "unknown_future_state": {"value": "must not be silently imported"}
+}

@@ -65,12 +65,12 @@ impl AtomicFile {
     }
 }
 
-struct FileLock {
+pub(crate) struct FileLock {
     file: File,
 }
 
 impl FileLock {
-    fn acquire(path: &Path, exclusive: bool) -> Result<Self, PortError> {
+    pub(crate) fn acquire(path: &Path, exclusive: bool) -> Result<Self, PortError> {
         let parent = path
             .parent()
             .ok_or_else(|| PortError::new("lock_path", "lock file must have a parent"))?;
@@ -679,7 +679,7 @@ fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>, PortError> {
     Ok(bytes)
 }
 
-fn create_private_dir(path: &Path) -> Result<(), PortError> {
+pub(crate) fn create_private_dir(path: &Path) -> Result<(), PortError> {
     fs::create_dir_all(path)
         .map_err(|error| PortError::new("native_directory", error.to_string()))?;
     make_private_dir(path).map_err(|error| PortError::new("native_permissions", error.to_string()))

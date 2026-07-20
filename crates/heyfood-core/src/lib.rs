@@ -5,6 +5,7 @@
 pub mod agent;
 pub mod auth;
 pub mod config;
+pub mod migration;
 pub mod network;
 pub mod operation;
 
@@ -14,6 +15,10 @@ pub use auth::{
     SessionCredentials, SessionSnapshot,
 };
 pub use config::{ClientConfig, ConfigRevision};
+pub use migration::{
+    ImportedPythonState, PythonFieldAction, PythonFieldDisposition, PythonImportOutcome,
+    PythonImportReport,
+};
 pub use network::{BrowserUrl, NetworkPolicy, ServiceUrl, ServiceUrlError};
 pub use operation::{CommitId, GenerationId, OperationId};
 

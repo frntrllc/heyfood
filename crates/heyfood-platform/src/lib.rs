@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod persistence;
+mod python_import;
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,6 +16,7 @@ use tokio::sync::mpsc;
 #[cfg(all(windows, feature = "native-credentials"))]
 pub use persistence::WindowsCredentialStore;
 pub use persistence::{AtomicFile, FileCredentialStore, NativeConfigStore};
+pub use python_import::PythonStateImporter;
 
 /// The package version shared by the native workspace.
 pub const VERSION: &str = heyfood_core::VERSION;
