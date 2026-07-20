@@ -15,8 +15,9 @@ mod terminal;
 pub use input::action_from_key;
 pub use loop_driver::{TuiError, run_terminal};
 pub use model::{
-    Action, AppModel, Effect, ExitReason, MAX_RENDERED_LINES, MAX_SCROLLBACK_ENTRIES,
-    OperationState, RuntimeEvent, Scrollback, SemanticEntry, Speaker, dispatch,
+    Action, AppModel, Effect, ExitReason, MAX_RENDERED_LINES, MAX_SCROLLBACK_BYTES,
+    MAX_SCROLLBACK_ENTRIES, OperationState, RuntimeEvent, Scrollback, SemanticEntry, Speaker,
+    dispatch,
 };
 pub use render::{ResponsiveMode, composer_height, render, responsive_mode};
 pub use terminal::{

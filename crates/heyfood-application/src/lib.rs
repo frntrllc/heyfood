@@ -12,7 +12,8 @@ pub use ports::{
     CredentialPort, EventStream, PortError, ServicePort,
 };
 pub use run_turn::{
-    RefreshPolicy, RunTurn, RunTurnError, RunTurnOutcome, TurnContext, TurnEvent, TurnRequest,
+    MAX_TURN_EVENTS, MAX_TURN_STREAM_BYTES, RefreshPolicy, RunTurn, RunTurnError, RunTurnOutcome,
+    TurnContext, TurnEvent, TurnRequest,
 };
 pub use state_writer::{
     CommitError, CommitOutcome, Mutation, MutationClass, MutationMetadata, MutationProposal,

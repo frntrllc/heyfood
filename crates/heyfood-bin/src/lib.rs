@@ -2,12 +2,13 @@
 
 #![forbid(unsafe_code)]
 
-use std::{fmt, io};
+use std::{fmt, io, time::Duration};
 
 use heyfood_tui::{Effect, ExitReason, RuntimeEvent, TuiError};
 use tokio::sync::mpsc;
 
 pub const QUALIFICATION_MESSAGE: &str = "The native interactive client is a Phase 0 qualification build and cannot start without validated native credentials and bootstrap state. Continue using the released Python client until cutover.";
+pub const QUALIFIED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Runtime supervisor boundary used only after bootstrap has validated every
 /// required input. Implementations must enqueue work and return promptly; the
@@ -21,12 +22,18 @@ pub trait QualifiedTurnDriver {
     ) -> io::Result<()>;
 
     fn cancel_turn(&mut self, operation_id: u64) -> io::Result<()>;
+
+    /// Cancel any remaining operations, close their transports, and join every
+    /// owned worker before the deadline. Returning `Ok` certifies that no turn
+    /// task or socket remains owned by this driver.
+    fn shutdown_and_join(&mut self, timeout: Duration) -> io::Result<()>;
 }
 
 #[derive(Debug)]
 pub enum CompositionError {
     Tui(TuiError),
     Driver(io::Error),
+    TuiAndDriver { tui: TuiError, driver: io::Error },
 }
 
 impl fmt::Display for CompositionError {
@@ -34,6 +41,10 @@ impl fmt::Display for CompositionError {
         match self {
             Self::Tui(error) => error.fmt(formatter),
             Self::Driver(error) => write!(formatter, "turn supervisor failed: {error}"),
+            Self::TuiAndDriver { tui, driver } => write!(
+                formatter,
+                "terminal session failed ({tui}) and turn supervisor shutdown also failed: {driver}"
+            ),
         }
     }
 }
@@ -43,6 +54,7 @@ impl std::error::Error for CompositionError {
         match self {
             Self::Tui(error) => Some(error),
             Self::Driver(error) => Some(error),
+            Self::TuiAndDriver { driver, .. } => Some(driver),
         }
     }
 }
@@ -53,13 +65,30 @@ pub fn run_qualified_session(
     driver: &mut impl QualifiedTurnDriver,
 ) -> Result<ExitReason, CompositionError> {
     let (runtime_sender, mut runtime_receiver) = mpsc::channel(64);
-    heyfood_tui::run_terminal(&mut runtime_receiver, |effect| {
+    let terminal = heyfood_tui::run_terminal(&mut runtime_receiver, |effect| {
         route_effect(driver, &runtime_sender, effect).map_err(|error| match error {
             CompositionError::Driver(error) => error,
-            CompositionError::Tui(_) => unreachable!("effect routing does not enter the TUI"),
+            CompositionError::Tui(_) | CompositionError::TuiAndDriver { .. } => {
+                unreachable!("effect routing does not enter the TUI")
+            }
         })
-    })
-    .map_err(CompositionError::Tui)
+    });
+    finish_session(
+        terminal,
+        driver.shutdown_and_join(QUALIFIED_SHUTDOWN_TIMEOUT),
+    )
+}
+
+fn finish_session(
+    terminal: Result<ExitReason, TuiError>,
+    shutdown: io::Result<()>,
+) -> Result<ExitReason, CompositionError> {
+    match (terminal, shutdown) {
+        (Ok(reason), Ok(())) => Ok(reason),
+        (Err(error), Ok(())) => Err(CompositionError::Tui(error)),
+        (Ok(_), Err(error)) => Err(CompositionError::Driver(error)),
+        (Err(tui), Err(driver)) => Err(CompositionError::TuiAndDriver { tui, driver }),
+    }
 }
 
 fn route_effect(
@@ -90,6 +119,7 @@ mod tests {
     struct ControlledDriver {
         started: Vec<(u64, String)>,
         cancelled: Vec<u64>,
+        joined: bool,
     }
 
     impl QualifiedTurnDriver for ControlledDriver {
@@ -112,6 +142,11 @@ mod tests {
 
         fn cancel_turn(&mut self, operation_id: u64) -> io::Result<()> {
             self.cancelled.push(operation_id);
+            Ok(())
+        }
+
+        fn shutdown_and_join(&mut self, _timeout: Duration) -> io::Result<()> {
+            self.joined = true;
             Ok(())
         }
     }
@@ -147,5 +182,21 @@ mod tests {
         assert!(QUALIFICATION_MESSAGE.contains("cannot start"));
         assert!(QUALIFICATION_MESSAGE.contains("released Python client"));
         assert!(!QUALIFICATION_MESSAGE.contains("--"));
+    }
+
+    #[test]
+    fn supervisor_shutdown_failure_cannot_be_reported_as_a_clean_exit() {
+        let error = finish_session(
+            Ok(ExitReason::Requested),
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "worker did not join",
+            )),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            CompositionError::Driver(error) if error.kind() == io::ErrorKind::TimedOut
+        ));
     }
 }

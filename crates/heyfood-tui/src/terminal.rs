@@ -59,6 +59,7 @@ impl<C: TerminalControl> Drop for TerminalGuard<C> {
 #[derive(Debug)]
 pub enum GuardedError<E, T> {
     Enter(T),
+    Restore(T),
     Body(E),
     Panic(String),
 }
@@ -67,14 +68,15 @@ impl<E: fmt::Display, T: fmt::Display> fmt::Display for GuardedError<E, T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Enter(error) => write!(formatter, "could not enter terminal mode: {error}"),
+            Self::Restore(error) => write!(formatter, "could not restore terminal mode: {error}"),
             Self::Body(error) => error.fmt(formatter),
             Self::Panic(message) => write!(formatter, "terminal application panicked: {message}"),
         }
     }
 }
 
-/// Runs a catchable terminal body. The guard is dropped before a body error or
-/// captured panic is returned to the composition root for reporting.
+/// Runs a catchable terminal body. Explicit restoration completes before a body
+/// error or captured panic is returned to the composition root for reporting.
 pub fn run_guarded<C, F, R, E>(control: C, body: F) -> Result<R, GuardedError<E, C::Error>>
 where
     C: TerminalControl,
@@ -87,9 +89,9 @@ where
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let _panic_hook = MutedPanicHook::install();
-    let guard = TerminalGuard::new(control).map_err(GuardedError::Enter)?;
+    let mut guard = TerminalGuard::new(control).map_err(GuardedError::Enter)?;
     let result = panic::catch_unwind(AssertUnwindSafe(body));
-    drop(guard);
+    guard.restore().map_err(GuardedError::Restore)?;
     match result {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => Err(GuardedError::Body(error)),
@@ -169,6 +171,7 @@ mod tests {
     struct RecordingControl {
         events: Arc<Mutex<Vec<&'static str>>>,
         fail_enter: bool,
+        fail_restore: bool,
     }
 
     impl TerminalControl for RecordingControl {
@@ -185,7 +188,11 @@ mod tests {
 
         fn restore(&mut self) -> Result<(), Self::Error> {
             self.events.lock().unwrap().push("restore");
-            Ok(())
+            if self.fail_restore {
+                Err("restore failed")
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -193,6 +200,7 @@ mod tests {
         RecordingControl {
             events: Arc::clone(events),
             fail_enter: false,
+            fail_restore: false,
         }
     }
 
@@ -227,6 +235,19 @@ mod tests {
         failing.fail_enter = true;
         let result = run_guarded(failing, || Ok::<_, &str>(()));
         assert!(matches!(result, Err(GuardedError::Enter("enter failed"))));
+        assert_eq!(*events.lock().unwrap(), ["enter", "restore"]);
+    }
+
+    #[test]
+    fn restoration_failure_is_never_reported_as_success() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut failing = control(&events);
+        failing.fail_restore = true;
+        let result = run_guarded(failing, || Ok::<_, &str>(7));
+        assert!(matches!(
+            result,
+            Err(GuardedError::Restore("restore failed"))
+        ));
         assert_eq!(*events.lock().unwrap(), ["enter", "restore"]);
     }
 

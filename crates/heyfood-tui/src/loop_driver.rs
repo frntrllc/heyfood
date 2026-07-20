@@ -57,6 +57,7 @@ pub fn run_terminal(
     match result {
         Ok(reason) => Ok(reason),
         Err(GuardedError::Enter(error)) => Err(TuiError::Terminal(error)),
+        Err(GuardedError::Restore(error)) => Err(TuiError::Terminal(error)),
         Err(GuardedError::Body(error)) => Err(error),
         Err(GuardedError::Panic(message)) => Err(TuiError::Panic(message)),
     }

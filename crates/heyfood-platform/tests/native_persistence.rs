@@ -293,11 +293,20 @@ fn windows_credential_manager_rotates_and_reconciles_without_token_files() {
     block_on(store.commit(commit.clone())).unwrap();
     block_on(store.mark_reconciliation_required(commit.commit_id)).unwrap();
     block_on(store.commit(commit)).unwrap();
+    for version in 3..=96 {
+        let rotation = CredentialCommit {
+            commit_id: CommitId::new(),
+            expected_version: CredentialVersion::new(version - 1),
+            credentials: credentials(version),
+        };
+        block_on(store.commit(rotation.clone())).unwrap();
+        block_on(store.commit(rotation)).unwrap();
+    }
 
     let reopened = WindowsCredentialStore::open(&root.0).unwrap();
     let loaded = block_on(reopened.load()).unwrap().unwrap();
-    assert_eq!(loaded.version, CredentialVersion::new(2));
-    assert_eq!(loaded.refresh_token.expose_secret(), "refresh-2");
+    assert_eq!(loaded.version, CredentialVersion::new(96));
+    assert_eq!(loaded.refresh_token.expose_secret(), "refresh-96");
     assert!(!store.reconciliation_required().unwrap());
     assert!(!root.0.join("credentials.native").exists());
 }

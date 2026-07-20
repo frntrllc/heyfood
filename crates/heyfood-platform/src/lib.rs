@@ -6,7 +6,7 @@ mod persistence;
 mod python_import;
 
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use directories::ProjectDirs;
 use heyfood_application::{BoxFuture, BrowserPort, ClockPort, PortError};
@@ -99,6 +99,31 @@ impl NativeSignalSource {
 
     pub async fn next(&mut self) -> Option<SignalEvent> {
         self.receiver.recv().await
+    }
+
+    /// Stops and joins every native signal listener within the supplied bound.
+    ///
+    /// Callers that own a runtime should use this explicit lifecycle boundary
+    /// instead of relying on `Drop`, which can only request cancellation.
+    pub async fn shutdown(&mut self, timeout: Duration) -> Result<(), PortError> {
+        for task in &self.tasks {
+            task.abort();
+        }
+        let tasks = std::mem::take(&mut self.tasks);
+        tokio::time::timeout(timeout, async move {
+            for task in tasks {
+                match task.await {
+                    Ok(()) => {}
+                    Err(error) if error.is_cancelled() => {}
+                    Err(error) => {
+                        return Err(PortError::new("signal_join", error.to_string()));
+                    }
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| PortError::new("signal_join_timeout", "signal listeners did not stop"))?
     }
 }
 

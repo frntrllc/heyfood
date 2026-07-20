@@ -45,5 +45,8 @@ unsafe_code = "forbid"
 [profile.release]
 codegen-units = 1
 lto = "thin"
-panic = "abort"
+# The TUI owns terminal restoration through a catch-unwind guard. Production
+# binaries must therefore retain unwinding; aborting can strand raw mode and the
+# alternate screen after a panic.
+panic = "unwind"
 strip = "symbols"

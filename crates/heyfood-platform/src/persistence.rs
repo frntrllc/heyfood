@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -355,13 +357,12 @@ impl CredentialPort for FileCredentialStore {
             let mut state = self.read_unlocked()?.ok_or_else(|| {
                 PortError::new("credentials_missing", "credentials are not initialized")
             })?;
-            if state.applied.contains(&commit.commit_id) {
+            if credential_commit_is_already_reflected(&state.credentials, &commit)? {
                 clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id)?;
                 return Ok(());
             }
             validate_credential_commit(&state.credentials, &commit)?;
             state.credentials = commit.credentials;
-            state.applied.insert(commit.commit_id);
             AtomicFile::replace(&self.state_path, &state.encode())?;
             clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id)
         })
@@ -393,6 +394,8 @@ impl CredentialPort for FileCredentialStore {
 
 #[cfg(all(windows, feature = "native-credentials"))]
 const WINDOWS_CREDENTIAL_SERVICE: &str = "ai.frntr.heyfood";
+#[cfg(all(windows, feature = "native-credentials"))]
+const WINDOWS_CREDENTIAL_BLOB_MAX_BYTES: usize = 2_560;
 
 /// Windows Credential Manager-backed session storage.
 ///
@@ -412,8 +415,7 @@ impl WindowsCredentialStore {
         use std::os::windows::ffi::OsStrExt;
 
         let root = root.as_ref();
-        fs::create_dir_all(root)
-            .map_err(|error| PortError::new("native_directory", error.to_string()))?;
+        create_private_dir(root)?;
         let mut identity = Vec::new();
         for unit in root.as_os_str().encode_wide() {
             identity.extend_from_slice(&unit.to_le_bytes());
@@ -464,8 +466,15 @@ impl WindowsCredentialStore {
     }
 
     fn write_unlocked(&self, state: &CredentialState) -> Result<(), PortError> {
+        let document = state.encode();
+        if document.len() > WINDOWS_CREDENTIAL_BLOB_MAX_BYTES {
+            return Err(PortError::new(
+                "credential_manager_size",
+                "credential document exceeds the Windows Credential Manager limit",
+            ));
+        }
         self.entry()?
-            .set_secret(&state.encode())
+            .set_secret(&document)
             .map_err(|error| keyring_error("credential_manager_write", error))
     }
 }
@@ -485,13 +494,12 @@ impl CredentialPort for WindowsCredentialStore {
             let mut state = self.read_unlocked()?.ok_or_else(|| {
                 PortError::new("credentials_missing", "credentials are not initialized")
             })?;
-            if state.applied.contains(&commit.commit_id) {
+            if credential_commit_is_already_reflected(&state.credentials, &commit)? {
                 clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id)?;
                 return Ok(());
             }
             validate_credential_commit(&state.credentials, &commit)?;
             state.credentials = commit.credentials;
-            state.applied.insert(commit.commit_id);
             self.write_unlocked(&state)?;
             clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id)
         })
@@ -546,6 +554,39 @@ fn validate_credential_commit(
     Ok(())
 }
 
+fn credential_commit_is_already_reflected(
+    current: &SessionCredentials,
+    commit: &CredentialCommit,
+) -> Result<bool, PortError> {
+    if current.account_id != commit.credentials.account_id {
+        return Err(PortError::new(
+            "credential_account_conflict",
+            "credential rotation cannot change accounts",
+        ));
+    }
+    if commit.credentials.version <= commit.expected_version {
+        return Err(PortError::new(
+            "credential_version_conflict",
+            "credential rotation must advance the version",
+        ));
+    }
+    if current == &commit.credentials {
+        return Ok(true);
+    }
+    if current.version > commit.credentials.version {
+        // A later accepted rotation safely supersedes a replay of this older
+        // durable proposal. Never roll credentials backward.
+        return Ok(true);
+    }
+    if current.version == commit.credentials.version {
+        return Err(PortError::new(
+            "credential_version_conflict",
+            "stored credential version has different token material",
+        ));
+    }
+    Ok(false)
+}
+
 fn clear_reconciliation_marker(path: &Path, commit_id: CommitId) -> Result<(), PortError> {
     if !path.exists() {
         return Ok(());
@@ -572,44 +613,39 @@ fn keyring_error(code: &'static str, error: keyring::Error) -> PortError {
 
 struct CredentialState {
     credentials: SessionCredentials,
-    applied: HashSet<CommitId>,
 }
 
 impl CredentialState {
     fn new(credentials: SessionCredentials) -> Self {
-        Self {
-            credentials,
-            applied: HashSet::new(),
-        }
+        Self { credentials }
     }
 
     fn encode(&self) -> Vec<u8> {
-        let mut applied = self
-            .applied
-            .iter()
-            .map(|value| value.as_uuid().to_string())
-            .collect::<Vec<_>>();
-        applied.sort_unstable();
-        let applied = applied.join(",");
         format!(
-            "schema=1\naccount={}\naccess={}\nrefresh={}\nversion={}\nexpires={}\napplied={}\n",
+            "schema=2\naccount={}\naccess={}\nrefresh={}\nversion={}\nexpires={}\n",
             hex_encode(self.credentials.account_id.as_str().as_bytes()),
             hex_encode(self.credentials.access_token.expose_secret().as_bytes()),
             hex_encode(self.credentials.refresh_token.expose_secret().as_bytes()),
             self.credentials.version.get(),
             self.credentials.expires_at_unix(),
-            applied,
         )
         .into_bytes()
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, PortError> {
         let fields = fields(bytes)?;
-        if required(&fields, "schema")? != "1" {
+        let schema = required(&fields, "schema")?;
+        if schema != "1" && schema != "2" {
             return Err(PortError::new(
                 "credential_schema",
                 "unsupported credential schema",
             ));
+        }
+        if schema == "1" {
+            // Schema 1 retained an unbounded commit-ID set. Validate it while
+            // migrating, then discard it: credential version monotonicity is
+            // the bounded durable idempotency key in schema 2.
+            let _ = parse_commit_set(required(&fields, "applied")?)?;
         }
         let account_id = AccountId::parse(hex_string(required(&fields, "account")?)?)
             .map_err(|error| PortError::new("credential_account", error))?;
@@ -630,10 +666,7 @@ impl CredentialState {
             expires,
         )
         .map_err(|error| PortError::new("credential_expiry", error))?;
-        Ok(Self {
-            credentials,
-            applied: parse_commit_set(required(&fields, "applied")?)?,
-        })
+        Ok(Self { credentials })
     }
 }
 
@@ -735,9 +768,17 @@ fn make_private_dir(path: &Path) -> std::io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn make_private_dir(path: &Path) -> std::io::Result<()> {
+    apply_windows_owner_acl(path, true)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn make_private_dir(_path: &Path) -> std::io::Result<()> {
-    Ok(())
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "private directory permissions are not implemented for this platform",
+    ))
 }
 
 #[cfg(unix)]
@@ -746,9 +787,81 @@ fn make_private_file(path: &Path) -> std::io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn make_private_file(path: &Path) -> std::io::Result<()> {
+    apply_windows_owner_acl(path, false)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn make_private_file(_path: &Path) -> std::io::Result<()> {
-    Ok(())
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "private file permissions are not implemented for this platform",
+    ))
+}
+
+#[cfg(windows)]
+fn apply_windows_owner_acl(path: &Path, directory: bool) -> std::io::Result<()> {
+    let sid = windows_current_user_sid()?;
+    let grant = if directory {
+        format!("*{sid}:(OI)(CI)F")
+    } else {
+        format!("*{sid}:F")
+    };
+    let status = Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(grant)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "icacls rejected the private ACL with status {status}"
+        )))
+    }
+}
+
+#[cfg(windows)]
+fn windows_current_user_sid() -> std::io::Result<String> {
+    let output = Command::new("whoami")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(
+            "whoami could not resolve the current Windows SID",
+        ));
+    }
+    let start = output
+        .stdout
+        .windows(b"S-1-".len())
+        .position(|window| window == b"S-1-")
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "whoami did not return a Windows SID",
+            )
+        })?;
+    let sid = output.stdout[start..]
+        .iter()
+        .copied()
+        .take_while(|byte| byte.is_ascii_digit() || *byte == b'-')
+        .collect::<Vec<_>>();
+    let sid = String::from_utf8(sid).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "whoami returned an invalid Windows SID",
+        )
+    })?;
+    if sid.len() <= "S-1-".len() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "whoami returned an invalid Windows SID",
+        ));
+    }
+    Ok(sid)
 }
 
 #[cfg(unix)]

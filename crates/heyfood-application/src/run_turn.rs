@@ -13,6 +13,9 @@ use crate::{
     SerializedStateWriter, ServicePort,
 };
 
+pub const MAX_TURN_EVENTS: usize = 10_000;
+pub const MAX_TURN_STREAM_BYTES: usize = 4 * 1024 * 1024;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RefreshPolicy {
     Never,
@@ -64,6 +67,7 @@ pub enum RunTurnError {
     ServiceReconciliationRequired(PortError),
     State(CommitError),
     EventConsumerClosed,
+    StreamLimitExceeded,
     StreamEndedWithoutTerminalEvent,
 }
 
@@ -81,6 +85,9 @@ impl fmt::Display for RunTurnError {
             ),
             Self::State(error) => write!(formatter, "state operation failed: {error}"),
             Self::EventConsumerClosed => formatter.write_str("turn event consumer closed"),
+            Self::StreamLimitExceeded => {
+                formatter.write_str("agent stream exceeded the bounded event or content budget")
+            }
             Self::StreamEndedWithoutTerminalEvent => {
                 formatter.write_str("agent stream ended without a terminal event")
             }
@@ -223,6 +230,8 @@ impl RunTurn {
             return Ok(RunTurnOutcome::CancelledAfterServerAcceptance);
         }
 
+        let mut event_count = 0_usize;
+        let mut stream_bytes = 0_usize;
         loop {
             let next = accepted.events.next();
             let Some(event) = cancellation.run_until_cancelled(next).await else {
@@ -248,6 +257,15 @@ impl RunTurn {
                     .map_err(RunTurnError::Service)?;
                 return Err(RunTurnError::StreamEndedWithoutTerminalEvent);
             };
+
+            event_count = event_count.saturating_add(1);
+            let event_bytes = serde_json::to_vec(&event)
+                .map_or(MAX_TURN_STREAM_BYTES.saturating_add(1), |bytes| bytes.len());
+            stream_bytes = stream_bytes.saturating_add(event_bytes);
+            if event_count > MAX_TURN_EVENTS || stream_bytes > MAX_TURN_STREAM_BYTES {
+                let _ = accepted.events.close().await;
+                return Err(RunTurnError::StreamLimitExceeded);
+            }
 
             let terminal = event.is_terminal();
             let conversation_id = match &event {
@@ -276,14 +294,18 @@ impl RunTurn {
                 return Ok(RunTurnOutcome::StaleGeneration);
             }
 
-            if events
-                .send(TurnEvent {
+            let delivery = tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    let _ = accepted.events.close().await;
+                    return Ok(RunTurnOutcome::CancelledAfterServerAcceptance);
+                }
+                result = events.send(TurnEvent {
                     generation: snapshot.generation,
                     event,
-                })
-                .await
-                .is_err()
-            {
+                }) => result,
+            };
+            if delivery.is_err() {
                 let _ = accepted.events.close().await;
                 return Err(RunTurnError::EventConsumerClosed);
             }

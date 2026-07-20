@@ -1,15 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(not(windows))]
 use heyfood_core::{PythonFieldAction, PythonImportOutcome};
 use heyfood_platform::PythonStateImporter;
 
 const BOUND_SOURCE: &[u8] = include_bytes!("../../../fixtures/config/python-0.3.2-file-state.json");
-#[cfg(not(windows))]
 const UNBOUND_SOURCE: &[u8] =
     include_bytes!("../../../fixtures/config/python-0.3.2-unbound-state.json");
-#[cfg(not(windows))]
 const KEYRING_SOURCE: &[u8] =
     include_bytes!("../../../fixtures/config/python-0.3.2-keyring-metadata.json");
 
@@ -43,7 +40,6 @@ fn fixture(root: &Path, name: &str, bytes: &[u8]) -> PathBuf {
 }
 
 #[test]
-#[cfg(not(windows))]
 fn imports_bound_local_state_without_copying_credentials_or_mutating_source() {
     let root = TempRoot::new("bound");
     let source = fixture(&root.0, "config.json", BOUND_SOURCE);
@@ -102,7 +98,6 @@ fn imports_bound_local_state_without_copying_credentials_or_mutating_source() {
 }
 
 #[test]
-#[cfg(not(windows))]
 fn repeat_is_idempotent_and_a_different_source_cannot_overwrite_state() {
     let root = TempRoot::new("idempotent");
     let source = fixture(&root.0, "config.json", BOUND_SOURCE);
@@ -128,7 +123,6 @@ fn repeat_is_idempotent_and_a_different_source_cannot_overwrite_state() {
 }
 
 #[test]
-#[cfg(not(windows))]
 fn unbound_and_unknown_state_is_reported_and_never_silently_copied() {
     let root = TempRoot::new("unbound");
     let source = fixture(&root.0, "config.json", UNBOUND_SOURCE);
@@ -160,7 +154,6 @@ fn unbound_and_unknown_state_is_reported_and_never_silently_copied() {
 }
 
 #[test]
-#[cfg(not(windows))]
 fn keyring_metadata_preserves_account_binding_but_requires_manual_reconciliation() {
     let root = TempRoot::new("keyring");
     let source = fixture(&root.0, "config.json", KEYRING_SOURCE);
@@ -187,7 +180,6 @@ fn keyring_metadata_preserves_account_binding_but_requires_manual_reconciliation
 }
 
 #[test]
-#[cfg(not(windows))]
 fn missing_malformed_and_symlink_sources_fail_closed_without_writes() {
     let root = TempRoot::new("fail-closed");
     let missing = PythonStateImporter::under(root.0.join("missing.json"), root.0.join("missing"));
@@ -227,11 +219,27 @@ fn missing_malformed_and_symlink_sources_fail_closed_without_writes() {
 
 #[test]
 #[cfg(windows)]
-fn existing_source_requires_a_private_windows_acl_adapter() {
+fn imported_state_has_a_non_inherited_owner_only_windows_acl() {
+    use std::process::Command;
+
     let root = TempRoot::new("windows-acl");
     let source = fixture(&root.0, "config.json", BOUND_SOURCE);
     let importer = PythonStateImporter::under(source, root.0.join("native"));
-    let error = importer.import().unwrap_err();
-    assert_eq!(error.code, "python_import_acl_unsupported");
-    assert!(!importer.destination_path().exists());
+    importer.import().unwrap();
+
+    let output = Command::new("icacls")
+        .arg(importer.destination_path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let acl = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !acl.contains("(I)"),
+        "ACL must not retain inherited entries: {acl}"
+    );
+    assert_eq!(
+        acl.matches("(F)").count(),
+        1,
+        "ACL must grant full control only to the current SID: {acl}"
+    );
 }

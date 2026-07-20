@@ -4,7 +4,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::Command;
 #[cfg(unix)]
@@ -17,6 +17,7 @@ use heyfood_application::{
     ClockPort, ConfigPort, CredentialPort, OperationSnapshot, RefreshPolicy, RunTurn,
     RunTurnOutcome, SerializedStateWriter, TurnContext, TurnRequest,
 };
+use heyfood_bin::{QualifiedTurnDriver, run_qualified_session};
 use heyfood_core::{
     AccountId, ClientConfig, ConfigRevision, CredentialVersion, GenerationId, NetworkPolicy,
     OperationId, SensitiveString, ServiceUrl, SessionCredentials, SessionSnapshot,
@@ -30,12 +31,13 @@ use heyfood_tui::{
     Action, AppModel, ExitReason, RuntimeEvent, SemanticEntry, Speaker, dispatch, render,
     run_terminal,
 };
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{Child, CommandBuilder, ExitStatus, PtySize, native_pty_system};
 use ratatui::{Terminal, backend::TestBackend};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 const PYTHON_FIXTURE: &str = include_str!("fixtures/python-exported-turn.v1.json");
@@ -473,12 +475,260 @@ async fn cancellation_closes_sse_socket_and_every_owned_task_joins() {
     std::fs::remove_dir_all(root).expect("remove controlled native state");
 }
 
+struct OwnedTurn {
+    operation_id: u64,
+    cancellation: CancellationToken,
+    task: JoinHandle<()>,
+}
+
+struct SupervisedQualificationDriver {
+    runtime: tokio::runtime::Runtime,
+    prepared: Option<(RunTurn, OperationSnapshot)>,
+    turns: Vec<OwnedTurn>,
+    controlled_server: Option<JoinHandle<()>>,
+}
+
+impl SupervisedQualificationDriver {
+    fn join_controlled_server(&mut self, timeout: Duration) -> io::Result<()> {
+        let Some(server) = self.controlled_server.take() else {
+            return Ok(());
+        };
+        self.runtime.block_on(async move {
+            tokio::time::timeout(timeout, server)
+                .await
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "server did not join"))?
+                .map_err(|error| io::Error::other(format!("server task failed: {error}")))
+        })
+    }
+}
+
+impl QualifiedTurnDriver for SupervisedQualificationDriver {
+    fn start_turn(
+        &mut self,
+        operation_id: u64,
+        prompt: String,
+        runtime_events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        let (run_turn, snapshot) = self.prepared.take().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "qualification driver accepts one active turn",
+            )
+        })?;
+        let cancellation = CancellationToken::new();
+        let execute_cancellation = cancellation.clone();
+        let supervisor_cancellation = cancellation.clone();
+        let task = self.runtime.spawn(async move {
+            let (turn_events, mut turn_receiver) = mpsc::channel(1);
+            let execute = tokio::spawn(async move {
+                run_turn
+                    .execute(
+                        TurnRequest {
+                            prompt,
+                            conversation_id: None,
+                            context: Default::default(),
+                            refresh: RefreshPolicy::Never,
+                        },
+                        snapshot,
+                        execute_cancellation,
+                        turn_events,
+                    )
+                    .await
+            });
+
+            while let Some(event) = turn_receiver.recv().await {
+                if runtime_events
+                    .send(RuntimeEvent::TurnEvent {
+                        operation_id,
+                        event: event.event,
+                    })
+                    .await
+                    .is_err()
+                {
+                    supervisor_cancellation.cancel();
+                    break;
+                }
+            }
+
+            let runtime_event = match execute.await {
+                Ok(Ok(outcome)) => RuntimeEvent::TurnFinished {
+                    operation_id,
+                    outcome,
+                },
+                Ok(Err(error)) => RuntimeEvent::TurnFailed {
+                    operation_id,
+                    message: error.to_string(),
+                },
+                Err(error) => RuntimeEvent::TurnFailed {
+                    operation_id,
+                    message: format!("turn task failed: {error}"),
+                },
+            };
+            let _ = runtime_events.send(runtime_event).await;
+        });
+        self.turns.push(OwnedTurn {
+            operation_id,
+            cancellation,
+            task,
+        });
+        Ok(())
+    }
+
+    fn cancel_turn(&mut self, operation_id: u64) -> io::Result<()> {
+        let turn = self
+            .turns
+            .iter()
+            .find(|turn| turn.operation_id == operation_id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "active turn is missing"))?;
+        turn.cancellation.cancel();
+        Ok(())
+    }
+
+    fn shutdown_and_join(&mut self, timeout: Duration) -> io::Result<()> {
+        for turn in &self.turns {
+            turn.cancellation.cancel();
+        }
+        let turns = std::mem::take(&mut self.turns);
+        self.runtime.block_on(async move {
+            tokio::time::timeout(timeout, async move {
+                for turn in turns {
+                    turn.task.await.map_err(|error| {
+                        io::Error::other(format!("turn supervisor task failed: {error}"))
+                    })?;
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "turn supervisor exceeded its shutdown deadline",
+                )
+            })?
+        })
+    }
+}
+
+#[test]
+#[ignore = "spawned under a PTY by supervised_tui_http_sse_cancel_and_join_vertical"]
+#[cfg_attr(
+    all(windows, not(feature = "native-credentials")),
+    ignore = "Windows vertical requires the native-credentials feature"
+)]
+fn qualification_active_turn_child() {
+    let runtime = tokio::runtime::Runtime::new().expect("qualification runtime");
+    let listener = runtime
+        .block_on(TcpListener::bind("127.0.0.1:0"))
+        .expect("bind controlled active-turn service");
+    let address = listener.local_addr().expect("controlled service address");
+    let server = runtime.spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept active turn");
+        let request = read_request(&mut stream).await;
+        assert_eq!(request.path, "/v1/agent/converse");
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\nevent: partial\ndata: {\"text\":\"working until cancelled\"}\n\n")
+            .await
+            .expect("write active SSE response");
+        eprintln!("QUALIFICATION_ACTIVE");
+        let mut byte = [0_u8; 1];
+        match tokio::time::timeout(Duration::from_secs(5), stream.read(&mut byte))
+            .await
+            .expect("client closes socket before deadline")
+        {
+            Ok(0) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
+                ) => {}
+            result => panic!("supervised cancellation must close the SSE socket: {result:?}"),
+        }
+        eprintln!("QUALIFICATION_SOCKET_CLOSED");
+    });
+
+    let root = scratch("supervised-active-turn");
+    let base_url = format!("http://{address}/");
+    let initial = credentials(1, "access-1", "refresh-1", 4_102_444_800);
+    let credential_store =
+        Arc::new(QualificationCredentialStore::open(&root).expect("credential store"));
+    let credential_cleanup = QualificationCredentialCleanup {
+        _store: credential_store.clone(),
+    };
+    credential_store
+        .initialize(&initial)
+        .expect("initialize credentials");
+    let config_store = Arc::new(
+        NativeConfigStore::open(&root, config(&base_url), NetworkPolicy::DEVELOPMENT)
+            .expect("config store"),
+    );
+    let writer = Arc::new(SerializedStateWriter::new(
+        credential_store,
+        config_store.clone(),
+        GenerationId::INITIAL,
+        Some(&initial),
+    ));
+    let service = Arc::new(
+        HttpService::new(
+            ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).expect("service URL"),
+            NetworkPolicy::DEVELOPMENT,
+            HttpDeadlines {
+                sse_inactivity: Duration::from_secs(5),
+                ..HttpDeadlines::default()
+            },
+        )
+        .expect("Rustls HTTP service")
+        .with_cli_auth(
+            CliAuthContext::new(
+                "hellofood-cli-fixture-device",
+                SensitiveString::new("channel-access-fixture"),
+                None,
+            )
+            .expect("CLI auth context"),
+        ),
+    );
+    let snapshot = OperationSnapshot {
+        operation_id: OperationId::new(),
+        generation: GenerationId::INITIAL,
+        config: runtime
+            .block_on(config_store.load())
+            .expect("load native config"),
+        session: SessionSnapshot {
+            credentials: initial,
+            reconciliation_required: false,
+        },
+    };
+    let mut driver = SupervisedQualificationDriver {
+        runtime,
+        prepared: Some((
+            RunTurn::new(service, Arc::new(FixedClock), writer),
+            snapshot,
+        )),
+        turns: Vec::new(),
+        controlled_server: Some(server),
+    };
+
+    eprintln!("QUALIFICATION_READY");
+    let reason = run_qualified_session(&mut driver).expect("supervised terminal session");
+    assert_eq!(reason, ExitReason::Requested);
+    driver
+        .join_controlled_server(Duration::from_secs(3))
+        .expect("controlled server joined");
+    eprintln!("QUALIFICATION_SUPERVISOR_JOINED");
+    drop(credential_cleanup);
+    std::fs::remove_dir_all(root).expect("remove controlled native state");
+}
+
+#[test]
+fn supervised_tui_http_sse_cancel_and_join_vertical() {
+    run_active_turn_pty_child();
+}
+
 #[test]
 #[ignore = "spawned under a PTY by qualification_pty_signal_and_restoration_matrix"]
 fn qualification_pty_child() {
     let runtime = tokio::runtime::Runtime::new().expect("signal runtime");
     let (sender, mut receiver) = mpsc::channel(8);
-    runtime.spawn(async move {
+    let signal_task = runtime.spawn(async move {
         let mut signals = NativeSignalSource::install().expect("install native signal source");
         if let Some(signal) = signals.next().await {
             let reason = match signal {
@@ -488,9 +738,17 @@ fn qualification_pty_child() {
             };
             let _ = sender.send(RuntimeEvent::ExternalSignal(reason)).await;
         }
+        signals
+            .shutdown(Duration::from_secs(1))
+            .await
+            .expect("native signal listeners stopped and joined");
     });
     eprintln!("QUALIFICATION_READY");
     let reason = run_terminal(&mut receiver, |_| Ok(())).expect("qualified terminal session");
+    runtime
+        .block_on(async { tokio::time::timeout(Duration::from_secs(2), signal_task).await })
+        .expect("native signal supervisor stopped within the qualification bound")
+        .expect("native signal supervisor joined without panic");
     #[cfg(unix)]
     {
         let state = Command::new("stty")
@@ -523,7 +781,7 @@ fn qualification_pty_signal_and_restoration_matrix() {
     }
 
     #[cfg(windows)]
-    run_pty_child(None, "Requested");
+    run_pty_child(Some("WINDOWS_CTRL_C"), "Interrupt");
 }
 
 #[test]
@@ -645,6 +903,7 @@ fn run_pty_child(signal: Option<&str>, expected: &str) {
     });
     std::thread::sleep(Duration::from_millis(700));
 
+    #[cfg(unix)]
     if let Some(signal) = signal {
         let pid = child.process_id().expect("PTY child process ID");
         let status = Command::new("kill")
@@ -652,13 +911,21 @@ fn run_pty_child(signal: Option<&str>, expected: &str) {
             .status()
             .expect("deliver catchable Unix signal");
         assert!(status.success(), "signal delivery must succeed");
-    } else {
+    }
+    #[cfg(unix)]
+    if signal.is_none() {
         let mut writer = writer.lock().expect("lock ConPTY writer");
         writer.write_all(&[4]).expect("send Ctrl+D");
         writer.flush().expect("flush Ctrl+D");
     }
+    #[cfg(windows)]
+    {
+        assert_eq!(signal, Some("WINDOWS_CTRL_C"));
+        let pid = child.process_id().expect("ConPTY child process ID");
+        send_windows_console_control(pid);
+    }
 
-    let status = child.wait().expect("wait for qualification child");
+    let status = wait_for_pty_child(&mut child, Duration::from_secs(10));
     drop(pair.master);
     let output = reader_task.join().expect("join PTY reader");
     assert!(
@@ -681,4 +948,185 @@ fn run_pty_child(signal: Option<&str>, expected: &str) {
         output.contains("\u{1b}[?2004l"),
         "bracketed paste was not disabled: {output:?}"
     );
+}
+
+#[cfg(windows)]
+fn send_windows_console_control(pid: u32) {
+    const SCRIPT: &str = r#"
+param([UInt32]$TargetPid)
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class HeyfoodConsoleSignal {
+    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool FreeConsole();
+    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool AttachConsole(uint processId);
+    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool SetConsoleCtrlHandler(IntPtr handler, bool add);
+    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GenerateConsoleCtrlEvent(uint signal, uint processGroupId);
+}
+'@
+[HeyfoodConsoleSignal]::FreeConsole() | Out-Null
+if (-not [HeyfoodConsoleSignal]::AttachConsole($TargetPid)) { exit 20 }
+if (-not [HeyfoodConsoleSignal]::SetConsoleCtrlHandler([IntPtr]::Zero, $true)) { exit 21 }
+if (-not [HeyfoodConsoleSignal]::GenerateConsoleCtrlEvent(0, 0)) { exit 22 }
+Start-Sleep -Milliseconds 250
+[HeyfoodConsoleSignal]::FreeConsole() | Out-Null
+"#;
+    let status = Command::new("pwsh")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            SCRIPT,
+        ])
+        .arg(pid.to_string())
+        .status()
+        .expect("launch Windows console-control sender");
+    assert!(
+        status.success(),
+        "Windows console-control delivery failed: {status:?}"
+    );
+}
+
+fn run_active_turn_pty_child() {
+    let pty = native_pty_system();
+    let pair = pty
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open active-turn PTY/ConPTY");
+    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    command.arg("--exact");
+    command.arg("qualification_active_turn_child");
+    command.arg("--ignored");
+    command.arg("--nocapture");
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .expect("spawn active-turn qualification test");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone PTY reader");
+    let writer = Arc::new(Mutex::new(
+        pair.master.take_writer().expect("take PTY writer"),
+    ));
+    let reply_writer = Arc::clone(&writer);
+    let (active_sender, active_receiver) = std::sync::mpsc::sync_channel(1);
+    let (closed_sender, closed_receiver) = std::sync::mpsc::sync_channel(1);
+    let reader_task = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut replied_to_cursor_query = false;
+        let mut active_reported = false;
+        let mut closed_reported = false;
+        loop {
+            let mut chunk = [0_u8; 1024];
+            let count = reader
+                .read(&mut chunk)
+                .expect("read active-turn PTY output");
+            if count == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&chunk[..count]);
+            if !replied_to_cursor_query
+                && bytes
+                    .windows(b"\x1b[6n".len())
+                    .any(|window| window == b"\x1b[6n")
+            {
+                let mut writer = reply_writer.lock().expect("lock PTY reply writer");
+                writer
+                    .write_all(b"\x1b[1;1R")
+                    .expect("reply to cursor position query");
+                writer.flush().expect("flush cursor position reply");
+                replied_to_cursor_query = true;
+            }
+            if !active_reported
+                && bytes
+                    .windows(b"QUALIFICATION_ACTIVE".len())
+                    .any(|window| window == b"QUALIFICATION_ACTIVE")
+            {
+                let _ = active_sender.send(());
+                active_reported = true;
+            }
+            if !closed_reported
+                && bytes
+                    .windows(b"QUALIFICATION_SOCKET_CLOSED".len())
+                    .any(|window| window == b"QUALIFICATION_SOCKET_CLOSED")
+            {
+                let _ = closed_sender.send(());
+                closed_reported = true;
+            }
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    });
+
+    std::thread::sleep(Duration::from_millis(700));
+    {
+        let mut writer = writer.lock().expect("lock active-turn PTY writer");
+        writer
+            .write_all(b"cancel this turn\r")
+            .expect("submit active turn");
+        writer.flush().expect("flush active turn");
+    }
+    active_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("TUI effect must reach HTTP/SSE runtime");
+    {
+        let mut writer = writer.lock().expect("lock active-turn cancel writer");
+        writer.write_all(&[3]).expect("send active-turn Ctrl+C");
+        writer.flush().expect("flush active-turn Ctrl+C");
+    }
+    closed_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("cancellation must close the SSE socket");
+    std::thread::sleep(Duration::from_millis(300));
+    for _ in 0..2 {
+        let mut writer = writer.lock().expect("lock active-turn exit writer");
+        writer.write_all(&[3]).expect("send exit Ctrl+C");
+        writer.flush().expect("flush exit Ctrl+C");
+        drop(writer);
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    let status = wait_for_pty_child(&mut child, Duration::from_secs(10));
+    drop(pair.master);
+    let output = reader_task.join().expect("join active-turn PTY reader");
+    assert!(
+        status.success(),
+        "active-turn qualification child failed: {status:?}; output: {output:?}"
+    );
+    for marker in [
+        "QUALIFICATION_READY",
+        "QUALIFICATION_ACTIVE",
+        "QUALIFICATION_SOCKET_CLOSED",
+        "QUALIFICATION_SUPERVISOR_JOINED",
+    ] {
+        assert!(output.contains(marker), "missing {marker}: {output:?}");
+    }
+    assert!(
+        output.contains("\u{1b}[?1049l"),
+        "alternate screen was not left: {output:?}"
+    );
+    assert!(
+        output.contains("\u{1b}[?2004l"),
+        "bracketed paste was not disabled: {output:?}"
+    );
+}
+
+fn wait_for_pty_child(child: &mut Box<dyn Child + Send + Sync>, timeout: Duration) -> ExitStatus {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().expect("poll qualification child") {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            child
+                .kill()
+                .expect("terminate timed-out qualification child");
+            let _ = child.wait();
+            panic!("qualification child did not exit within {timeout:?}");
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }

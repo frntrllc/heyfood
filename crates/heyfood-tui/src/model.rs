@@ -5,6 +5,8 @@ use heyfood_core::AgentEvent;
 
 pub const MAX_SCROLLBACK_ENTRIES: usize = 1_000;
 pub const MAX_RENDERED_LINES: usize = 20_000;
+pub const MAX_SCROLLBACK_BYTES: usize = 4 * 1024 * 1024;
+const TRUNCATION_NOTICE: &str = "[… earlier content truncated …]\n";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Speaker {
@@ -30,29 +32,38 @@ impl SemanticEntry {
 pub struct Scrollback {
     entries: VecDeque<SemanticEntry>,
     rendered_lines: usize,
+    rendered_bytes: usize,
     maximum_entries: usize,
     maximum_lines: usize,
+    maximum_bytes: usize,
 }
 
 impl Default for Scrollback {
     fn default() -> Self {
-        Self::bounded(MAX_SCROLLBACK_ENTRIES, MAX_RENDERED_LINES)
+        Self::bounded(
+            MAX_SCROLLBACK_ENTRIES,
+            MAX_RENDERED_LINES,
+            MAX_SCROLLBACK_BYTES,
+        )
     }
 }
 
 impl Scrollback {
     #[must_use]
-    pub fn bounded(maximum_entries: usize, maximum_lines: usize) -> Self {
+    pub fn bounded(maximum_entries: usize, maximum_lines: usize, maximum_bytes: usize) -> Self {
         Self {
             entries: VecDeque::new(),
             rendered_lines: 0,
+            rendered_bytes: 0,
             maximum_entries: maximum_entries.max(1),
             maximum_lines: maximum_lines.max(1),
+            maximum_bytes: maximum_bytes.max(1),
         }
     }
 
     pub fn push(&mut self, entry: SemanticEntry) {
         self.rendered_lines = self.rendered_lines.saturating_add(entry.line_count());
+        self.rendered_bytes = self.rendered_bytes.saturating_add(entry.text.len());
         self.entries.push_back(entry);
         self.enforce_bounds();
     }
@@ -67,6 +78,11 @@ impl Scrollback {
         self.rendered_lines
     }
 
+    #[must_use]
+    pub const fn rendered_bytes(&self) -> usize {
+        self.rendered_bytes
+    }
+
     fn mutate_last_assistant(&mut self, mutate: impl FnOnce(&mut SemanticEntry)) {
         if let Some(entry) = self
             .entries
@@ -75,12 +91,18 @@ impl Scrollback {
             .find(|entry| entry.speaker == Speaker::Assistant && entry.streaming)
         {
             let before = entry.line_count();
+            let before_bytes = entry.text.len();
             mutate(entry);
             let after = entry.line_count();
+            let after_bytes = entry.text.len();
             self.rendered_lines = self
                 .rendered_lines
                 .saturating_sub(before)
                 .saturating_add(after);
+            self.rendered_bytes = self
+                .rendered_bytes
+                .saturating_sub(before_bytes)
+                .saturating_add(after_bytes);
         }
         self.enforce_bounds();
     }
@@ -88,25 +110,52 @@ impl Scrollback {
     fn enforce_bounds(&mut self) {
         while self.entries.len() > self.maximum_entries
             || (self.rendered_lines > self.maximum_lines && self.entries.len() > 1)
+            || (self.rendered_bytes > self.maximum_bytes && self.entries.len() > 1)
         {
             if let Some(removed) = self.entries.pop_front() {
                 self.rendered_lines = self.rendered_lines.saturating_sub(removed.line_count());
+                self.rendered_bytes = self.rendered_bytes.saturating_sub(removed.text.len());
             }
         }
-        if self.rendered_lines > self.maximum_lines
-            && let Some(entry) = self.entries.back_mut()
-        {
-            let mut retained = entry
-                .text
-                .lines()
-                .rev()
-                .take(self.maximum_lines)
-                .collect::<Vec<_>>();
-            retained.reverse();
-            entry.text = retained.join("\n");
-            self.rendered_lines = entry.line_count();
+        if let Some(entry) = self.entries.back_mut() {
+            if self.rendered_lines > self.maximum_lines {
+                let mut retained = entry
+                    .text
+                    .lines()
+                    .rev()
+                    .take(self.maximum_lines)
+                    .collect::<Vec<_>>();
+                retained.reverse();
+                entry.text = retained.join("\n");
+            }
+            retain_utf8_tail(&mut entry.text, self.maximum_bytes);
+            self.rendered_lines = self.entries.iter().map(SemanticEntry::line_count).sum();
+            self.rendered_bytes = self.entries.iter().map(|entry| entry.text.len()).sum();
         }
     }
+}
+
+fn retain_utf8_tail(text: &mut String, maximum_bytes: usize) {
+    if text.len() <= maximum_bytes {
+        return;
+    }
+    if maximum_bytes <= TRUNCATION_NOTICE.len() {
+        let mut end = maximum_bytes;
+        while !text.is_char_boundary(end) {
+            end = end.saturating_sub(1);
+        }
+        text.truncate(end);
+        return;
+    }
+    let tail_bytes = maximum_bytes - TRUNCATION_NOTICE.len();
+    let mut start = text.len().saturating_sub(tail_bytes);
+    while !text.is_char_boundary(start) {
+        start = start.saturating_add(1);
+    }
+    let tail = text[start..].to_owned();
+    text.clear();
+    text.push_str(TRUNCATION_NOTICE);
+    text.push_str(&tail);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -356,8 +405,7 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
             operation_id,
             outcome,
         } if model.operation.operation_id() == Some(operation_id) => {
-            let cancelled = !matches!(outcome, RunTurnOutcome::Completed);
-            finish_stream(model, cancelled);
+            finish_stream(model, outcome);
         }
         RuntimeEvent::TurnFailed {
             operation_id,
@@ -371,7 +419,7 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
                     .text
                     .push_str(&format!("Unable to complete this turn: {message}"));
             });
-            finish_stream(model, false);
+            finish_stream(model, RunTurnOutcome::Completed);
         }
         RuntimeEvent::TurnEvent { .. }
         | RuntimeEvent::TurnFinished { .. }
@@ -452,11 +500,27 @@ fn mark_finishing(model: &mut AppModel) {
     }
 }
 
-fn finish_stream(model: &mut AppModel, cancelled: bool) {
+fn finish_stream(model: &mut AppModel, outcome: RunTurnOutcome) {
     let old_lines = model.scrollback.rendered_lines();
     model.scrollback.mutate_last_assistant(|entry| {
-        if cancelled && entry.text.is_empty() {
-            entry.text = "Turn cancelled.".into();
+        let notice = match outcome {
+            RunTurnOutcome::Completed => None,
+            RunTurnOutcome::CancelledBeforeServerAcceptance => Some("Turn cancelled."),
+            RunTurnOutcome::CancelledAfterServerAcceptance => Some(
+                "Turn cancelled after server acceptance. Check the conversation before retrying.",
+            ),
+            RunTurnOutcome::CancelledAfterDispatchOutcomeUnknown => Some(
+                "Cancellation happened after dispatch and the server outcome is unknown. Check current state before retrying.",
+            ),
+            RunTurnOutcome::StaleGeneration => {
+                Some("Turn stopped because the active account or context changed.")
+            }
+        };
+        if let Some(notice) = notice {
+            if !entry.text.is_empty() {
+                entry.text.push_str("\n\n");
+            }
+            entry.text.push_str(notice);
         }
         entry.streaming = false;
     });
@@ -580,7 +644,7 @@ mod tests {
 
     #[test]
     fn scrollback_is_bounded_by_entries_and_lines() {
-        let mut scrollback = Scrollback::bounded(3, 4);
+        let mut scrollback = Scrollback::bounded(3, 4, 1_024);
         for number in 0..8 {
             scrollback.push(SemanticEntry {
                 speaker: Speaker::Notice,
@@ -610,6 +674,49 @@ mod tests {
                 .text
                 .contains("line 19")
         );
+    }
+
+    #[test]
+    fn one_unbroken_stream_is_bounded_by_utf8_bytes() {
+        let mut scrollback = Scrollback::bounded(3, 100, 96);
+        scrollback.push(SemanticEntry {
+            speaker: Speaker::Assistant,
+            text: String::new(),
+            streaming: true,
+        });
+        scrollback.mutate_last_assistant(|entry| {
+            entry.text.push_str(&"é".repeat(1_000));
+        });
+        assert!(scrollback.rendered_bytes() <= 96);
+        assert!(scrollback.entries().back().unwrap().text.ends_with('é'));
+        assert!(
+            scrollback
+                .entries()
+                .back()
+                .unwrap()
+                .text
+                .starts_with(TRUNCATION_NOTICE)
+        );
+    }
+
+    #[test]
+    fn uncertain_post_dispatch_cancellation_is_not_presented_as_safe_to_retry() {
+        let mut model = AppModel {
+            draft: "mutating question".into(),
+            cursor: 17,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFinished {
+                operation_id: 1,
+                outcome: RunTurnOutcome::CancelledAfterDispatchOutcomeUnknown,
+            }),
+        );
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert!(text.contains("server outcome is unknown"));
+        assert!(text.contains("Check current state before retrying"));
     }
 
     #[test]

@@ -437,6 +437,79 @@ fn terminal_result_streams_and_persists_current_conversation_pointer() {
 }
 
 #[test]
+fn cancellation_wakes_a_turn_blocked_on_a_full_ui_channel() {
+    block_on(async {
+        let cancellation = CancellationToken::new();
+        let events = vec![
+            AgentEvent::Partial {
+                text: "fills channel".into(),
+            },
+            AgentEvent::Partial {
+                text: "would otherwise block forever".into(),
+            },
+        ];
+        let (run_turn, _, _, _, _) = harness(RefreshBehavior::Accepted, &cancellation, events);
+        let (sender, _receiver) = mpsc::channel(1);
+        let cancel_from_thread = cancellation.clone();
+        let canceller = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            cancel_from_thread.cancel();
+        });
+
+        let outcome = run_turn
+            .execute(
+                TurnRequest {
+                    prompt: "bounded cancellation".into(),
+                    conversation_id: None,
+                    context: Default::default(),
+                    refresh: RefreshPolicy::Never,
+                },
+                snapshot(),
+                cancellation,
+                sender,
+            )
+            .await
+            .unwrap();
+
+        canceller.join().unwrap();
+        assert_eq!(outcome, RunTurnOutcome::CancelledAfterServerAcceptance);
+    });
+}
+
+#[test]
+fn excessive_stream_event_count_fails_closed() {
+    block_on(async {
+        let cancellation = CancellationToken::new();
+        let events = (0..=heyfood_application::MAX_TURN_EVENTS)
+            .map(|_| AgentEvent::Thinking {
+                stage: None,
+                message: None,
+            })
+            .collect();
+        let (run_turn, _, _, _, _) = harness(RefreshBehavior::Accepted, &cancellation, events);
+        let (sender, receiver) = mpsc::channel(heyfood_application::MAX_TURN_EVENTS + 1);
+
+        let error = run_turn
+            .execute(
+                TurnRequest {
+                    prompt: "bounded events".into(),
+                    conversation_id: None,
+                    context: Default::default(),
+                    refresh: RefreshPolicy::Never,
+                },
+                snapshot(),
+                cancellation,
+                sender,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, RunTurnError::StreamLimitExceeded);
+        assert_eq!(receiver.len(), heyfood_application::MAX_TURN_EVENTS);
+    });
+}
+
+#[test]
 fn duplicate_durable_proposal_is_idempotent() {
     block_on(async {
         let cancellation = CancellationToken::new();

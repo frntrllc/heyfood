@@ -122,7 +122,6 @@ impl PythonStateImporter {
             };
         };
 
-        ensure_private_import_file_supported()?;
         let source_sha256 = sha256(&source);
 
         if let Some(mut document) = read_document_if_present(&destination)? {
@@ -306,19 +305,6 @@ fn validate_destination_root(path: &Path) -> Result<(), PortError> {
             "could not inspect native import destination",
         )),
     }
-}
-
-#[cfg(not(windows))]
-fn ensure_private_import_file_supported() -> Result<(), PortError> {
-    Ok(())
-}
-
-#[cfg(windows)]
-fn ensure_private_import_file_supported() -> Result<(), PortError> {
-    Err(PortError::new(
-        "python_import_acl_unsupported",
-        "Python state import is disabled until a private Windows ACL adapter is available",
-    ))
 }
 
 fn build_import(
