@@ -6,7 +6,9 @@
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(unix)]
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -19,7 +21,11 @@ use heyfood_core::{
     AccountId, ClientConfig, ConfigRevision, CredentialVersion, GenerationId, NetworkPolicy,
     OperationId, SensitiveString, ServiceUrl, SessionCredentials, SessionSnapshot,
 };
-use heyfood_platform::{FileCredentialStore, NativeConfigStore, NativeSignalSource, SignalEvent};
+#[cfg(not(all(windows, feature = "native-credentials")))]
+use heyfood_platform::FileCredentialStore as QualificationCredentialStore;
+#[cfg(all(windows, feature = "native-credentials"))]
+use heyfood_platform::WindowsCredentialStore as QualificationCredentialStore;
+use heyfood_platform::{NativeConfigStore, NativeSignalSource, SignalEvent};
 use heyfood_tui::{
     Action, AppModel, ExitReason, RuntimeEvent, SemanticEntry, Speaker, dispatch, render,
     run_terminal,
@@ -35,6 +41,19 @@ use tokio_util::sync::CancellationToken;
 const PYTHON_FIXTURE: &str = include_str!("fixtures/python-exported-turn.v1.json");
 const PYTHON_AUTH_FIXTURE: &str =
     include_str!("../../heyfood-agent-runtime/tests/fixtures/python_backend_refresh.json");
+
+struct QualificationCredentialCleanup {
+    _store: Arc<QualificationCredentialStore>,
+}
+
+impl Drop for QualificationCredentialCleanup {
+    fn drop(&mut self) {
+        #[cfg(all(windows, feature = "native-credentials"))]
+        self._store
+            .delete()
+            .expect("remove controlled Windows credential");
+    }
+}
 
 struct FixedClock;
 
@@ -164,6 +183,10 @@ fn assert_frozen_converse_request(request: &Request, fixture: &Value, operation_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(
+    all(windows, not(feature = "native-credentials")),
+    ignore = "Windows vertical requires the native-credentials feature"
+)]
 async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratatui() {
     let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).expect("valid Python export fixture");
     let auth_fixture: Value =
@@ -213,7 +236,11 @@ async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratat
     let root = scratch("vertical");
     let base_url = format!("http://{address}/");
     let initial = credentials(1, "access-1", "refresh-1", 1);
-    let credential_store = Arc::new(FileCredentialStore::open(&root).expect("credential store"));
+    let credential_store =
+        Arc::new(QualificationCredentialStore::open(&root).expect("credential store"));
+    let credential_cleanup = QualificationCredentialCleanup {
+        _store: credential_store.clone(),
+    };
     credential_store
         .initialize(&initial)
         .expect("initialize credentials");
@@ -323,10 +350,15 @@ async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratat
         .await
         .expect("controlled service joined")
         .expect("controlled service task");
+    drop(credential_cleanup);
     std::fs::remove_dir_all(root).expect("remove controlled native state");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(
+    all(windows, not(feature = "native-credentials")),
+    ignore = "Windows vertical requires the native-credentials feature"
+)]
 async fn cancellation_closes_sse_socket_and_every_owned_task_joins() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -360,7 +392,11 @@ async fn cancellation_closes_sse_socket_and_every_owned_task_joins() {
     let root = scratch("cancel");
     let base_url = format!("http://{address}/");
     let initial = credentials(1, "access-1", "refresh-1", 4_102_444_800);
-    let credential_store = Arc::new(FileCredentialStore::open(&root).expect("credential store"));
+    let credential_store =
+        Arc::new(QualificationCredentialStore::open(&root).expect("credential store"));
+    let credential_cleanup = QualificationCredentialCleanup {
+        _store: credential_store.clone(),
+    };
     credential_store
         .initialize(&initial)
         .expect("initialize credentials");
@@ -369,7 +405,7 @@ async fn cancellation_closes_sse_socket_and_every_owned_task_joins() {
             .expect("config store"),
     );
     let writer = Arc::new(SerializedStateWriter::new(
-        credential_store,
+        credential_store.clone(),
         config_store.clone(),
         GenerationId::INITIAL,
         Some(&initial),
@@ -433,6 +469,7 @@ async fn cancellation_closes_sse_socket_and_every_owned_task_joins() {
         .await
         .expect("server joins after peer EOF")
         .expect("server task");
+    drop(credential_cleanup);
     std::fs::remove_dir_all(root).expect("remove controlled native state");
 }
 

@@ -132,7 +132,12 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - run: cargo test --locked --package heyfood-bin --test phase0_qualification
+      - name: Qualify the portable Unix credential vertical
+        if: runner.os != 'Windows'
+        run: cargo test --locked --package heyfood-bin --test phase0_qualification
+      - name: Qualify the Windows Credential Manager vertical
+        if: runner.os == 'Windows'
+        run: cargo test --locked --package heyfood-bin --test phase0_qualification --features native-credentials
 
   dependency-security:
     name: Cargo Audit and Cargo Deny

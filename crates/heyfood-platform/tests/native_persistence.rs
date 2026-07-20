@@ -1,20 +1,21 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(not(windows))]
 use heyfood_application::{
-    CommitOutcome, ConfigCommit, ConfigMutation, ConfigPort, MutationProposal, OperationSnapshot,
-    SerializedStateWriter,
+    CommitOutcome, MutationProposal, OperationSnapshot, SerializedStateWriter,
 };
+use heyfood_application::{ConfigCommit, ConfigMutation, ConfigPort};
 #[cfg(any(not(windows), feature = "native-credentials"))]
 use heyfood_application::{CredentialCommit, CredentialPort};
 #[cfg(any(not(windows), feature = "native-credentials"))]
 use heyfood_core::{AccountId, CredentialVersion, SensitiveString, SessionCredentials};
-use heyfood_core::{
-    ClientConfig, CommitId, ConfigRevision, GenerationId, NetworkPolicy, OperationId, ServiceUrl,
-    SessionSnapshot,
-};
+use heyfood_core::{ClientConfig, CommitId, ConfigRevision, NetworkPolicy, ServiceUrl};
+#[cfg(not(windows))]
+use heyfood_core::{GenerationId, OperationId, SessionSnapshot};
 #[cfg(all(windows, feature = "native-credentials"))]
 use heyfood_platform::WindowsCredentialStore;
 use heyfood_platform::{AtomicFile, FileCredentialStore, NativeConfigStore};
