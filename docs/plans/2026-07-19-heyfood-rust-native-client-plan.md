@@ -1,6 +1,6 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v7 — Production 095 checkpoint complete; Grocery 096 reconstruction in progress
+**Status:** Draft v8 — Production 095 checkpoint complete; reconstructed Grocery 096 is in final qualification
 **Baseline:** final unpublished Python `0.4.0` candidate at `73494a57468dac83b4904ce6c390e36926f5c6fe`; the last public Python release remains `0.3.2`
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`
@@ -65,17 +65,25 @@ verifier. The corrected certifi-backed root configuration passed focused tests,
 independent review, hosted CI, and an exact-build read-only verifier before the
 single `alembic upgrade 095` submission. The postflight verifier reported the
 sole head `095` and both `user_health_consent` and `user_health_daily` tables.
-The application fleet is being aligned to corrected merge SHA
-`e29704e3aafecdabb2cf783f6429e402b65bddc1`; this checkpoint does not weaken TLS
-to `require`, disable certificate verification, or bypass any preflight.
+Runtime TLS and exact profile-constraint readiness corrections are merged
+through companion merge SHA `f752a057fb1cf75abe9bcb6ab4aafdc11687db73`
+(PR #108). The fleet remains safety-contained while the strict established-
+profile inventory gate rejects the observed legacy storage state; this is an
+operational recovery dependency, not permission to weaken TLS, relax the boot
+gate, or let Rust encode a draft server contract.
 
-Grocery Phase A remains a substantial backend implementation candidate in PR
-#90, but it must be reconstructed onto current `main`, retain its domain and
-contract work, replace its obsolete migration with `096 -> 095`, resolve every
-authoritative-context/list-confirmation finding, and pass fresh PostgreSQL,
-hermetic, aggregate, and independent review gates. Only its final reviewed
-merge SHA, fixture aggregate digest, deployed `capabilities.grocery = "v1"`,
-and live scope/behavior canaries may become Rust contract provenance.
+Grocery Phase A has been reconstructed from the superseded PR #90 onto current
+`main` as PR #107. Its exact final-qualification head is
+`af7e6f30a43ce4e975743143dcb18b8eb745844c`: migration `096` descends from
+`095`; authoritative household snapshots and exact list/version preconditions
+are frozen into confirmations; Grocery writes require both read and write
+scopes; public provenance is manual-only; active-list reads are non-mutating;
+and existing/future accounts receive one active list at the account-write
+boundary. This head is not a Rust import authority until hosted PostgreSQL,
+hermetic, auth/audit, aggregate CI, and independent review all pass. Only its
+final reviewed merge SHA, regenerated fixture aggregate digest, deployed
+`capabilities.grocery = "v1"`, and live scope/behavior canaries may become Rust
+contract provenance.
 
 This dependency does not stop generic Rust work. Auth, state, terminal
 supervision, cancellation, rendering, generic voice, provisional semantic
@@ -1433,8 +1441,9 @@ and evidence receive independent review.
    wire types and Phase 2 grocery calls require authoritative generated backend
    fixtures, the corrected Phase A source SHA, and aggregate digest. Record the
    completed release chain explicitly as Production `094 -> 095`, reviewed
-   Grocery `096 -> 095`, Grocery merge/deploy, `grocery:v1` canary, then Rust fixture
-   import; a stale PR #90 SHA or pre-reconstruction fixture is never pinnable.
+   Grocery `095 -> 096`, Grocery merge/deploy, `grocery:v1` canary, then Rust
+   fixture import; a stale PR #90 SHA or pre-reconstruction fixture is never
+   pinnable.
 10. Freeze H1/H2 provider-neutral backend fixtures and production-scope/routing
     evidence; record H3 mobile/backend contracts as a separately capability-
     gated dependency rather than inventing Apple Health wire types.
