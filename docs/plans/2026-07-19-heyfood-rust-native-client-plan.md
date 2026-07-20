@@ -1,6 +1,6 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v6 — Grocery 095/096 execution reconciliation; exact-SHA re-review required
+**Status:** Draft v7 — Production 095 checkpoint complete; Grocery 096 reconstruction in progress
 **Baseline:** final unpublished Python `0.4.0` candidate at `73494a57468dac83b4904ce6c390e36926f5c6fe`; the last public Python release remains `0.3.2`
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`
@@ -57,14 +57,17 @@ Phase A must be the next migration as revision `096` with
 `down_revision = "095"`. The obsolete `089g1`/`089h1`/`089m1` topology and the
 old PR #90 merge base are not valid client or release inputs.
 
-At this plan revision, Production remains verified at `094`. The first bounded
-`094 -> 095` attempt failed before connecting and performed no DDL because the
-Render one-off runtime lacked a usable CA root. PR #103 retained
-`sslmode=verify-full` but its system-root approach also failed a read-only
-verifier. The certifi-root follow-up is separately reviewed and must pass hosted
-CI plus an exact-build read-only `alembic current` before the one authorized
-`alembic upgrade 095` submission. Neither failure permits weakening TLS to
-`require`, disabling certificate verification, or bypassing the preflight.
+Production is now verified at revision `095`. The first bounded `094 -> 095`
+attempt failed before connecting and performed no DDL because the Render
+one-off runtime lacked a usable CA root. PR #103 retained
+`sslmode=verify-full`, but its system-root approach also failed a read-only
+verifier. The corrected certifi-backed root configuration passed focused tests,
+independent review, hosted CI, and an exact-build read-only verifier before the
+single `alembic upgrade 095` submission. The postflight verifier reported the
+sole head `095` and both `user_health_consent` and `user_health_daily` tables.
+The application fleet is being aligned to corrected merge SHA
+`e29704e3aafecdabb2cf783f6429e402b65bddc1`; this checkpoint does not weaken TLS
+to `require`, disable certificate verification, or bypass any preflight.
 
 Grocery Phase A remains a substantial backend implementation candidate in PR
 #90, but it must be reconstructed onto current `main`, retain its domain and
@@ -1429,8 +1432,8 @@ and evidence receive independent review.
    provisional. Generic Phase 1 ports and semantic types may proceed, but final
    wire types and Phase 2 grocery calls require authoritative generated backend
    fixtures, the corrected Phase A source SHA, and aggregate digest. Record the
-   release chain explicitly as Production `094 -> 095`, reviewed Grocery
-   `096 -> 095`, Grocery merge/deploy, `grocery:v1` canary, then Rust fixture
+   completed release chain explicitly as Production `094 -> 095`, reviewed
+   Grocery `096 -> 095`, Grocery merge/deploy, `grocery:v1` canary, then Rust fixture
    import; a stale PR #90 SHA or pre-reconstruction fixture is never pinnable.
 10. Freeze H1/H2 provider-neutral backend fixtures and production-scope/routing
     evidence; record H3 mobile/backend contracts as a separately capability-
