@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "evidence_date": "2026-07-19",
-  "code_commit_sha": "cea3b72f8c0c2ffdc5cd90d218ecfbcb1d72c9fc",
+  "code_commit_sha": "16aa8bdb6296c4cad3f1586894766a5c0648732b",
   "source_tree_clean": true,
   "host": {
     "os": "macOS 26.5 (25F71)",
@@ -14,7 +14,7 @@
     "passed": 4,
     "failed": 0,
     "ignored_helper": 1,
-    "wall_seconds": 16.74,
+    "wall_seconds": 16.96,
     "unix_signals": ["SIGINT", "SIGTERM", "SIGHUP"],
     "terminal_restoration": [
       "alternate_screen_left",
@@ -24,12 +24,21 @@
     "cancellation_join_deadline_seconds": 3,
     "windows_console_control_event": "not_run_local"
   },
+  "python_state_import": {
+    "tests_passed": 5,
+    "source_mutation": false,
+    "credential_transfer": "reauthentication_required",
+    "file_backed_local_state": "implemented",
+    "python_keyring_local_state": "manual_reconciliation_required",
+    "windows_private_acl": "blocked_fail_closed",
+    "windows_target_compile": "passed"
+  },
   "performance": {
     "backend": "ratatui_test_backend",
     "first_frame_samples": 30,
-    "first_frame_p95_microseconds": 2178,
+    "first_frame_p95_microseconds": 2249,
     "input_frame_samples": 2000,
-    "input_frame_p95_microseconds": 7622,
+    "input_frame_p95_microseconds": 8193,
     "semantic_scrollback_entries": 500,
     "release_process_or_real_terminal_measurement": false
   },
@@ -38,8 +47,8 @@
       "name": "debug_heyfood_fail_closed",
       "path": "target/debug/heyfood",
       "shipped": false,
-      "bytes": 444152,
-      "sha256": "99687669fcc6c0dcb1e259a3c277eaaf21e30803049d1f2772a29f979e982df1",
+      "bytes": 444136,
+      "sha256": "e739945872a6210b9786befbe249a8a12b02da9a1994f08cb1d180da2f1d457f",
       "build_command": "cargo build --locked --package heyfood-bin"
     },
     {
@@ -47,15 +56,15 @@
       "path": "target/release/heyfood",
       "shipped": false,
       "bytes": 333520,
-      "sha256": "230b902310654f5d7ff6a5b3b674dc0af1ce3885c6cd486220309d6e8eba6be8",
+      "sha256": "bf343d4246ddea20b1f3cb1fce4a0774c6387ba9f9d11a8204b80089e84a580a",
       "build_command": "cargo build --locked --release --package heyfood-bin"
     },
     {
       "name": "release_internal_qualification_test",
-      "path": "target/release/deps/phase0_qualification-3873faa2679d69b6",
+      "path": "target/release/deps/phase0_qualification-3e6fa39d4cb7d534",
       "shipped": false,
       "bytes": 4054608,
-      "sha256": "176fe9afff0d354288f03048de19610dd286d27d7d522d95b449873dd7bbdd9b",
+      "sha256": "d320450fee6c6208d9f44cd4d12e088f0fdbf25cc7d032db655936e65742ea17",
       "build_command": "cargo test --locked --release --package heyfood-bin --test phase0_qualification --no-run"
     }
   ],

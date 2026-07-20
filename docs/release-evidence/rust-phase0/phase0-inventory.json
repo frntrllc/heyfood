@@ -4,7 +4,7 @@
   "rust_lineage": {
     "repository": "https://github.com/frntrllc/heyfood.git",
     "branch": "codex/rust-big-bang",
-    "code_commit_sha": "cea3b72f8c0c2ffdc5cd90d218ecfbcb1d72c9fc",
+    "code_commit_sha": "16aa8bdb6296c4cad3f1586894766a5c0648732b",
     "evidence_commit_sha": null
   },
   "requirements": [
@@ -47,8 +47,8 @@
     {
       "id": "P0-7-native-state-and-importer",
       "status": "blocked",
-      "evidence": ["docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md"],
-      "blocker": "Native controlled file creation is exercised, but the required read-only importer for supported non-secret/local-only Python state and safe reauthentication dispositions is not implemented or evaluated."
+      "evidence": ["crates/heyfood-platform/tests/python_state_import.rs", "fixtures/config/python-0.3.2-file-state.json", "docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md"],
+      "blocker": "File-backed supported Python state now imports read-only and idempotently with safe credential reauthentication, but Python-keyring local-state reconciliation, application consumption/disposition UX, hosted-platform evidence, and a private Windows ACL writer remain incomplete."
     },
     {
       "id": "P0-8-backend-idempotency-and-metrics",

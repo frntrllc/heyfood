@@ -11,7 +11,12 @@ No independently reviewed companion artifact currently maps each state-changing 
 Phase 0 therefore records this requirement as blocked. A future inventory must be sourced from a committed companion-backend SHA and reviewed without editing or inventing backend behavior in this repository.
 
 Native state creation is covered by the internal qualification harness using
-repository-local controlled directories. The required read-only importer for
-supported non-secret/local-only Python state remains unevaluated and is a Phase
-0 exit dependency. Unsafe or ambiguous credential transfer must produce a
-redacted disposition and require reauthentication without mutating the source.
+repository-local controlled directories. File-backed supported Python state now
+has a read-only, idempotent importer with redacted dispositions and mandatory
+credential reauthentication. It preserves account-bound context, location,
+household/local-child state, repair outbox data, and conversation/confirmation
+state without mutating the source. The requirement remains blocked on selective
+reconciliation of local household state held in the Python keyring, application
+consumption/disposition UX, hosted-platform evidence, and a private Windows ACL
+writer; Windows fails closed rather than creating an inadequately protected
+dietary-state file.
