@@ -630,7 +630,7 @@ fn qualification_active_turn_child() {
         let request = read_request(&mut stream).await;
         assert_eq!(request.path, "/v1/agent/converse");
         stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\nevent: partial\ndata: {\"text\":\"working until cancelled\"}\n\n")
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\nevent: partial\ndata: {\"text\":\"ACTIVE42\"}\n\n")
             .await
             .expect("write active SSE response");
         eprintln!("QUALIFICATION_ACTIVE");
@@ -1189,8 +1189,8 @@ fn run_active_turn_pty_child() {
             }
             if !active_reported
                 && bytes
-                    .windows(b"QUALIFICATION_ACTIVE".len())
-                    .any(|window| window == b"QUALIFICATION_ACTIVE")
+                    .windows(b"ACTIVE42".len())
+                    .any(|window| window == b"ACTIVE42")
             {
                 let _ = active_sender.send(());
                 active_reported = true;
@@ -1217,7 +1217,7 @@ fn run_active_turn_pty_child() {
     }
     active_receiver
         .recv_timeout(Duration::from_secs(5))
-        .expect("TUI effect must reach HTTP/SSE runtime");
+        .expect("accepted SSE content must be rendered before cancellation");
     {
         let mut writer = writer.lock().expect("lock active-turn cancel writer");
         writer.write_all(&[3]).expect("send active-turn Ctrl+C");
