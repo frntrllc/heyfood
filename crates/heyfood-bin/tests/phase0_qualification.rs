@@ -1031,6 +1031,7 @@ fn run_windows_console_control_child() {
 
     const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
     let root = scratch("windows-console-control");
+    std::fs::create_dir_all(&root).expect("create Windows console signal fixture");
     let ready_path = root.join("ready");
     let result_path = root.join("result");
     let mut child = Command::new(std::env::current_exe().expect("test executable"))
