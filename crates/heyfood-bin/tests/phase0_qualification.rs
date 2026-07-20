@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::Command;
 #[cfg(unix)]
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
@@ -74,6 +74,14 @@ fn scratch(label: &str) -> PathBuf {
         "heyfood-phase0-{label}-{}-{nonce}",
         std::process::id()
     ))
+}
+
+fn terminal_qualification_guard() -> MutexGuard<'static, ()> {
+    static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+    GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn credentials(version: u64, access: &str, refresh: &str, expiry: i64) -> SessionCredentials {
@@ -720,6 +728,7 @@ fn qualification_active_turn_child() {
     ignore = "Windows vertical requires the native-credentials feature"
 )]
 fn supervised_tui_http_sse_cancel_and_join_vertical() {
+    let _terminal_guard = terminal_qualification_guard();
     run_active_turn_pty_child();
 }
 
@@ -791,18 +800,26 @@ fn qualification_windows_console_signal_child() {
         .block_on(async { NativeSignalSource::install() })
         .expect("install Windows signal source");
     std::fs::write(&ready_path, b"ready").expect("publish Windows signal readiness");
+    let mut sender = spawn_windows_console_control_sender();
     let signal = runtime
-        .block_on(signals.next())
+        .block_on(async { tokio::time::timeout(Duration::from_secs(3), signals.next()).await })
+        .expect("receive Windows console control event within the qualification bound")
         .expect("receive Windows console control event");
     runtime
         .block_on(signals.shutdown(Duration::from_secs(1)))
         .expect("Windows signal listeners stopped and joined");
+    let sender_status = wait_for_process_child(&mut sender, Duration::from_secs(2));
+    assert!(
+        sender_status.success(),
+        "Windows console-control sender failed: {sender_status}"
+    );
     std::fs::write(&result_path, format!("{signal:?}")).expect("publish Windows signal result");
     assert_eq!(signal, SignalEvent::Interrupt);
 }
 
 #[test]
 fn qualification_pty_signal_and_restoration_matrix() {
+    let _terminal_guard = terminal_qualification_guard();
     #[cfg(unix)]
     for (signal, expected) in [
         ("INT", "Interrupt"),
@@ -988,27 +1005,23 @@ fn run_pty_child(signal: Option<&str>, expected: &str) {
 }
 
 #[cfg(windows)]
-fn send_windows_console_control(pid: u32) {
+fn spawn_windows_console_control_sender() -> std::process::Child {
     const SCRIPT: &str = r#"
-param([UInt32]$TargetPid)
+param()
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class HeyfoodConsoleSignal {
-    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool FreeConsole();
-    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool AttachConsole(uint processId);
     [DllImport("kernel32.dll", SetLastError=true)] public static extern bool SetConsoleCtrlHandler(IntPtr handler, bool add);
     [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GenerateConsoleCtrlEvent(uint signal, uint processGroupId);
 }
 '@
-[HeyfoodConsoleSignal]::FreeConsole() | Out-Null
-if (-not [HeyfoodConsoleSignal]::AttachConsole($TargetPid)) { exit 20 }
 if (-not [HeyfoodConsoleSignal]::SetConsoleCtrlHandler([IntPtr]::Zero, $true)) { exit 21 }
+Start-Sleep -Milliseconds 100
 if (-not [HeyfoodConsoleSignal]::GenerateConsoleCtrlEvent(0, 0)) { exit 22 }
 Start-Sleep -Milliseconds 250
-[HeyfoodConsoleSignal]::FreeConsole() | Out-Null
 "#;
-    let status = Command::new("pwsh")
+    Command::new("pwsh")
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -1016,13 +1029,8 @@ Start-Sleep -Milliseconds 250
             "-Command",
             SCRIPT,
         ])
-        .arg(pid.to_string())
-        .status()
-        .expect("launch Windows console-control sender");
-    assert!(
-        status.success(),
-        "Windows console-control delivery failed: {status:?}"
-    );
+        .spawn()
+        .expect("launch Windows console-control sender")
 }
 
 #[cfg(windows)]
@@ -1047,7 +1055,6 @@ fn run_windows_console_control_child() {
         .spawn()
         .expect("spawn isolated Windows console signal child");
     wait_for_file(&ready_path, Duration::from_secs(5), &mut child);
-    send_windows_console_control(child.id());
     wait_for_file(&result_path, Duration::from_secs(5), &mut child);
     let status = wait_for_process_child(&mut child, Duration::from_secs(5));
     assert!(
