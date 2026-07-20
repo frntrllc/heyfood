@@ -820,6 +820,7 @@ fn qualification_pty_signal_and_restoration_matrix() {
 }
 
 #[test]
+#[ignore = "run explicitly in the release profile by the Phase 0 qualification gate"]
 fn qualification_render_and_input_performance_budgets() {
     let mut warm_terminal = Terminal::new(TestBackend::new(80, 24)).expect("warm terminal");
     warm_terminal

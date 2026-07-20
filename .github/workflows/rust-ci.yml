@@ -134,10 +134,16 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Qualify the portable Unix credential vertical
         if: runner.os != 'Windows'
-        run: cargo test --locked --package heyfood-bin --test phase0_qualification
+        run: cargo test --release --locked --package heyfood-bin --test phase0_qualification
       - name: Qualify the Windows Credential Manager vertical
         if: runner.os == 'Windows'
-        run: cargo test --locked --package heyfood-bin --test phase0_qualification --features native-credentials
+        run: cargo test --release --locked --package heyfood-bin --test phase0_qualification --features native-credentials
+      - name: Enforce the optimized input and render budgets
+        if: runner.os != 'Windows'
+        run: cargo test --release --locked --package heyfood-bin --test phase0_qualification qualification_render_and_input_performance_budgets -- --ignored --exact --nocapture
+      - name: Enforce the optimized Windows input and render budgets
+        if: runner.os == 'Windows'
+        run: cargo test --release --locked --package heyfood-bin --test phase0_qualification --features native-credentials qualification_render_and_input_performance_budgets -- --ignored --exact --nocapture
       - name: Prove release-profile panic restoration remains catchable
         run: cargo test --release --locked --package heyfood-tui restores_before_returning_catchable_panic
 
