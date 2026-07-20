@@ -62,6 +62,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         OperationState::Idle => "ready",
         OperationState::Running(_) => "working",
         OperationState::Cancelling(_) => "stopping",
+        OperationState::Finishing(_) => "finishing",
         OperationState::Exiting(_) => "closing",
     };
     let line = match responsive_mode(area.width) {

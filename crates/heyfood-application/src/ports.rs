@@ -5,7 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use heyfood_core::{
-    AgentEvent, BrowserUrl, ClientConfig, CommitId, CredentialVersion, RefreshOutcome,
+    AgentEvent, BrowserUrl, ClientConfig, CommitId, CredentialVersion, OperationId, RefreshOutcome,
     RefreshRequest, SessionCredentials,
 };
 use tokio_util::sync::CancellationToken;
@@ -72,6 +72,7 @@ pub trait ServicePort: Send + Sync {
         &self,
         request: crate::TurnRequest,
         credentials: SessionCredentials,
+        operation_id: OperationId,
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<AcceptedTurn, PortError>>;
 }

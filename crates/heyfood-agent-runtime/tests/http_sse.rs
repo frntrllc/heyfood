@@ -262,6 +262,7 @@ async fn refresh_rotation_integrates_with_run_turn_and_normalized_sse() {
             TurnRequest {
                 prompt: "what can I eat?".into(),
                 conversation_id: None,
+                context: Default::default(),
                 refresh: RefreshPolicy::Required,
             },
             snapshot,
@@ -449,15 +450,19 @@ async fn every_raw_sse_type_is_normalized_including_multiline_and_error() {
         let stream = b": comment\nevent: thinking\ndata: {\"stage\":\"one\"}\n\nevent: progress\ndata: {\"message\":\"two\",\"current\":1,\"total\":2}\n\nevent: partial\ndata: {\"delta\":\"three\",\ndata: \"ignored\":true}\n\nevent: choices\ndata: {\"choices\":[\"four\",{\"label\":\"five\",\"value\":\"5\"}]}\n\nevent: result\ndata: {\"conversation_id\":\"six\"}\n\nevent: error\ndata: {\"code\":\"seven\",\"message\":\"failed\",\"retryable\":false}\n\n";
         respond(&mut socket, "text/event-stream", stream).await;
     });
-    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines()).unwrap();
+    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines())
+        .unwrap()
+        .with_cli_auth(cli_auth(None));
     let accepted = service
         .open_turn(
             TurnRequest {
                 prompt: "fixture".into(),
                 conversation_id: None,
+                context: Default::default(),
                 refresh: RefreshPolicy::Never,
             },
             credentials(1),
+            OperationId::new(),
             CancellationToken::new(),
         )
         .await
@@ -496,15 +501,19 @@ async fn uncertain_conversational_post_is_never_retried() {
             .is_ok();
         count_sender.send(retried).unwrap();
     });
-    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines()).unwrap();
+    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines())
+        .unwrap()
+        .with_cli_auth(cli_auth(None));
     let error = match service
         .open_turn(
             TurnRequest {
                 prompt: "do not replay".into(),
                 conversation_id: None,
+                context: Default::default(),
                 refresh: RefreshPolicy::Never,
             },
             credentials(1),
+            OperationId::new(),
             CancellationToken::new(),
         )
         .await
@@ -514,6 +523,72 @@ async fn uncertain_conversational_post_is_never_retried() {
     };
     assert!(error.outcome_uncertain);
     assert!(!count_receiver.await.unwrap());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn cancellation_after_peer_consumes_converse_body_reports_unknown_outcome() {
+    let (listener, base) = fixture_service().await;
+    let (consumed_sender, consumed_receiver) = oneshot::channel();
+    let (release_sender, release_receiver) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.contains("\"query\":\"possibly mutating turn\""));
+        consumed_sender.send(()).unwrap();
+        let _ = release_receiver.await;
+    });
+
+    let service = Arc::new(
+        HttpService::new(base.clone(), NetworkPolicy::DEVELOPMENT, deadlines())
+            .unwrap()
+            .with_cli_auth(cli_auth(Some("fixture-api-key"))),
+    );
+    let initial = credentials(1);
+    let writer = Arc::new(SerializedStateWriter::new(
+        Arc::new(MemoryCredentials {
+            stored: Mutex::new(Some(initial.clone())),
+            commits: Mutex::new(0),
+        }),
+        Arc::new(MemoryConfig),
+        GenerationId::INITIAL,
+        Some(&initial),
+    ));
+    let run_turn = RunTurn::new(service, Arc::new(FixedClock), writer);
+    let cancellation = CancellationToken::new();
+    let task_cancellation = cancellation.clone();
+    let (sender, _receiver) = mpsc::channel(4);
+    let task = tokio::spawn(async move {
+        run_turn
+            .execute(
+                TurnRequest {
+                    prompt: "possibly mutating turn".into(),
+                    conversation_id: None,
+                    context: Default::default(),
+                    refresh: RefreshPolicy::Never,
+                },
+                heyfood_application::OperationSnapshot {
+                    operation_id: OperationId::new(),
+                    generation: GenerationId::INITIAL,
+                    config: config(&base),
+                    session: SessionSnapshot {
+                        credentials: initial,
+                        reconciliation_required: false,
+                    },
+                },
+                task_cancellation,
+                sender,
+            )
+            .await
+    });
+
+    consumed_receiver.await.unwrap();
+    cancellation.cancel();
+    assert_eq!(
+        task.await.unwrap().unwrap(),
+        RunTurnOutcome::CancelledAfterDispatchOutcomeUnknown
+    );
+    release_sender.send(()).unwrap();
     server.await.unwrap();
 }
 
@@ -540,8 +615,11 @@ async fn cancellation_drops_the_sse_response_and_closes_the_peer_socket() {
         closed_sender.send(closed).unwrap();
     });
 
-    let service =
-        Arc::new(HttpService::new(base.clone(), NetworkPolicy::DEVELOPMENT, deadlines()).unwrap());
+    let service = Arc::new(
+        HttpService::new(base.clone(), NetworkPolicy::DEVELOPMENT, deadlines())
+            .unwrap()
+            .with_cli_auth(cli_auth(None)),
+    );
     let credential_port = Arc::new(MemoryCredentials {
         stored: Mutex::new(Some(credentials(1))),
         commits: Mutex::new(0),
@@ -562,6 +640,7 @@ async fn cancellation_drops_the_sse_response_and_closes_the_peer_socket() {
                 TurnRequest {
                     prompt: "wait".into(),
                     conversation_id: None,
+                    context: Default::default(),
                     refresh: RefreshPolicy::Never,
                 },
                 heyfood_application::OperationSnapshot {

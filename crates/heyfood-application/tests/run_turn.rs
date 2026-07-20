@@ -213,6 +213,7 @@ impl ServicePort for FakeService {
         &self,
         _request: TurnRequest,
         _credentials: SessionCredentials,
+        _operation_id: OperationId,
         _cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<AcceptedTurn, PortError>> {
         Box::pin(async move {
@@ -289,6 +290,7 @@ fn cancellation_before_server_acceptance_does_not_mutate_credentials() {
                 TurnRequest {
                     prompt: "hello".into(),
                     conversation_id: None,
+                    context: Default::default(),
                     refresh: RefreshPolicy::Required,
                 },
                 snapshot(),
@@ -328,6 +330,7 @@ fn cancellation_during_post_acceptance_commit_cannot_lose_rotated_credentials() 
                 TurnRequest {
                     prompt: "hello".into(),
                     conversation_id: None,
+                    context: Default::default(),
                     refresh: RefreshPolicy::Required,
                 },
                 snapshot(),
@@ -363,6 +366,7 @@ fn stale_generation_rejects_ui_but_not_server_accepted_rotation() {
                 TurnRequest {
                     prompt: "hello".into(),
                     conversation_id: None,
+                    context: Default::default(),
                     refresh: RefreshPolicy::Required,
                 },
                 snapshot(),
@@ -409,6 +413,7 @@ fn terminal_result_streams_and_persists_current_conversation_pointer() {
                 TurnRequest {
                     prompt: "hello".into(),
                     conversation_id: None,
+                    context: Default::default(),
                     refresh: RefreshPolicy::Required,
                 },
                 snapshot(),
@@ -463,6 +468,29 @@ fn duplicate_durable_proposal_is_idempotent() {
 }
 
 #[test]
+fn presentation_commit_ids_are_not_retained_as_durable_replay_state() {
+    block_on(async {
+        let cancellation = CancellationToken::new();
+        let (_, _, _, writer, _) = harness(RefreshBehavior::Accepted, &cancellation, vec![]);
+        let proposal = MutationProposal::presentation(
+            &snapshot(),
+            AgentEvent::Partial {
+                text: "streamed".into(),
+            },
+        );
+
+        assert_eq!(
+            writer.commit(proposal.clone()).await.unwrap(),
+            CommitOutcome::Applied
+        );
+        assert_eq!(
+            writer.commit(proposal).await.unwrap(),
+            CommitOutcome::Applied
+        );
+    });
+}
+
+#[test]
 fn uncertain_post_dispatch_refresh_is_marked_and_blocks_restart() {
     block_on(async {
         let cancellation = CancellationToken::new();
@@ -475,6 +503,7 @@ fn uncertain_post_dispatch_refresh_is_marked_and_blocks_restart() {
                 TurnRequest {
                     prompt: "hello".into(),
                     conversation_id: None,
+                    context: Default::default(),
                     refresh: RefreshPolicy::Required,
                 },
                 snapshot(),
@@ -521,6 +550,7 @@ fn uncertain_post_dispatch_refresh_is_marked_and_blocks_restart() {
                 TurnRequest {
                     prompt: "do not dispatch".into(),
                     conversation_id: None,
+                    context: Default::default(),
                     refresh: RefreshPolicy::Required,
                 },
                 restart_snapshot,
@@ -548,6 +578,7 @@ fn reconciliation_marker_write_failure_is_surfaced_fail_closed() {
                 TurnRequest {
                     prompt: "hello".into(),
                     conversation_id: None,
+                    context: Default::default(),
                     refresh: RefreshPolicy::Required,
                 },
                 snapshot(),
@@ -581,6 +612,7 @@ fn uncertain_rotation_commit_marks_reconciliation_required() {
                 TurnRequest {
                     prompt: "hello".into(),
                     conversation_id: None,
+                    context: Default::default(),
                     refresh: RefreshPolicy::Required,
                 },
                 snapshot(),

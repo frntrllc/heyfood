@@ -8,6 +8,10 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+const MAX_SSE_LINE_BYTES: usize = 64 * 1024;
+const MAX_SSE_EVENT_BYTES: usize = 1024 * 1024;
+const MAX_SSE_BUFFERED_BYTES: usize = MAX_SSE_EVENT_BYTES + (2 * MAX_SSE_LINE_BYTES);
+
 pub struct SseEventStream {
     response: Option<Response>,
     cancellation: CancellationToken,
@@ -70,7 +74,13 @@ impl EventStream for SseEventStream {
                     self.response.take();
                     return Ok(None);
                 };
-                let raw_events = self.parser.push(&chunk)?;
+                let raw_events = match self.parser.push(&chunk) {
+                    Ok(events) => events,
+                    Err(error) => {
+                        self.response.take();
+                        return Err(error);
+                    }
+                };
                 for raw in raw_events {
                     self.normalized.push_back(normalize(raw)?);
                 }
@@ -89,10 +99,12 @@ impl EventStream for SseEventStream {
 struct RawSseParser {
     bytes: Vec<u8>,
     event_type: String,
-    data: Vec<String>,
+    data: String,
+    data_lines: usize,
     first_line: bool,
 }
 
+#[derive(Debug)]
 struct RawEvent {
     event_type: String,
     data: String,
@@ -100,9 +112,27 @@ struct RawEvent {
 
 impl RawSseParser {
     fn push(&mut self, bytes: &[u8]) -> Result<Vec<RawEvent>, PortError> {
+        if self
+            .bytes
+            .len()
+            .saturating_add(self.data.len())
+            .saturating_add(bytes.len())
+            > MAX_SSE_BUFFERED_BYTES
+        {
+            return Err(PortError::new(
+                "sse_buffer_too_large",
+                "event stream exceeded the aggregate buffer limit",
+            ));
+        }
         self.bytes.extend_from_slice(bytes);
         let mut events = Vec::new();
         while let Some(index) = self.bytes.iter().position(|byte| *byte == b'\n') {
+            if index > MAX_SSE_LINE_BYTES {
+                return Err(PortError::new(
+                    "sse_line_too_large",
+                    "event stream line exceeded the size limit",
+                ));
+            }
             let mut line = self.bytes.drain(..=index).collect::<Vec<_>>();
             line.pop();
             if line.last() == Some(&b'\r') {
@@ -117,16 +147,16 @@ impl RawSseParser {
             let line = String::from_utf8(line)
                 .map_err(|_| PortError::new("sse_utf8", "event stream is not valid UTF-8"))?;
             if line.is_empty() {
-                if !self.data.is_empty() {
+                if self.data_lines != 0 {
                     events.push(RawEvent {
                         event_type: if self.event_type.is_empty() {
                             "message".into()
                         } else {
                             std::mem::take(&mut self.event_type)
                         },
-                        data: self.data.join("\n"),
+                        data: std::mem::take(&mut self.data),
                     });
-                    self.data.clear();
+                    self.data_lines = 0;
                 } else {
                     self.event_type.clear();
                 }
@@ -143,9 +173,34 @@ impl RawSseParser {
             }
             match field {
                 "event" => self.event_type = value.into(),
-                "data" => self.data.push(value.into()),
+                "data" => {
+                    let separator = usize::from(self.data_lines != 0);
+                    if self
+                        .data
+                        .len()
+                        .saturating_add(separator)
+                        .saturating_add(value.len())
+                        > MAX_SSE_EVENT_BYTES
+                    {
+                        return Err(PortError::new(
+                            "sse_event_too_large",
+                            "event stream event exceeded the size limit",
+                        ));
+                    }
+                    if self.data_lines != 0 {
+                        self.data.push('\n');
+                    }
+                    self.data.push_str(value);
+                    self.data_lines += 1;
+                }
                 _ => {}
             }
+        }
+        if self.bytes.len() > MAX_SSE_LINE_BYTES {
+            return Err(PortError::new(
+                "sse_line_too_large",
+                "event stream line exceeded the size limit",
+            ));
         }
         Ok(events)
     }
@@ -271,7 +326,7 @@ fn normalize(raw: RawEvent) -> Result<AgentEvent, PortError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RawSseParser, normalize};
+    use super::{MAX_SSE_BUFFERED_BYTES, MAX_SSE_LINE_BYTES, RawSseParser, normalize};
     use heyfood_core::AgentEvent;
 
     #[test]
@@ -306,5 +361,34 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn continuous_line_is_rejected_at_a_typed_bound() {
+        let mut parser = RawSseParser::default();
+        parser.push(&vec![b'x'; MAX_SSE_LINE_BYTES]).unwrap();
+        let error = parser.push(b"x").unwrap_err();
+        assert_eq!(error.code, "sse_line_too_large");
+    }
+
+    #[test]
+    fn multiline_event_is_rejected_at_a_typed_bound() {
+        let mut parser = RawSseParser::default();
+        let first = format!("data: {}\n", "x".repeat(MAX_SSE_LINE_BYTES - 6));
+        for _ in 0..16 {
+            parser.push(first.as_bytes()).unwrap();
+        }
+        let overflow = format!("data: {}\n", "y".repeat(100));
+        let error = parser.push(overflow.as_bytes()).unwrap_err();
+        assert_eq!(error.code, "sse_event_too_large");
+    }
+
+    #[test]
+    fn aggregate_chunk_is_rejected_before_allocation() {
+        let mut parser = RawSseParser::default();
+        let error = parser
+            .push(&vec![b'x'; MAX_SSE_BUFFERED_BYTES + 1])
+            .unwrap_err();
+        assert_eq!(error.code, "sse_buffer_too_large");
     }
 }

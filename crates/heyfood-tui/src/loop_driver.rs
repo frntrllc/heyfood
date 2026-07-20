@@ -1,4 +1,7 @@
-use std::{fmt, io, time::Duration};
+use std::{
+    fmt, io,
+    time::{Duration, Instant},
+};
 
 use crossterm::event::{self, Event};
 use ratatui::{Terminal, backend::CrosstermBackend};
@@ -10,6 +13,7 @@ use crate::{
 };
 
 const INPUT_POLL: Duration = Duration::from_millis(16);
+const MIN_FRAME_INTERVAL: Duration = Duration::from_millis(34);
 
 #[derive(Debug)]
 pub enum TuiError {
@@ -74,19 +78,38 @@ fn terminal_body(
         },
     );
     terminal.clear().map_err(TuiError::Terminal)?;
+    let mut invalidated = true;
+    let mut last_frame = None;
 
     loop {
         while let Ok(runtime) = runtime_events.try_recv() {
             if let Some(reason) = apply(&mut model, Action::Runtime(runtime), effect_sink)? {
                 return Ok(reason);
             }
+            invalidated = true;
         }
 
-        terminal
-            .draw(|frame| render(frame, &model))
-            .map_err(TuiError::Terminal)?;
+        let now = Instant::now();
+        let frame_due =
+            last_frame.is_none_or(|last| now.duration_since(last) >= MIN_FRAME_INTERVAL);
+        if invalidated && frame_due {
+            terminal
+                .draw(|frame| render(frame, &model))
+                .map_err(TuiError::Terminal)?;
+            invalidated = false;
+            last_frame = Some(Instant::now());
+        }
 
-        if !event::poll(INPUT_POLL).map_err(TuiError::Terminal)? {
+        let poll_for = if invalidated {
+            last_frame
+                .map_or(Duration::ZERO, |last| {
+                    MIN_FRAME_INTERVAL.saturating_sub(last.elapsed())
+                })
+                .min(INPUT_POLL)
+        } else {
+            INPUT_POLL
+        };
+        if !event::poll(poll_for).map_err(TuiError::Terminal)? {
             continue;
         }
         let action = match event::read().map_err(TuiError::Terminal)? {
@@ -95,10 +118,11 @@ fn terminal_body(
             Event::Resize(width, height) => Some(Action::Resize { width, height }),
             Event::FocusGained | Event::FocusLost | Event::Mouse(_) => None,
         };
-        if let Some(action) = action
-            && let Some(reason) = apply(&mut model, action, effect_sink)?
-        {
-            return Ok(reason);
+        if let Some(action) = action {
+            if let Some(reason) = apply(&mut model, action, effect_sink)? {
+                return Ok(reason);
+            }
+            invalidated = true;
         }
     }
 }

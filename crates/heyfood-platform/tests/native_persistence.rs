@@ -1,39 +1,30 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
-use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use heyfood_application::{ConfigCommit, ConfigMutation, ConfigPort};
+use heyfood_application::{
+    CommitOutcome, ConfigCommit, ConfigMutation, ConfigPort, MutationProposal, OperationSnapshot,
+    SerializedStateWriter,
+};
 #[cfg(any(not(windows), feature = "native-credentials"))]
 use heyfood_application::{CredentialCommit, CredentialPort};
 #[cfg(any(not(windows), feature = "native-credentials"))]
 use heyfood_core::{AccountId, CredentialVersion, SensitiveString, SessionCredentials};
-use heyfood_core::{ClientConfig, CommitId, ConfigRevision, NetworkPolicy, ServiceUrl};
+use heyfood_core::{
+    ClientConfig, CommitId, ConfigRevision, GenerationId, NetworkPolicy, OperationId, ServiceUrl,
+    SessionSnapshot,
+};
 #[cfg(all(windows, feature = "native-credentials"))]
 use heyfood_platform::WindowsCredentialStore;
 use heyfood_platform::{AtomicFile, FileCredentialStore, NativeConfigStore};
 
-struct ThreadWake(thread::Thread);
-
-impl Wake for ThreadWake {
-    fn wake(self: Arc<Self>) {
-        self.0.unpark();
-    }
-}
-
 fn block_on<T>(future: impl Future<Output = T>) -> T {
-    let waker = Waker::from(Arc::new(ThreadWake(thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match Future::poll(Pin::as_mut(&mut future), &mut context) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => thread::park_timeout(Duration::from_millis(10)),
-        }
-    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(future)
 }
 
 struct TempRoot(PathBuf);
@@ -196,6 +187,76 @@ fn idempotent_replay_clears_a_stale_reconciliation_marker() {
     block_on(store.commit(commit)).unwrap();
 
     assert!(!store.reconciliation_required().unwrap());
+}
+
+#[test]
+#[cfg(not(windows))]
+fn state_writer_replays_credential_commit_after_process_restart() {
+    let root = TempRoot::new("writer-restart-replay");
+    let credential_store = Arc::new(FileCredentialStore::open(&root.0).unwrap());
+    credential_store.initialize(&credentials(1)).unwrap();
+    let config_store = Arc::new(
+        NativeConfigStore::open(&root.0, config("fixture", 1), NetworkPolicy::DEVELOPMENT).unwrap(),
+    );
+    let operation = OperationSnapshot {
+        operation_id: OperationId::new(),
+        generation: GenerationId::INITIAL,
+        config: config("fixture", 1),
+        session: SessionSnapshot {
+            credentials: credentials(1),
+            reconciliation_required: false,
+        },
+    };
+    let proposal =
+        MutationProposal::credential_rotation(&operation, CommitId::new(), credentials(2));
+    let first_writer = SerializedStateWriter::new(
+        credential_store.clone(),
+        config_store.clone(),
+        GenerationId::INITIAL,
+        Some(&credentials(1)),
+    );
+    assert_eq!(
+        block_on(first_writer.commit(proposal.clone())).unwrap(),
+        CommitOutcome::Applied
+    );
+
+    let persisted = block_on(credential_store.load()).unwrap().unwrap();
+    let restarted_writer = SerializedStateWriter::new(
+        credential_store.clone(),
+        config_store,
+        GenerationId::INITIAL,
+        Some(&persisted),
+    );
+    assert_eq!(
+        block_on(restarted_writer.commit(proposal)).unwrap(),
+        CommitOutcome::Applied
+    );
+    assert_eq!(
+        block_on(credential_store.load()).unwrap().unwrap().version,
+        CredentialVersion::new(2)
+    );
+}
+
+#[test]
+fn async_config_lock_wait_is_off_executor_and_bounded() {
+    use fs2::FileExt;
+    use std::fs::OpenOptions;
+
+    let root = TempRoot::new("bounded-lock");
+    let store =
+        NativeConfigStore::open(&root.0, config("fixture", 1), NetworkPolicy::DEVELOPMENT).unwrap();
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(root.0.join("config.lock"))
+        .unwrap();
+    lock.lock_exclusive().unwrap();
+
+    let started = Instant::now();
+    let error = block_on(store.load()).unwrap_err();
+    assert_eq!(error.code, "lock_timeout");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    lock.unlock().unwrap();
 }
 
 #[test]

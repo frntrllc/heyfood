@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use heyfood_application::{AcceptedTurn, BoxFuture, PortError, ServicePort, TurnRequest};
 use heyfood_core::{
-    AccountId, NetworkPolicy, RefreshOutcome, RefreshRequest, RefreshResult, SensitiveString,
-    ServiceUrl, SessionCredentials,
+    AccountId, NetworkPolicy, OperationId, RefreshOutcome, RefreshRequest, RefreshResult,
+    SensitiveString, ServiceUrl, SessionCredentials,
 };
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -268,9 +268,22 @@ impl ServicePort for HttpService {
         &self,
         request: TurnRequest,
         credentials: SessionCredentials,
+        operation_id: OperationId,
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<AcceptedTurn, PortError>> {
         Box::pin(async move {
+            if cancellation.is_cancelled() {
+                return Err(PortError::new(
+                    "converse_cancelled_before_dispatch",
+                    "conversational POST was cancelled before dispatch",
+                ));
+            }
+            let cli_auth = self.cli_auth.as_ref().ok_or_else(|| {
+                PortError::new(
+                    "converse_context",
+                    "CLI auth context is required for conversational requests",
+                )
+            })?;
             let client = self.client(true)?;
             let endpoint = self.endpoint("/v1/agent/converse")?;
             let mut body = serde_json::json!({
@@ -280,14 +293,40 @@ impl ServicePort for HttpService {
             if let Some(conversation_id) = request.conversation_id {
                 body["conversation_id"] = serde_json::Value::String(conversation_id);
             }
-            let send = client
+            if let Some(value) = request.context.dietary {
+                body["dietary_context"] = value;
+            }
+            if let Some(value) = request.context.device {
+                body["device_context"] = value;
+            }
+            if let Some(value) = request.context.meal {
+                body["meal_context"] = value;
+            }
+            if let Some(value) = request.context.latitude {
+                body["lat"] = serde_json::Value::from(value);
+            }
+            if let Some(value) = request.context.longitude {
+                body["lng"] = serde_json::Value::from(value);
+            }
+            let mut builder = client
                 .post(endpoint)
-                .header("Accept", "text/event-stream")
+                .header("Accept", "application/json")
+                .header("X-App-Client-ID", "heyfood-cli")
+                .header("X-Device-ID", &cli_auth.device_id)
+                .header("X-Request-ID", operation_id.as_uuid().to_string())
                 .bearer_auth(credentials.access_token.expose_secret())
-                .json(&body)
-                .send();
+                .json(&body);
+            if let Some(api_key) = cli_auth.api_key.as_ref() {
+                builder = builder.header("X-API-Key", api_key.expose_secret());
+            }
+            let send = builder.send();
             let response = tokio::select! {
-                () = cancellation.cancelled() => cancellation_pending().await,
+                () = cancellation.cancelled() => {
+                    return Err(PortError::uncertain(
+                        "converse_cancelled_after_dispatch",
+                        "conversational POST response was not observed after dispatch",
+                    ));
+                }
                 result = tokio::time::timeout(self.deadlines.request, send) => {
                     match result {
                         Ok(Ok(response)) => response,
@@ -383,14 +422,6 @@ fn ensure_success(status: StatusCode, code: &'static str) -> Result<(), PortErro
             format!("service returned HTTP status {}", status.as_u16()),
         ))
     }
-}
-
-async fn cancellation_pending<T>() -> T {
-    // The application layer owns the user-visible cancellation outcome. By
-    // entering this branch, `select!` first drops the in-flight Reqwest future
-    // (and therefore its request/response resource); remaining pending lets the
-    // application's outer cancellation race complete deterministically.
-    std::future::pending().await
 }
 
 fn uncertain_transport(code: &'static str, error: &reqwest::Error) -> PortError {

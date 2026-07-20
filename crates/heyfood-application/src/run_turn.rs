@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use heyfood_core::{AgentEvent, CommitId, RefreshOutcome, RefreshRequest};
+use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -19,11 +20,23 @@ pub enum RefreshPolicy {
     Required,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TurnRequest {
     pub prompt: String,
     pub conversation_id: Option<String>,
+    pub context: TurnContext,
     pub refresh: RefreshPolicy,
+}
+
+/// Optional fields emitted by the Python `ask` command for a normal text turn.
+/// Confirmation payloads remain outside the dormant Phase 0 surface.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TurnContext {
+    pub dietary: Option<Value>,
+    pub device: Option<Value>,
+    pub meal: Option<Value>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -36,6 +49,9 @@ pub struct TurnEvent {
 pub enum RunTurnOutcome {
     Completed,
     CancelledBeforeServerAcceptance,
+    /// The conversational POST was dispatched, but no response headers were
+    /// observed. Retrying may duplicate a server-side conversational effect.
+    CancelledAfterDispatchOutcomeUnknown,
     CancelledAfterServerAcceptance,
     StaleGeneration,
 }
@@ -174,17 +190,29 @@ impl RunTurn {
             }
         }
 
-        let opening = self
+        let accepted = self
             .service
-            .open_turn(request, credentials, cancellation.child_token());
-        let Some(accepted) = cancellation.run_until_cancelled(opening).await else {
-            return Ok(if server_accepted {
-                RunTurnOutcome::CancelledAfterServerAcceptance
-            } else {
-                RunTurnOutcome::CancelledBeforeServerAcceptance
-            });
+            .open_turn(
+                request,
+                credentials,
+                snapshot.operation_id,
+                cancellation.child_token(),
+            )
+            .await;
+        let mut accepted = match accepted {
+            Ok(accepted) => accepted,
+            Err(error) if error.code == "converse_cancelled_before_dispatch" => {
+                return Ok(if server_accepted {
+                    RunTurnOutcome::CancelledAfterServerAcceptance
+                } else {
+                    RunTurnOutcome::CancelledBeforeServerAcceptance
+                });
+            }
+            Err(error) if error.outcome_uncertain && cancellation.is_cancelled() => {
+                return Ok(RunTurnOutcome::CancelledAfterDispatchOutcomeUnknown);
+            }
+            Err(error) => return Err(RunTurnError::Service(error)),
         };
-        let mut accepted = accepted.map_err(RunTurnError::Service)?;
 
         if cancellation.is_cancelled() {
             accepted

@@ -359,7 +359,7 @@ heyfood-installer ──> heyfood-core  # standalone bootstrap/manifest verifier
 - Async: Tokio 1.x with only required `rt-multi-thread`, `macros`, `sync`,
   `time`, `signal`, `net`, `io-util`, `fs`, and `process` features; Tokio-util
   0.7 `CancellationToken`.
-- TUI: Ratatui 0.29 and Crossterm 0.28 with `event-stream` and
+- TUI: Ratatui 0.30.2 and Crossterm 0.29 with `event-stream` and
   `bracketed-paste`; no Grok-internal Ratatui fork.
 - CLI/data: Clap 4 derive/completion, Serde/Serde JSON 1, UUID 1, URL 2, time
   0.3, `secrecy` plus `zeroize` for secret-bearing values.

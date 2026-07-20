@@ -11,7 +11,9 @@ pub use ports::{
     ClipboardPort, ClockPort, ConfigCommit, ConfigMutation, ConfigPort, CredentialCommit,
     CredentialPort, EventStream, PortError, ServicePort,
 };
-pub use run_turn::{RefreshPolicy, RunTurn, RunTurnError, RunTurnOutcome, TurnEvent, TurnRequest};
+pub use run_turn::{
+    RefreshPolicy, RunTurn, RunTurnError, RunTurnOutcome, TurnContext, TurnEvent, TurnRequest,
+};
 pub use state_writer::{
     CommitError, CommitOutcome, Mutation, MutationClass, MutationMetadata, MutationProposal,
     OperationSnapshot, SerializedStateWriter,

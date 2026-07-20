@@ -134,6 +134,7 @@ pub enum OperationState {
     Idle,
     Running(u64),
     Cancelling(u64),
+    Finishing(u64),
     Exiting(ExitReason),
 }
 
@@ -141,14 +142,17 @@ impl OperationState {
     #[must_use]
     pub const fn operation_id(self) -> Option<u64> {
         match self {
-            Self::Running(id) | Self::Cancelling(id) => Some(id),
+            Self::Running(id) | Self::Cancelling(id) | Self::Finishing(id) => Some(id),
             Self::Idle | Self::Exiting(_) => None,
         }
     }
 
     #[must_use]
     pub const fn is_active(self) -> bool {
-        matches!(self, Self::Running(_) | Self::Cancelling(_))
+        matches!(
+            self,
+            Self::Running(_) | Self::Cancelling(_) | Self::Finishing(_)
+        )
     }
 }
 
@@ -318,7 +322,7 @@ fn cancel_or_exit(model: &mut AppModel) -> Vec<Effect> {
             model.activity = Some("Stopping…".into());
             vec![Effect::CancelTurn { operation_id }]
         }
-        OperationState::Cancelling(_) => Vec::new(),
+        OperationState::Cancelling(_) | OperationState::Finishing(_) => Vec::new(),
         OperationState::Idle if model.idle_exit_armed => begin_exit(model, ExitReason::Requested),
         OperationState::Idle => {
             model.idle_exit_armed = true;
@@ -421,8 +425,8 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                 entry.text = result;
                 entry.streaming = false;
             });
-            model.operation = OperationState::Idle;
-            model.activity = None;
+            mark_finishing(model);
+            model.activity = Some("Finishing…".into());
             model.idle_exit_armed = false;
         }
         AgentEvent::Error { error } => {
@@ -435,11 +439,17 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                     .push_str(&format!("{}: {}", error.code, error.message));
                 entry.streaming = false;
             });
-            model.operation = OperationState::Idle;
-            model.activity = None;
+            mark_finishing(model);
+            model.activity = Some("Finishing…".into());
         }
     }
     account_for_new_lines(model, old_lines);
+}
+
+fn mark_finishing(model: &mut AppModel) {
+    if let Some(operation_id) = model.operation.operation_id() {
+        model.operation = OperationState::Finishing(operation_id);
+    }
 }
 
 fn finish_stream(model: &mut AppModel, cancelled: bool) {
@@ -679,5 +689,39 @@ mod tests {
             ]
         );
         assert_eq!(ExitReason::Terminate.exit_code(), 143);
+    }
+
+    #[test]
+    fn terminal_event_keeps_single_flight_closed_until_turn_finished() {
+        let mut model = AppModel {
+            draft: "first".into(),
+            cursor: 5,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: Default::default(),
+                    conversation_id: Some("conversation-1".into()),
+                },
+            }),
+        );
+        assert_eq!(model.operation, OperationState::Finishing(1));
+
+        let _ = dispatch(&mut model, Action::InsertText("second".into()));
+        assert!(dispatch(&mut model, Action::Submit).is_empty());
+
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFinished {
+                operation_id: 1,
+                outcome: RunTurnOutcome::Completed,
+            }),
+        );
+        assert_eq!(model.operation, OperationState::Idle);
+        assert_eq!(dispatch(&mut model, Action::Submit).len(), 1);
     }
 }

@@ -34,6 +34,7 @@ pub struct MutationMetadata {
     pub generation: GenerationId,
     pub class: MutationClass,
     pub expected_account: Option<AccountId>,
+    pub expected_credential_version: Option<CredentialVersion>,
     pub credential_version: Option<CredentialVersion>,
     pub commit_id: CommitId,
 }
@@ -62,6 +63,7 @@ impl MutationProposal {
                 generation: snapshot.generation,
                 class: MutationClass::GenerationScoped,
                 expected_account: Some(snapshot.session.credentials.account_id.clone()),
+                expected_credential_version: None,
                 credential_version: Some(snapshot.session.credentials.version),
                 commit_id: CommitId::new(),
             },
@@ -77,6 +79,7 @@ impl MutationProposal {
                 generation: snapshot.generation,
                 class: MutationClass::GenerationScoped,
                 expected_account: Some(snapshot.session.credentials.account_id.clone()),
+                expected_credential_version: None,
                 credential_version: Some(snapshot.session.credentials.version),
                 commit_id: CommitId::new(),
             },
@@ -96,6 +99,7 @@ impl MutationProposal {
                 generation: snapshot.generation,
                 class: MutationClass::ServerAcceptedDurable,
                 expected_account: Some(snapshot.session.credentials.account_id.clone()),
+                expected_credential_version: Some(snapshot.session.credentials.version),
                 credential_version: Some(credentials.version),
                 commit_id,
             },
@@ -116,6 +120,7 @@ impl MutationProposal {
                 generation: snapshot.generation,
                 class: MutationClass::LocalFirstDurable,
                 expected_account: Some(snapshot.session.credentials.account_id.clone()),
+                expected_credential_version: None,
                 credential_version: Some(snapshot.session.credentials.version),
                 commit_id,
             },
@@ -232,6 +237,7 @@ impl SerializedStateWriter {
     /// made, its bounded adapter commit is deliberately non-cancellable.
     pub async fn commit(&self, proposal: MutationProposal) -> Result<CommitOutcome, CommitError> {
         validate_shape(&proposal)?;
+        let retain_commit_id = !matches!(&proposal.mutation, Mutation::Presentation(_));
         let mut state = self.state.lock().await;
 
         if state.applied_commits.contains(&proposal.metadata.commit_id) {
@@ -268,12 +274,11 @@ impl SerializedStateWriter {
                     .map_err(CommitError::Port)?;
             }
             Mutation::CredentialRotation(credentials) => {
-                let expected_version =
-                    state
-                        .credential_version
-                        .ok_or(CommitError::InvalidProposal(
-                            "cannot rotate credentials without a prior version",
-                        ))?;
+                let expected_version = proposal.metadata.expected_credential_version.ok_or(
+                    CommitError::InvalidProposal(
+                        "credential rotation is missing its original expected version",
+                    ),
+                )?;
                 if credentials.version <= expected_version {
                     return Err(CommitError::InvalidProposal(
                         "credential rotation must advance the stored version",
@@ -298,8 +303,13 @@ impl SerializedStateWriter {
                     .clear_reconciliation_required(proposal.metadata.commit_id)
                     .await
                     .map_err(CommitError::ReconciliationMarkerClear)?;
-                state.account_id = Some(credentials.account_id);
-                state.credential_version = Some(credentials.version);
+                if state
+                    .credential_version
+                    .is_none_or(|current| credentials.version > current)
+                {
+                    state.account_id = Some(credentials.account_id);
+                    state.credential_version = Some(credentials.version);
+                }
             }
             Mutation::Config(config) => {
                 self.config_port
@@ -321,7 +331,9 @@ impl SerializedStateWriter {
             }
         }
 
-        state.applied_commits.insert(proposal.metadata.commit_id);
+        if retain_commit_id {
+            state.applied_commits.insert(proposal.metadata.commit_id);
+        }
         Ok(CommitOutcome::Applied)
     }
 
@@ -368,6 +380,15 @@ fn validate_shape(proposal: &MutationProposal) -> Result<(), CommitError> {
         if proposal.metadata.credential_version != Some(credentials.version) {
             return Err(CommitError::InvalidProposal(
                 "credential rotation version does not match metadata",
+            ));
+        }
+        if proposal
+            .metadata
+            .expected_credential_version
+            .is_none_or(|expected| credentials.version <= expected)
+        {
+            return Err(CommitError::InvalidProposal(
+                "credential rotation must preserve an earlier expected version",
             ));
         }
     }

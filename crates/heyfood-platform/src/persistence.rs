@@ -3,6 +3,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 use heyfood_application::{
@@ -15,6 +17,8 @@ use heyfood_core::{
 };
 
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
+const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Same-directory, exclusive staging followed by a flushed atomic replace.
 pub struct AtomicFile;
@@ -84,13 +88,37 @@ impl FileLock {
             .map_err(|error| PortError::new("lock_open", error.to_string()))?;
         make_private_file(path)
             .map_err(|error| PortError::new("lock_permissions", error.to_string()))?;
-        if exclusive {
-            FileExt::lock_exclusive(&file)
-        } else {
-            FileExt::lock_shared(&file)
+        let started = Instant::now();
+        loop {
+            let result = if exclusive {
+                FileExt::try_lock_exclusive(&file)
+            } else {
+                FileExt::try_lock_shared(&file)
+            };
+            match result {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if started.elapsed() >= LOCK_ACQUIRE_TIMEOUT {
+                        return Err(PortError::new(
+                            "lock_timeout",
+                            "state lock acquisition exceeded its deadline",
+                        ));
+                    }
+                    thread::sleep(LOCK_RETRY_INTERVAL);
+                }
+                Err(error) => {
+                    return Err(PortError::new("lock_acquire", error.to_string()));
+                }
+            }
         }
-        .map_err(|error| PortError::new("lock_acquire", error.to_string()))?;
         Ok(Self { file })
+    }
+
+    pub(crate) async fn acquire_async(path: &Path, exclusive: bool) -> Result<Self, PortError> {
+        let path = path.to_owned();
+        tokio::task::spawn_blocking(move || Self::acquire(&path, exclusive))
+            .await
+            .map_err(|_| PortError::new("lock_task", "state lock worker did not complete"))?
     }
 }
 
@@ -138,14 +166,14 @@ impl NativeConfigStore {
 impl ConfigPort for NativeConfigStore {
     fn load(&self) -> BoxFuture<'_, Result<ClientConfig, PortError>> {
         Box::pin(async move {
-            let _lock = FileLock::acquire(&self.lock_path, false)?;
+            let _lock = FileLock::acquire_async(&self.lock_path, false).await?;
             Ok(self.read_unlocked()?.config)
         })
     }
 
     fn commit(&self, commit: ConfigCommit) -> BoxFuture<'_, Result<(), PortError>> {
         Box::pin(async move {
-            let _lock = FileLock::acquire(&self.lock_path, true)?;
+            let _lock = FileLock::acquire_async(&self.lock_path, true).await?;
             let mut state = self.read_unlocked()?;
             if state.applied.contains(&commit.commit_id) {
                 return Ok(());
@@ -300,14 +328,14 @@ impl FileCredentialStore {
 impl CredentialPort for FileCredentialStore {
     fn load(&self) -> BoxFuture<'_, Result<Option<SessionCredentials>, PortError>> {
         Box::pin(async move {
-            let _lock = FileLock::acquire(&self.lock_path, false)?;
+            let _lock = FileLock::acquire_async(&self.lock_path, false).await?;
             Ok(self.read_unlocked()?.map(|state| state.credentials))
         })
     }
 
     fn commit(&self, commit: CredentialCommit) -> BoxFuture<'_, Result<(), PortError>> {
         Box::pin(async move {
-            let _lock = FileLock::acquire(&self.lock_path, true)?;
+            let _lock = FileLock::acquire_async(&self.lock_path, true).await?;
             let mut state = self.read_unlocked()?.ok_or_else(|| {
                 PortError::new("credentials_missing", "credentials are not initialized")
             })?;
@@ -328,7 +356,7 @@ impl CredentialPort for FileCredentialStore {
         commit_id: CommitId,
     ) -> BoxFuture<'_, Result<(), PortError>> {
         Box::pin(async move {
-            let _lock = FileLock::acquire(&self.lock_path, true)?;
+            let _lock = FileLock::acquire_async(&self.lock_path, true).await?;
             AtomicFile::replace(
                 &self.reconciliation_path,
                 format!("{}\n", commit_id.as_uuid()).as_bytes(),
@@ -341,7 +369,7 @@ impl CredentialPort for FileCredentialStore {
         commit_id: CommitId,
     ) -> BoxFuture<'_, Result<(), PortError>> {
         Box::pin(async move {
-            let _lock = FileLock::acquire(&self.lock_path, true)?;
+            let _lock = FileLock::acquire_async(&self.lock_path, true).await?;
             clear_reconciliation_marker(&self.reconciliation_path, commit_id)
         })
     }
@@ -430,14 +458,14 @@ impl WindowsCredentialStore {
 impl CredentialPort for WindowsCredentialStore {
     fn load(&self) -> BoxFuture<'_, Result<Option<SessionCredentials>, PortError>> {
         Box::pin(async move {
-            let _lock = FileLock::acquire(&self.lock_path, false)?;
+            let _lock = FileLock::acquire_async(&self.lock_path, false).await?;
             Ok(self.read_unlocked()?.map(|state| state.credentials))
         })
     }
 
     fn commit(&self, commit: CredentialCommit) -> BoxFuture<'_, Result<(), PortError>> {
         Box::pin(async move {
-            let _lock = FileLock::acquire(&self.lock_path, true)?;
+            let _lock = FileLock::acquire_async(&self.lock_path, true).await?;
             let mut state = self.read_unlocked()?.ok_or_else(|| {
                 PortError::new("credentials_missing", "credentials are not initialized")
             })?;
@@ -458,7 +486,7 @@ impl CredentialPort for WindowsCredentialStore {
         commit_id: CommitId,
     ) -> BoxFuture<'_, Result<(), PortError>> {
         Box::pin(async move {
-            let _lock = FileLock::acquire(&self.lock_path, true)?;
+            let _lock = FileLock::acquire_async(&self.lock_path, true).await?;
             AtomicFile::replace(
                 &self.reconciliation_path,
                 format!("{}\n", commit_id.as_uuid()).as_bytes(),
@@ -471,7 +499,7 @@ impl CredentialPort for WindowsCredentialStore {
         commit_id: CommitId,
     ) -> BoxFuture<'_, Result<(), PortError>> {
         Box::pin(async move {
-            let _lock = FileLock::acquire(&self.lock_path, true)?;
+            let _lock = FileLock::acquire_async(&self.lock_path, true).await?;
             clear_reconciliation_marker(&self.reconciliation_path, commit_id)
         })
     }

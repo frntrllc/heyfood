@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
 use heyfood_application::{
     ClockPort, ConfigPort, CredentialPort, OperationSnapshot, RefreshPolicy, RunTurn,
-    RunTurnOutcome, SerializedStateWriter, TurnRequest,
+    RunTurnOutcome, SerializedStateWriter, TurnContext, TurnRequest,
 };
 use heyfood_core::{
     AccountId, ClientConfig, ConfigRevision, CredentialVersion, GenerationId, NetworkPolicy,
@@ -135,6 +135,34 @@ async fn write_response(stream: &mut TcpStream, content_type: &str, body: &str) 
         .expect("write controlled response");
 }
 
+fn assert_frozen_converse_request(request: &Request, fixture: &Value, operation_id: OperationId) {
+    let request_line = request.headers.lines().next().expect("request line");
+    assert!(request_line.starts_with(&format!(
+        "{} {} ",
+        fixture["method"].as_str().expect("fixture method"),
+        fixture["path"].as_str().expect("fixture path")
+    )));
+    let actual_headers = request
+        .headers
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.to_ascii_lowercase(), value.trim().to_owned()))
+        .collect::<std::collections::HashMap<_, _>>();
+    for (name, value) in fixture["headers"].as_object().expect("fixture headers") {
+        let expected = if value == "$operation_id" {
+            operation_id.as_uuid().to_string()
+        } else {
+            value.as_str().expect("fixture header value").to_owned()
+        };
+        assert_eq!(actual_headers.get(name), Some(&expected), "header {name}");
+    }
+    assert_eq!(
+        serde_json::from_str::<Value>(&request.body).expect("converse JSON"),
+        fixture["body"]
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratatui() {
     let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).expect("valid Python export fixture");
@@ -148,6 +176,8 @@ async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratat
         .await
         .expect("bind controlled service");
     let address = listener.local_addr().expect("controlled service address");
+    let operation_id = OperationId::new();
+    let frozen_request = fixture["request"].clone();
     let refresh_response = auth_fixture["refresh"]["response"].to_string();
     let sse = fixture["sse_lines"]
         .as_array()
@@ -176,14 +206,7 @@ async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratat
 
         let (mut converse, _) = listener.accept().await.expect("accept converse");
         let request = read_request(&mut converse).await;
-        assert_eq!(request.path, "/v1/agent/converse");
-        assert!(
-            request
-                .headers
-                .to_ascii_lowercase()
-                .contains("authorization: bearer access-2")
-        );
-        assert!(request.body.contains("private dietary request"));
+        assert_frozen_converse_request(&request, &frozen_request, operation_id);
         write_response(&mut converse, "text/event-stream", &sse).await;
     });
 
@@ -227,7 +250,7 @@ async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratat
     );
     let run_turn = RunTurn::new(service, Arc::new(FixedClock), writer);
     let snapshot = OperationSnapshot {
-        operation_id: OperationId::new(),
+        operation_id,
         generation: GenerationId::INITIAL,
         config: config_store.load().await.expect("load native config"),
         session: SessionSnapshot {
@@ -239,11 +262,20 @@ async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratat
     let outcome = run_turn
         .execute(
             TurnRequest {
-                prompt: fixture["request"]["prompt"]
+                prompt: fixture["request"]["body"]["query"]
                     .as_str()
                     .expect("fixture prompt")
                     .to_owned(),
-                conversation_id: None,
+                conversation_id: fixture["request"]["body"]["conversation_id"]
+                    .as_str()
+                    .map(str::to_owned),
+                context: TurnContext {
+                    dietary: Some(fixture["request"]["body"]["dietary_context"].clone()),
+                    device: Some(fixture["request"]["body"]["device_context"].clone()),
+                    meal: Some(fixture["request"]["body"]["meal_context"].clone()),
+                    latitude: fixture["request"]["body"]["lat"].as_f64(),
+                    longitude: fixture["request"]["body"]["lng"].as_f64(),
+                },
                 refresh: RefreshPolicy::Required,
             },
             snapshot,
@@ -264,7 +296,7 @@ async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratat
     assert_eq!(rotated.version, CredentialVersion::new(2));
 
     let mut model = AppModel::default();
-    model.draft = fixture["request"]["prompt"]
+    model.draft = fixture["request"]["body"]["query"]
         .as_str()
         .expect("fixture prompt")
         .to_owned();
@@ -348,7 +380,15 @@ async fn cancellation_closes_sse_socket_and_every_owned_task_joins() {
             NetworkPolicy::DEVELOPMENT,
             HttpDeadlines::default(),
         )
-        .expect("Rustls HTTP service"),
+        .expect("Rustls HTTP service")
+        .with_cli_auth(
+            CliAuthContext::new(
+                "hellofood-cli-fixture-device",
+                SensitiveString::new("channel-access-fixture"),
+                None,
+            )
+            .expect("Python-compatible CLI auth context"),
+        ),
     );
     let run_turn = RunTurn::new(service, Arc::new(FixedClock), writer);
     let cancellation = CancellationToken::new();
@@ -360,6 +400,7 @@ async fn cancellation_closes_sse_socket_and_every_owned_task_joins() {
                 TurnRequest {
                     prompt: "cancel fixture".into(),
                     conversation_id: None,
+                    context: Default::default(),
                     refresh: RefreshPolicy::Never,
                 },
                 OperationSnapshot {
