@@ -787,7 +787,9 @@ fn qualification_windows_console_signal_child() {
         .map(PathBuf::from)
         .expect("Windows signal result path");
     let runtime = tokio::runtime::Runtime::new().expect("Windows signal runtime");
-    let mut signals = NativeSignalSource::install().expect("install Windows signal source");
+    let mut signals = runtime
+        .block_on(async { NativeSignalSource::install() })
+        .expect("install Windows signal source");
     std::fs::write(&ready_path, b"ready").expect("publish Windows signal readiness");
     let signal = runtime
         .block_on(signals.next())
