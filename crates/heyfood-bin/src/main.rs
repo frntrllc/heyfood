@@ -42,6 +42,7 @@ async fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some(Command::Register(arguments)) => register(arguments, machine).await,
+        Some(Command::Login(arguments)) => login(arguments, machine).await,
         Some(command) if is_native_one_shot(&command) => {
             one_shot(command, output_mode, machine).await
         }
@@ -53,7 +54,12 @@ async fn main() -> ExitCode {
 const fn is_native_one_shot(command: &Command) -> bool {
     matches!(
         command,
-        Command::Ask(_) | Command::Reply(_) | Command::Log(_) | Command::Item(_)
+        Command::Ask(_)
+            | Command::Reply(_)
+            | Command::Log(_)
+            | Command::Item(_)
+            | Command::Grocery { .. }
+            | Command::Health { .. }
     )
 }
 
@@ -74,7 +80,7 @@ fn pending_command(machine: bool) -> ExitCode {
     failure(
         "command_not_available",
         "This command has not been implemented in the native Rust client yet.",
-        Some("Native register, ask, reply, log, and item commands are available."),
+        Some("Run `heyfood --help` to see the active native commands."),
         machine,
         false,
     )
@@ -116,8 +122,11 @@ async fn one_shot_inner(
     let paths = NativePaths::discover().map_err(heyfood_bin::OneShotError::from)?;
     let auth_store =
         NativeAuthStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?;
+    let credential_store = Arc::new(
+        NativeSessionStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?,
+    );
     let mut auth = auth_store
-        .load()
+        .load_reconciling_authorization(credential_store.as_ref())
         .map_err(heyfood_bin::OneShotError::from)?
         .ok_or_else(|| {
             heyfood_bin::OneShotError::new(
@@ -125,6 +134,7 @@ async fn one_shot_inner(
                 "No hello.food account is connected. Run `heyfood register` first.",
             )
         })?;
+    ensure_command_scopes(&command, &auth.channel.scope)?;
 
     let (service_url, policy) = service_url().map_err(registration_to_one_shot)?;
     let now = SystemTime::now()
@@ -192,9 +202,6 @@ async fn one_shot_inner(
         }
     }
 
-    let credential_store = Arc::new(
-        NativeSessionStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?,
-    );
     let credentials = match credential_store
         .load()
         .await
@@ -292,8 +299,143 @@ fn one_shot_hint(code: &str) -> Option<&'static str> {
         "login_required" => Some("Run `heyfood register` and retry."),
         "phase2_parity_pending" | "command_not_available" => Some("Run `heyfood --help`."),
         "session_cancelled_before_dispatch" => Some("Run the command again when ready."),
+        "authorization_scope_upgrade_required" => {
+            Some("Run `heyfood login` to approve the expanded grant, then retry.")
+        }
         _ => None,
     }
+}
+
+fn ensure_command_scopes(
+    command: &Command,
+    granted_scope: &str,
+) -> Result<(), heyfood_bin::OneShotError> {
+    let required: &[&str] = match command {
+        Command::Grocery {
+            command: heyfood_cli::GroceryCommand::List | heyfood_cli::GroceryCommand::Export(_),
+        } => &["grocery:read"],
+        Command::Grocery { .. } => &["grocery:read", "grocery:write"],
+        Command::Health {
+            command: heyfood_cli::HealthCommand::Status | heyfood_cli::HealthCommand::Show,
+        } => &["health:read"],
+        Command::Health { .. } => &["integrations:manage"],
+        _ => &[],
+    };
+    let granted = granted_scope.split_whitespace().collect::<Vec<_>>();
+    let missing = required
+        .iter()
+        .copied()
+        .filter(|scope| !granted.contains(scope))
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(heyfood_bin::OneShotError::new(
+        "authorization_scope_upgrade_required",
+        format!(
+            "This command requires additional authorization ({}). Run `heyfood login` to approve it; token refresh cannot add scopes.",
+            missing.join(", ")
+        ),
+    ))
+}
+
+async fn login(arguments: heyfood_cli::LoginArgs, machine: bool) -> ExitCode {
+    let result = login_inner(arguments, machine).await;
+    match result {
+        Ok(document) => match heyfood_cli::render_registration_success(&document, machine) {
+            Ok(output) => {
+                print!("{output}");
+                ExitCode::SUCCESS
+            }
+            Err(_) => failure(
+                "internal_error",
+                "Could not render the login result.",
+                None,
+                machine,
+                false,
+            ),
+        },
+        Err(error) => failure(
+            error.code,
+            &error.public_message,
+            registration_hint(error.code),
+            machine,
+            error.outcome_uncertain,
+        ),
+    }
+}
+
+async fn login_inner(
+    arguments: heyfood_cli::LoginArgs,
+    machine: bool,
+) -> Result<RegistrationResultDocument, RegistrationError> {
+    let paths = NativePaths::discover().map_err(platform_error)?;
+    let auth_store = NativeAuthStore::open(paths.config_dir()).map_err(platform_error)?;
+    let session_store = NativeSessionStore::open(paths.config_dir()).map_err(platform_error)?;
+    let current = auth_store
+        .load_reconciling_authorization(&session_store)
+        .map_err(platform_error)?
+        .ok_or_else(|| RegistrationError {
+            code: "login_required",
+            public_message:
+                "No prior native account is available to reauthorize. Run `heyfood register` first."
+                    .into(),
+            retryable: false,
+            outcome_uncertain: false,
+        })?;
+    let (service_url, policy) = service_url()?;
+    let client = RegistrationClient::new(service_url, policy)?;
+    let authorization = client
+        .start_device_reauthorization(&current.channel.scope)
+        .await?;
+    eprintln!(
+        "Open this URL to continue: {}",
+        authorization.verification_uri
+    );
+    eprintln!("Approval code: {}", authorization.user_code);
+    io::stderr().flush().ok();
+    if !machine
+        && !arguments.no_browser
+        && let Ok(destination) = BrowserUrl::parse(&authorization.verification_uri, policy)
+    {
+        let _ = NativeBrowser.open(destination).await;
+    }
+    let cancellation = CancellationToken::new();
+    let signal_cancellation = cancellation.clone();
+    let signal = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            signal_cancellation.cancel();
+        }
+    });
+    let outcome = client
+        .complete_device_authorization(
+            authorization,
+            current.channel.device_id.clone(),
+            arguments.timeout(),
+            cancellation,
+        )
+        .await;
+    signal.abort();
+    let outcome = outcome?;
+    if outcome.credentials.session.account_id != current.session.account_id {
+        return Err(RegistrationError {
+            code: "reauthorization_account_conflict",
+            public_message: "The approved account does not match the connected account. Existing credentials were not changed.".into(),
+            retryable: false,
+            outcome_uncertain: false,
+        });
+    }
+    auth_store
+        .replace_authorization_bundle(&current, &outcome.credentials, &session_store)
+        .map_err(|_| RegistrationError {
+            code: "reauthorization_persistence_outcome_uncertain",
+            public_message: "The expanded grant completed, but both native credential stores could not be committed. Stop and reconcile native account state before retrying.".into(),
+            retryable: false,
+            outcome_uncertain: true,
+        })?;
+    Ok(RegistrationResultDocument::completed(
+        outcome.profile_status,
+    ))
 }
 
 async fn register(arguments: heyfood_cli::RegisterArgs, machine: bool) -> ExitCode {
@@ -441,6 +583,12 @@ fn registration_hint(code: &str) -> Option<&'static str> {
         "auth_contract_error" => {
             Some("Update heyfood and retry. If it continues, check hello.food service status.")
         }
+        "reauthorization_scope_unsupported" => {
+            Some("Update heyfood before attempting to replace this grant.")
+        }
+        "reauthorization_persistence_outcome_uncertain" => Some(
+            "Run one authenticated command; native state will reconcile locally before network dispatch.",
+        ),
         "session_exchange_outcome_uncertain"
         | "session_exchange_contract_uncertain"
         | "registration_persistence_outcome_uncertain" => {

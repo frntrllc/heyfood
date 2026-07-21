@@ -106,9 +106,8 @@ pub enum Command {
     /// Complete dietary onboarding; retained for parity but implemented in Phase 4.
     #[command(hide = true)]
     Onboard(LegacyArgs),
-    /// Authenticate an existing account.
-    #[command(hide = true)]
-    Login(LegacyArgs),
+    /// Authenticate or expand authorization for an existing account.
+    Login(LoginArgs),
     /// Create and connect a hello.food account.
     Register(RegisterArgs),
     /// Revoke the local/server session.
@@ -132,14 +131,12 @@ pub enum Command {
     /// Request recommendations.
     #[command(hide = true)]
     Recommend(LegacyArgs),
-    /// Grocery Phase-A commands.
-    #[command(hide = true)]
+    /// Manage the active Grocery list.
     Grocery {
         #[command(subcommand)]
         command: GroceryCommand,
     },
-    /// Provider-neutral H1/H2 health commands.
-    #[command(hide = true)]
+    /// Read health context and manage provider integrations.
     Health {
         #[command(subcommand)]
         command: HealthCommand,
@@ -253,6 +250,28 @@ pub struct RegisterArgs {
 }
 
 impl RegisterArgs {
+    #[must_use]
+    pub const fn timeout(&self) -> Duration {
+        Duration::from_secs(self.timeout)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Args)]
+pub struct LoginArgs {
+    /// Use device-code authorization. This is the native launch transport.
+    #[arg(long)]
+    pub device: bool,
+
+    /// Print the approval URL without opening a browser.
+    #[arg(long)]
+    pub no_browser: bool,
+
+    /// Maximum seconds to wait for approval.
+    #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=1800))]
+    pub timeout: u64,
+}
+
+impl LoginArgs {
     #[must_use]
     pub const fn timeout(&self) -> Duration {
         Duration::from_secs(self.timeout)

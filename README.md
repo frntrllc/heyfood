@@ -4,9 +4,10 @@ Native command-line access to personalized food and dietary guidance from
 [hello.food](https://hello.food).
 
 This repository is moving the CLI to Rust. The current public native cut is
-deliberately small: `register`, `ask`, `reply`, `log`, and `item` are the only
-active product commands. Guidance comes from the hosted hello.food service and
-is not a substitute for professional medical advice or emergency care.
+deliberately bounded: registration, hosted-agent turns, Grocery, and
+provider-neutral Health are active. Guidance comes from the hosted hello.food
+service and is not a substitute for professional medical advice or emergency
+care.
 
 ## Installation
 
@@ -27,7 +28,7 @@ startup files, or requires Python or `pipx`.
 Pin an exact release or choose another user-owned installation directory with:
 
 ```bash
-curl -fsSL https://hey.food/install.sh | HEYFOOD_VERSION=0.4.0 bash
+curl -fsSL https://hey.food/install.sh | HEYFOOD_VERSION=0.4.1 bash
 curl -fsSL https://hey.food/install.sh | \
   HEYFOOD_BIN_DIR="$HOME/bin" bash
 ```
@@ -95,6 +96,17 @@ exchange, and response-contract validation all succeed. If it reports an
 uncertain session-exchange or persistence outcome, do not start another
 registration attempt until account state is reconciled.
 
+Native `0.4.0` credentials predate the Grocery and Health scopes. If a command
+reports `authorization_scope_upgrade_required`, approve the explicit upgrade:
+
+```bash
+heyfood login
+```
+
+OAuth refresh cannot add authority. Login preserves the existing credentials
+through device approval and session exchange, verifies the complete expanded
+grant, and only then replaces both native credential stores.
+
 ## Active commands
 
 ```bash
@@ -102,6 +114,9 @@ heyfood ask "What can I eat?"
 heyfood reply --conversation-id CONVERSATION_ID "The second option"
 heyfood log "I ate the first option"
 heyfood item "pad thai at Pismo's"
+heyfood grocery list
+heyfood health status
+heyfood health show
 ```
 
 `reply` requires an explicit `--conversation-id` in this cut because native
@@ -144,7 +159,7 @@ do not retry a potentially committed operation blindly. See the
 The native Rust binary does not currently provide the legacy Python CLI's
 interactive chat/TUI, onboarding, profile, account-management, restaurant
 search, saved location, recommendation, menu, recipe, household, voice,
-Grocery, Health, context, configuration, or diagnostic workflows. Hidden
+context, configuration, or diagnostic workflows. Hidden
 compatibility topology may recognize some old command names, but those paths
 fail closed with `command_not_available`; they are not supported commands.
 

@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 const OFFICIAL_CLIENT_ID: &str = "hf_cid_heyfood_cli";
 const APP_CLIENT_ID: &str = "heyfood-cli";
-const LOGIN_SCOPES: &[&str] = &[
+pub const LOGIN_SCOPES: &[&str] = &[
     "account:link",
     "account:delete",
     "knowledge:read",
@@ -25,6 +25,10 @@ const LOGIN_SCOPES: &[&str] = &[
     "meals:read",
     "meals:write",
     "audio:transcribe",
+    "health:read",
+    "integrations:manage",
+    "grocery:read",
+    "grocery:write",
 ];
 
 #[derive(Clone, Debug)]
@@ -102,6 +106,21 @@ struct DeviceAuthorizationRequest<'a> {
     client_id: &'a str,
     scope: String,
     intent: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AuthorizationIntent {
+    CreateAccount,
+    SignIn,
+}
+
+impl AuthorizationIntent {
+    const fn wire_value(self) -> &'static str {
+        match self {
+            Self::CreateAccount => "create_account",
+            Self::SignIn => "sign_in",
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -191,6 +210,23 @@ impl RegistrationClient {
     }
 
     pub async fn capabilities(&self) -> Result<AuthCapabilities, RegistrationError> {
+        let capabilities = self.authorization_capabilities().await?;
+        capabilities
+            .validate_native_registration_launch()
+            .map_err(|message| {
+                let code = if capabilities.self_registration.status
+                    == heyfood_core::RegistrationStatus::Available
+                {
+                    "auth_contract_error"
+                } else {
+                    "registration_unavailable"
+                };
+                RegistrationError::new(code, message)
+            })?;
+        Ok(capabilities)
+    }
+
+    async fn authorization_capabilities(&self) -> Result<AuthCapabilities, RegistrationError> {
         let response = self
             .client
             .get(self.endpoint("/v1/auth/capabilities")?)
@@ -221,18 +257,6 @@ impl RegistrationClient {
                 "hello.food returned an unsupported registration capability response.",
             )
         })?;
-        capabilities
-            .validate_native_registration_launch()
-            .map_err(|message| {
-                let code = if capabilities.self_registration.status
-                    == heyfood_core::RegistrationStatus::Available
-                {
-                    "auth_contract_error"
-                } else {
-                    "registration_unavailable"
-                };
-                RegistrationError::new(code, message)
-            })?;
         Ok(capabilities)
     }
 
@@ -313,10 +337,37 @@ impl RegistrationClient {
         &self,
     ) -> Result<DeviceAuthorization, RegistrationError> {
         self.capabilities().await?;
+        self.start_device_authorization(AuthorizationIntent::CreateAccount)
+            .await
+    }
+
+    /// Start an explicit sign-in that expands an existing grant to the full
+    /// canonical native scope set. Refresh and app-session re-exchange are
+    /// intentionally not used: neither operation can widen OAuth authority.
+    pub async fn start_device_reauthorization(
+        &self,
+        current_scope: &str,
+    ) -> Result<DeviceAuthorization, RegistrationError> {
+        let capabilities = self.authorization_capabilities().await?;
+        if capabilities.schema_version != 1 || !capabilities.authorization.device_code {
+            return Err(RegistrationError::new(
+                "reauthorization_unavailable",
+                "This hello.food service does not advertise device authorization.",
+            ));
+        }
+        assert_preservable_scope(current_scope)?;
+        self.start_device_authorization(AuthorizationIntent::SignIn)
+            .await
+    }
+
+    async fn start_device_authorization(
+        &self,
+        intent: AuthorizationIntent,
+    ) -> Result<DeviceAuthorization, RegistrationError> {
         let request = DeviceAuthorizationRequest {
             client_id: OFFICIAL_CLIENT_ID,
             scope: LOGIN_SCOPES.join(" "),
-            intent: "create_account",
+            intent: intent.wire_value(),
         };
         let response = self
             .client
@@ -365,8 +416,10 @@ impl RegistrationClient {
                 "Device authorization did not return a secure verification URL.",
             ));
         }
-        url.query_pairs_mut()
-            .append_pair("intent", "create_account");
+        if intent == AuthorizationIntent::CreateAccount {
+            url.query_pairs_mut()
+                .append_pair("intent", intent.wire_value());
+        }
         Ok(DeviceAuthorization {
             verification_uri: url.into(),
             user_code: decoded.user_code,
@@ -378,6 +431,20 @@ impl RegistrationClient {
     }
 
     pub async fn complete_device_registration(
+        &self,
+        authorization: DeviceAuthorization,
+        device_id: String,
+        maximum_wait: Duration,
+        cancellation: CancellationToken,
+    ) -> Result<RegistrationOutcome, RegistrationError> {
+        self.complete_device_authorization(authorization, device_id, maximum_wait, cancellation)
+            .await
+    }
+
+    /// Complete either registration or explicit reauthorization. The returned
+    /// bundle is produced only when both the channel grant and app session
+    /// contain the complete canonical native grant.
+    pub async fn complete_device_authorization(
         &self,
         authorization: DeviceAuthorization,
         device_id: String,
@@ -467,11 +534,14 @@ impl RegistrationClient {
             }
             sleep_before_next_poll(interval, deadline, &cancellation).await?;
         };
-        if oauth.access_token.is_empty() || oauth.refresh_token.is_empty() || oauth.scope.is_empty()
+        if oauth.access_token.is_empty()
+            || oauth.refresh_token.is_empty()
+            || oauth.expires_in == 0
+            || parse_scope(&oauth.scope) != LOGIN_SCOPES
         {
             return Err(RegistrationError::uncertain(
                 "device_token_contract_uncertain",
-                "The device authorization was consumed, but its token response was incomplete. Reconcile account state before retrying registration.",
+                "The device authorization was consumed, but it did not preserve the complete requested grant. Existing credentials remain authoritative until account state is reconciled.",
             ));
         }
         // A successful device-token response consumed the grant. Finish the
@@ -480,7 +550,7 @@ impl RegistrationClient {
         let session = self
             .exchange_cli_session(&oauth.access_token, &device_id)
             .await?;
-        let session_credentials = validate_cli_session(session, &device_id)?;
+        let session_credentials = validate_cli_session(session, &device_id, LOGIN_SCOPES)?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |value| value.as_secs());
@@ -638,6 +708,7 @@ impl RegistrationClient {
 fn validate_cli_session(
     session: CliSessionResponse,
     requested_device_id: &str,
+    expected_scopes: &[&str],
 ) -> Result<SessionCredentials, RegistrationError> {
     if session.device_id != requested_device_id {
         return Err(RegistrationError::uncertain(
@@ -670,23 +741,16 @@ fn validate_cli_session(
             "The server accepted the session exchange but returned incomplete credentials. Do not retry registration until account state is reconciled.",
         ));
     }
-    if session.scopes.is_empty()
-        || session.scopes.len() > LOGIN_SCOPES.len()
-        || session.scopes.iter().any(|scope| {
-            scope.is_empty()
-                || scope.len() > 128
-                || scope.chars().any(char::is_control)
-                || !LOGIN_SCOPES.contains(&scope.as_str())
-        })
-        || session
-            .scopes
-            .iter()
-            .enumerate()
-            .any(|(index, scope)| session.scopes[..index].contains(scope))
+    if session
+        .scopes
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        != expected_scopes
     {
         return Err(RegistrationError::uncertain(
             "session_exchange_contract_uncertain",
-            "The server accepted the session exchange but returned invalid scopes. Do not retry registration until account state is reconciled.",
+            "The server accepted the session exchange but did not preserve the complete requested grant. Existing credentials remain authoritative until account state is reconciled.",
         ));
     }
     let account_id = AccountId::parse(session.user_id).map_err(|_| {
@@ -722,6 +786,27 @@ fn validate_cli_session(
     Ok(credentials)
 }
 
+fn parse_scope(scope: &str) -> Vec<&str> {
+    scope.split_whitespace().collect()
+}
+
+fn assert_preservable_scope(current_scope: &str) -> Result<(), RegistrationError> {
+    let current = parse_scope(current_scope);
+    if current.is_empty()
+        || current.iter().any(|scope| !LOGIN_SCOPES.contains(scope))
+        || current
+            .iter()
+            .enumerate()
+            .any(|(index, scope)| current[..index].contains(scope))
+    {
+        return Err(RegistrationError::new(
+            "reauthorization_scope_unsupported",
+            "The existing authorization contains a scope this client cannot safely preserve. Update heyfood or contact hello.food support before reauthorizing.",
+        ));
+    }
+    Ok(())
+}
+
 async fn successful(response: Response, code: &'static str) -> Result<Response, RegistrationError> {
     if response.status().is_success() {
         return Ok(response);
@@ -751,6 +836,125 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::Notify;
+
+    #[test]
+    fn login_scopes_cover_every_released_health_and_grocery_command() {
+        let released_routes = [
+            ("/v1/grocery/list", &["grocery:read"][..]),
+            ("/v1/grocery/items", &["grocery:read", "grocery:write"][..]),
+            (
+                "/v1/grocery/items/remove",
+                &["grocery:read", "grocery:write"][..],
+            ),
+            (
+                "/v1/grocery/items/state",
+                &["grocery:read", "grocery:write"][..],
+            ),
+            (
+                "/v1/grocery/confirm",
+                &["grocery:read", "grocery:write"][..],
+            ),
+            ("/v1/grocery/lists/{list_id}/export", &["grocery:read"][..]),
+            ("/v1/health/context", &["health:read"][..]),
+            ("/v1/integrations", &["health:read"][..]),
+            ("/v1/integrations/authorize", &["integrations:manage"][..]),
+            (
+                "/v1/integrations/{provider}/sync",
+                &["integrations:manage"][..],
+            ),
+            ("/v1/integrations/{provider}", &["integrations:manage"][..]),
+        ];
+        assert_eq!(released_routes.len(), 11);
+        for (route, required_scopes) in released_routes {
+            for required in required_scopes {
+                assert!(
+                    LOGIN_SCOPES.contains(required),
+                    "released route {route} requires unrequested scope {required}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scope_upgrade_preserves_every_existing_scope_or_fails_closed() {
+        let v040 = LOGIN_SCOPES[..LOGIN_SCOPES.len() - 4].join(" ");
+        assert!(assert_preservable_scope(&v040).is_ok());
+        assert_eq!(parse_scope(&LOGIN_SCOPES.join(" ")), LOGIN_SCOPES);
+        let error = assert_preservable_scope("account:link future:unknown").unwrap_err();
+        assert_eq!(error.code, "reauthorization_scope_unsupported");
+    }
+
+    #[tokio::test]
+    async fn reauthorization_uses_sign_in_even_when_self_registration_is_disabled() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let verification_uri = format!("{base_url}/authorize?flow=device");
+        let server = tokio::spawn(async move {
+            for path in [
+                "/v1/auth/capabilities",
+                "/v1/channel/oauth/device/authorize",
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                loop {
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    request.extend_from_slice(&buffer[..count]);
+                    if complete_http_request(&request) {
+                        break;
+                    }
+                }
+                let text = String::from_utf8(request).unwrap();
+                assert!(text.lines().next().unwrap().contains(path));
+                let body = if path == "/v1/auth/capabilities" {
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "self_registration": {"status": "disabled", "regions": [], "identity_methods": []},
+                        "authorization": {"loopback_pkce": true, "device_code": true, "identity_methods": ["sms", "email"]},
+                        "profile_readiness": true,
+                        "application_capabilities": {}
+                    })
+                } else {
+                    let request: serde_json::Value =
+                        serde_json::from_str(text.split_once("\r\n\r\n").unwrap().1).unwrap();
+                    assert_eq!(request["intent"], "sign_in");
+                    assert_eq!(request["scope"], LOGIN_SCOPES.join(" "));
+                    serde_json::json!({
+                        "device_code": "hf_dc_01234567890123456789",
+                        "user_code": "ABCD-EFGH",
+                        "verification_uri": verification_uri,
+                        "verification_uri_complete": null,
+                        "expires_in": 600,
+                        "interval": 1
+                    })
+                };
+                let body = serde_json::to_vec(&body).unwrap();
+                socket.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+                socket.write_all(&body).await.unwrap();
+            }
+        });
+        let client = RegistrationClient::new(
+            ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap(),
+            NetworkPolicy::DEVELOPMENT,
+        )
+        .unwrap();
+        let previous = LOGIN_SCOPES[..LOGIN_SCOPES.len() - 4].join(" ");
+        let authorization = client
+            .start_device_reauthorization(&previous)
+            .await
+            .unwrap();
+        assert_eq!(authorization.user_code, "ABCD-EFGH");
+        assert!(!authorization.verification_uri.contains("intent="));
+        server.await.unwrap();
+    }
 
     #[tokio::test]
     async fn device_registration_requires_both_identity_methods_and_builds_credentials() {
@@ -1018,7 +1222,8 @@ mod tests {
     fn session_validation_rejects_device_mismatch_and_empty_tokens() {
         let mut mismatch = valid_session_response();
         mismatch.device_id = "another-device".into();
-        let error = validate_cli_session(mismatch, "heyfood-test-device").unwrap_err();
+        let error =
+            validate_cli_session(mismatch, "heyfood-test-device", LOGIN_SCOPES).unwrap_err();
         assert_eq!(error.code, "session_exchange_contract_uncertain");
         assert!(error.outcome_uncertain);
 
@@ -1026,10 +1231,18 @@ mod tests {
             let mut response = valid_session_response();
             response.access_token = access_token.into();
             response.refresh_token = refresh_token.into();
-            let error = validate_cli_session(response, "heyfood-test-device").unwrap_err();
+            let error =
+                validate_cli_session(response, "heyfood-test-device", LOGIN_SCOPES).unwrap_err();
             assert_eq!(error.code, "session_exchange_contract_uncertain");
             assert!(error.outcome_uncertain);
         }
+
+        let mut incomplete = valid_session_response();
+        incomplete.scopes.pop();
+        let error =
+            validate_cli_session(incomplete, "heyfood-test-device", LOGIN_SCOPES).unwrap_err();
+        assert_eq!(error.code, "session_exchange_contract_uncertain");
+        assert!(error.outcome_uncertain);
     }
 
     fn valid_session_response() -> CliSessionResponse {
@@ -1040,7 +1253,7 @@ mod tests {
             access_token: "hf_at_test".into(),
             refresh_token: "hf_rt_test".into(),
             access_expires_at: "2999-01-01T00:00:00Z".into(),
-            scopes: vec!["profile:read".into(), "profile:write".into()],
+            scopes: LOGIN_SCOPES.iter().map(|scope| (*scope).into()).collect(),
             is_anonymous: false,
         }
     }
@@ -1170,7 +1383,11 @@ mod tests {
                         "application_capabilities": {}
                     }),
                     "/v1/channel/oauth/device/authorize" => {
-                        assert!(text.contains("create_account"));
+                        let (_, request_body) = text.split_once("\r\n\r\n").unwrap();
+                        let request: serde_json::Value =
+                            serde_json::from_str(request_body).unwrap();
+                        assert_eq!(request["intent"], "create_account");
+                        assert_eq!(request["scope"], LOGIN_SCOPES.join(" "));
                         serde_json::json!({
                             "device_code": "hf_dc_01234567890123456789",
                             "user_code": "ABCD-EFGH",
@@ -1217,7 +1434,7 @@ mod tests {
             "access_token": "hf_at_test",
             "refresh_token": "hf_rt_test",
             "access_expires_at": "2999-01-01T00:00:00Z",
-            "scopes": ["profile:read", "profile:write"],
+            "scopes": LOGIN_SCOPES,
             "is_anonymous": false
         })
     }

@@ -18,6 +18,8 @@ use heyfood_core::{AuthCredentialBundle, ChannelCredentials};
 use heyfood_core::{ClientConfig, CommitId, ConfigRevision, NetworkPolicy, ServiceUrl};
 #[cfg(not(windows))]
 use heyfood_core::{GenerationId, OperationId, SessionSnapshot};
+#[cfg(not(windows))]
+use heyfood_platform::AuthorizationSessionStore;
 #[cfg(all(not(windows), feature = "native-credentials"))]
 use heyfood_platform::KeyringCredentialStore;
 #[cfg(any(not(windows), feature = "native-credentials"))]
@@ -176,6 +178,85 @@ fn channel_refresh_transaction_is_single_flight_and_reconciliation_is_durable() 
     refresh.replace(&replacement).unwrap();
     drop(refresh);
     assert_eq!(store.load().unwrap(), Some(replacement));
+    assert!(!root.0.join("auth.reconciliation").exists());
+}
+
+#[test]
+#[cfg(not(windows))]
+fn complete_reauthorization_replaces_both_stores_only_after_full_bundle_exists() {
+    let root = TempRoot::new("authorization-replacement");
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let current = auth_bundle();
+    auth_store.initialize(&current).unwrap();
+    session_store.initialize(&current.session).unwrap();
+
+    let mut replacement = current.clone();
+    replacement.channel.access_token = SensitiveString::new("expanded-channel-access");
+    replacement.channel.refresh_token = SensitiveString::new("expanded-channel-refresh");
+    replacement.channel.scope =
+        "account:link profile:read health:read integrations:manage grocery:read grocery:write"
+            .into();
+    replacement.session = credentials(2);
+
+    auth_store
+        .replace_authorization_bundle(&current, &replacement, &session_store)
+        .unwrap();
+    assert_eq!(auth_store.load().unwrap(), Some(replacement.clone()));
+    assert_eq!(
+        block_on(session_store.load()).unwrap(),
+        Some(replacement.session)
+    );
+    assert!(!root.0.join("auth.reconciliation").exists());
+}
+
+#[test]
+#[cfg(not(windows))]
+fn partial_reauthorization_write_is_durably_blocked_for_reconciliation() {
+    struct FailingSessionStore;
+    impl AuthorizationSessionStore for FailingSessionStore {
+        fn replace_authorized_session(
+            &self,
+            _credentials: &SessionCredentials,
+        ) -> Result<(), heyfood_application::PortError> {
+            Err(heyfood_application::PortError::new(
+                "fixture_write_failure",
+                "controlled failure",
+            ))
+        }
+    }
+
+    let root = TempRoot::new("authorization-partial-write");
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let current = auth_bundle();
+    auth_store.initialize(&current).unwrap();
+    session_store.initialize(&current.session).unwrap();
+    let mut replacement = current.clone();
+    replacement.channel.scope =
+        "account:link profile:read health:read integrations:manage grocery:read grocery:write"
+            .into();
+    replacement.session = credentials(2);
+
+    let error = auth_store
+        .replace_authorization_bundle(&current, &replacement, &FailingSessionStore)
+        .unwrap_err();
+    assert_eq!(error.code, "authorization_session_replace");
+    assert!(error.outcome_uncertain);
+    assert!(root.0.join("auth.reconciliation").exists());
+    let blocked = auth_store.load().unwrap_err();
+    assert_eq!(blocked.code, "auth_reconciliation_required");
+    assert!(blocked.outcome_uncertain);
+
+    let reconciled = auth_store
+        .load_reconciling_authorization(&session_store)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reconciled, replacement);
+    assert_eq!(
+        block_on(session_store.load()).unwrap(),
+        Some(reconciled.session)
+    );
     assert!(!root.0.join("auth.reconciliation").exists());
 }
 

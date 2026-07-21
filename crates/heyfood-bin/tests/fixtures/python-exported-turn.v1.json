@@ -14,7 +14,7 @@
       "accept": "application/json",
       "authorization": "Bearer access-2",
       "content-type": "application/json",
-      "user-agent": "heyfood-cli/0.4.0",
+      "user-agent": "heyfood-cli/0.4.1",
       "x-api-key": "fixture-api-key",
       "x-app-client-id": "heyfood-cli",
       "x-device-id": "hellofood-cli-fixture-device",

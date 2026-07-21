@@ -534,6 +534,14 @@ pub struct NativeAuthRefreshGuard<'a> {
     _lock: FileLock,
 }
 
+/// Session-store half of an explicit authorization replacement. Implementors
+/// must either leave the previous credential intact or return an uncertain
+/// error; the auth-store transaction marker blocks use after either outcome.
+pub trait AuthorizationSessionStore {
+    fn replace_authorized_session(&self, credentials: &SessionCredentials)
+    -> Result<(), PortError>;
+}
+
 #[cfg(any(not(windows), feature = "native-credentials"))]
 impl NativeAuthRefreshGuard<'_> {
     pub fn load(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
@@ -608,7 +616,7 @@ impl NativeAuthStore {
         if self.reconciliation_path.exists() {
             return Err(PortError::uncertain(
                 "auth_reconciliation_required",
-                "channel credentials have an unresolved refresh outcome; stop and contact hello.food support for manual credential recovery before retrying",
+                "authorization credentials have an unresolved refresh or replacement outcome; stop and reconcile native account state before retrying",
             ));
         }
         Ok(())
@@ -675,6 +683,89 @@ impl NativeAuthStore {
             ));
         }
         AtomicFile::replace(&self.state_path, &encode_auth_bundle(bundle))
+    }
+
+    /// Atomically publish an already-complete expanded grant across the
+    /// channel bundle and rotating app-session store. The previous credentials
+    /// remain untouched while browser/device authorization and session exchange
+    /// run. A durable marker is written before the first local replacement and
+    /// is cleared only after both owner-only stores commit.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn replace_authorization_bundle(
+        &self,
+        expected: &AuthCredentialBundle,
+        replacement: &AuthCredentialBundle,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<(), PortError> {
+        replacement
+            .validate()
+            .map_err(|error| PortError::new("auth_validation", error))?;
+        if replacement.session.account_id != expected.session.account_id {
+            return Err(PortError::new(
+                "authorization_account_conflict",
+                "reauthorization cannot change accounts",
+            ));
+        }
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        self.ensure_reconciled_unlocked()?;
+        let current = self
+            .load_unlocked()?
+            .ok_or_else(|| PortError::new("auth_missing", "authorization state is missing"))?;
+        if &current != expected {
+            return Err(PortError::new(
+                "authorization_version_conflict",
+                "authorization changed while reauthorization was in progress; restart login",
+            ));
+        }
+        AtomicFile::replace(
+            &self.reconciliation_path,
+            b"authorization_replacement_outcome_uncertain\n",
+        )
+        .map_err(|error| PortError::uncertain("auth_reconciliation_write", error.to_string()))?;
+        self.replace_unlocked(replacement).map_err(|error| {
+            PortError::uncertain("authorization_bundle_replace", error.to_string())
+        })?;
+        session_store
+            .replace_authorized_session(&replacement.session)
+            .map_err(|error| {
+                PortError::uncertain("authorization_session_replace", error.to_string())
+            })?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
+    }
+
+    /// Finish or roll back an interrupted explicit authorization replacement.
+    /// The complete auth bundle is the transaction record: if its atomic write
+    /// landed, mirror its session; if it did not, mirror the still-current old
+    /// session. Refresh markers are deliberately not eligible for this repair.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn load_reconciling_authorization(
+        &self,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<Option<AuthCredentialBundle>, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if !self.reconciliation_path.exists() {
+            return self.load_unlocked();
+        }
+        let marker = read_limited(&self.reconciliation_path, 128)?;
+        if marker != b"authorization_replacement_outcome_uncertain\n" {
+            return Err(PortError::uncertain(
+                "auth_reconciliation_required",
+                "channel refresh has an unresolved outcome and cannot be repaired by authorization replacement",
+            ));
+        }
+        let bundle = self.load_unlocked()?.ok_or_else(|| {
+            PortError::uncertain(
+                "auth_reconciliation_required",
+                "authorization replacement marker exists without a credential bundle",
+            )
+        })?;
+        session_store
+            .replace_authorized_session(&bundle.session)
+            .map_err(|error| {
+                PortError::uncertain("authorization_session_reconcile", error.to_string())
+            })?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)?;
+        Ok(Some(bundle))
     }
 
     #[cfg(all(windows, feature = "native-credentials"))]
@@ -866,6 +957,28 @@ impl FileCredentialStore {
     }
 }
 
+impl AuthorizationSessionStore for FileCredentialStore {
+    fn replace_authorized_session(
+        &self,
+        credentials: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let current = self.read_unlocked()?.ok_or_else(|| {
+            PortError::new("credentials_missing", "credentials are not initialized")
+        })?;
+        if current.credentials.account_id != credentials.account_id {
+            return Err(PortError::new(
+                "credential_account_conflict",
+                "authorization replacement cannot change accounts",
+            ));
+        }
+        AtomicFile::replace(
+            &self.state_path,
+            &CredentialState::new(credentials.clone()).encode(),
+        )
+    }
+}
+
 impl CredentialPort for FileCredentialStore {
     fn load(&self) -> BoxFuture<'_, Result<Option<SessionCredentials>, PortError>> {
         Box::pin(async move {
@@ -1034,6 +1147,26 @@ impl WindowsCredentialStore {
     pub(crate) fn broker_clear(&self, commit_id: CommitId) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
         clear_reconciliation_marker(&self.reconciliation_path, commit_id)
+    }
+}
+
+#[cfg(all(windows, feature = "native-credentials"))]
+impl AuthorizationSessionStore for WindowsCredentialStore {
+    fn replace_authorized_session(
+        &self,
+        credentials: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let current = self.read_unlocked()?.ok_or_else(|| {
+            PortError::new("credentials_missing", "credentials are not initialized")
+        })?;
+        if current.credentials.account_id != credentials.account_id {
+            return Err(PortError::new(
+                "credential_account_conflict",
+                "authorization replacement cannot change accounts",
+            ));
+        }
+        self.write_unlocked(&CredentialState::new(credentials.clone()))
     }
 }
 

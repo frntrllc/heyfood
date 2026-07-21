@@ -8,6 +8,21 @@ authentication contracts are stabilized.
 
 _Nothing yet._
 
+## 0.4.1 - 2026-07-21
+
+### Fixed
+
+- Grocery and Health now dispatch through the public native binary instead of
+  falling through to the unavailable-command boundary. Grocery remains gated
+  on the deployed `grocery:v1` capability, and destructive confirmation stays
+  local and explicit.
+- Fresh native sign-ins request the `health:read`, `integrations:manage`,
+  `grocery:read`, and `grocery:write` scopes required by those commands.
+  Existing `0.4.0` grants receive an actionable scope error and can run
+  `heyfood login` to approve an expanded grant. Refresh never widens scopes;
+  the old grant remains authoritative until the full channel and app-session
+  replacement is validated and committed.
+
 ## 0.4.0 - 2026-07-19
 
 ### Added
