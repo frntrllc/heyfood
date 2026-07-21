@@ -435,7 +435,10 @@ async fn cancellation_after_post_dispatch_is_uncertain_and_never_retried() {
         assert!(request.starts_with("POST /v1/grocery/items "));
         dispatched.send(()).unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let _ = respond(&mut socket, 200, proposal_fixture("add_items")).await;
+        // The cancelled client is required to drop this socket. Do not write a
+        // synthetic response after cancellation: Linux may correctly report a
+        // broken pipe before the no-retry assertion runs.
+        drop(socket);
         assert!(
             tokio::time::timeout(Duration::from_millis(250), listener.accept())
                 .await
