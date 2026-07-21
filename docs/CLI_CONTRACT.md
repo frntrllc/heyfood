@@ -74,7 +74,7 @@ onboarding:
   "authenticated": true,
   "account_outcome": null,
   "profile_status": "missing",
-  "next_command": "heyfood onboard"
+  "next_command": "heyfood ask \"What can I eat?\""
 }
 ```
 

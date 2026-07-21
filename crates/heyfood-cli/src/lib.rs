@@ -481,11 +481,9 @@ impl RegistrationResultDocument {
             authenticated: true,
             account_outcome: None,
             profile_status,
-            next_command: if profile_status == ProfileStatus::Ready {
-                "heyfood chat".into()
-            } else {
-                "heyfood onboard".into()
-            },
+            // Classic chat and native onboarding are not implemented yet.
+            // Never send a newly connected user to a placeholder command.
+            next_command: "heyfood ask \"What can I eat?\"".into(),
         }
     }
 }
@@ -758,7 +756,7 @@ mod registration_tests {
         assert_eq!(value["authenticated"], true);
         assert_eq!(value["account_outcome"], Value::Null);
         assert_eq!(value["profile_status"], "missing");
-        assert_eq!(value["next_command"], "heyfood onboard");
+        assert_eq!(value["next_command"], "heyfood ask \"What can I eat?\"");
         assert!(!rendered.contains('\u{1b}'));
         assert!(rendered.ends_with('\n'));
     }

@@ -264,6 +264,22 @@ async fn unported_registration_topology_is_fail_closed_without_network() {
 }
 
 #[tokio::test]
+async fn reply_requires_explicit_conversation_until_native_persistence_exists() {
+    let (listener, service) = fixture_service().await;
+    let parsed = CommandLine::try_parse_from(["heyfood", "reply", "the", "second", "one"]).unwrap();
+    let error = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "conversation_required");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn one_shot_ask_collects_sse_into_exactly_one_json_value() {
     let (listener, service) = fixture_service().await;
     let server = tokio::spawn(async move {

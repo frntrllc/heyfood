@@ -2,14 +2,22 @@
 
 #![forbid(unsafe_code)]
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
+use std::sync::Arc;
 
-use heyfood_agent_runtime::{RegistrationClient, RegistrationError};
-use heyfood_application::BrowserPort;
-use heyfood_cli::{Cli, Command, RegistrationResultDocument};
-use heyfood_core::{BrowserUrl, NetworkPolicy, OperationId, ServiceUrl};
-use heyfood_platform::{NativeAuthStore, NativeBrowser, NativePaths};
+use heyfood_agent_runtime::{
+    CliAuthContext, HttpDeadlines, HttpService, RegistrationClient, RegistrationError,
+};
+use heyfood_application::{BrowserPort, CredentialPort, EnsureSession};
+use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
+use heyfood_core::{
+    BrowserUrl, NetworkPolicy, OperationId, SensitiveString, ServiceUrl, SessionSnapshot,
+    terminal_safe_text,
+};
+use heyfood_platform::{
+    FileCredentialStore, NativeAuthStore, NativeBrowser, NativeClock, NativePaths,
+};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
@@ -21,6 +29,7 @@ async fn main() -> ExitCode {
 
     let cli = Cli::parse_env();
     let machine = cli.machine_output();
+    let output_mode = cli.output_mode(io::stdout().is_terminal());
     if cli.raw {
         eprintln!("--raw is deprecated; use --json.");
     }
@@ -30,18 +39,180 @@ async fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some(Command::Register(arguments)) => register(arguments, machine).await,
-        Some(_) => {
-            // Phase 2 commands are linked for qualification but are not yet a
-            // supported-product entry path. Activation remains separately gated.
-            eprintln!("{}", heyfood_bin::QUALIFICATION_MESSAGE);
-            ExitCode::from(78)
+        Some(command) if is_native_one_shot(&command) => {
+            one_shot(command, output_mode, machine).await
         }
+        Some(_) => pending_command(machine),
+        None => bare(machine),
+    }
+}
+
+const fn is_native_one_shot(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Ask(_)
+            | Command::Reply(_)
+            | Command::Log(_)
+            | Command::Item(_)
+            | Command::Grocery { .. }
+            | Command::Health { .. }
+    )
+}
+
+fn bare(machine: bool) -> ExitCode {
+    if machine {
+        println!(
+            "{{\"ok\":true,\"message\":\"Run an explicit native command.\",\"next_command\":\"heyfood register\"}}"
+        );
+    } else {
+        println!(
+            "hello.food for your terminal.\n\nStart: heyfood register\nAsk:   heyfood ask \"What can I eat?\"\nHelp:  heyfood --help"
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+fn pending_command(machine: bool) -> ExitCode {
+    failure(
+        "command_not_available",
+        "This command has not been implemented in the native Rust client yet.",
+        Some(
+            "Run `heyfood --help`; native register, ask, reply, log, item, Grocery, and Health commands are available.",
+        ),
+        machine,
+        false,
+    )
+}
+
+async fn one_shot(command: Command, output_mode: OutputMode, machine: bool) -> ExitCode {
+    match one_shot_inner(command, output_mode).await {
+        Ok(output) => {
+            print!("{output}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => failure(
+            error.code,
+            &terminal_safe_text(&error.message),
+            one_shot_hint(error.code),
+            machine,
+            error.outcome_uncertain,
+        ),
+    }
+}
+
+async fn one_shot_inner(
+    command: Command,
+    output_mode: OutputMode,
+) -> Result<String, heyfood_bin::OneShotError> {
+    let paths = NativePaths::discover().map_err(heyfood_bin::OneShotError::from)?;
+    let auth_store =
+        NativeAuthStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?;
+    let auth = auth_store
+        .load()
+        .map_err(heyfood_bin::OneShotError::from)?
+        .ok_or_else(|| {
+            heyfood_bin::OneShotError::new(
+                "login_required",
+                "No hello.food account is connected. Run `heyfood register` first.",
+            )
+        })?;
+
+    let credential_store = Arc::new(
+        FileCredentialStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?,
+    );
+    let credentials = match credential_store
+        .load()
+        .await
+        .map_err(heyfood_bin::OneShotError::from)?
+    {
+        Some(credentials) => credentials,
         None => {
-            // Bare interactive TUI remains a later phase. Native one-shot
-            // commands are dispatched above instead of being held behind it.
-            eprintln!("{}", heyfood_bin::QUALIFICATION_MESSAGE);
-            ExitCode::from(78)
+            // Registration predates the rotating-session store. Seed it once
+            // from the complete authorization bundle, then rotate only here.
+            credential_store
+                .initialize(&auth.session)
+                .map_err(heyfood_bin::OneShotError::from)?;
+            auth.session.clone()
         }
+    };
+    let reconciliation_required = credential_store
+        .reconciliation_required()
+        .map_err(heyfood_bin::OneShotError::from)?;
+
+    let (service_url, policy) = service_url()
+        .map_err(|error| heyfood_bin::OneShotError::new(error.code, error.public_message))?;
+    let api_key = std::env::var("HEYFOOD_API_KEY")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(SensitiveString::new);
+    let cli_auth = CliAuthContext::new(
+        auth.channel.device_id.clone(),
+        auth.channel.access_token.clone(),
+        api_key,
+    )
+    .map_err(heyfood_bin::OneShotError::from)?;
+    let service = Arc::new(
+        HttpService::new(service_url, policy, HttpDeadlines::default())
+            .map_err(heyfood_bin::OneShotError::from)?
+            .with_cli_auth(cli_auth),
+    );
+    let ensure_session =
+        EnsureSession::new(service.clone(), credential_store, Arc::new(NativeClock));
+    let stdin = read_command_stdin(&command)?;
+    let cancellation = CancellationToken::new();
+    let signal_cancellation = cancellation.clone();
+    let signal = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            signal_cancellation.cancel();
+        }
+    });
+    let result = heyfood_bin::execute_qualified_one_shot(
+        service.as_ref(),
+        &ensure_session,
+        SessionSnapshot {
+            credentials,
+            reconciliation_required,
+        },
+        output_mode,
+        command,
+        &stdin,
+        cancellation,
+    )
+    .await;
+    signal.abort();
+    result
+}
+
+fn read_command_stdin(command: &Command) -> Result<Vec<u8>, heyfood_bin::OneShotError> {
+    let should_read = match command {
+        Command::Ask(arguments)
+        | Command::Reply(arguments)
+        | Command::Log(arguments)
+        | Command::Item(arguments) => arguments.text.is_empty(),
+        Command::Grocery {
+            command: heyfood_cli::GroceryCommand::Confirm(_),
+        } => true,
+        _ => false,
+    };
+    if !should_read || io::stdin().is_terminal() {
+        return Ok(Vec::new());
+    }
+    let mut bytes = Vec::new();
+    io::stdin()
+        .take((heyfood_bin::MAX_CONFIRMATION_STDIN_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| {
+            heyfood_bin::OneShotError::new("stdin_read", "could not read standard input")
+        })?;
+    Ok(bytes)
+}
+
+fn one_shot_hint(code: &str) -> Option<&'static str> {
+    match code {
+        "login_required" => Some("Run `heyfood register` and retry."),
+        "phase2_parity_pending" | "command_not_available" => Some("Run `heyfood --help`."),
+        "session_cancelled_before_dispatch" => Some("Run the command again when ready."),
+        _ => None,
     }
 }
 
@@ -80,29 +251,13 @@ async fn register_inner(
     if auth_store.load().map_err(platform_error)?.is_some() {
         return Err(RegistrationError {
             code: "account_already_connected",
-            public_message:
-                "A hello.food account is already connected. Use status or log out first.".into(),
+            public_message: "A hello.food account is already connected.".into(),
             retryable: false,
             outcome_uncertain: false,
         });
     }
 
-    let api_url =
-        std::env::var("HEYFOOD_API_URL").unwrap_or_else(|_| "https://api.hello.food".into());
-    let policy = if api_url.starts_with("http://localhost")
-        || api_url.starts_with("http://127.0.0.1")
-        || api_url.starts_with("http://[::1]")
-    {
-        NetworkPolicy::DEVELOPMENT
-    } else {
-        NetworkPolicy::HTTPS_ONLY
-    };
-    let service_url = ServiceUrl::parse(&api_url, policy).map_err(|_| RegistrationError {
-        code: "service_url",
-        public_message: "HEYFOOD_API_URL is not a valid secure hello.food service URL.".into(),
-        retryable: false,
-        outcome_uncertain: false,
-    })?;
+    let (service_url, policy) = service_url()?;
     let client = RegistrationClient::new(service_url, policy)?;
     let authorization = client.start_device_registration().await?;
 
@@ -144,12 +299,40 @@ async fn register_inner(
         retryable: false,
         outcome_uncertain: true,
     })?;
+    FileCredentialStore::open(paths.config_dir())
+        .and_then(|store| store.initialize(&outcome.credentials.session))
+        .map_err(|_| RegistrationError {
+            code: "registration_persistence_outcome_uncertain",
+            public_message: "The account was connected, but its rotating session could not be initialized. Do not retry registration until account state is reconciled.".into(),
+            retryable: false,
+            outcome_uncertain: true,
+        })?;
     if arguments.no_onboard && outcome.profile_status != heyfood_core::ProfileStatus::Ready {
         eprintln!("Dietary onboarding was deferred. Your account remains connected.");
     }
     Ok(RegistrationResultDocument::completed(
         outcome.profile_status,
     ))
+}
+
+fn service_url() -> Result<(ServiceUrl, NetworkPolicy), RegistrationError> {
+    let api_url =
+        std::env::var("HEYFOOD_API_URL").unwrap_or_else(|_| "https://api.hello.food".into());
+    let policy = if api_url.starts_with("http://localhost")
+        || api_url.starts_with("http://127.0.0.1")
+        || api_url.starts_with("http://[::1]")
+    {
+        NetworkPolicy::DEVELOPMENT
+    } else {
+        NetworkPolicy::HTTPS_ONLY
+    };
+    let service_url = ServiceUrl::parse(&api_url, policy).map_err(|_| RegistrationError {
+        code: "service_url",
+        public_message: "HEYFOOD_API_URL is not a valid secure hello.food service URL.".into(),
+        retryable: false,
+        outcome_uncertain: false,
+    })?;
+    Ok((service_url, policy))
 }
 
 fn platform_error(error: heyfood_application::PortError) -> RegistrationError {
@@ -171,9 +354,7 @@ fn platform_error(error: heyfood_application::PortError) -> RegistrationError {
 fn registration_hint(code: &str) -> Option<&'static str> {
     match code {
         "registration_unavailable" => Some("Registration is not enabled on this service yet."),
-        "account_already_connected" => {
-            Some("Native logout/status arrives in the next command slice.")
-        }
+        "account_already_connected" => Some("Run `heyfood ask \"What can I eat?\"`."),
         "cancelled" | "authorization_expired" => {
             Some("Run `heyfood register` to start a fresh request.")
         }

@@ -22,7 +22,6 @@ use heyfood_tui::{Effect, ExitReason, RuntimeEvent, TuiError};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-pub const QUALIFICATION_MESSAGE: &str = "The native interactive session cannot start in this build. Use a native one-shot command such as `heyfood register`; run `heyfood -h` for available commands.";
 pub const QUALIFIED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 pub const MAX_CONFIRMATION_STDIN_BYTES: usize = 1024 * 1024;
 
@@ -62,9 +61,8 @@ impl From<heyfood_application::PortError> for OneShotError {
     }
 }
 
-/// Phase 2 qualification executor over explicit, already-validated native
-/// state. The public binary does not yet construct this executor, so repository
-/// integration cannot activate or cut over the Rust client.
+/// Phase 2 executor over explicit, already-validated native state. The public
+/// binary constructs this for the native command families it advertises.
 pub struct OneShotExecutor<'a> {
     service: &'a HttpService,
     credentials: &'a SessionCredentials,
@@ -125,10 +123,18 @@ impl<'a> OneShotExecutor<'a> {
         cancellation: CancellationToken,
     ) -> Result<String, OneShotError> {
         match command {
-            Command::Ask(arguments)
-            | Command::Reply(arguments)
-            | Command::Log(arguments)
-            | Command::Item(arguments) => self.execute_agent(arguments, stdin, cancellation).await,
+            Command::Ask(arguments) | Command::Log(arguments) | Command::Item(arguments) => {
+                self.execute_agent(arguments, stdin, cancellation).await
+            }
+            Command::Reply(arguments) => {
+                if arguments.conversation_id.is_none() {
+                    return Err(OneShotError::new(
+                        "conversation_required",
+                        "native reply requires --conversation-id until conversation persistence is implemented",
+                    ));
+                }
+                self.execute_agent(arguments, stdin, cancellation).await
+            }
             Command::Grocery { command } => {
                 self.execute_grocery(command, stdin, cancellation).await
             }
@@ -516,7 +522,7 @@ impl<'a> OneShotExecutor<'a> {
 }
 
 impl OneShotError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -730,14 +736,6 @@ mod tests {
 
         route_effect(&mut driver, &sender, Effect::CancelTurn { operation_id: 7 }).unwrap();
         assert_eq!(driver.cancelled, [7]);
-    }
-
-    #[test]
-    fn qualification_message_is_fail_closed_and_does_not_advertise_a_spike_flag() {
-        assert!(QUALIFICATION_MESSAGE.contains("cannot start"));
-        assert!(QUALIFICATION_MESSAGE.contains("heyfood register"));
-        assert!(!QUALIFICATION_MESSAGE.contains("Python"));
-        assert!(!QUALIFICATION_MESSAGE.contains("--"));
     }
 
     #[test]

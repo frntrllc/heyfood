@@ -91,10 +91,8 @@ heyfood --help
 
 ## Get started
 
-Run the bare command after installation. In a terminal, it takes a new user
-from account creation through optional dietary onboarding and into a useful
-session. In a pipe or other non-interactive environment it only prints concise
-next steps and never opens a browser.
+Run the bare command after installation for concise, runnable native next
+steps. It never opens a browser or claims to start the not-yet-implemented TUI.
 
 ```bash
 heyfood
@@ -108,10 +106,9 @@ heyfood register
 
 Registration preflights the production capability contract before opening the
 browser. Identity verification, current Terms and Privacy acceptance, account
-resolution, and capability consent stay on `auth.hello.food`. If the first
-dietary profile is missing, interactive registration offers the existing
-guided onboarding immediately. Choose `type`, `voice`, or `later`; voice is an
-optional path and never blocks typed onboarding. Use `--no-onboard` to defer it.
+resolution, and capability consent stay on `auth.hello.food`. The native result
+reports profile readiness; native dietary onboarding remains a separate,
+unimplemented command slice and is not advertised as a runnable next step.
 
 For a headless machine, use the one-decision short-code flow. JSON mode never
 opens a browser or starts onboarding; progress and the approval URL use stderr,
@@ -124,77 +121,26 @@ heyfood register --device --no-browser --json
 SMS registration is US-only. Email remains available without a phone. The auth
 page advertises only identity methods that are genuinely enabled.
 
-## Sign in to an existing account
-
-```bash
-heyfood login
-heyfood status
-heyfood doctor
-```
-
-Login opens a browser for explicit hello.food consent and stores the resulting
-CLI credentials securely. On an SSH/headless machine, use the short-code flow:
-
-```bash
-heyfood login --device --no-browser
-```
-
-Manage AI-channel links owned by the same signed-in hello.food account:
-
-```bash
-heyfood channels list
-heyfood channels list --json
-heyfood channels disconnect LINK_ID
-heyfood channels disconnect LINK_ID --yes --no-input --json
-```
-
-Disconnecting a link revokes its server-side channel tokens. The CLI lists
-link metadata only and never stores or prints another channel's credentials.
-
-Account deletion is a separate, deliberately destructive flow. It requires a
-fresh CLI session with `account:delete`, explicit local acknowledgement, and a
-second identity confirmation in the browser. Local credentials are removed
-only after the service returns a validated post-commit receipt:
-
-```bash
-heyfood account delete
-```
-
-Open the printed URL on any browser, confirm that the displayed code matches
-the terminal, review the same capability list, and approve. The remote machine
-never needs a reachable loopback callback.
+The hosted authorization page resolves both new and existing accounts. Native
+`login`, `status`, `logout`, and account-management commands are still explicit
+follow-up work; invoking one returns `command_not_available` instead of implying
+that it ran.
 
 ## Common workflows
 
 ```bash
 heyfood ask "What can I order at this restaurant?"
-heyfood reply "Log the first option"
-heyfood chat
+heyfood reply --conversation-id CONVERSATION_ID "Log the first option"
+heyfood log "I ate the first option"
+heyfood item "pad thai at Pismo's"
 
-heyfood item "pad thai" --restaurant "Pismo's"
-heyfood search --near "Fresno, CA" --query "thai"
-heyfood menu 1
-heyfood recommend 1 --query "low-FODMAP dinner"
-
-heyfood recipes search "Mediterranean dinner" --max-ready-time 35
-heyfood recipes save 1
-heyfood recipes saved
-
-heyfood onboard
-heyfood profile
-heyfood members list
-heyfood household list
-heyfood household use everyone
-heyfood daily today
-
-heyfood conversation list
-heyfood conversation resume "What about the second option?"
+heyfood grocery list
+heyfood health status
 ```
 
-Agent and direct commands render confirmations, safety verdicts,
-restaurant/menu summaries, recipe ideas, and meal nutrition as terminal-native
-output. The product uses “generally safer,” “risky,” “avoid,” and “unable to
-evaluate” rather than presenting food as absolutely safe.
+These native one-shot commands use the hosted agent/runtime. The product uses
+“generally safer,” “risky,” “avoid,” and “unable to evaluate” rather than
+presenting food as absolutely safe.
 
 See the [command grammar](docs/COMMAND_GRAMMAR.md) for positional inputs,
 selectors, compatibility aliases, and the rationale for optional search flags.
