@@ -1,81 +1,74 @@
 # Releasing heyfood
 
-Only FRNTR, LLC maintainers authorized for the protected `pypi` GitHub
-environment may publish heyfood.
+heyfood is released only as an attested native Rust executable through GitHub
+Releases. The legacy Python/PyPI channel is not a release authority.
 
 ## Release prerequisites
 
-1. All P0 gates in the execution plan are satisfied on the default branch.
-2. CI passes for every supported Python version on macOS and Linux.
-3. The version in `src/heyfood_cli/__init__.py` is the intended release version.
-4. `CHANGELOG.md` moves relevant entries from `Unreleased` into a dated version
-   section and includes breaking-change migration notes.
-5. Wheel and sdist metadata, contents, installation, help, and uninstall smoke
-   tests pass from a clean environment.
-6. The release commit contains no secrets, private data, or proprietary service
+1. The release commit is the current `main` commit and all required native CI
+   checks pass.
+2. The workspace and `heyfood-bin` versions are the intended release version,
+   and `CHANGELOG.md` describes that version.
+3. `install.sh`, its macOS/Linux contract suite, `install.sh.sha256`, and every
+   release packaging verifier pass.
+4. The hosted `https://hey.food/install.sh` and `install.sh.sha256` mirror the
+   reviewed release-commit bytes before the tag is pushed.
+5. The release commit contains no secrets, private data, or proprietary service
    content.
-7. `install.sh` passes its macOS/Linux behavior suite, its SHA-256 file matches,
-   and the website mirror is byte-for-byte identical before deployment.
 
 ## Publication contract
 
-- Tags use `vMAJOR.MINOR.PATCH` and must resolve to the reviewed release commit.
-- The release workflow is the only supported publishing path.
-- Publication uses PyPI trusted publishing through the protected GitHub
-  environment. Do not create or store a long-lived PyPI API token.
-- The workflow builds artifacts once, verifies them, and publishes those exact
-  bytes. It must not rebuild between verification and publication.
-- GitHub release notes and the changelog must describe the same version.
-- The hosted installer is a convenience bootstrap into this PyPI channel, not
-  a second release authority. It may install only `heyfood-cli` from public
-  PyPI and must retain the no-sudo, no-shell-edit contract.
-
-Before the first release, register a pending trusted publisher on PyPI with
-these exact values:
-
-- PyPI project: `heyfood-cli`
-- GitHub owner: `frntrllc`
-- GitHub repository: `heyfood`
-- Workflow: `release.yml`
-- Environment: `pypi`
-
-The protected `pypi` environment must require maintainer approval. The publish
-job alone receives `id-token: write`; builds and tests have read-only repository
-permissions. Workflow actions are pinned to reviewed commit SHAs, and the PyPI
-publisher emits attestations for the verified wheel and sdist.
+- Tags are annotated `vMAJOR.MINOR.PATCH` tags and must resolve to the exact
+  current `main` commit.
+- `.github/workflows/release.yml` is the only supported publication path.
+- The workflow builds on each target architecture instead of cross-compiling:
+  `aarch64-apple-darwin`, `x86_64-apple-darwin`,
+  `aarch64-unknown-linux-gnu`, and `x86_64-unknown-linux-gnu`.
+- Each archive is named `heyfood-vVERSION-TARGET.tar.gz` and contains one bare
+  regular executable named `heyfood`.
+- `SHA256SUMS` covers exactly those four archives. The complete five-file set
+  is verified before publication.
+- GitHub artifact attestations cover each archive and `SHA256SUMS`. The public
+  smoke verifies those attestations before executing a downloaded binary.
+- Release assets are immutable. The workflow refuses to publish when a GitHub
+  Release already exists for the tag and never rebuilds an existing version.
+- The hosted installer accepts an exact `HEYFOOD_VERSION`, independently
+  verifies the selected archive, and installs only to an owner-controlled
+  directory without `sudo` or shell-profile edits.
 
 ## Release procedure
 
-1. Merge the reviewed version/changelog commit after CI succeeds.
-2. Create an annotated `vMAJOR.MINOR.PATCH` tag at that exact commit and push
-   only the tag.
-3. Review the protected `pypi` deployment request and confirm its commit and
-   artifact checks before approval.
-4. Verify the PyPI project page, attestations, GitHub release attachments, and
-   a fresh `pipx install heyfood-cli` on macOS and Linux.
-5. After the separately reviewed website deployment succeeds, verify that
-   `https://hey.food/install.sh` returns the repository bytes and defensive
-   headers, then run it with temporary `HOME`, `PIPX_HOME`, and `PIPX_BIN_DIR`
-   and confirm install, repeat execution, version, help, and uninstall.
-6. If any verification fails, follow the fix-forward policy below; do not
-   rebuild or replace the published version.
+1. Merge the reviewed version/changelog and distribution changes. Wait for all
+   required checks on `main` to pass.
+2. Deploy the separately reviewed `install.sh` and `install.sh.sha256` bytes to
+   `https://hey.food/`, then compare both hosted responses byte-for-byte with
+   the current `main` checkout.
+3. Create an annotated `vMAJOR.MINOR.PATCH` tag at that exact `main` commit and
+   push only the tag.
+4. The release workflow validates the tag, runs the native workspace tests,
+   builds and smokes all four target executables, creates deterministic
+   archives, generates `SHA256SUMS`, attests all five files, and creates the
+   GitHub Release.
+5. The reusable post-release workflow downloads the public files on all four
+   target runners, verifies checksums, archive policy, and GitHub attestations,
+   then runs both the public executable smoke and the hosted installer contract.
+6. Confirm the GitHub Release and all four public smoke jobs are green. A
+   release is not complete while any target or hosted-installer smoke is red.
 
 ## Failed or unsafe releases
 
-PyPI filenames and released versions are immutable. Never delete and silently
-replace an artifact under the same version.
+Do not replace, delete, or silently rebuild published assets under the same
+version.
 
-- If publication fails before PyPI accepts any artifact, correct the workflow
-  and rerun only when the exact version remains unused.
-- If any artifact was accepted, treat the version as consumed. Fix forward with
-  a new patch version.
-- If a published version is broken or unsafe, yank it on PyPI, publish a GitHub
-  advisory or release warning as appropriate, and ship a corrected version.
-- If credentials or provenance are suspect, stop publication, preserve logs,
+- If failure occurs before a GitHub Release is created, correct the issue and
+  rerun only if no assets for that version were published.
+- If the GitHub Release exists, treat the version as consumed. Mark it clearly
+  as broken or prerelease as appropriate and fix forward with a new patch
+  version.
+- If provenance or credentials are suspect, stop publication, preserve logs,
   rotate affected credentials, revoke sessions where applicable, and follow
   the security policy.
 
 The hosted hello.food service has its own deployment and rollback process.
-Rolling back the service does not change or replace an already published CLI
-artifact; compatibility must be restored additively or through a new CLI
-release.
+Rolling back the service does not change or replace a published CLI artifact;
+compatibility must be restored additively or through a new CLI release.

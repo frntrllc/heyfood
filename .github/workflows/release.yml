@@ -1,4 +1,4 @@
-name: Release
+name: Release native CLI
 
 on:
   push:
@@ -8,80 +8,147 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: native-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build:
-    name: Build exact release artifacts
-    runs-on: ubuntu-latest
+  validate:
+    name: Validate exact release commit
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.13"
-          cache: pip
-      - name: Match tag to the single-sourced package version
+      - name: Match annotated tag, workspace version, and main
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([abrc][0-9]+)?$ ]]
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           test "$(git cat-file -t "$GITHUB_REF_NAME")" = "tag"
           git fetch --no-tags origin main:refs/remotes/origin/main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-          VERSION=$(PYTHONPATH=src python -c 'from heyfood_cli import __version__; print(__version__)')
-          test "$GITHUB_REF_NAME" = "v$VERSION"
-      - name: Test and build once
+          tag_commit=$(git rev-parse "${GITHUB_REF_NAME}^{commit}")
+          test "$tag_commit" = "$(git rev-parse HEAD)"
+          test "$tag_commit" = "$(git rev-parse origin/main)"
+          version=$(cargo metadata --locked --no-deps --format-version 1 |
+            jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
+          test "$GITHUB_REF_NAME" = "v$version"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "A GitHub Release already exists for $GITHUB_REF_NAME; release assets are immutable." >&2
+            exit 1
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+      - name: Test the exact native workspace
+        run: cargo test --workspace --locked --all-targets
+
+  build:
+    name: Build / ${{ matrix.target }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify the pinned native toolchain
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]" "build>=1.2,<2" "twine>=6,<7" "pipx>=1.7,<2"
-          python -m pytest -q
-          python -m build
-      - name: Verify metadata, contents, and clean installation
+          set -euo pipefail
+          rustup toolchain install 1.94.0 --profile minimal --no-self-update
+          rustup target add "$TARGET" --toolchain 1.94.0
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "$TARGET"
+      - name: Build and smoke the release executable
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          export PIPX_BIN_DIR="$RUNNER_TEMP/pipx-bin"
-          python -m twine check dist/*
-          python scripts/verify_artifacts.py dist
-          python -m pipx install --python "$(command -v python)" dist/*.whl
-          VERSION=${GITHUB_REF_NAME#v}
-          python scripts/smoke_installed_cli.py "$PIPX_BIN_DIR/heyfood" "$VERSION"
-          python -m pipx uninstall heyfood-cli
-      - name: Upload the verified bytes
+          set -euo pipefail
+          export CARGO_INCREMENTAL=0
+          export SOURCE_DATE_EPOCH
+          SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
+          cargo build --locked --release --package heyfood-bin --target "$TARGET"
+          binary="target/$TARGET/release/heyfood"
+          test "$($binary --version)" = "heyfood $VERSION"
+          "$binary" --help >/dev/null
+          "$binary" register --help >/dev/null
+      - name: Install deterministic archive tooling
+        if: runner.os == 'macOS'
+        run: brew install gnu-tar
+      - name: Package the exact executable
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: scripts/release/package.sh "target/$TARGET/release/heyfood" "$VERSION" "$TARGET" dist
+      - name: Upload the native archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: python-distributions
-          path: dist/
+          name: native-${{ matrix.target }}
+          path: dist/heyfood-v${{ needs.validate.outputs.version }}-${{ matrix.target }}.tar.gz
           if-no-files-found: error
           retention-days: 14
 
   publish:
-    name: Publish through PyPI trusted publishing
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/project/heyfood-cli/
+    name: Attest and create GitHub Release
+    needs: [validate, build]
+    runs-on: ubuntu-22.04
     permissions:
-      contents: read
+      attestations: write
+      contents: write
       id-token: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: python-distributions
+          pattern: native-*
           path: dist
-      - name: Publish exact verified artifacts with attestations
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
-
-  github-release:
-    name: Create GitHub release
-    needs: publish
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+          merge-multiple: true
+      - name: Generate and verify the complete release set
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          scripts/release/checksums.sh dist "$VERSION"
+          scripts/release/verify-assets.sh dist "$VERSION"
+      - name: Sign release assets with GitHub artifact attestations
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          name: python-distributions
-          path: dist
-      - name: Attach published artifacts to the matching tag
+          subject-path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+      - name: Create the immutable GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          gh release create "v$VERSION" dist/*.tar.gz dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "heyfood v$VERSION" \
+            --generate-notes
+
+  post-release-smoke:
+    name: Public native artifact smoke
+    needs: [validate, publish]
+    permissions:
+      attestations: read
+      contents: read
+    uses: ./.github/workflows/post-release-smoke.yml
+    with:
+      version: ${{ needs.validate.outputs.version }}
