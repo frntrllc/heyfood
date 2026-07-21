@@ -1,6 +1,6 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v9 — Rust Phase 0 approved; Grocery 096 merged but Production activation remains gated at revision 095
+**Status:** Draft v10 — Rust Phase 0 approved; Grocery 096 is migrated but Production activation remains contained pending exact deploy and canaries
 **Baseline:** final unpublished Python `0.4.0` candidate at `73494a57468dac83b4904ce6c390e36926f5c6fe`; the last public Python release remains `0.3.2`
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`
@@ -99,20 +99,34 @@ PostgreSQL 18, hermetic, auth, dependency-audit, and aggregate CI gate, plus
 migration tests, and 39 PostgreSQL 16 tests (48 PostgreSQL-18-only cases
 skipped).
 
-The merge is not yet a deployed Rust import authority. Production remains at
-revision `095`, has no Grocery tables, and has no runtime-attestation row. A
-read-only first-attestation dry run at companion SHA
-`1a4a05b5799ba3050027171c1f98a2999c24df5c` proved zero aggregate issues, but
-the separately authorized write consumed its one-attempt authorization and
-then failed closed because the isolated migration runner had no attestation
-signing key. That authorization must never be retried. The Production sequence
-must first correct the execution-surface/key contract, obtain a fresh exact
-manifest and owner authorization, write and verify the first signed
-attestation, then apply `095 -> 096`, deploy the exact Grocery merge, and pass
-live capability, scope, confirmation, conflict, and non-mutation canaries. Only
-the final deployed merge SHA, regenerated fixture aggregate digest,
-`capabilities.grocery = "v1"`, and those live canaries may become authoritative
-Rust contract provenance.
+The merge is not yet a deployed Rust import authority. Production advanced
+transactionally from `095` to sole revision `096` at the reviewed backend line,
+and read-only postflight inventory proves all five Grocery tables, 51 columns,
+34 PostgreSQL 18 NOT NULL constraints, 16 semantic constraints, 14 indexes,
+one initializer function, one account-write trigger, and one active list for
+each of 273 existing accounts. The first failed attestation authorization
+remains permanently consumed. A second independently authorized legacy-
+controller attempt wrote the singleton successfully at revision `095`; the
+temporary attestation key was then removed from the migration runner. PR #112,
+squash-merged as `f7b0eebca879840995226ede9ea715dc8702313a`, now prevents this
+failure class by preflighting the signer, verifier configuration, schema, and
+Production API process class before work or authorization consumption. It also
+requires any future first-attestation dry run/apply to derive from the exact
+suspended API deploy rather than the migration runner.
+
+Activation remains fail-closed. Although Render reports the isolated runner at
+`f7b0eebca879840995226ede9ea715dc8702313a`, a postflight job proved Python had
+loaded a stale cached pre-096 schema-verifier artifact; direct read-only catalog
+inventory nevertheless matches every expected Grocery aggregate above. Both
+the API and migration runner are currently suspended, so Render rejected the
+required cache-cleared rebuild. The remaining Production sequence is: resume
+under containment, rebuild/deploy exact `f7b0eebc...` with a clear cache,
+require the code-owned revision-096 verifier to return true, deploy the full
+fleet at that exact SHA, refresh/verify the existing signed attestation, and
+pass live capability, scope, confirmation, conflict, and non-mutation canaries
+before public Grocery activation. Only that deployed SHA, regenerated fixture
+aggregate digest, `capabilities.grocery = "v1"`, and the live canaries may
+become authoritative Rust contract provenance.
 
 This dependency does not stop generic Rust work. Auth, state, terminal
 supervision, cancellation, rendering, generic voice, provisional semantic
