@@ -52,6 +52,7 @@ async fn register(arguments: heyfood_cli::RegisterArgs, machine: bool) -> ExitCo
                 "Could not render the registration result.",
                 None,
                 machine,
+                false,
             ),
         },
         Err(error) => failure(
@@ -59,6 +60,7 @@ async fn register(arguments: heyfood_cli::RegisterArgs, machine: bool) -> ExitCo
             &error.public_message,
             registration_hint(error.code),
             machine,
+            error.outcome_uncertain,
         ),
     }
 }
@@ -75,6 +77,7 @@ async fn register_inner(
             public_message:
                 "A hello.food account is already connected. Use status or log out first.".into(),
             retryable: false,
+            outcome_uncertain: false,
         });
     }
 
@@ -92,6 +95,7 @@ async fn register_inner(
         code: "service_url",
         public_message: "HEYFOOD_API_URL is not a valid secure hello.food service URL.".into(),
         retryable: false,
+        outcome_uncertain: false,
     })?;
     let client = RegistrationClient::new(service_url, policy)?;
     let authorization = client.start_device_registration().await?;
@@ -128,9 +132,15 @@ async fn register_inner(
 
     // Persist only after OAuth, app-session exchange, and contract validation
     // all succeed. The owner-only atomic store retains both grants together.
-    auth_store
-        .initialize(&outcome.credentials)
-        .map_err(platform_error)?;
+    auth_store.initialize(&outcome.credentials).map_err(|_| RegistrationError {
+        code: "registration_persistence_outcome_uncertain",
+        public_message: "The account was connected, but native credentials could not be saved. Do not retry registration until account state is reconciled.".into(),
+        retryable: false,
+        outcome_uncertain: true,
+    })?;
+    if arguments.no_onboard && outcome.profile_status != heyfood_core::ProfileStatus::Ready {
+        eprintln!("Dietary onboarding was deferred. Your account remains connected.");
+    }
     Ok(RegistrationResultDocument::completed(
         outcome.profile_status,
     ))
@@ -148,6 +158,7 @@ fn platform_error(error: heyfood_application::PortError) -> RegistrationError {
         code: error.code,
         public_message: public_message.into(),
         retryable: error.outcome_uncertain,
+        outcome_uncertain: error.outcome_uncertain,
     }
 }
 
@@ -163,13 +174,27 @@ fn registration_hint(code: &str) -> Option<&'static str> {
         "auth_contract_error" => {
             Some("Update heyfood and retry. If it continues, check hello.food service status.")
         }
+        "session_exchange_outcome_uncertain"
+        | "session_exchange_contract_uncertain"
+        | "registration_persistence_outcome_uncertain" => {
+            Some("Do not start another registration attempt until account state is reconciled.")
+        }
         _ => None,
     }
 }
 
-fn failure(kind: &str, message: &str, hint: Option<&str>, machine: bool) -> ExitCode {
-    let output = heyfood_cli::render_error(kind, message, hint, machine)
-        .unwrap_or_else(|_| "heyfood error: Could not render the requested operation.\n".into());
+fn failure(
+    kind: &str,
+    message: &str,
+    hint: Option<&str>,
+    machine: bool,
+    outcome_uncertain: bool,
+) -> ExitCode {
+    let output =
+        heyfood_cli::render_error_with_outcome(kind, message, hint, machine, outcome_uncertain)
+            .unwrap_or_else(|_| {
+                "heyfood error: Could not render the requested operation.\n".into()
+            });
     if machine {
         print!("{output}");
     } else {

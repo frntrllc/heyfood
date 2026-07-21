@@ -54,6 +54,10 @@ pub struct RegistrationError {
     pub code: &'static str,
     pub public_message: String,
     pub retryable: bool,
+    /// The server may have accepted a security mutation even though the client
+    /// could not observe or persist its terminal response. Automated retry is
+    /// unsafe until account state is reconciled.
+    pub outcome_uncertain: bool,
 }
 
 impl RegistrationError {
@@ -62,6 +66,7 @@ impl RegistrationError {
             code,
             public_message: public_message.into(),
             retryable: false,
+            outcome_uncertain: false,
         }
     }
 
@@ -70,6 +75,16 @@ impl RegistrationError {
             code,
             public_message: public_message.into(),
             retryable: true,
+            outcome_uncertain: false,
+        }
+    }
+
+    fn uncertain(code: &'static str, public_message: impl Into<String>) -> Self {
+        Self {
+            code,
+            public_message: public_message.into(),
+            retryable: false,
+            outcome_uncertain: true,
         }
     }
 }
@@ -126,9 +141,14 @@ struct CliSessionRequest<'a> {
 #[derive(Deserialize)]
 struct CliSessionResponse {
     user_id: String,
+    device_id: String,
+    session_id: String,
     access_token: String,
     refresh_token: String,
     access_expires_at: String,
+    scopes: Vec<String>,
+    #[serde(default)]
+    is_anonymous: bool,
 }
 
 #[derive(Deserialize)]
@@ -384,28 +404,20 @@ impl RegistrationClient {
                 "Device token exchange returned incomplete credentials.",
             ));
         }
+        // Cancellation remains clean only before the session POST dispatch.
+        // Once dispatched, the backend may commit a trusted device and session;
+        // we therefore wait for the client's finite request deadline instead of
+        // dropping the response future on Ctrl-C.
+        if cancellation.is_cancelled() {
+            return Err(RegistrationError::new(
+                "cancelled",
+                "Registration canceled before session exchange. Nothing was saved.",
+            ));
+        }
         let session = self
-            .exchange_cli_session(&oauth.access_token, &device_id, &cancellation)
+            .exchange_cli_session(&oauth.access_token, &device_id)
             .await?;
-        let account_id = AccountId::parse(session.user_id).map_err(|_| {
-            RegistrationError::new(
-                "auth_contract_error",
-                "CLI session exchange returned an invalid account.",
-            )
-        })?;
-        let session_credentials = SessionCredentials::from_rfc3339_expiry(
-            account_id,
-            SensitiveString::new(session.access_token),
-            SensitiveString::new(session.refresh_token),
-            CredentialVersion::new(1),
-            &session.access_expires_at,
-        )
-        .map_err(|_| {
-            RegistrationError::new(
-                "auth_contract_error",
-                "CLI session exchange returned an invalid expiry.",
-            )
-        })?;
+        let session_credentials = validate_cli_session(session, &device_id)?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |value| value.as_secs());
@@ -462,9 +474,8 @@ impl RegistrationClient {
         &self,
         channel_access_token: &str,
         device_id: &str,
-        cancellation: &CancellationToken,
     ) -> Result<CliSessionResponse, RegistrationError> {
-        let send = self
+        let response = self
             .client
             .post(self.endpoint("/v1/channel/oauth/cli/session")?)
             .header("Accept", "application/json")
@@ -473,19 +484,28 @@ impl RegistrationClient {
             .header("X-Request-ID", OperationId::new().as_uuid().to_string())
             .bearer_auth(channel_access_token)
             .json(&CliSessionRequest { device_id })
-            .send();
-        let response = tokio::select! {
-            () = cancellation.cancelled() => return Err(RegistrationError::new("cancelled", "Registration canceled before session exchange completed.")),
-            result = send => result.map_err(|_| RegistrationError::retryable("session_exchange", "Could not establish the native hello.food session."))?,
-        };
+            .send()
+            .await
+            .map_err(|_| {
+                RegistrationError::uncertain(
+                    "session_exchange_outcome_uncertain",
+                    "The server may have connected the account, but the native client could not observe the session response. Do not retry registration until account state is reconciled.",
+                )
+            })?;
+        if response.status().is_server_error() {
+            return Err(RegistrationError::uncertain(
+                "session_exchange_outcome_uncertain",
+                "The server may have connected the account before returning an error. Do not retry registration until account state is reconciled.",
+            ));
+        }
         successful(response, "session_exchange")
             .await?
             .json()
             .await
             .map_err(|_| {
-                RegistrationError::new(
-                    "auth_contract_error",
-                    "CLI session exchange returned an unsupported response.",
+                RegistrationError::uncertain(
+                    "session_exchange_contract_uncertain",
+                    "The server accepted the session exchange, but returned an unsupported response. Do not retry registration until account state is reconciled.",
                 )
             })
     }
@@ -552,6 +572,93 @@ impl RegistrationClient {
     }
 }
 
+fn validate_cli_session(
+    session: CliSessionResponse,
+    requested_device_id: &str,
+) -> Result<SessionCredentials, RegistrationError> {
+    if session.device_id != requested_device_id {
+        return Err(RegistrationError::uncertain(
+            "session_exchange_contract_uncertain",
+            "The server accepted the session exchange but returned a different device identifier. Do not retry registration until account state is reconciled.",
+        ));
+    }
+    if session.is_anonymous {
+        return Err(RegistrationError::uncertain(
+            "session_exchange_contract_uncertain",
+            "The server accepted the session exchange but returned an anonymous session. Do not retry registration until account state is reconciled.",
+        ));
+    }
+    if session.session_id.is_empty()
+        || session.session_id.len() > 256
+        || session.session_id.chars().any(char::is_control)
+    {
+        return Err(RegistrationError::uncertain(
+            "session_exchange_contract_uncertain",
+            "The server accepted the session exchange but returned an invalid session identifier. Do not retry registration until account state is reconciled.",
+        ));
+    }
+    if session.access_token.is_empty()
+        || session.refresh_token.is_empty()
+        || session.access_token.len() > 16 * 1024
+        || session.refresh_token.len() > 16 * 1024
+    {
+        return Err(RegistrationError::uncertain(
+            "session_exchange_contract_uncertain",
+            "The server accepted the session exchange but returned incomplete credentials. Do not retry registration until account state is reconciled.",
+        ));
+    }
+    if session.scopes.is_empty()
+        || session.scopes.len() > LOGIN_SCOPES.len()
+        || session.scopes.iter().any(|scope| {
+            scope.is_empty()
+                || scope.len() > 128
+                || scope.chars().any(char::is_control)
+                || !LOGIN_SCOPES.contains(&scope.as_str())
+        })
+        || session
+            .scopes
+            .iter()
+            .enumerate()
+            .any(|(index, scope)| session.scopes[..index].contains(scope))
+    {
+        return Err(RegistrationError::uncertain(
+            "session_exchange_contract_uncertain",
+            "The server accepted the session exchange but returned invalid scopes. Do not retry registration until account state is reconciled.",
+        ));
+    }
+    let account_id = AccountId::parse(session.user_id).map_err(|_| {
+        RegistrationError::uncertain(
+            "session_exchange_contract_uncertain",
+            "The server accepted the session exchange but returned an invalid account. Do not retry registration until account state is reconciled.",
+        )
+    })?;
+    let credentials = SessionCredentials::from_rfc3339_expiry(
+        account_id,
+        SensitiveString::new(session.access_token),
+        SensitiveString::new(session.refresh_token),
+        CredentialVersion::new(1),
+        &session.access_expires_at,
+    )
+    .map_err(|_| {
+        RegistrationError::uncertain(
+            "session_exchange_contract_uncertain",
+            "The server accepted the session exchange but returned an invalid expiry. Do not retry registration until account state is reconciled.",
+        )
+    })?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |value| {
+            i64::try_from(value.as_secs()).unwrap_or(i64::MAX)
+        });
+    if credentials.expires_at_unix() <= now {
+        return Err(RegistrationError::uncertain(
+            "session_exchange_contract_uncertain",
+            "The server accepted the session exchange but returned an expired session. Do not retry registration until account state is reconciled.",
+        ));
+    }
+    Ok(credentials)
+}
+
 async fn successful(response: Response, code: &'static str) -> Result<Response, RegistrationError> {
     if response.status().is_success() {
         return Ok(response);
@@ -577,8 +684,10 @@ async fn sleep_before_next_poll(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio::sync::Notify;
 
     #[tokio::test]
     async fn device_registration_requires_both_identity_methods_and_builds_credentials() {
@@ -608,13 +717,119 @@ mod tests {
         server.await.unwrap();
     }
 
+    #[tokio::test]
+    async fn cancellation_after_session_dispatch_waits_for_response_and_completes() {
+        let session_seen = Arc::new(Notify::new());
+        let release_session = Arc::new(Notify::new());
+        let (base_url, server) = fixture_server_with(SessionBehavior::Wait {
+            seen: session_seen.clone(),
+            release: release_session.clone(),
+        })
+        .await;
+        let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let client = RegistrationClient::new(service_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let authorization = client.start_device_registration().await.unwrap();
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+        let task = tokio::spawn(async move {
+            client
+                .complete_device_registration(
+                    authorization,
+                    "heyfood-test-device".into(),
+                    Duration::from_secs(5),
+                    task_cancellation,
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), session_seen.notified())
+            .await
+            .unwrap();
+        cancellation.cancel();
+        release_session.notify_one();
+        let result = task.await.unwrap().unwrap();
+        assert_eq!(result.profile_status, ProfileStatus::Ready);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn eof_after_session_dispatch_is_explicitly_outcome_uncertain() {
+        let (base_url, server) = fixture_server_with(SessionBehavior::Eof).await;
+        let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let client = RegistrationClient::new(service_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let authorization = client.start_device_registration().await.unwrap();
+        let error = client
+            .complete_device_registration(
+                authorization,
+                "heyfood-test-device".into(),
+                Duration::from_secs(5),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "session_exchange_outcome_uncertain");
+        assert!(error.outcome_uncertain);
+        assert!(!error.retryable);
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn session_validation_rejects_device_mismatch_and_empty_tokens() {
+        let mut mismatch = valid_session_response();
+        mismatch.device_id = "another-device".into();
+        let error = validate_cli_session(mismatch, "heyfood-test-device").unwrap_err();
+        assert_eq!(error.code, "session_exchange_contract_uncertain");
+        assert!(error.outcome_uncertain);
+
+        for (access_token, refresh_token) in [("", "refresh"), ("access", "")] {
+            let mut response = valid_session_response();
+            response.access_token = access_token.into();
+            response.refresh_token = refresh_token.into();
+            let error = validate_cli_session(response, "heyfood-test-device").unwrap_err();
+            assert_eq!(error.code, "session_exchange_contract_uncertain");
+            assert!(error.outcome_uncertain);
+        }
+    }
+
+    fn valid_session_response() -> CliSessionResponse {
+        CliSessionResponse {
+            user_id: "user-test".into(),
+            device_id: "heyfood-test-device".into(),
+            session_id: "session-test".into(),
+            access_token: "hf_at_test".into(),
+            refresh_token: "hf_rt_test".into(),
+            access_expires_at: "2999-01-01T00:00:00Z".into(),
+            scopes: vec!["profile:read".into(), "profile:write".into()],
+            is_anonymous: false,
+        }
+    }
+
+    enum SessionBehavior {
+        Immediate,
+        Wait {
+            seen: Arc<Notify>,
+            release: Arc<Notify>,
+        },
+        Eof,
+    }
+
     async fn fixture_server() -> (String, tokio::task::JoinHandle<()>) {
+        fixture_server_with(SessionBehavior::Immediate).await
+    }
+
+    async fn fixture_server_with(
+        behavior: SessionBehavior,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let base_url = format!("http://{address}");
         let verification_uri = format!("{base_url}/authorize?flow=device");
         let server = tokio::spawn(async move {
-            for _ in 0..5 {
+            let request_count = if matches!(&behavior, SessionBehavior::Eof) {
+                4
+            } else {
+                5
+            };
+            for _ in 0..request_count {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = Vec::new();
                 let mut buffer = [0_u8; 4096];
@@ -636,6 +851,19 @@ mod tests {
                     .split_whitespace()
                     .nth(1)
                     .unwrap();
+                if path == "/v1/channel/oauth/cli/session" {
+                    match &behavior {
+                        SessionBehavior::Immediate => {}
+                        SessionBehavior::Wait { seen, release } => {
+                            seen.notify_one();
+                            release.notified().await;
+                        }
+                        SessionBehavior::Eof => {
+                            socket.shutdown().await.unwrap();
+                            continue;
+                        }
+                    }
+                }
                 let body = match path {
                     "/v1/auth/capabilities" => serde_json::json!({
                         "schema_version": 1,
@@ -669,12 +897,7 @@ mod tests {
                         "expires_in": 3600,
                         "scope": LOGIN_SCOPES.join(" ")
                     }),
-                    "/v1/channel/oauth/cli/session" => serde_json::json!({
-                        "user_id": "user-test",
-                        "access_token": "hf_at_test",
-                        "refresh_token": "hf_rt_test",
-                        "access_expires_at": "2999-01-01T00:00:00Z"
-                    }),
+                    "/v1/channel/oauth/cli/session" => valid_session_response_json(),
                     "/v1/channel/tools/profile/readiness" => serde_json::json!({
                         "schema_version": 1,
                         "status": "ready",
@@ -695,6 +918,19 @@ mod tests {
             }
         });
         (base_url, server)
+    }
+
+    fn valid_session_response_json() -> serde_json::Value {
+        serde_json::json!({
+            "user_id": "user-test",
+            "device_id": "heyfood-test-device",
+            "session_id": "session-test",
+            "access_token": "hf_at_test",
+            "refresh_token": "hf_rt_test",
+            "access_expires_at": "2999-01-01T00:00:00Z",
+            "scopes": ["profile:read", "profile:write"],
+            "is_anonymous": false
+        })
     }
 
     fn complete_http_request(bytes: &[u8]) -> bool {

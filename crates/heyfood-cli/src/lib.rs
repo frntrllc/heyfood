@@ -133,6 +133,8 @@ struct ErrorBody<'a> {
     message: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     hint: Option<&'a str>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    outcome_uncertain: bool,
 }
 
 pub fn render_registration_success(
@@ -155,6 +157,16 @@ pub fn render_error(
     hint: Option<&str>,
     machine: bool,
 ) -> Result<String, serde_json::Error> {
+    render_error_with_outcome(kind, message, hint, machine, false)
+}
+
+pub fn render_error_with_outcome(
+    kind: &str,
+    message: &str,
+    hint: Option<&str>,
+    machine: bool,
+    outcome_uncertain: bool,
+) -> Result<String, serde_json::Error> {
     if machine {
         let envelope = ErrorEnvelope {
             ok: false,
@@ -162,6 +174,7 @@ pub fn render_error(
                 kind,
                 message,
                 hint,
+                outcome_uncertain,
             },
         };
         serde_json::to_string(&envelope).map(|value| format!("{value}\n"))
@@ -225,5 +238,20 @@ mod tests {
         assert_eq!(value["ok"], false);
         assert_eq!(value["error"]["type"], "registration_unavailable");
         assert_eq!(value["error"]["hint"], "Try again later.");
+        assert!(value["error"].get("outcome_uncertain").is_none());
+    }
+
+    #[test]
+    fn uncertain_error_is_explicit_for_machine_consumers() {
+        let rendered = render_error_with_outcome(
+            "session_exchange_outcome_uncertain",
+            "Reconcile before retrying.",
+            None,
+            true,
+            true,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(value["error"]["outcome_uncertain"], true);
     }
 }
