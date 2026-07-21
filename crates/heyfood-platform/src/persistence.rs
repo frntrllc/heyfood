@@ -27,6 +27,10 @@ static WINDOWS_HARDENED_PATHS: OnceLock<Mutex<std::collections::HashSet<(PathBuf
     OnceLock::new();
 const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(10);
+#[cfg(any(windows, test))]
+const CREDENTIAL_WRITE_VERIFY_TIMEOUT: Duration = Duration::from_secs(1);
+#[cfg(any(windows, test))]
+const CREDENTIAL_WRITE_VERIFY_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_CONFIG_APPLIED_COMMITS: usize = 128;
 const MAX_CONVERSATION_POINTER_BYTES: usize = 4 * 1_024;
 const MAX_LOCAL_RECORD_KIND_BYTES: usize = 64;
@@ -1983,7 +1987,13 @@ impl WindowsCredentialStore {
         }
         self.entry()?
             .set_secret(&document)
-            .map_err(|error| keyring_error("credential_manager_write", error))
+            .map_err(|error| keyring_error("credential_manager_write", error))?;
+        verify_credential_write_visibility(
+            state,
+            CREDENTIAL_WRITE_VERIFY_TIMEOUT,
+            || self.read_unlocked(),
+            thread::sleep,
+        )
     }
 
     pub(crate) fn broker_load(&self) -> Result<Option<SessionCredentials>, PortError> {
@@ -2623,6 +2633,38 @@ impl CredentialState {
         .map_err(|error| PortError::new("credential_expiry", error))?;
         Ok(Self { credentials })
     }
+}
+
+#[cfg(any(windows, test))]
+fn verify_credential_write_visibility(
+    expected: &CredentialState,
+    timeout: Duration,
+    mut read: impl FnMut() -> Result<Option<CredentialState>, PortError>,
+    mut wait: impl FnMut(Duration),
+) -> Result<(), PortError> {
+    let started = Instant::now();
+    loop {
+        match read() {
+            Ok(Some(actual)) if actual.credentials == expected.credentials => return Ok(()),
+            Ok(Some(actual))
+                if actual.credentials.account_id == expected.credentials.account_id
+                    && actual.credentials.version < expected.credentials.version => {}
+            Ok(None) => {}
+            Ok(Some(_)) | Err(_) => return Err(credential_write_verify_error()),
+        }
+        if started.elapsed() >= timeout {
+            return Err(credential_write_verify_error());
+        }
+        wait(CREDENTIAL_WRITE_VERIFY_INTERVAL);
+    }
+}
+
+#[cfg(any(windows, test))]
+fn credential_write_verify_error() -> PortError {
+    PortError::uncertain(
+        "credential_manager_write_verify",
+        "Windows Credential Manager did not return the exact credential state after a successful write",
+    )
 }
 
 fn encode_auth_bundle(bundle: &AuthCredentialBundle) -> Vec<u8> {
@@ -3426,6 +3468,103 @@ fn sync_directory(path: &Path) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn sync_directory(_path: &Path) -> std::io::Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod credential_write_verification_tests {
+    use std::collections::VecDeque;
+
+    use super::*;
+
+    fn state(account: &str, version: u64, token_suffix: &str) -> CredentialState {
+        CredentialState::new(
+            SessionCredentials::from_unix_expiry(
+                AccountId::parse(account).unwrap(),
+                SensitiveString::new(format!("access-{token_suffix}")),
+                SensitiveString::new(format!("refresh-{token_suffix}")),
+                CredentialVersion::new(version),
+                4_102_444_800,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn assert_uncertain_verify_error(error: PortError) {
+        assert_eq!(error.code, "credential_manager_write_verify");
+        assert!(error.outcome_uncertain);
+    }
+
+    #[test]
+    fn delayed_credential_visibility_retries_only_missing_and_older_state() {
+        let expected = state("account-one", 3, "expected");
+        let mut observations = VecDeque::from([
+            None,
+            Some(state("account-one", 2, "older")),
+            Some(state("account-one", 3, "expected")),
+        ]);
+        let mut waits = 0;
+
+        verify_credential_write_visibility(
+            &expected,
+            CREDENTIAL_WRITE_VERIFY_TIMEOUT,
+            || Ok(observations.pop_front().unwrap()),
+            |_| waits += 1,
+        )
+        .unwrap();
+
+        assert_eq!(waits, 2);
+        assert!(observations.is_empty());
+    }
+
+    #[test]
+    fn delayed_credential_visibility_times_out_as_uncertain_without_rewriting() {
+        let expected = state("account-one", 3, "expected");
+        let mut reads = 0;
+        let error = verify_credential_write_visibility(
+            &expected,
+            Duration::ZERO,
+            || {
+                reads += 1;
+                Ok(Some(state("account-one", 2, "older")))
+            },
+            |_| panic!("a zero-duration deadline must not wait"),
+        )
+        .unwrap_err();
+
+        assert_eq!(reads, 1);
+        assert_uncertain_verify_error(error);
+    }
+
+    #[test]
+    fn delayed_credential_visibility_preserves_true_conflicts_and_read_errors() {
+        let expected = state("account-one", 3, "expected");
+        for conflict in [
+            state("account-one", 4, "newer"),
+            state("account-one", 3, "different"),
+            state("account-two", 2, "other-account"),
+        ] {
+            let mut observations =
+                VecDeque::from([Some(state("account-one", 2, "older")), Some(conflict)]);
+            let error = verify_credential_write_visibility(
+                &expected,
+                CREDENTIAL_WRITE_VERIFY_TIMEOUT,
+                || Ok(observations.pop_front().unwrap()),
+                |_| {},
+            )
+            .unwrap_err();
+            assert_eq!(observations.len(), 0);
+            assert_uncertain_verify_error(error);
+        }
+
+        let error = verify_credential_write_visibility(
+            &expected,
+            CREDENTIAL_WRITE_VERIFY_TIMEOUT,
+            || Err(PortError::new("credential_schema", "malformed fixture")),
+            |_| panic!("read errors must fail immediately"),
+        )
+        .unwrap_err();
+        assert_uncertain_verify_error(error);
+    }
 }
 
 #[cfg(all(test, windows))]
