@@ -30,6 +30,12 @@ async fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some(Command::Register(arguments)) => register(arguments, machine).await,
+        Some(_) => {
+            // Phase 2 commands are linked for qualification but are not yet a
+            // supported-product entry path. Activation remains separately gated.
+            eprintln!("{}", heyfood_bin::QUALIFICATION_MESSAGE);
+            ExitCode::from(78)
+        }
         None => {
             // Bare interactive TUI remains a later phase. Native one-shot
             // commands are dispatched above instead of being held behind it.

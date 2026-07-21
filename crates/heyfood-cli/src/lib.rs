@@ -726,3 +726,70 @@ pub enum ProposalInput {
     Stdin,
     File(PathBuf),
 }
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+
+    #[test]
+    fn register_accepts_machine_flags_after_the_command() {
+        let cli =
+            Cli::try_parse_from(["heyfood", "register", "--device", "--no-browser", "--json"])
+                .unwrap();
+        assert!(cli.machine_output());
+        assert!(matches!(
+            cli.command,
+            Some(Command::Register(RegisterArgs {
+                device: true,
+                no_browser: true,
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn registration_json_is_one_ansi_free_value() {
+        let rendered = render_registration_success(
+            &RegistrationResultDocument::completed(ProfileStatus::Missing),
+            true,
+        )
+        .unwrap();
+        let value: Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(value["authenticated"], true);
+        assert_eq!(value["account_outcome"], Value::Null);
+        assert_eq!(value["profile_status"], "missing");
+        assert_eq!(value["next_command"], "heyfood onboard");
+        assert!(!rendered.contains('\u{1b}'));
+        assert!(rendered.ends_with('\n'));
+    }
+
+    #[test]
+    fn error_json_matches_the_public_envelope() {
+        let rendered = render_error(
+            "registration_unavailable",
+            "Registration is disabled.",
+            Some("Try again later."),
+            true,
+        )
+        .unwrap();
+        let value: Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["type"], "registration_unavailable");
+        assert_eq!(value["error"]["hint"], "Try again later.");
+        assert!(value["error"].get("outcome_uncertain").is_none());
+    }
+
+    #[test]
+    fn uncertain_error_is_explicit_for_machine_consumers() {
+        let rendered = render_error_with_outcome(
+            "session_exchange_outcome_uncertain",
+            "Reconcile before retrying.",
+            None,
+            true,
+            true,
+        )
+        .unwrap();
+        let value: Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(value["error"]["outcome_uncertain"], true);
+    }
+}
