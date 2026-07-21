@@ -1,6 +1,6 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v8 — Production 095 checkpoint complete; reconstructed Grocery 096 is in final qualification
+**Status:** Draft v9 — Rust Phase 0 approved; Grocery 096 merged but Production activation remains gated at revision 095
 **Baseline:** final unpublished Python `0.4.0` candidate at `73494a57468dac83b4904ce6c390e36926f5c6fe`; the last public Python release remains `0.3.2`
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`
@@ -72,34 +72,47 @@ profile inventory gate rejects the observed legacy storage state; this is an
 operational recovery dependency, not permission to weaken TLS, relax the boot
 gate, or let Rust encode a draft server contract.
 
-Grocery Phase A has been reconstructed from the superseded PR #90 onto current
-`main` as PR #107. Its exact pushed final-qualification head is
-`8cd7baf2c683bf5ad286af32c26d96bdb1742f86`: migration `096` descends from
+Grocery Phase A was reconstructed from the superseded PR #90 onto current
+`main` as PR #107 and squash-merged as
+`70d79bf6d859ff7d45738663b52a9a1074e62738` from the exact reviewed source head
+`8cd7baf2c683bf5ad286af32c26d96bdb1742f86`. Migration `096` descends from
 `095`; authoritative household snapshots and exact list/version preconditions
 are frozen into confirmations; Grocery writes require both read and write
 scopes; public provenance is manual-only; active-list reads are non-mutating;
 and existing/future accounts receive one active list at the account-write
 boundary. After PRs #109 and #110 advanced the strict health/security
-attestation contract on `main`, this head was rebased onto those changes and
-made `096` an explicit attestation/action-manifest head. Revision `096` retains
-every health envelope gate required at `095` and adds an exact Grocery catalog
-proof rather than bypassing readiness at the additive head. That proof binds
-all 51 Grocery columns, 16 semantic constraints, 14 indexes, the exact
+attestation contract on `main`, the source head was rebased onto those changes
+and made `096` an explicit attestation/action-manifest head. Revision `096`
+retains every health envelope gate required at `095` and adds an exact Grocery
+catalog proof rather than bypassing readiness at the additive head. That proof
+binds all 51 Grocery columns, 16 semantic constraints, 14 indexes, the exact
 account-initializer function/trigger semantics, and PostgreSQL 18's exact set
 of 34 validated and enforced Grocery NOT NULL constraints. Rollback-isolated
 catalog-tamper tests cover PostgreSQL 16 and 18 without relaxing the shared
-`pg_attribute.attnotnull` contract. The confirmation contract now
-accepts the advertised 25-item/four-member prepared payload while rejecting an
-oversize proposal before emitting an unusable token, and the language-neutral
-scope contract exposes the full `required_scopes`/`missing_scopes` denial
-shape. Local qualification includes 5,396 hermetic tests passed (17 skipped),
-87 PostgreSQL 18 data-protection migration tests passed, and 39 PostgreSQL 16
-tests passed with 48 PostgreSQL-18-only cases skipped. This head is not a Rust
-import authority until hosted PostgreSQL, hermetic, auth/audit,
-aggregate CI, and independent review all pass. Only its final reviewed merge
-SHA, regenerated fixture aggregate digest, deployed
-`capabilities.grocery = "v1"`, and live scope/behavior canaries may become Rust
-contract provenance.
+`pg_attribute.attnotnull` contract. The confirmation contract accepts the
+advertised 25-item/four-member prepared payload while rejecting an oversize
+proposal before emitting an unusable token, and the language-neutral scope
+contract exposes the full `required_scopes`/`missing_scopes` denial shape.
+Qualification passed independent review, every required hosted PostgreSQL 16,
+PostgreSQL 18, hermetic, auth, dependency-audit, and aggregate CI gate, plus
+5,396 local hermetic tests (17 skipped), 87 PostgreSQL 18 data-protection
+migration tests, and 39 PostgreSQL 16 tests (48 PostgreSQL-18-only cases
+skipped).
+
+The merge is not yet a deployed Rust import authority. Production remains at
+revision `095`, has no Grocery tables, and has no runtime-attestation row. A
+read-only first-attestation dry run at companion SHA
+`1a4a05b5799ba3050027171c1f98a2999c24df5c` proved zero aggregate issues, but
+the separately authorized write consumed its one-attempt authorization and
+then failed closed because the isolated migration runner had no attestation
+signing key. That authorization must never be retried. The Production sequence
+must first correct the execution-surface/key contract, obtain a fresh exact
+manifest and owner authorization, write and verify the first signed
+attestation, then apply `095 -> 096`, deploy the exact Grocery merge, and pass
+live capability, scope, confirmation, conflict, and non-mutation canaries. Only
+the final deployed merge SHA, regenerated fixture aggregate digest,
+`capabilities.grocery = "v1"`, and those live canaries may become authoritative
+Rust contract provenance.
 
 This dependency does not stop generic Rust work. Auth, state, terminal
 supervision, cancellation, rendering, generic voice, provisional semantic
