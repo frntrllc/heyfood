@@ -192,13 +192,13 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Lint the target-native credential backend
-        run: cargo clippy --locked --package heyfood-platform --all-targets --features native-credentials -- -D warnings
       - name: Install the Linux Secret Service fixture
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes dbus-x11 gnome-keyring
+          sudo apt-get install --yes dbus-x11 gnome-keyring libdbus-1-dev pkg-config
+      - name: Lint the target-native credential backend
+        run: cargo clippy --locked --package heyfood-platform --all-targets --features native-credentials -- -D warnings
       - name: Test the macOS and Windows native credential backend
         if: runner.os != 'Linux'
         run: cargo test --locked --package heyfood-platform --features native-credentials
