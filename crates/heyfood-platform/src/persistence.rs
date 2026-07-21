@@ -2,7 +2,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(windows)]
 use std::sync::{Mutex, OnceLock};
@@ -1305,26 +1305,45 @@ fn make_private_staging_file(path: &Path) -> std::io::Result<()> {
     let owner = format!("*{sid}");
     let output = Command::new("icacls")
         .arg(path)
-        .args(["/setowner", owner.as_str(), "/inheritance:r", "/grant:r"])
-        .arg(grant)
-        .stdout(Stdio::null())
+        .arg("/setowner")
+        .arg(owner)
         .output()?;
+    windows_acl_command_result("set-owner", path, &sid, output)?;
+
+    let output = Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(grant)
+        .output()?;
+    windows_acl_command_result("install", path, &sid, output)
+}
+
+#[cfg(windows)]
+fn windows_acl_command_result(
+    operation: &'static str,
+    path: &Path,
+    sid: &str,
+    output: Output,
+) -> std::io::Result<()> {
     if output.status.success() {
-        Ok(())
-    } else {
-        let path = path.to_string_lossy();
-        let detail = String::from_utf8_lossy(&output.stderr)
-            .replace(path.as_ref(), "[PATH]")
-            .replace(&sid, "[SID]");
-        let detail: String = heyfood_core::terminal_safe_text(&detail)
-            .chars()
-            .take(512)
-            .collect();
-        Err(std::io::Error::other(format!(
-            "Windows fresh-file ACL install failed with status {}: {detail}",
-            output.status
-        )))
+        return Ok(());
     }
+    let path = path.to_string_lossy();
+    let detail = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .replace(path.as_ref(), "[PATH]")
+    .replace(sid, "[SID]");
+    let detail: String = heyfood_core::terminal_safe_text(&detail)
+        .chars()
+        .take(512)
+        .collect();
+    Err(std::io::Error::other(format!(
+        "Windows fresh-file ACL {operation} failed with status {}: {detail}",
+        output.status
+    )))
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -1644,8 +1663,12 @@ mod windows_acl_tests {
         for sid in ["S-1-1-0", "S-1-5-32-545"] {
             add_explicit_grant(&replacement, sid, false);
         }
-        AtomicFile::replace(&replacement, b"private replacement")
-            .expect("atomically replace broadly accessible file");
+        AtomicFile::replace(&replacement, b"private replacement").unwrap_or_else(|error| {
+            panic!(
+                "atomically replace broadly accessible file: {}: {}",
+                error.code, error.message
+            )
+        });
         run_windows_acl_script(
             "verify",
             WINDOWS_VERIFY_OWNER_ONLY_ACL,
