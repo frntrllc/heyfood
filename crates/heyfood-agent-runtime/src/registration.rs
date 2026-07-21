@@ -390,7 +390,6 @@ impl RegistrationClient {
             tokio::time::Instant::now() + maximum_wait.max(Duration::from_secs(1)),
         );
         let mut interval = authorization.interval;
-        let mut consecutive_transport_failures = 0_u8;
         let mut consecutive_server_failures = 0_u8;
         let oauth = loop {
             if tokio::time::Instant::now() >= deadline {
@@ -399,26 +398,17 @@ impl RegistrationClient {
                     "The approval window ended. Run heyfood register again.",
                 ));
             }
-            let response = tokio::select! {
-                () = cancellation.cancelled() => return Err(RegistrationError::new("cancelled", "Registration canceled. Nothing was saved.")),
-                result = self.poll_device_token(&authorization) => result,
-            };
-            let response = match response {
-                Ok(response) => {
-                    consecutive_transport_failures = 0;
-                    response
-                }
-                Err(error) if error.retryable => {
-                    consecutive_transport_failures =
-                        consecutive_transport_failures.saturating_add(1);
-                    if consecutive_transport_failures >= 10 {
-                        return Err(error);
-                    }
-                    sleep_before_next_poll(interval, deadline, &cancellation).await?;
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
+            // Cancellation is clean only before the consuming token request is
+            // dispatched. Once dispatched, observe its bounded response rather
+            // than dropping the future: a successful exchange consumes the
+            // device grant, so its outcome must not be reported as retryable.
+            if cancellation.is_cancelled() {
+                return Err(RegistrationError::new(
+                    "cancelled",
+                    "Registration canceled. Nothing was saved.",
+                ));
+            }
+            let response = self.poll_device_token(&authorization).await?;
             if response.status().is_success() {
                 break response.json::<OAuthTokenResponse>().await.map_err(|_| {
                     RegistrationError::new(
@@ -478,16 +468,9 @@ impl RegistrationClient {
                 "Device token exchange returned incomplete credentials.",
             ));
         }
-        // Cancellation remains clean only before the session POST dispatch.
-        // Once dispatched, the backend may commit a trusted device and session;
-        // we therefore wait for the client's finite request deadline instead of
-        // dropping the response future on Ctrl-C.
-        if cancellation.is_cancelled() {
-            return Err(RegistrationError::new(
-                "cancelled",
-                "Registration canceled before session exchange. Nothing was saved.",
-            ));
-        }
+        // A successful device-token response consumed the grant. Finish the
+        // bounded session exchange even if cancellation arrived while that
+        // response was in flight, preserving the known authorization outcome.
         let session = self
             .exchange_cli_session(&oauth.access_token, &device_id)
             .await?;
@@ -537,9 +520,9 @@ impl RegistrationClient {
             .send()
             .await
             .map_err(|_| {
-                RegistrationError::retryable(
-                    "device_token",
-                    "Could not reach hello.food while waiting for approval.",
+                RegistrationError::uncertain(
+                    "device_token_outcome_uncertain",
+                    "hello.food may have consumed the device authorization, but the native client could not observe the token response. Do not retry registration until account state is reconciled.",
                 )
             })
     }
@@ -826,6 +809,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancellation_after_device_token_dispatch_waits_for_response_and_completes() {
+        let token_seen = Arc::new(Notify::new());
+        let release_token = Arc::new(Notify::new());
+        let (base_url, server) = fixture_server_with_token(DeviceTokenBehavior::Wait {
+            seen: token_seen.clone(),
+            release: release_token.clone(),
+        })
+        .await;
+        let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let client = RegistrationClient::new(service_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let authorization = client.start_device_registration().await.unwrap();
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+        let task = tokio::spawn(async move {
+            client
+                .complete_device_registration(
+                    authorization,
+                    "heyfood-test-device".into(),
+                    Duration::from_secs(5),
+                    task_cancellation,
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), token_seen.notified())
+            .await
+            .unwrap();
+        cancellation.cancel();
+        release_token.notify_one();
+        let result = task.await.unwrap().unwrap();
+        assert_eq!(result.profile_status, ProfileStatus::Ready);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn eof_after_device_token_dispatch_is_explicitly_outcome_uncertain() {
+        let (base_url, server) = fixture_server_with_token(DeviceTokenBehavior::Eof).await;
+        let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let client = RegistrationClient::new(service_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let authorization = client.start_device_registration().await.unwrap();
+        let error = client
+            .complete_device_registration(
+                authorization,
+                "heyfood-test-device".into(),
+                Duration::from_secs(5),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "device_token_outcome_uncertain");
+        assert!(error.outcome_uncertain);
+        assert!(!error.retryable);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn eof_after_session_dispatch_is_explicitly_outcome_uncertain() {
         let (base_url, server) = fixture_server_with(SessionBehavior::Eof).await;
         let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
@@ -943,6 +981,15 @@ mod tests {
         Eof,
     }
 
+    enum DeviceTokenBehavior {
+        Immediate,
+        Wait {
+            seen: Arc<Notify>,
+            release: Arc<Notify>,
+        },
+        Eof,
+    }
+
     async fn fixture_server() -> (String, tokio::task::JoinHandle<()>) {
         fixture_server_with(SessionBehavior::Immediate).await
     }
@@ -950,15 +997,28 @@ mod tests {
     async fn fixture_server_with(
         behavior: SessionBehavior,
     ) -> (String, tokio::task::JoinHandle<()>) {
+        fixture_server_with_behaviors(DeviceTokenBehavior::Immediate, behavior).await
+    }
+
+    async fn fixture_server_with_token(
+        behavior: DeviceTokenBehavior,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        fixture_server_with_behaviors(behavior, SessionBehavior::Immediate).await
+    }
+
+    async fn fixture_server_with_behaviors(
+        token_behavior: DeviceTokenBehavior,
+        session_behavior: SessionBehavior,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let base_url = format!("http://{address}");
         let verification_uri = format!("{base_url}/authorize?flow=device");
         let server = tokio::spawn(async move {
-            let request_count = if matches!(&behavior, SessionBehavior::Eof) {
-                4
-            } else {
-                5
+            let request_count = match (&token_behavior, &session_behavior) {
+                (DeviceTokenBehavior::Eof, _) => 3,
+                (_, SessionBehavior::Eof) => 4,
+                _ => 5,
             };
             for _ in 0..request_count {
                 let (mut socket, _) = listener.accept().await.unwrap();
@@ -982,8 +1042,21 @@ mod tests {
                     .split_whitespace()
                     .nth(1)
                     .unwrap();
+                if path == "/v1/channel/oauth/device/token" {
+                    match &token_behavior {
+                        DeviceTokenBehavior::Immediate => {}
+                        DeviceTokenBehavior::Wait { seen, release } => {
+                            seen.notify_one();
+                            release.notified().await;
+                        }
+                        DeviceTokenBehavior::Eof => {
+                            socket.shutdown().await.unwrap();
+                            continue;
+                        }
+                    }
+                }
                 if path == "/v1/channel/oauth/cli/session" {
-                    match &behavior {
+                    match &session_behavior {
                         SessionBehavior::Immediate => {}
                         SessionBehavior::Wait { seen, release } => {
                             seen.notify_one();
