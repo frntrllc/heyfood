@@ -1302,9 +1302,10 @@ fn make_private_staging_file(path: &Path) -> std::io::Result<()> {
     // safe: an arbitrary pre-existing explicit ACE cannot exist on this file.
     let sid = windows_current_user_sid()?;
     let grant = format!("*{sid}:F");
+    let owner = format!("*{sid}");
     let output = Command::new("icacls")
         .arg(path)
-        .args(["/inheritance:r", "/grant:r"])
+        .args(["/setowner", owner.as_str(), "/inheritance:r", "/grant:r"])
         .arg(grant)
         .stdout(Stdio::null())
         .output()?;
