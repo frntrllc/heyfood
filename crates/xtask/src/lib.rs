@@ -2719,9 +2719,9 @@ mod tests {
     fn checked_in_phase1_evidence_preserves_external_gates() {
         let phase1 = verify_phase1_evidence(&root()).expect("Phase 1 evidence must validate");
         assert_eq!(phase1.requirements, 10);
-        assert_eq!(phase1.blockers, 5);
-        assert_eq!(phase1.hosted_status, "pending");
-        assert_eq!(phase1.review_status, "pending");
+        assert_eq!(phase1.blockers, 0);
+        assert_eq!(phase1.hosted_status, "passed");
+        assert_eq!(phase1.review_status, "approved");
     }
 
     #[test]

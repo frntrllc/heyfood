@@ -1,9 +1,9 @@
 # Rust Phase 1 qualification report
 
-The prior Phase 1 candidate was measured at code lineage
-`a3b953ec571099c5f34f1d91aac29c2cc2bfa901`, then superseded by a REQUEST
-CHANGES verdict at evidence head `326c50c6`. Remediation and new exact-SHA
-qualification are in progress. Phase 2 is not authorized by this report.
+Phase 1 is implemented and independently approved at exact code lineage
+`09191ca5d3f3254eb6d2deb750e9f65a2c77df7a` and immutable tree
+`c3ff635dd5c2dd7e344054261b41bfad617fe4da`. Local qualification and hosted
+macOS, Linux, and Windows CI passed. Phase 2 is not authorized by this report.
 
 ## Implemented boundary
 
@@ -61,10 +61,15 @@ item-reference cache stores only server UUIDs.
 
 ## Deliberate external gates
 
-No final Grocery Phase-A request/response DTO, REST call, or tool binding was
-added. Those remain blocked until exact deployment, regenerated aggregate
-digest, `capabilities.grocery = "v1"`, and live capability/scope/confirmation/
-conflict/non-mutation canaries establish authoritative provenance.
+Grocery Phase A is deployed at backend commit
+`f7b0eebca879840995226ede9ea715dc8702313a`; schema revision `096`, runtime
+readiness, `capabilities.grocery = "v1"`, and the public Grocery scopes are
+live. No final Grocery request/response DTO, REST call, or tool binding was
+added here. Those remain blocked until an approved contract import pins the
+Grocery merge and deployed provenance, per-file hashes, and regenerated
+aggregate digest. The later Rust implementation must pass fresh
+least-privilege list, prepare/cancel, stale-version-conflict, and active-list
+non-mutation canaries before Grocery activation.
 
 No Kroger or other provider OAuth-token type/storage was added. That remains
 blocked until Security D2's purpose-specific versioned integration-key custody
@@ -73,12 +78,17 @@ state only; H3 remains false unless a separate runtime capability is proven.
 
 ## Phase 1 disposition
 
-REQUEST CHANGES. A subsequent independent review at evidence head `326c50c6`
-identified two P1 defects: incomplete frozen C3 confirmation semantics and
-incomplete removal of explicit foreign Windows ACL entries. It also identified
-overbroad Health status domains and stale review-packet metadata. The prior GO
-is superseded until those findings are corrected, a new exact remediation SHA
-passes hosted qualification, and the Rust specialist approves that SHA.
+GO. Exact-head Rust CI run
+[`29799184345`](https://github.com/frntrllc/heyfood/actions/runs/29799184345)
+passed 39 jobs with one intentional conditional skip and zero failures; general
+CI run
+[`29799185069`](https://github.com/frntrllc/heyfood/actions/runs/29799185069)
+passed 14 of 14 jobs. Windows broad-ACE replacement, atomic persistence,
+concurrent writes, Credential Manager, broker attestation, PTY cancellation,
+signal/restoration, and optimized performance qualification all passed. The
+independent Rust specialist subagent approved the same immutable SHA with no
+remaining code findings.
 
-PR #18 remains draft. Phase 2 remains unauthorized. The final Grocery Phase-A
-wire and Kroger token-storage gates above remain in force.
+PR #18 remains draft. This disposition approves Phase 1 only; Phase 2 remains
+unauthorized. The final Grocery contract-import/activation and Kroger
+token-storage gates above remain in force.
