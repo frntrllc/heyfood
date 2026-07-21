@@ -74,7 +74,7 @@ gate, or let Rust encode a draft server contract.
 
 Grocery Phase A has been reconstructed from the superseded PR #90 onto current
 `main` as PR #107. Its exact pushed final-qualification head is
-`a80f852c23e18b485a6a27a9f978aab5bbb35c93`: migration `096` descends from
+`f5bf2656d4f47a40aaeb17ee1f791f3dbe5a566c`: migration `096` descends from
 `095`; authoritative household snapshots and exact list/version preconditions
 are frozen into confirmations; Grocery writes require both read and write
 scopes; public provenance is manual-only; active-list reads are non-mutating;
@@ -83,7 +83,10 @@ boundary. After PR #109 advanced the strict health/security attestation
 contract on `main`, this head was rebased onto that change and made `096` an
 explicit attestation/action-manifest head. Revision `096` retains every health
 envelope gate required at `095` and adds an exact Grocery catalog proof rather
-than bypassing readiness at the additive head. The confirmation contract now
+than bypassing readiness at the additive head. That proof binds all 51 Grocery
+columns, 16 semantic constraints, 14 indexes, and the exact account-initializer
+function/trigger semantics, with rollback-isolated catalog-tamper tests and
+PostgreSQL 16/18 compatibility. The confirmation contract now
 accepts the advertised 25-item/four-member prepared payload while rejecting an
 oversize proposal before emitting an unusable token, and the language-neutral
 scope contract exposes the full `required_scopes`/`missing_scopes` denial
