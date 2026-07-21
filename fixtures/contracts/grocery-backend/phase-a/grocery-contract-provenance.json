@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "contract_family": "hellofood-grocery",
+  "contract_version": 1,
+  "status": "approved_deployed",
+  "source_repository": "https://github.com/frntrllc/hellofood",
+  "source_commit": "70d79bf6d859ff7d45738663b52a9a1074e62738",
+  "deployed_commit": "f7b0eebca879840995226ede9ea715dc8702313a",
+  "migration_revision": "096",
+  "capability": {"name": "grocery", "version": "v1"},
+  "hash_algorithm": "sha256",
+  "files": {
+    "grocery-entities-contract.json": "38f6b6e79401b04205aa85ea4a9e3c7f069389705ce35405364f840965e5c34e",
+    "grocery-rest-contract.json": "549c2c6adc0448a1f9b4d0b478d7009d419961a7052c6a609ea161a7ecbcc2d6",
+    "grocery-tool-events-contract.json": "57703f8c36857c3c4d24806f37c2456e2c0e7919c1b02bb699815c4dadbbaf3d",
+    "grocery-wire-schema.json": "783472779f3f1209c1daca6d33088b36415e5ea8b51ec6113750d453e0654930",
+    "fixtures/grocery/capability_absent.json": "393a2b998fdc8da3df3b1d6725db163a510d69f4135e5935a59a901128ea19be",
+    "fixtures/grocery/capability_present.json": "1a48f5d3811e62a6468bb4d9957818a80933a31e8a1f50fdb322709551041bc2",
+    "fixtures/grocery/confirmation_round_trip.json": "95ec84fd985b6b514e9390a7d6f6a8e890a0d5da6a238a6ca00fc7e1f482b37b",
+    "fixtures/grocery/export_json.json": "79516b497605fc9b374ede32ab10cddd1907daa31549b04319c903c78adc7607",
+    "fixtures/grocery/export_markdown.json": "98fe378cf17cec52b57ba87996beaf7f7213e50eda574e44dc6e4702a3644346",
+    "fixtures/grocery/export_text.json": "43473b24273e3ea5e713457675e7c9f971f34e1306bfa316e45ee147c0c4f5d8",
+    "fixtures/grocery/founding_scenario_maya.json": "35ed176100c6220eb7814f71896feb8e7766d26a5063389fcb15558ae6de031a",
+    "fixtures/grocery/happy_path_render.json": "22cbe1124ec8c720834d8e427982754279635d5154cdd38f825b59884d3a7f28",
+    "fixtures/grocery/scope_denial.json": "8376805be8c227585645c31a87ff5342cf6543b7f7ce0310fdcb8fc091d84f5b",
+    "fixtures/grocery/version_conflict.json": "414128baeb74591b9ded56195788d3808823bcbb3fa2cef6cb6de9d1bd427f1a"
+  },
+  "aggregate": {
+    "algorithm": "sha256",
+    "file_count": 14,
+    "canonicalization": "Sort files by UTF-8 path ascending; for each entry append <path>, one TAB byte, the lowercase SHA-256 hex digest, and one LF byte; SHA-256 the resulting UTF-8 byte sequence including the final LF.",
+    "digest": "781a14b9d05d70a4da245e2d80c24b0b040aa7ec742f852c65ca3815cc583911"
+  },
+  "evidence": {
+    "recorded_date": "2026-07-20",
+    "deployment": {
+      "migration_runner_deploy_id": "dep-d9fdog1kh4rs73c9a3r0",
+      "api_deploy_id": "dep-d9fe9hvavr4c73c2c3h0",
+      "deployed_commit": "f7b0eebca879840995226ede9ea715dc8702313a"
+    },
+    "schema": {
+      "revision": "096",
+      "verifier_job_id": "job-d9fdq8r7uimc73efuqp0",
+      "schema_ready": true,
+      "verifier_source_sha256": "ed28bc337d371f66cfa39842c35e1d91950b393666458526f6cff2c3909dfa27"
+    },
+    "capability": {
+      "endpoint": "https://api.hello.food/v1/auth/capabilities",
+      "claim": {"grocery": "v1"},
+      "oauth_metadata_endpoint": "https://api.hello.food/.well-known/oauth-authorization-server",
+      "published_scopes": ["grocery:read", "grocery:write"]
+    },
+    "negative_scope": {
+      "client_release": "heyfood 0.3.2",
+      "request": "GET /v1/grocery/list",
+      "observed_status": 403,
+      "message": "This CLI session is missing required scope(s): grocery:read."
+    }
+  },
+  "pinning_rule": "Rust must independently validate source_commit as the reviewed Grocery merge, deployed_commit as the Production fleet source, migration 096, capability grocery:v1, every file hash, and the deterministic aggregate digest before generating wire DTOs."
+}

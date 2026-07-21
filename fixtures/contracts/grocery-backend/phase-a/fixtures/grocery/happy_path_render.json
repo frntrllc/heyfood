@@ -1,0 +1,55 @@
+{
+  "description": "Happy-path grocery list render — two unflagged items, no safety annotations.",
+  "list": {
+    "id": "list-2",
+    "title": "Grocery List",
+    "state": "active",
+    "version": 1,
+    "items": [
+      {
+        "id": "h1",
+        "requested_name": "eggs",
+        "canonical_name": "eggs",
+        "quantity": 12.0,
+        "unit": null,
+        "package_quantity": null,
+        "note": null,
+        "state": "active",
+        "intended_for": null,
+        "sources": [
+          {
+            "source_type": "manual",
+            "source_ref": null,
+            "source_detail": null
+          }
+        ],
+        "safety": null,
+        "created_at": "2026-07-19T12:00:00+00:00",
+        "updated_at": "2026-07-19T12:00:00+00:00"
+      },
+      {
+        "id": "h2",
+        "requested_name": "milk",
+        "canonical_name": "milk",
+        "quantity": 1.0,
+        "unit": "l",
+        "package_quantity": null,
+        "note": null,
+        "state": "active",
+        "intended_for": null,
+        "sources": [
+          {
+            "source_type": "manual",
+            "source_ref": null,
+            "source_detail": null
+          }
+        ],
+        "safety": null,
+        "created_at": "2026-07-19T12:00:00+00:00",
+        "updated_at": "2026-07-19T12:00:00+00:00"
+      }
+    ],
+    "created_at": "2026-07-19T12:00:00+00:00",
+    "updated_at": "2026-07-19T12:00:00+00:00"
+  }
+}

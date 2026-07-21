@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/frntrllc/heyfood/blob/main/contracts/v1/grocery-rest-contract.json",
+  "title": "Grocery REST contract (v1)",
+  "description": "Every /v1/grocery/* endpoint: method, path, required scopes, prepare/confirm semantics, and typed errors. Mutation preparation and confirmation require grocery:read plus grocery:write because responses and authoritative preconditions read list state. No deterministic REST endpoint commits a mutation during preparation.",
+  "x-heyfood-contract-version": 1,
+  "auth": {
+    "app_level": "X-API-Key on every /v1/*",
+    "user": "require_authenticated_user (dual-surface: mobile app-session AND CLI session)",
+    "scope_dependency": "app.core.scope_enforcement.RequireScope",
+    "cli_admission": "app.core.scope_enforcement.CLI_ENDPOINT_REQUIREMENTS / CLI_PREFIX_REQUIREMENTS"
+  },
+  "endpoints": [
+    {"method": "GET", "path": "/v1/grocery/list", "scope": "grocery:read", "response": "GroceryListView"},
+    {"method": "GET", "path": "/v1/grocery/lists/{list_id}/export", "scope": "grocery:read", "response": "text/markdown | text/plain | application/json", "query": {"format": ["markdown", "text", "json"]}},
+    {"method": "GET", "path": "/v1/grocery/exclusions", "scope": "grocery:read", "response": "ExclusionListResponse"},
+    {"method": "POST", "path": "/v1/grocery/screen", "scope": "grocery:read", "response": "{items: ProposedItemView[]}"},
+    {"method": "POST", "path": "/v1/grocery/items", "scopes": ["grocery:read", "grocery:write"], "behavior": "prepare_only", "request": "AddItemsRequest", "response": "GroceryMutationProposal"},
+    {"method": "POST", "path": "/v1/grocery/items/remove", "scopes": ["grocery:read", "grocery:write"], "behavior": "prepare_only", "request": "RemoveItemsRequest", "response": "GroceryMutationProposal"},
+    {"method": "POST", "path": "/v1/grocery/items/state", "scopes": ["grocery:read", "grocery:write"], "behavior": "prepare_only", "request": "UpdateItemStateRequest", "response": "GroceryMutationProposal"},
+    {"method": "POST", "path": "/v1/grocery/exclusions", "scopes": ["grocery:read", "grocery:write"], "behavior": "prepare_only", "request": "ExclusionMutationRequest", "response": "GroceryMutationProposal"},
+    {"method": "POST", "path": "/v1/grocery/exclusions/remove", "scopes": ["grocery:read", "grocery:write"], "behavior": "prepare_only", "request": "ExclusionMutationRequest", "response": "GroceryMutationProposal"},
+    {"method": "POST", "path": "/v1/grocery/confirm", "scopes": ["grocery:read", "grocery:write"], "behavior": "commit_or_cancel", "request": "GroceryMutationConfirmRequest", "response": "GroceryMutationResult"}
+  ],
+  "error_codes": {
+    "source_of_truth": "app.schemas.grocery.GroceryErrorCode",
+    "codes": ["list_not_found", "item_not_found", "member_not_found", "version_conflict", "invalid_item_state", "empty_request", "confirmation_invalid", "confirmation_expired", "precondition_failed"]
+  },
+  "confirmation": {
+    "prepare_mutates": false,
+    "accept_endpoint": "POST /v1/grocery/confirm",
+    "cancel_mutates": false,
+    "ttl_seconds": 300,
+    "token_format": "base64url(canonical-json).base64url(hmac-sha256)",
+    "token_is_authority": false,
+    "authentication_and_scopes_rechecked": true,
+    "frozen_operands": ["user_id", "operation", "payload", "list_id", "expected_version", "context_hash", "context_hash_version", "confirmation_id", "idempotency_key", "expires_at"],
+    "precondition_reads": {
+      "list": "exact owned active list UUID only; missing/replaced/archived/stale fails; never creates and never follows an active-list alias",
+      "household": "fresh authoritative HouseholdContextSnapshot from the same resolver used by /v1/agent/converse"
+    },
+    "add_item_freeze": "Preparation canonicalizes and screens with the authoritative snapshot, returns the safety-bearing structured preview, and signs those exact prepared operands; acceptance persists them without reinterpreting or re-screening.",
+    "replay": {
+      "list_mutations": "the first commit atomically increments exact list version; replay fails version precondition",
+      "exclusion_mutations": "canonical set add/remove operations are idempotent"
+    }
+  },
+  "version_conflict": {
+    "status_code": 409,
+    "error_code": "invalid_request",
+    "details": {"reason": "version_conflict", "expected_version": "int", "actual_version": "int"},
+    "source_of_truth": "app.schemas.grocery.VersionConflictDetail"
+  },
+  "member_not_found": {
+    "status_code": 404,
+    "details": {"reason": "member_not_found"},
+    "note": "intended_for referencing a member not on the account is a 404 (account-bound)."
+  },
+  "scope_denial": {
+    "status_code": 403,
+    "error_code": "forbidden",
+    "details": {"reason": "scope_not_permitted", "token_type": "cli_session"},
+    "source_of_truth": "app.core.scope_enforcement.RequireScope"
+  }
+}

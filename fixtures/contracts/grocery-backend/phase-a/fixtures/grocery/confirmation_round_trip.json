@@ -1,0 +1,75 @@
+{
+  "description": "grocery_list_add_items returns an item-list confirmation card; the user accepts with a decision=accept payload; a replayed accept returns the original result (idempotent).",
+  "card": {
+    "type": "action_confirmation",
+    "envelope_version": 1,
+    "card_form": "item_list",
+    "action": "add_items",
+    "structured_preview": {
+      "action": "add_items",
+      "list_id": "00000000-0000-4000-8000-000000000123",
+      "expected_version": 4,
+      "items": [
+        {
+          "name": "onion",
+          "quantity": 1.0,
+          "unit": null,
+          "note": null,
+          "intended_for": null,
+          "provenance": "manual",
+          "safety": {
+            "basis": "ingredient",
+            "status": "risky",
+            "member_flags": [
+              {
+                "member_id": "maya-uuid",
+                "status": "risky",
+                "reason": "Onion is high-FODMAP.",
+                "substitutions": ["scallion greens"]
+              }
+            ],
+            "model_version": "test-model",
+            "rules_version": "dietary-rules-1",
+            "confidence": 0.9,
+            "context_hash": "f5c4ef0eec2f500b3ab4fe579bfae80d8c72d1199f0032a08f9a40273d4ca8b6",
+            "context_hash_version": 1,
+            "label_hint": "Screened at ingredient level — verify the product label."
+          }
+        }
+      ]
+    },
+    "preconditions": [
+      {
+        "type": "household_context_hash",
+        "mode": "authoritative",
+        "expected_hash": "f5c4ef0eec2f500b3ab4fe579bfae80d8c72d1199f0032a08f9a40273d4ca8b6",
+        "hash_version": 1
+      },
+      {
+        "type": "list_version",
+        "mode": "authoritative",
+        "list_id": "00000000-0000-4000-8000-000000000123",
+        "expected_version": 4
+      }
+    ]
+  },
+  "frozen_authority": {
+    "list_id": "00000000-0000-4000-8000-000000000123",
+    "expected_version": 4,
+    "household_context_hash": {
+      "value": "f5c4ef0eec2f500b3ab4fe579bfae80d8c72d1199f0032a08f9a40273d4ca8b6",
+      "version": 1,
+      "source": "HouseholdContextSnapshot"
+    },
+    "precondition_read": "exact_list_uuid_read_only"
+  },
+  "accept_payload": {
+    "confirmation_id": "00000000-0000-0000-0000-000000000001",
+    "idempotency_key": "00000000-0000-0000-0000-000000000002",
+    "decision": "accept"
+  },
+  "expect": {
+    "card_form": "item_list",
+    "commit_is_idempotent": true
+  }
+}

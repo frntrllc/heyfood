@@ -1,0 +1,32 @@
+{
+  "description": "REST-layer scope denial (C4). Grocery mutation preparation and confirmation read list state, so both grocery:read and grocery:write are required. A one-scope CLI session gets HTTP 403; both scopes or *:full_access pass.",
+  "required_scopes": ["grocery:read", "grocery:write"],
+  "denied": {
+    "auth_provider": "cli",
+    "granted_scopes": [
+      "grocery:write"
+    ],
+    "expected_status": 403,
+    "expected_error": {
+      "code": "forbidden",
+      "details": {
+        "reason": "scope_not_permitted",
+        "token_type": "cli_session"
+      }
+    }
+  },
+  "granted": {
+    "auth_provider": "cli",
+    "granted_scopes": [
+      "grocery:read",
+      "grocery:write"
+    ],
+    "expected_status": 200
+  },
+  "full_access_granted": {
+    "granted_scopes": [
+      "app:full_access"
+    ],
+    "expected_status": 200
+  }
+}

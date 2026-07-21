@@ -1,0 +1,20 @@
+{
+  "description": "A grocery mutation with a stale expected_version returns HTTP 409 with a typed version_conflict envelope so the client can reload and retry.",
+  "request": {
+    "expected_version": 2,
+    "items": [
+      {
+        "name": "eggs"
+      }
+    ]
+  },
+  "expected_status": 409,
+  "expected_error": {
+    "code": "invalid_request",
+    "details": {
+      "reason": "version_conflict",
+      "expected_version": 2,
+      "actual_version": 3
+    }
+  }
+}

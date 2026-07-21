@@ -1,0 +1,7 @@
+{
+  "description": "A deployed, contract-qualified backend advertises Grocery Phase A v1.",
+  "application_capabilities": {"grocery": "v1"},
+  "expected_client_state": "available",
+  "required_contract_version": 1,
+  "unknown_versions_fail_closed": true
+}

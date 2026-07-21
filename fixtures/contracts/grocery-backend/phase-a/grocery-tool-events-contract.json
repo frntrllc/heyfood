@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/frntrllc/heyfood/blob/main/contracts/v1/grocery-tool-events-contract.json",
+  "title": "Grocery channel-tool + SSE events contract (v1)",
+  "description": "Conversation/voice surface for the grocery domain: the channel tools, their scope gating, and the item-list confirmation card WRITE tools return. Bound to app.services.conversation.tools.grocery + the confirmation contract by tests/test_grocery_contract.py.",
+  "x-heyfood-contract-version": 1,
+  "tools": {
+    "source_of_truth": "app.services.conversation.tools.grocery.GROCERY_TOOL_NAMES",
+    "read": [
+      {"name": "grocery_list_view", "required_scope": "grocery:read"},
+      {"name": "grocery_screen_items", "required_scope": "grocery:read"},
+      {"name": "grocery_build_weekly", "required_scope": "grocery:read", "note": "PROPOSES only — never writes; recipe-driven."}
+    ],
+    "write": [
+      {"name": "grocery_list_add_items", "required_scopes": ["grocery:read", "grocery:write"], "card_form": "item_list"},
+      {"name": "grocery_list_remove_items", "required_scopes": ["grocery:read", "grocery:write"], "card_form": "item_list"},
+      {"name": "grocery_list_update_item_state", "required_scopes": ["grocery:read", "grocery:write"], "card_form": "item_list"}
+    ]
+  },
+  "confirmation_card": {
+    "card_form": "item_list",
+    "trigger": "structured_preview contains an 'items' list (agent_loop tags card_form=item_list)",
+    "envelope_version_source": "app.services.conversation.agent_loop.CONFIRMATION_ENVELOPE_VERSION",
+    "prepare_hook": "await tool.prepare_confirmation(params, ToolContext) -> (frozen_params, structured_preview)",
+    "prepare_mutates": false,
+    "structured_preview_shape": {
+      "action": "add_items | remove_items | update_item_state",
+      "list_id": "uuid",
+      "expected_version": "positive int",
+      "items": [{"name": "str", "quantity": "number?", "unit": "str?", "note": "str?", "intended_for": "member_id?", "sources": "ItemSourceView[]", "item_id": "str?", "safety": "SafetyAnnotationView?"}]
+    },
+    "safety_visibility": "Add canonicalizes/screens before freezing; remove/state load the existing item annotation. The committed add consumes the same server-prepared operands shown on the card.",
+    "edits": "Add-item edits are structurally validated, then the async prepare hook reruns canonicalization/screening and replaces the frozen card and operands before acceptance."
+  },
+  "preconditions": {
+    "list_version": {
+      "type": "list_version",
+      "mode": "authoritative",
+      "operands": {"list_id": "uuid", "expected_version": "positive int"},
+      "handler": "app.services.grocery.preconditions.list_version_handler",
+      "live_value": "EvaluationContext.extra['list_versions'][list_id] (supplied by BaseTool.live_precondition_values)",
+      "read_semantics": "exact UUID lookup only; never creates a list and never follows an active-list alias"
+    },
+    "household_context_hash": {
+      "type": "household_context_hash",
+      "mode": "authoritative",
+      "operands": {"expected_hash": "str", "hash_version": "int"},
+      "handler": "app.services.conversation.confirmation_preconditions (C1/C3 built-in)",
+      "note": "Frozen from HouseholdContextSnapshot.context_hash at proposal and compared to a freshly resolver-produced HouseholdContextSnapshot at commit. Reconstructing from DietaryContext or using compute_profile_context_hash is prohibited."
+    }
+  },
+  "snapshot_transport": {
+    "type": "app.schemas.dietary.HouseholdContextSnapshot",
+    "proposal_source": "HouseholdContextResolver output for the converse turn",
+    "tool_context_key": "metadata.household_context_snapshot",
+    "screening_input": "the same snapshot object, unchanged",
+    "required_fields": ["dietary_context", "effective_scope", "members", "consent", "context_hash", "context_hash_version"]
+  },
+  "confirmation_error_codes": {
+    "source_of_truth": "app.services.conversation.schemas.ConfirmationErrorCode",
+    "grocery_relevant": ["precondition_failed", "unknown_precondition", "temporarily_unavailable", "write_failed", "edit_invalid", "already_cancelled"]
+  }
+}
