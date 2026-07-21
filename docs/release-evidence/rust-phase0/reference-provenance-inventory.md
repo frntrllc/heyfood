@@ -13,6 +13,7 @@ heyfood implementation and records `copied_bytes: false`. No Grok crate,
 symbol, asset, source file, or byte snapshot is present in the heyfood Cargo
 workspace.
 
-The ledger is ready for the specialized Rust review. Its review metadata must
-remain pending until that reviewer verifies the exact heyfood commit, the
-upstream hashes/license, and the no-copied-bytes conclusion.
+The specialized Rust reviewer approved the ledger at exact heyfood commit
+`d738f8c0a2f02f677e7cdd5cb764bff11941db56` after verifying the upstream
+hashes/license and the no-copied-bytes conclusion. The machine-readable review
+metadata records that identity and commit.

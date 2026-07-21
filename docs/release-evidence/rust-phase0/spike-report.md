@@ -3,7 +3,8 @@
 **Evidence date:** 2026-07-20
 **Exact code lineage measured:** `08cecb3a00bff6bbd670faf066105205f6e93b0b`
 **Status:** local and exact hosted three-OS remediation evidence is green;
-asset/provenance approval and specialized Phase 0 approval are pending.
+asset and Grok provenance are specialist-approved; the new deterministic
+grocery C3/C4 freeze and overall Phase 0 approval are pending exact-SHA review.
 Cutover and Phase 1 are not authorized by this report.
 
 ## What the spike now proves
@@ -43,16 +44,18 @@ unpublished Python `0.4.0` converse/SSE oracle at
 `73494a57468dac83b4904ce6c390e36926f5c6fe`.
 
 Companion backend main is
-`f752a057fb1cf75abe9bcb6ab4aafdc11687db73`: migration repair plus the
+`8633c0a5229178eefb1556edc6c136b0a88cff3f`: migration repair plus the
 certifi-backed verified-TLS correction are merged, production is postflight
 verified at sole head `095`, H1/H2 PR #79 and H3 backend/mobile PRs #96/#95 are
 merged, and their health contracts are frozen under `fixtures/contracts/`.
 Grocery PR #107 now supersedes PR #90 with a mergeable revision-096 candidate
-that claims the authoritative-snapshot/frozen-list/C1 corrections, but is
-behind current main with red hosted gates; final provenance remains gated on a
-green merge, production migration, and live canaries. Security PR #108 is
-merged and PR #109 remains active attestation hardening; no Kroger B1/B2 or
-Security D2 implementation is visible.
+that claims the authoritative-snapshot/frozen-list/C1 corrections. Its
+aggregate GitHub CI is green but its public Vercel preview is red; final Phase A
+provenance remains gated on a fully green merge, production migration, and live
+canaries. Security PRs #108 and #109 are merged; PR #110 remains active for a
+PostgreSQL-18 attestation correction. No Kroger B1/B2 or Security D2
+implementation is visible. Exact merged C3/C4 schemas are now mirrored under
+`fixtures/contracts/grocery-backend/` with deterministic import and validation.
 `external-contract-status.md` records the exact boundaries.
 
 ## Clean local measurement
@@ -76,7 +79,7 @@ Measured from a detached, clean worktree at the exact code SHA on macOS 26.5
 | First-frame controlled probe | 30 samples; optimized p95 104 µs |
 | Input-to-frame controlled probe | 2,000 samples with 500 semantic entries; optimized p95 470 µs |
 | Workspace format/strict Clippy/tests | passed locally |
-| Dependency DAG/contracts/assets/ledger/inventory validators | passed locally; asset review metadata remains pending |
+| Dependency DAG/contracts/assets/ledger/inventory validators | passed locally; assets and Grok ledger specialist-approved; grocery freeze and overall Phase 0 review pending |
 
 The timing probes use Ratatui's controlled `TestBackend`; they are regression
 checks, not release-process startup, real terminal paint, network latency, idle
@@ -126,11 +129,11 @@ head `08cecb3` have the identical tree `3b99bb0`.
 
 ## Remaining Phase 0 gates
 
-The authoritative machine-readable inventory currently has one blocker:
-
-1. the specialized Rust reviewer must verify the two first-party asset
-   provenance records, the Grok pattern-only ledger, and the complete exact-SHA
-   Phase 0 result.
+The authoritative machine-readable inventory has zero classified requirement
+blockers. The specialized Rust reviewer already approved both first-party
+asset provenance records and the Grok pattern-only ledger at `d738f8c`. The
+remaining Phase 0 gate is an exact-SHA re-review of the deterministic grocery
+C3/C4 import/provenance remediation and the assembled zero-blocker result.
 
 The grocery correction/deployment sequence, Kroger B1/B2, Security D2, final
 wire DTOs, signed installers, real-hardware RCs, and all 675 migration-ledger
@@ -138,6 +141,6 @@ mappings remain explicit later-phase or cutover gates. Per the authoritative
 plan, recording those unfinished external dependencies does not serialize the
 Phase 0 spike or generic Phase 1 foundation.
 
-The next decision is mechanical: commit this exact evidence candidate and send
-it to the specialized reviewer. Only a GO verdict permits asking the owner to
-authorize Phase 1.
+The next decision is mechanical: commit this exact evidence candidate, pass its
+hosted matrix, and send that same SHA to the specialized reviewer. Only a GO
+verdict permits asking the owner to authorize Phase 1.

@@ -22,9 +22,9 @@
     },
     {
       "id": "P0-3-runtime-assets",
-      "status": "blocked",
+      "status": "satisfied",
       "evidence": ["assets/dietary/provenance.json", "assets/brand/provenance.json"],
-      "blocker": "Both byte-level provenance records are valid but specialized Rust subagent exact-SHA review remains pending."
+      "blocker": null
     },
     {
       "id": "P0-4-workspace-policy",
@@ -59,7 +59,7 @@
     {
       "id": "P0-9-grocery-companion-contract",
       "status": "satisfied",
-      "evidence": ["docs/release-evidence/rust-phase0/external-contract-status.md", "fixtures/contracts/health-contract-provenance.json"],
+      "evidence": ["fixtures/contracts/grocery-backend/provenance.json", "fixtures/contracts/grocery-backend/c3-confirmation-contract.json", "fixtures/contracts/grocery-backend/c4-application-capabilities-contract.json", "fixtures/contracts/grocery-backend/c4-scopes-contract.json", "docs/release-evidence/rust-phase0/external-contract-status.md"],
       "blocker": null
     },
     {
@@ -85,18 +85,18 @@
     "hellofood_repository": "/Users/justinhambleton/Dev/hellofood",
     "grocery": {
       "observed_branch": "codex/grocery-phase-a-096",
-      "observed_head_sha": "ca9c793c5928c6af3f57f505393a61bdd81c7c46",
-      "observed_main_sha": "f752a057fb1cf75abe9bcb6ab4aafdc11687db73",
+      "observed_head_sha": "a80f852c23e18b485a6a27a9f978aab5bbb35c93",
+      "observed_main_sha": "8633c0a5229178eefb1556edc6c136b0a88cff3f",
       "merged_prerequisite_shas": [
         "4b7bcdfaf80053c087f5aa68fea8bd5f78732160",
         "fa23437c324b4e5d3d1c433b9c933b9f2dc2cbca",
         "9e0a9f220751270da56996ba7004ae25e67b06d0",
         "9e1011d75be9b919452c82cc7dd849bc3f5823a2"
       ],
-      "phase_a_status": "superseded_by_pr_107_mergeable_096_candidate_hosted_gates_not_green",
+      "phase_a_status": "pr_107_mergeable_096_ci_green_public_preview_failed_provisional",
       "authoritative_contract_sha": null,
       "authoritative_contract_digest": null,
-      "blocker": "PR #107 supersedes PR #90 and claims revision 096 plus the authoritative-snapshot, frozen-list, and C1 corrections. Its first hosted PostgreSQL/auth checks are red and final provenance requires merge, Production 095 to 096, and live grocery:v1 canaries."
+      "blocker": "PR #107 supersedes PR #90 and claims revision 096 plus the authoritative-snapshot, frozen-list, and C1 corrections. Its aggregate GitHub CI is green, but the public Vercel preview is red and final Phase A provenance still requires merge, Production 095 to 096, and live grocery:v1 canaries."
     },
     "kroger": {
       "provider_foundation_pr": null,

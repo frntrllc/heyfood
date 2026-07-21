@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/frntrllc/heyfood/blob/main/schemas/v1/scopes-contract.json",
+  "title": "hello.food CLI scope-tier + enforcement contract v1",
+  "description": "Single canonical machine-readable contract for the least-privilege scope model shared between the private backend (frntrllc/hellofood) and language-neutral clients (the Rust heyfood rewrite; released Python CLI v0.3.2 until cutover). SOURCE OF TRUTH for: the CLI scope inventory (the server ceiling), the TIER semantics (required-envelope vs optional, and how they compose with the orthogonal server-ahead rollout axis), the canonical scope-order law, and the TYPED scope-denial error shapes at the tool layer and the REST layer. The backend parity test (tests/test_scope_tier_contract.py) verifies the cli_scopes tier tuples, the enforcement predicate, and the recorded wire fixtures against THIS file; nothing is hand-duplicated. The three-layer parity (ceiling <-> CHANNEL_OAUTH_ALLOWED_SCOPES <-> auth UI SCOPE_LABELS) is additionally pinned by tests/test_cli_authorization_contract.py.",
+  "x-heyfood-contract-version": 1,
+  "scope_inventory": {
+    "description": "The complete server ceiling: every scope the token endpoint will accept and the consent page labels. Canonical order is significant (see scope_order_law). The authoritative Python tuple is app.core.cli_scopes.CLI_SESSION_SCOPES.",
+    "source_of_truth": "app.core.cli_scopes.CLI_SESSION_SCOPES",
+    "scopes": [
+      "account:link",
+      "account:delete",
+      "knowledge:read",
+      "menu:read",
+      "menu:watch",
+      "recommend:read",
+      "recipes:read",
+      "recipes:write",
+      "claims:read_derived",
+      "profile:read",
+      "profile:write",
+      "meals:read",
+      "meals:write",
+      "audio:transcribe",
+      "health:read",
+      "integrations:manage"
+    ]
+  },
+  "tiers": {
+    "description": "TIER is an AUTHORITY/GATING axis: does holding a scope gate POST /v1/agent/converse ADMISSION, or does it merely unlock an additional tool/endpoint when granted? Every scope is in exactly one tier. Orthogonal to the SERVER-AHEAD rollout axis (see server_ahead).",
+    "required_envelope": {
+      "description": "The complete agent tool envelope. A CLI session missing ANY of these is 403'd at converse admission. FROZEN at its historical value so the tier refactor invalidates zero existing sessions.",
+      "source_of_truth": "app.core.cli_scopes.CONVERSE_REQUIRED_SCOPES",
+      "alias": "app.core.cli_scopes.CLI_AGENT_SCOPES",
+      "gates_converse_admission": true,
+      "scopes": [
+        "knowledge:read",
+        "menu:read",
+        "recommend:read",
+        "recipes:read",
+        "recipes:write",
+        "claims:read_derived",
+        "profile:read",
+        "profile:write",
+        "meals:read",
+        "meals:write"
+      ]
+    },
+    "optional": {
+      "description": "Scopes that, when granted, expose an additional agent tool (filtered from the model's tool list otherwise) and/or a REST endpoint, but NEVER gate converse admission. A session without an optional scope converses exactly as before. EMPTY today: no deployed tool declares an optional scope. Grocery Phase A appends grocery:read / grocery:write here as a pure addition.",
+      "source_of_truth": "app.core.cli_scopes.OPTIONAL_TOOL_SCOPES",
+      "gates_converse_admission": false,
+      "scopes": [],
+      "reserved_phase_a": ["grocery:read", "grocery:write"]
+    },
+    "excluded_from_envelope": {
+      "description": "Ceiling scopes that are NOT part of the agent tool envelope AND are not optional agent-tool scopes: they gate their own dedicated surfaces (login/teardown, client-side transcription, dedicated menu-watch / health-integration endpoints), not converse and not an agent tool. Listed so the required-envelope derivation is exhaustive: required_envelope = ceiling MINUS excluded_from_envelope MINUS optional.",
+      "scopes": [
+        "account:link",
+        "account:delete",
+        "audio:transcribe",
+        "health:read",
+        "integrations:manage",
+        "menu:watch"
+      ]
+    }
+  },
+  "server_ahead": {
+    "description": "SERVER-AHEAD is a ROLLOUT/SEQUENCING axis, ORTHOGONAL to tier. It records scopes the server ceiling already declares but the released public CLI has not yet added to its LOGIN_SCOPES (the token endpoint rejects unknown scopes, so the server must lead — the v0.3.0 incident class). A scope can be server-ahead in EITHER tier. Pinned by tests/test_cli_authorization_contract.py::SERVER_AHEAD_SCOPES. Grocery Phase A introduces grocery:* as OPTIONAL-tier AND server-ahead simultaneously: never gates converse (tier) and is added to the CLI LOGIN_SCOPES only after the server ships it (sequencing). Wiring the optional tier does not touch this machinery.",
+    "current_server_ahead_scopes": ["menu:watch", "health:read", "integrations:manage"],
+    "orthogonality_rule": "tier(scope) and server_ahead(scope) are independent; any optional scope MUST also be a member of scope_inventory.scopes (the ceiling) before it can be granted."
+  },
+  "scope_order_law": {
+    "description": "Canonical scope order is server-pinned. Documented in docs/plans/2026-07-19-heyfood-cli-rust-transition-handoff.md section 2. The server pins order at token time; consented_cli_session_scopes returns the grant in CLI_SESSION_SCOPES order. NEW scopes APPEND LAST — never inserted mid-list — so a persisted grant's order is stable across releases.",
+    "rules": [
+      "The order of scope_inventory.scopes is authoritative and equals app.core.cli_scopes.CLI_SESSION_SCOPES.",
+      "A newly introduced scope (e.g. grocery:read, grocery:write) is appended after the current last element, never inserted earlier.",
+      "consented_cli_session_scopes(grant) returns the intersection with the ceiling in this canonical order, regardless of the order the client requested."
+    ]
+  },
+  "scope_denial_errors": {
+    "description": "Two enforcement layers deny an unauthorized scope with DISTINCT, typed shapes. Neither ever produces a 500.",
+    "tool_layer": {
+      "description": "The conversation tool registry re-checks a tool's required_scope at execution (defense in depth; the tool is also filtered from the model's tool list up front). Denial is a TYPED tool result — a JSON object returned to the agent loop, never an exception. Enforcement is active only when the caller threaded a scope grant into ToolContext.metadata['granted_scopes'].",
+      "source_of_truth": "app.core.scope_enforcement.SCOPE_DENIED_TOOL_ERROR_CODE",
+      "error_code": "scope_denied",
+      "shape": {
+        "error": { "const": "scope_denied" },
+        "tool": { "type": "string", "description": "The tool name that was refused." },
+        "required_scope": { "type": "string", "description": "The scope the session lacked." },
+        "message": { "type": "string" }
+      }
+    },
+    "rest_layer": {
+      "description": "The RequireScope FastAPI dependency (app.core.scope_enforcement.RequireScope) gates a REST endpoint on a single scope, sharing the tool-layer predicate (scope_grant_satisfies). Denial is HTTP 403 with the standard structured error envelope (code=forbidden, details.reason=scope_not_permitted), byte-identical to enforce_scoped_token's shape. Unrestricted *:full_access principals bypass the check; a scoped principal (e.g. a CLI session) missing the scope is denied.",
+      "status_code": 403,
+      "error_code": "forbidden",
+      "details": {
+        "reason": { "const": "scope_not_permitted" },
+        "path": { "type": "string" },
+        "token_type": { "type": "string", "description": "e.g. cli_session" }
+      }
+    }
+  },
+  "enforcement_predicate": {
+    "description": "One shared predicate governs both layers so they admit/deny identically. app.core.cli_scopes.scope_grant_satisfies(required_scope, granted_scopes).",
+    "source_of_truth": "app.core.cli_scopes.scope_grant_satisfies",
+    "rules": [
+      "required_scope is None -> allowed (tool/endpoint declares no scope).",
+      "granted_scopes is None -> allowed (unrestricted / non-scoped caller context; no filtering).",
+      "the grant contains any *:full_access scope -> allowed (phone/app/legacy principals bypass least-privilege gating).",
+      "required_scope in granted_scopes -> allowed.",
+      "otherwise -> denied."
+    ]
+  }
+}

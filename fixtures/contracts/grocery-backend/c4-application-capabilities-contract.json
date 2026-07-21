@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/frntrllc/heyfood/blob/main/schemas/v1/application-capabilities-contract.json",
+  "title": "hello.food GET /v1/auth/capabilities response contract v1",
+  "description": "Single canonical machine-readable contract for the GET /v1/auth/capabilities response (CliAuthCapabilitiesResponse), shared between the private backend (frntrllc/hellofood) and language-neutral clients (the Rust heyfood rewrite; released Python CLI v0.3.2 until cutover). SOURCE OF TRUTH for the response shape including the P0 C4 additive application_capabilities map (honest feature detection) and the pre-existing self_registration / authorization / profile_readiness shapes. WIRE COMPATIBILITY IS A HARD CONSTRAINT: released v0.3.2 parses this response today; every pre-C4 field is byte-identical, and application_capabilities is a purely additive key an older client ignores. The backend parity test (tests/test_scope_tier_contract.py) verifies the Pydantic CliAuthCapabilitiesResponse fields and the recorded wire fixtures against THIS file.",
+  "x-heyfood-contract-version": 1,
+  "capabilities_response": {
+    "description": "The GET /v1/auth/capabilities response body. Unauthenticated, default-off account-resolution feature detection.",
+    "source_of_truth": "app.schemas.cli_registration.CliAuthCapabilitiesResponse",
+    "required": ["schema_version", "self_registration", "authorization", "profile_readiness"],
+    "fields": {
+      "schema_version": {
+        "type": "integer",
+        "const": 1,
+        "pre_c4": true,
+        "description": "Response schema version. Unchanged by C4 (application_capabilities is additive, not a schema-version bump)."
+      },
+      "self_registration": {
+        "type": "object",
+        "pre_c4": true,
+        "$ref": "#/self_registration_capability"
+      },
+      "authorization": {
+        "type": "object",
+        "pre_c4": true,
+        "$ref": "#/authorization_capability"
+      },
+      "profile_readiness": {
+        "type": "boolean",
+        "pre_c4": true,
+        "description": "True when at least one authorization flow is live and not quiesced."
+      },
+      "application_capabilities": {
+        "type": "object",
+        "pre_c4": false,
+        "additive": true,
+        "additionalProperties": { "type": "string" },
+        "description": "P0 C4 additive. Map of DEPLOYED application domain -> served contract version, e.g. {\"grocery\": \"v1\"}. DEPLOYED-TRUTH: an entry appears ONLY when the code+config serving it is deployed; EMPTY today. Distinct from OAuth scopes_supported (login negotiation, unchanged): a scope can be grantable long before its feature ships, so capability MUST NOT be inferred from a scope. Source of truth: app.core.application_capabilities.APPLICATION_CAPABILITIES."
+      }
+    }
+  },
+  "self_registration_capability": {
+    "description": "self_registration object shape (SelfRegistrationCapability). Unchanged by C4.",
+    "source_of_truth": "app.schemas.cli_registration.SelfRegistrationCapability",
+    "required": ["status", "regions", "identity_methods"],
+    "fields": {
+      "status": { "type": "string", "enum": ["available", "disabled", "unavailable"] },
+      "regions": { "type": "array", "items": { "type": "string" } },
+      "identity_methods": {
+        "type": "array",
+        "items": { "type": "string", "enum": ["sms", "email", "apple", "google"] }
+      }
+    }
+  },
+  "authorization_capability": {
+    "description": "authorization object shape (AuthorizationCapability). Unchanged by C4.",
+    "source_of_truth": "app.schemas.cli_registration.AuthorizationCapability",
+    "required": ["loopback_pkce", "device_code", "identity_methods"],
+    "fields": {
+      "loopback_pkce": { "type": "boolean" },
+      "device_code": { "type": "boolean" },
+      "identity_methods": {
+        "type": "array",
+        "items": { "type": "string", "enum": ["sms", "email", "apple", "google"] }
+      }
+    }
+  },
+  "wire_compatibility": {
+    "description": "The pre-C4 field set the released CLI v0.3.2 parses. Every one of these MUST remain byte-identical; application_capabilities is the only key C4 adds.",
+    "v0_3_2_fields": ["schema_version", "self_registration", "authorization", "profile_readiness"],
+    "additive_fields": ["application_capabilities"]
+  }
+}

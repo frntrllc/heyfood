@@ -8,6 +8,7 @@ mod sha256;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use cargo_metadata::{Metadata, MetadataCommand};
 use json::Json;
@@ -34,6 +35,12 @@ pub struct AssetReport {
     pub pending_reviews: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GroceryContractReport {
+    pub contracts: usize,
+    pub review_pending: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Phase0EvidenceReport {
     pub requirements: usize,
@@ -47,6 +54,43 @@ const FROZEN_COMPATIBILITY_DIGEST: &str =
     "aeb4339da0cb1c73d36892c7d57d4c8b412aa2f8efcb0aec8c855fe88f835957";
 const FROZEN_COMPATIBILITY_BLOB: &[u8] =
     include_bytes!("../fixtures/called_endpoints.73494a5.json");
+
+#[derive(Clone, Copy)]
+struct GroceryContractSpec {
+    name: &'static str,
+    platform_contract: &'static str,
+    source_commit: &'static str,
+    source_path: &'static str,
+    sha256: &'static str,
+    target_path: &'static str,
+}
+
+const GROCERY_CONTRACTS: [GroceryContractSpec; 3] = [
+    GroceryContractSpec {
+        name: "c3_confirmation_contract",
+        platform_contract: "C3",
+        source_commit: "9e0a9f220751270da56996ba7004ae25e67b06d0",
+        source_path: "backend/docs/schemas/v1/confirmation-contract.json",
+        sha256: "1dfb2be6befbb53068dfa16d063c2551602b04c977f5cb1e073339d316b24430",
+        target_path: "fixtures/contracts/grocery-backend/c3-confirmation-contract.json",
+    },
+    GroceryContractSpec {
+        name: "c4_application_capabilities_contract",
+        platform_contract: "C4",
+        source_commit: "9e1011d75be9b919452c82cc7dd849bc3f5823a2",
+        source_path: "backend/docs/schemas/v1/application-capabilities-contract.json",
+        sha256: "346460ef7e0eadbd292c9ccc0eee2ec0b1595893cf2ef83f0d7e97b91f3c5dac",
+        target_path: "fixtures/contracts/grocery-backend/c4-application-capabilities-contract.json",
+    },
+    GroceryContractSpec {
+        name: "c4_scopes_contract",
+        platform_contract: "C4",
+        source_commit: "9e1011d75be9b919452c82cc7dd849bc3f5823a2",
+        source_path: "backend/docs/schemas/v1/scopes-contract.json",
+        sha256: "6ad0e04f48729148731a1a432a1c8abca1187070d7bcd9e0899f3bbef961808e",
+        target_path: "fixtures/contracts/grocery-backend/c4-scopes-contract.json",
+    },
+];
 
 /// Validate the checked-out workspace against the approved crate dependency DAG.
 pub fn validate_dependency_dag(manifest_path: &Path) -> Result<(), String> {
@@ -510,6 +554,276 @@ pub fn verify_stable_contracts(root: &Path) -> Result<ContractReport, String> {
     })
 }
 
+/// Reproduce the checked-in Platform P0 C3/C4 grocery contract freeze from an
+/// exact companion-repository history. Grocery Phase A is deliberately absent
+/// from the import table until its reviewed merge, deployment, and canary gates
+/// make a source SHA authoritative.
+pub fn import_grocery_contracts(
+    root: &Path,
+    source_repository: &Path,
+) -> Result<GroceryContractReport, String> {
+    let mut imported = Vec::with_capacity(GROCERY_CONTRACTS.len());
+    for contract in GROCERY_CONTRACTS {
+        let object = format!("{}:{}", contract.source_commit, contract.source_path);
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(source_repository)
+            .args(["show", &object])
+            .output()
+            .map_err(|error| {
+                format!(
+                    "could not read {object} from {}: {error}",
+                    source_repository.display()
+                )
+            })?;
+        if !output.status.success() {
+            return Err(format!(
+                "git show {object} failed in {}: {}",
+                source_repository.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        let actual = sha256::repository_text_digest_hex(&output.stdout)
+            .map_err(|error| format!("{object} is not UTF-8 repository text: {error}"))?;
+        if actual != contract.sha256 {
+            return Err(format!(
+                "refusing to import {object}: expected {}, found {actual}",
+                contract.sha256
+            ));
+        }
+        imported.push((contract.target_path, output.stdout));
+    }
+
+    for (target, bytes) in imported {
+        let target = root.join(target);
+        let parent = target
+            .parent()
+            .ok_or_else(|| format!("grocery contract target {} has no parent", target.display()))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "could not create grocery contract directory {}: {error}",
+                parent.display()
+            )
+        })?;
+        fs::write(&target, bytes).map_err(|error| {
+            format!(
+                "could not write imported grocery contract {}: {error}",
+                target.display()
+            )
+        })?;
+    }
+
+    verify_grocery_contracts(root)
+}
+
+/// Validate the deterministic Platform P0 C3/C4 grocery contract mirror and
+/// prove that unfinished Grocery Phase A remains explicitly provisional.
+pub fn verify_grocery_contracts(root: &Path) -> Result<GroceryContractReport, String> {
+    let document = read_json(root, "fixtures/contracts/grocery-backend/provenance.json")?;
+    let provenance = document.object("grocery contract provenance")?;
+    exact_keys(
+        provenance,
+        &[
+            "schema_version",
+            "source_repository",
+            "import_command",
+            "contracts",
+            "external_dependencies",
+            "review",
+        ],
+        "grocery contract provenance",
+    )?;
+    expect_usize(
+        provenance,
+        "schema_version",
+        1,
+        "grocery contract provenance",
+    )?;
+    expect_string(
+        provenance,
+        "source_repository",
+        "https://github.com/frntrllc/hellofood.git",
+        "grocery contract provenance",
+    )?;
+    expect_string(
+        provenance,
+        "import_command",
+        "cargo xtask import-grocery-contracts --source-repo PATH",
+        "grocery contract provenance",
+    )?;
+
+    let contracts = field(provenance, "contracts", "grocery contract provenance")?
+        .array("grocery contract provenance.contracts")?;
+    if contracts.len() != GROCERY_CONTRACTS.len() {
+        return Err(format!(
+            "grocery contract provenance must contain exactly {} merged C3/C4 contracts",
+            GROCERY_CONTRACTS.len()
+        ));
+    }
+    for (index, (contract, expected)) in contracts.iter().zip(GROCERY_CONTRACTS.iter()).enumerate()
+    {
+        let context = format!("grocery contract provenance.contracts[{index}]");
+        let contract = contract.object(&context)?;
+        exact_keys(
+            contract,
+            &[
+                "name",
+                "platform_contract",
+                "source_commit",
+                "source_path",
+                "source_sha256",
+                "target_path",
+                "target_sha256",
+                "freeze_kind",
+            ],
+            &context,
+        )?;
+        for (name, value) in [
+            ("name", expected.name),
+            ("platform_contract", expected.platform_contract),
+            ("source_commit", expected.source_commit),
+            ("source_path", expected.source_path),
+            ("source_sha256", expected.sha256),
+            ("target_path", expected.target_path),
+            ("target_sha256", expected.sha256),
+            ("freeze_kind", "exact_copy"),
+        ] {
+            expect_string(contract, name, value, &context)?;
+        }
+        validate_git_sha(expected.source_commit, &format!("{context}.source_commit"))?;
+        validate_sha256(expected.sha256, &format!("{context}.source_sha256"))?;
+        let target = safe_relative_path(expected.target_path)?;
+        expect_hash(&read_bytes(root, &target)?, expected.sha256, &target)?;
+    }
+
+    let dependencies = field(
+        provenance,
+        "external_dependencies",
+        "grocery contract provenance",
+    )?
+    .object("grocery contract provenance.external_dependencies")?;
+    exact_keys(
+        dependencies,
+        &["platform_p0", "grocery_phase_a"],
+        "grocery contract provenance.external_dependencies",
+    )?;
+    let platform = field(
+        dependencies,
+        "platform_p0",
+        "grocery contract provenance.external_dependencies",
+    )?
+    .array("grocery contract provenance.external_dependencies.platform_p0")?;
+    let expected_platform = [
+        (
+            "C1",
+            "4b7bcdfaf80053c087f5aa68fea8bd5f78732160",
+            "merged_external_dependency",
+        ),
+        (
+            "C2",
+            "fa23437c324b4e5d3d1c433b9c933b9f2dc2cbca",
+            "merged_external_dependency",
+        ),
+        (
+            "C3",
+            "9e0a9f220751270da56996ba7004ae25e67b06d0",
+            "merged_and_frozen",
+        ),
+        (
+            "C4",
+            "9e1011d75be9b919452c82cc7dd849bc3f5823a2",
+            "merged_and_frozen",
+        ),
+    ];
+    if platform.len() != expected_platform.len() {
+        return Err("grocery Platform P0 dependency ledger must contain C1-C4".to_owned());
+    }
+    for (index, (row, (id, commit, status))) in platform.iter().zip(expected_platform).enumerate() {
+        let context =
+            format!("grocery contract provenance.external_dependencies.platform_p0[{index}]");
+        let row = row.object(&context)?;
+        exact_keys(row, &["id", "commit", "status"], &context)?;
+        expect_string(row, "id", id, &context)?;
+        expect_string(row, "commit", commit, &context)?;
+        validate_git_sha(commit, &format!("{context}.commit"))?;
+        expect_string(row, "status", status, &context)?;
+    }
+
+    let phase_a = field(
+        dependencies,
+        "grocery_phase_a",
+        "grocery contract provenance.external_dependencies",
+    )?
+    .object("grocery contract provenance.external_dependencies.grocery_phase_a")?;
+    exact_keys(
+        phase_a,
+        &[
+            "source_pr",
+            "observed_head_sha",
+            "status",
+            "authoritative_source_sha",
+            "aggregate_digest",
+            "required_before_import",
+        ],
+        "grocery contract provenance.external_dependencies.grocery_phase_a",
+    )?;
+    expect_usize(
+        phase_a,
+        "source_pr",
+        107,
+        "grocery contract provenance.external_dependencies.grocery_phase_a",
+    )?;
+    validate_git_sha(
+        required_string(
+            phase_a,
+            "observed_head_sha",
+            "grocery contract provenance.external_dependencies.grocery_phase_a",
+        )?,
+        "grocery_phase_a.observed_head_sha",
+    )?;
+    expect_string(
+        phase_a,
+        "status",
+        "provisional_not_imported",
+        "grocery contract provenance.external_dependencies.grocery_phase_a",
+    )?;
+    if !null_fields(phase_a, &["authoritative_source_sha", "aggregate_digest"])? {
+        return Err(
+            "provisional Grocery Phase A must not claim an authoritative SHA or digest".to_owned(),
+        );
+    }
+    let gates = field(
+        phase_a,
+        "required_before_import",
+        "grocery contract provenance.external_dependencies.grocery_phase_a",
+    )?
+    .array(
+        "grocery contract provenance.external_dependencies.grocery_phase_a.required_before_import",
+    )?;
+    let gates: Vec<_> = gates
+        .iter()
+        .map(|gate| gate.string("grocery Phase A import gate"))
+        .collect::<Result<_, _>>()?;
+    if gates
+        != [
+            "corrected_reviewed_phase_a_merge",
+            "production_095_to_096",
+            "grocery_v1_live_canary",
+        ]
+    {
+        return Err("grocery Phase A import gates differ from the authoritative plan".to_owned());
+    }
+
+    let review_pending = validate_review(
+        field(provenance, "review", "grocery contract provenance")?,
+        "grocery contract provenance.review",
+    )?;
+    Ok(GroceryContractReport {
+        contracts: contracts.len(),
+        review_pending,
+    })
+}
+
 /// Validate Phase 0 runtime assets, schema markers, hashes, and provenance.
 pub fn verify_assets(root: &Path) -> Result<AssetReport, String> {
     for (schema, id, hash) in [
@@ -740,7 +1054,8 @@ pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, Strin
         "blocked_uncommitted"
         | "open_conflicting_checks_failed_contract_corrections_required"
         | "open_conflicting_green_contract_corrections_and_migration_096_required"
-        | "superseded_by_pr_107_mergeable_096_candidate_hosted_gates_not_green" => {
+        | "superseded_by_pr_107_mergeable_096_candidate_hosted_gates_not_green"
+        | "pr_107_mergeable_096_ci_green_public_preview_failed_provisional" => {
             if !null_fields(
                 grocery,
                 &[
@@ -866,6 +1181,7 @@ pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, Strin
         "merged_contracts_frozen_provider_neutral_seams_permitted_h3_capability_gated",
         "Phase 0 health contract",
     )?;
+    verify_grocery_contracts(root)?;
     validate_health_contract_provenance(root)?;
     validate_grok_pattern_provenance(root)?;
 
@@ -2039,9 +2355,10 @@ fn set_difference(context: &str, expected: &BTreeSet<String>, actual: &BTreeSet<
 mod tests {
     use super::{
         FROZEN_COMPATIBILITY_DIGEST, FROZEN_COMPATIBILITY_SHA, FROZEN_COMPATIBILITY_TREE,
-        validate_dependency_dag, validate_grok_pattern_provenance,
+        import_grocery_contracts, validate_dependency_dag, validate_grok_pattern_provenance,
         validate_health_contract_provenance, verify_assets, verify_assets_approved,
-        verify_migration_ledger, verify_phase0_evidence, verify_stable_contracts,
+        verify_grocery_contracts, verify_migration_ledger, verify_phase0_evidence,
+        verify_stable_contracts,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -2094,11 +2411,69 @@ mod tests {
         assert_eq!(ledger.mapped, 0);
         assert_eq!(ledger.unmapped, ledger.entries);
         assert_eq!(verify_stable_contracts(&root()).unwrap().endpoints, 27);
-        assert_eq!(verify_assets(&root()).unwrap().pending_reviews, 2);
-        assert!(verify_assets_approved(&root()).is_err());
+        assert_eq!(verify_grocery_contracts(&root()).unwrap().contracts, 3);
+        assert_eq!(verify_assets(&root()).unwrap().pending_reviews, 0);
+        verify_assets_approved(&root()).expect("specialist-approved assets must validate");
         let phase0 = verify_phase0_evidence(&root()).expect("Phase 0 inventory must validate");
-        assert!(phase0.blockers > 0);
+        assert_eq!(phase0.blockers, 0);
         assert_eq!(phase0.review_status, "pending");
+    }
+
+    #[test]
+    fn grocery_contract_validator_rejects_target_corruption() {
+        let scratch = scratch("grocery-contract-corruption");
+        for path in [
+            "fixtures/contracts/grocery-backend/provenance.json",
+            "fixtures/contracts/grocery-backend/c3-confirmation-contract.json",
+            "fixtures/contracts/grocery-backend/c4-application-capabilities-contract.json",
+            "fixtures/contracts/grocery-backend/c4-scopes-contract.json",
+        ] {
+            copy(path, &scratch);
+        }
+        verify_grocery_contracts(&scratch)
+            .expect("checked-in grocery contract provenance must validate");
+        let contract =
+            scratch.join("fixtures/contracts/grocery-backend/c3-confirmation-contract.json");
+        let mut corrupted = fs::read(&contract).unwrap();
+        corrupted.extend_from_slice(b"\ncorruption\n");
+        fs::write(contract, corrupted).unwrap();
+        assert!(verify_grocery_contracts(&scratch).is_err());
+        fs::remove_dir_all(scratch).unwrap();
+    }
+
+    #[test]
+    fn grocery_contract_validator_accepts_windows_checkout_line_endings() {
+        let scratch = scratch("grocery-contract-crlf");
+        for path in [
+            "fixtures/contracts/grocery-backend/provenance.json",
+            "fixtures/contracts/grocery-backend/c3-confirmation-contract.json",
+            "fixtures/contracts/grocery-backend/c4-application-capabilities-contract.json",
+            "fixtures/contracts/grocery-backend/c4-scopes-contract.json",
+        ] {
+            convert_to_crlf(path, &scratch);
+        }
+        verify_grocery_contracts(&scratch)
+            .expect("CRLF checkout must preserve grocery contract digests");
+        fs::remove_dir_all(scratch).unwrap();
+    }
+
+    #[test]
+    fn grocery_contract_import_failure_does_not_modify_targets() {
+        let scratch = scratch("grocery-contract-import-atomicity");
+        for path in [
+            "fixtures/contracts/grocery-backend/provenance.json",
+            "fixtures/contracts/grocery-backend/c3-confirmation-contract.json",
+            "fixtures/contracts/grocery-backend/c4-application-capabilities-contract.json",
+            "fixtures/contracts/grocery-backend/c4-scopes-contract.json",
+        ] {
+            copy(path, &scratch);
+        }
+        let target =
+            scratch.join("fixtures/contracts/grocery-backend/c3-confirmation-contract.json");
+        let before = fs::read(&target).unwrap();
+        assert!(import_grocery_contracts(&scratch, &scratch.join("missing-source")).is_err());
+        assert_eq!(fs::read(target).unwrap(), before);
+        fs::remove_dir_all(scratch).unwrap();
     }
 
     #[test]
