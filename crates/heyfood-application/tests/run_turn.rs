@@ -162,6 +162,20 @@ impl ConfigPort for FakeConfig {
             Ok(())
         })
     }
+
+    fn mark_reconciliation_required(
+        &self,
+        _commit_id: heyfood_core::CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn clear_reconciliation_required(
+        &self,
+        _commit_id: heyfood_core::CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 struct FakeClock;

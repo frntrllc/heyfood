@@ -1063,6 +1063,12 @@ if (-not [HeyfoodConsoleHost]::GenerateConsoleCtrlEvent(1, 0)) {
 $resultDeadline = [DateTime]::UtcNow.AddSeconds(8)
 while (-not [System.IO.File]::Exists($env:HEYFOOD_QUALIFICATION_RESULT_FILE)) {
     if ($child.HasExited) {
+        # The child writes its result immediately before exiting. Re-check
+        # after observing exit so publication between the loop condition and
+        # HasExited cannot be reported as a false failure.
+        if ([System.IO.File]::Exists($env:HEYFOOD_QUALIFICATION_RESULT_FILE)) {
+            break
+        }
         Write-Error "Rust signal child exited before publishing its result: $($child.ExitCode)"
         exit 32
     }

@@ -41,7 +41,7 @@ pub use presentation::{
 };
 pub use validation::{
     ValidationError, bounded_integer, bounded_number, choice, coordinates, iso_date, optional_text,
-    required_text, validate_identifier,
+    required_text, terminal_safe_text, validate_identifier,
 };
 
 /// The package version shared by the native workspace.

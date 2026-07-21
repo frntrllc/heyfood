@@ -3,7 +3,7 @@
 use std::fmt;
 
 use secrecy::{ExposeSecret, SecretString};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -44,7 +44,7 @@ impl PartialEq for SensitiveString {
 
 impl Eq for SensitiveString {}
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct AccountId(String);
 
@@ -58,12 +58,24 @@ impl AccountId {
         if trimmed != value {
             return Err("account ID must not contain surrounding whitespace");
         }
+        if value.len() > 256 || value.chars().any(char::is_control) {
+            return Err("account ID is invalid");
+        }
         Ok(Self(value))
     }
 
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for AccountId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::parse(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
     }
 }
 

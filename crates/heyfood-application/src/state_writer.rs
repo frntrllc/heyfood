@@ -261,11 +261,20 @@ impl SerializedStateWriter {
         let mut state = self.state.lock().await;
 
         if state.applied_commits.contains(&proposal.metadata.commit_id) {
-            if matches!(proposal.mutation, Mutation::CredentialRotation(_)) {
-                self.credential_port
-                    .clear_reconciliation_required(proposal.metadata.commit_id)
-                    .await
-                    .map_err(CommitError::ReconciliationMarkerClear)?;
+            match proposal.mutation {
+                Mutation::CredentialRotation(_) => {
+                    self.credential_port
+                        .clear_reconciliation_required(proposal.metadata.commit_id)
+                        .await
+                        .map_err(CommitError::ReconciliationMarkerClear)?;
+                }
+                Mutation::Config(_) | Mutation::LocalFirstRecord { .. } => {
+                    self.config_port
+                        .clear_reconciliation_required(proposal.metadata.commit_id)
+                        .await
+                        .map_err(CommitError::ReconciliationMarkerClear)?;
+                }
+                Mutation::Presentation(_) | Mutation::ConversationPointer(_) => {}
             }
             return Ok(CommitOutcome::Duplicate);
         }
@@ -274,12 +283,19 @@ impl SerializedStateWriter {
         {
             return Ok(CommitOutcome::RejectedStaleGeneration);
         }
-        if let (Some(expected), Some(actual)) = (
+        match (
             proposal.metadata.expected_account.as_ref(),
             state.account_id.as_ref(),
-        ) && expected != actual
-        {
-            return Err(CommitError::InvalidProposal("account snapshot is stale"));
+        ) {
+            (Some(expected), Some(actual)) if expected != actual => {
+                return Err(CommitError::InvalidProposal("account snapshot is stale"));
+            }
+            (Some(_), None) => {
+                return Err(CommitError::InvalidProposal(
+                    "state writer is not bound to the proposal account",
+                ));
+            }
+            _ => {}
         }
 
         match proposal.mutation {
@@ -332,22 +348,53 @@ impl SerializedStateWriter {
                 }
             }
             Mutation::Config(config) => {
-                self.config_port
+                let result = self
+                    .config_port
                     .commit(ConfigCommit {
                         commit_id: proposal.metadata.commit_id,
                         mutation: ConfigMutation::Replace(config),
                     })
+                    .await;
+                if let Err(operation) = result {
+                    if let Err(marker) = self
+                        .config_port
+                        .mark_reconciliation_required(proposal.metadata.commit_id)
+                        .await
+                    {
+                        return Err(CommitError::ReconciliationMarkerWrite { operation, marker });
+                    }
+                    return Err(CommitError::ReconciliationRequired(operation));
+                }
+                self.config_port
+                    .clear_reconciliation_required(proposal.metadata.commit_id)
                     .await
-                    .map_err(CommitError::Port)?;
+                    .map_err(CommitError::ReconciliationMarkerClear)?;
             }
             Mutation::LocalFirstRecord { kind, payload } => {
-                self.config_port
+                let result = self
+                    .config_port
                     .commit(ConfigCommit {
                         commit_id: proposal.metadata.commit_id,
                         mutation: ConfigMutation::LocalFirstRecord { kind, payload },
                     })
+                    .await;
+                if let Err(operation) = result {
+                    if !operation.outcome_uncertain {
+                        return Err(CommitError::Port(operation));
+                    }
+                    if let Err(marker) = self
+                        .config_port
+                        .mark_reconciliation_required(proposal.metadata.commit_id)
+                        .await
+                    {
+                        return Err(CommitError::ReconciliationMarkerWrite { operation, marker });
+                    }
+                    return Err(CommitError::ReconciliationRequired(operation));
+                }
+                self.config_port
+                    .clear_reconciliation_required(proposal.metadata.commit_id)
                     .await
-                    .map_err(CommitError::Port)?;
+                    .map_err(CommitError::ReconciliationMarkerClear)?;
             }
         }
 

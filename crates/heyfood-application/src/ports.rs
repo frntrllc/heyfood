@@ -13,11 +13,22 @@ use tokio_util::sync::CancellationToken;
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub type BoxEventStream = Box<dyn EventStream>;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct PortError {
     pub code: &'static str,
     pub message: String,
     pub outcome_uncertain: bool,
+}
+
+impl fmt::Debug for PortError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PortError")
+            .field("code", &self.code)
+            .field("message", &"[REDACTED]")
+            .field("outcome_uncertain", &self.outcome_uncertain)
+            .finish()
+    }
 }
 
 impl PortError {
@@ -120,6 +131,19 @@ pub trait ConfigPort: Send + Sync {
 
     /// This adapter operation must be bounded, atomic, and idempotent by commit ID.
     fn commit(&self, commit: ConfigCommit) -> BoxFuture<'_, Result<(), PortError>>;
+
+    /// Persist an exact-commit repair marker when a durable config outcome is
+    /// uncertain or a server-accepted config cannot be written locally.
+    fn mark_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>>;
+
+    /// Clear only the repair marker for this exact idempotent commit.
+    fn clear_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>>;
 }
 
 pub trait ClockPort: Send + Sync {

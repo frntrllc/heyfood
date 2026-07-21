@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use heyfood_core::{AccountId, ClientConfig, ConfigRevision, NetworkPolicy, ServiceUrl};
+use heyfood_application::{ConfigCommit, ConfigMutation, ConfigPort};
+use heyfood_core::{AccountId, ClientConfig, CommitId, ConfigRevision, NetworkPolicy, ServiceUrl};
 use heyfood_platform::{
     NativeConfigStore, NativePaths, ProxyConfiguration, TerminalKind, TlsRootPolicy,
     TtyCapabilities,
@@ -60,7 +61,16 @@ fn native_paths_separate_state_and_make_account_paths_opaque() {
 #[test]
 fn native_config_claims_legacy_unbound_state_once_and_rejects_other_accounts() {
     let root = TempRoot::new("account-binding");
-    NativeConfigStore::open(&root.0, config(), NetworkPolicy::HTTPS_ONLY).unwrap();
+    let unbound = NativeConfigStore::open(&root.0, config(), NetworkPolicy::HTTPS_ONLY).unwrap();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(unbound.commit(ConfigCommit {
+            commit_id: CommitId::new(),
+            mutation: ConfigMutation::ConversationPointer(Some("account-a-private".into())),
+        }))
+        .unwrap();
     NativeConfigStore::open_account_bound(
         &root.0,
         AccountId::parse("account-a").unwrap(),
@@ -69,7 +79,8 @@ fn native_config_claims_legacy_unbound_state_once_and_rejects_other_accounts() {
     )
     .unwrap();
     let document = std::fs::read_to_string(root.0.join("config.native")).unwrap();
-    assert!(document.starts_with("schema=2\naccount="));
+    assert!(document.starts_with("schema=3\naccount="));
+    assert!(document.lines().any(|line| line == "conversation="));
 
     NativeConfigStore::open_account_bound(
         &root.0,

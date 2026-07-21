@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use url::{Host, Url};
 
 /// Transport policy applied at every service URL ingress.
@@ -29,7 +29,7 @@ impl Default for NetworkPolicy {
 }
 
 /// A service base URL that has passed the heyfood network policy.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct ServiceUrl(Url);
 
@@ -67,9 +67,19 @@ impl ServiceUrl {
     }
 }
 
+impl<'de> Deserialize<'de> for ServiceUrl {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value, NetworkPolicy::HTTPS_ONLY).map_err(serde::de::Error::custom)
+    }
+}
+
 /// A validated browser destination. Unlike a service base URL, an OAuth
 /// authorization destination may contain a query string.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct BrowserUrl(Url);
 
@@ -94,10 +104,20 @@ impl BrowserUrl {
     }
 }
 
+impl<'de> Deserialize<'de> for BrowserUrl {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value, NetworkPolicy::HTTPS_ONLY).map_err(serde::de::Error::custom)
+    }
+}
+
 /// An HTTP(S) forward proxy URL. Plain HTTP proxies are standard and may carry
 /// encrypted HTTPS tunnels, so this is intentionally distinct from a service
 /// endpoint. Embedded credentials, query, and fragments are forbidden.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct ProxyUrl(Url);
 
@@ -132,9 +152,25 @@ impl ProxyUrl {
     }
 }
 
+impl<'de> Deserialize<'de> for ProxyUrl {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(serde::de::Error::custom)
+    }
+}
+
 impl fmt::Display for BrowserUrl {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
+        formatter.write_str("[REDACTED_BROWSER_URL]")
+    }
+}
+
+impl fmt::Debug for BrowserUrl {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BrowserUrl([REDACTED])")
     }
 }
 

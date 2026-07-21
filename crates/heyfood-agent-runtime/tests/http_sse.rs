@@ -90,6 +90,20 @@ impl ConfigPort for MemoryConfig {
     fn commit(&self, _commit: ConfigCommit) -> BoxFuture<'_, Result<(), PortError>> {
         Box::pin(async { Ok(()) })
     }
+
+    fn mark_reconciliation_required(
+        &self,
+        _commit_id: heyfood_core::CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn clear_reconciliation_required(
+        &self,
+        _commit_id: heyfood_core::CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 struct FixedClock;

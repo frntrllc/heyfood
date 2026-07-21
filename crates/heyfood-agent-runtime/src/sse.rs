@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use heyfood_application::{BoxFuture, EventStream, PortError};
-use heyfood_core::{AgentChoice, AgentEvent, AgentFailure};
+use heyfood_core::{AgentChoice, AgentEvent, AgentFailure, terminal_safe_text};
 use reqwest::Response;
 use serde::Deserialize;
 use serde_json::Value;
@@ -11,6 +11,8 @@ use tokio_util::sync::CancellationToken;
 const MAX_SSE_LINE_BYTES: usize = 64 * 1024;
 const MAX_SSE_EVENT_BYTES: usize = 1024 * 1024;
 const MAX_SSE_BUFFERED_BYTES: usize = MAX_SSE_EVENT_BYTES + (2 * MAX_SSE_LINE_BYTES);
+const MAX_STREAM_METADATA_BYTES: usize = heyfood_core::agent::MAX_AGENT_METADATA_BYTES;
+const MAX_CONVERSATION_ID_BYTES: usize = 4 * 1024;
 
 pub struct SseEventStream {
     response: Option<Response>,
@@ -266,21 +268,23 @@ fn normalize(raw: RawEvent) -> Result<AgentEvent, PortError> {
         "thinking" => {
             let data: ThinkingData = serde_json::from_str(&raw.data).map_err(|_| parse_error())?;
             Ok(AgentEvent::Thinking {
-                stage: data.stage,
-                message: data.message,
+                stage: normalize_optional_text(data.stage, MAX_STREAM_METADATA_BYTES)?,
+                message: normalize_optional_text(data.message, MAX_STREAM_METADATA_BYTES)?,
             })
         }
         "progress" => {
             let data: ProgressData = serde_json::from_str(&raw.data).map_err(|_| parse_error())?;
             Ok(AgentEvent::Progress {
-                message: data.message,
+                message: normalize_text(data.message, MAX_STREAM_METADATA_BYTES)?,
                 current: data.current,
                 total: data.total,
             })
         }
         "partial" => {
             let data: PartialData = serde_json::from_str(&raw.data).map_err(|_| parse_error())?;
-            Ok(AgentEvent::Partial { text: data.text })
+            Ok(AgentEvent::Partial {
+                text: normalize_text(data.text, MAX_SSE_EVENT_BYTES)?,
+            })
         }
         "choices" => {
             let data: ChoicesData = serde_json::from_str(&raw.data).map_err(|_| parse_error())?;
@@ -288,21 +292,35 @@ fn normalize(raw: RawEvent) -> Result<AgentEvent, PortError> {
                 .choices
                 .into_iter()
                 .map(|choice| match choice {
-                    ChoiceWire::Label(label) => AgentChoice { label, value: None },
-                    ChoiceWire::Detailed(choice) => choice,
+                    ChoiceWire::Label(label) => AgentChoice::from_untrusted(label, None),
+                    ChoiceWire::Detailed(choice) => Ok(choice),
                 })
-                .collect();
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| PortError::new("sse_payload", error))?;
+            if choices.len() > heyfood_core::agent::MAX_AGENT_CHOICES {
+                return Err(PortError::new(
+                    "sse_payload",
+                    "agent choice count exceeds its limit",
+                ));
+            }
             Ok(AgentEvent::Choices {
                 choices,
                 allow_multiple: data.allow_multiple,
             })
         }
         "result" => {
-            let document: Value = serde_json::from_str(&raw.data).map_err(|_| parse_error())?;
+            let mut document: Value = serde_json::from_str(&raw.data).map_err(|_| parse_error())?;
+            sanitize_json_strings(&mut document);
             let conversation_id = document
                 .get("conversation_id")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
+            if conversation_id
+                .as_ref()
+                .is_some_and(|value| value.is_empty() || value.len() > MAX_CONVERSATION_ID_BYTES)
+            {
+                return Err(PortError::new("sse_payload", "conversation ID is invalid"));
+            }
             Ok(AgentEvent::Result {
                 document,
                 conversation_id,
@@ -310,11 +328,17 @@ fn normalize(raw: RawEvent) -> Result<AgentEvent, PortError> {
         }
         "error" => {
             let data: ErrorData = serde_json::from_str(&raw.data).map_err(|_| parse_error())?;
-            let error = data.error.unwrap_or_else(|| AgentFailure {
-                code: data.code.unwrap_or_else(|| "service_error".into()),
-                message: data.message.unwrap_or_else(|| "service error".into()),
-                retryable: data.retryable,
-            });
+            let error = data.error.map_or_else(
+                || {
+                    AgentFailure::from_untrusted(
+                        data.code.unwrap_or_else(|| "service_error".into()),
+                        data.message.unwrap_or_else(|| "service error".into()),
+                        data.retryable,
+                    )
+                    .map_err(|error| PortError::new("sse_payload", error))
+                },
+                Ok,
+            )?;
             Ok(AgentEvent::Error { error })
         }
         _ => Err(PortError::new(
@@ -324,9 +348,38 @@ fn normalize(raw: RawEvent) -> Result<AgentEvent, PortError> {
     }
 }
 
+fn normalize_text(value: String, maximum_bytes: usize) -> Result<String, PortError> {
+    let value = terminal_safe_text(&value);
+    if value.len() > maximum_bytes {
+        return Err(PortError::new(
+            "sse_payload",
+            "agent presentation text exceeds its limit",
+        ));
+    }
+    Ok(value)
+}
+
+fn normalize_optional_text(
+    value: Option<String>,
+    maximum_bytes: usize,
+) -> Result<Option<String>, PortError> {
+    value
+        .map(|value| normalize_text(value, maximum_bytes))
+        .transpose()
+}
+
+fn sanitize_json_strings(value: &mut Value) {
+    match value {
+        Value::String(text) => *text = terminal_safe_text(text),
+        Value::Array(values) => values.iter_mut().for_each(sanitize_json_strings),
+        Value::Object(values) => values.values_mut().for_each(sanitize_json_strings),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MAX_SSE_BUFFERED_BYTES, MAX_SSE_LINE_BYTES, RawSseParser, normalize};
+    use super::{MAX_SSE_BUFFERED_BYTES, MAX_SSE_LINE_BYTES, RawEvent, RawSseParser, normalize};
     use heyfood_core::AgentEvent;
 
     #[test]
@@ -361,6 +414,44 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn normalized_service_text_cannot_emit_terminal_controls() {
+        let partial = normalize(RawEvent {
+            event_type: "partial".into(),
+            data: r#"{"text":"safe\u001b]52;clipboard\u0007"}"#.into(),
+        })
+        .unwrap();
+        assert_eq!(
+            partial,
+            AgentEvent::Partial {
+                text: "safe]52;clipboard".into()
+            }
+        );
+
+        let result = normalize(RawEvent {
+            event_type: "result".into(),
+            data: r#"{"text":"safe\u001b[31m","nested":["\u0007value"]}"#.into(),
+        })
+        .unwrap();
+        let AgentEvent::Result { document, .. } = result else {
+            panic!("expected result event");
+        };
+        assert_eq!(document["text"], "safe[31m");
+        assert_eq!(document["nested"][0], "value");
+    }
+
+    #[test]
+    fn choice_count_is_bounded_before_reaching_the_ui() {
+        let choices = (0..=heyfood_core::agent::MAX_AGENT_CHOICES)
+            .map(|index| format!("choice-{index}"))
+            .collect::<Vec<_>>();
+        let event = RawEvent {
+            event_type: "choices".into(),
+            data: serde_json::json!({"choices": choices}).to_string(),
+        };
+        assert_eq!(normalize(event).unwrap_err().code, "sse_payload");
     }
 
     #[test]

@@ -30,6 +30,7 @@ secrecy = { version = "0.10", default-features = false }
 serde = { version = "1", default-features = false }
 serde_json = { version = "1", default-features = false }
 sha2 = { version = "0.10", default-features = false }
+sysinfo = { version = "0.38.4", default-features = false }
 time = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false }
 tokio-util = { version = "0.7", default-features = false }

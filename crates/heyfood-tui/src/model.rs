@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use heyfood_application::RunTurnOutcome;
-use heyfood_core::AgentEvent;
+use heyfood_core::{AgentEvent, terminal_safe_text};
 
 pub const MAX_SCROLLBACK_ENTRIES: usize = 1_000;
 pub const MAX_RENDERED_LINES: usize = 20_000;
@@ -411,6 +411,7 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
             operation_id,
             message,
         } if model.operation.operation_id() == Some(operation_id) => {
+            let message = terminal_safe_text(&message);
             model.scrollback.mutate_last_assistant(|entry| {
                 if !entry.text.is_empty() {
                     entry.text.push_str("\n\n");
@@ -432,19 +433,24 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
     let old_lines = model.scrollback.rendered_lines();
     match event {
         AgentEvent::Thinking { stage, message } => {
-            model.activity = message.or(stage).or_else(|| Some("Thinking…".into()));
+            model.activity = message
+                .or(stage)
+                .map(|value| terminal_safe_text(&value))
+                .or_else(|| Some("Thinking…".into()));
         }
         AgentEvent::Progress {
             message,
             current,
             total,
         } => {
+            let message = terminal_safe_text(&message);
             model.activity = match (current, total) {
                 (Some(current), Some(total)) => Some(format!("{message} ({current}/{total})")),
                 _ => Some(message),
             };
         }
         AgentEvent::Partial { text } => {
+            let text = terminal_safe_text(&text);
             model
                 .scrollback
                 .mutate_last_assistant(|entry| entry.text.push_str(&text));
@@ -457,7 +463,7 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                 }
                 for choice in choices {
                     entry.text.push_str("• ");
-                    entry.text.push_str(&choice.label);
+                    entry.text.push_str(&terminal_safe_text(&choice.label));
                     entry.text.push('\n');
                 }
             });
@@ -469,6 +475,7 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                 .or_else(|| document.get("text").and_then(|value| value.as_str()))
                 .map(str::to_owned)
                 .unwrap_or_else(|| document.to_string());
+            let result = terminal_safe_text(&result);
             model.scrollback.mutate_last_assistant(|entry| {
                 entry.text = result;
                 entry.streaming = false;
@@ -478,13 +485,13 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             model.idle_exit_armed = false;
         }
         AgentEvent::Error { error } => {
+            let code = terminal_safe_text(&error.code);
+            let message = terminal_safe_text(&error.message);
             model.scrollback.mutate_last_assistant(|entry| {
                 if !entry.text.is_empty() {
                     entry.text.push_str("\n\n");
                 }
-                entry
-                    .text
-                    .push_str(&format!("{}: {}", error.code, error.message));
+                entry.text.push_str(&format!("{code}: {message}"));
                 entry.streaming = false;
             });
             mark_finishing(model);
@@ -640,6 +647,28 @@ mod tests {
         );
         assert!(model.scrollback.entries().back().unwrap().text.is_empty());
         assert_eq!(model.operation, OperationState::Running(1));
+    }
+
+    #[test]
+    fn runtime_text_is_terminal_safe_even_when_an_adapter_constructs_events_directly() {
+        let mut model = AppModel {
+            draft: "question".into(),
+            cursor: 8,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Partial {
+                    text: "safe\u{1b}]52;clipboard\u{7}".into(),
+                },
+            }),
+        );
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert_eq!(text, "safe]52;clipboard");
+        assert!(!text.chars().any(|character| character == '\u{1b}'));
     }
 
     #[test]

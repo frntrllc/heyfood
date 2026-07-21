@@ -2,11 +2,12 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::validation::without_terminal_controls;
+use crate::validation::terminal_safe_text;
 
 pub const MAX_PRESENTATION_BLOCKS: usize = 256;
+pub const MAX_PRESENTATION_CHOICES: usize = 256;
 pub const MAX_PRESENTATION_TEXT_BYTES: usize = 16 * 1024;
 pub const MAX_PRESENTATION_DOCUMENT_BYTES: usize = 256 * 1024;
 
@@ -15,6 +16,8 @@ pub enum PresentationError {
     EmptyText,
     TextTooLarge,
     TooManyBlocks,
+    TooManyChoices,
+    UnsupportedSchema,
     DocumentTooLarge,
 }
 
@@ -24,6 +27,10 @@ impl fmt::Display for PresentationError {
             Self::EmptyText => formatter.write_str("presentation text must not be empty"),
             Self::TextTooLarge => formatter.write_str("presentation text exceeds its limit"),
             Self::TooManyBlocks => formatter.write_str("presentation has too many blocks"),
+            Self::TooManyChoices => formatter.write_str("presentation has too many choices"),
+            Self::UnsupportedSchema => {
+                formatter.write_str("presentation schema version is unsupported")
+            }
             Self::DocumentTooLarge => formatter.write_str("presentation exceeds its byte limit"),
         }
     }
@@ -31,13 +38,29 @@ impl fmt::Display for PresentationError {
 
 impl std::error::Error for PresentationError {}
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct PresentationText(String);
 
+impl fmt::Debug for PresentationText {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PresentationText([REDACTED])")
+    }
+}
+
+impl<'de> Deserialize<'de> for PresentationText {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_untrusted(value).map_err(serde::de::Error::custom)
+    }
+}
+
 impl PresentationText {
     pub fn from_untrusted(value: impl AsRef<str>) -> Result<Self, PresentationError> {
-        let value = without_terminal_controls(value.as_ref());
+        let value = terminal_safe_text(value.as_ref());
         if value.is_empty() {
             return Err(PresentationError::EmptyText);
         }
@@ -90,7 +113,7 @@ pub enum PresentationBlock {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PresentationDocument {
     pub schema_version: u16,
     pub title: Option<PresentationText>,
@@ -105,6 +128,15 @@ impl PresentationDocument {
         if blocks.len() > MAX_PRESENTATION_BLOCKS {
             return Err(PresentationError::TooManyBlocks);
         }
+        if blocks.iter().any(|block| {
+            matches!(
+                block,
+                PresentationBlock::Choices { choices, .. }
+                    if choices.len() > MAX_PRESENTATION_CHOICES
+            )
+        }) {
+            return Err(PresentationError::TooManyChoices);
+        }
         let document = Self {
             schema_version: 1,
             title,
@@ -117,5 +149,27 @@ impl PresentationDocument {
             return Err(PresentationError::DocumentTooLarge);
         }
         Ok(document)
+    }
+}
+
+impl<'de> Deserialize<'de> for PresentationDocument {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawPresentationDocument {
+            schema_version: u16,
+            title: Option<PresentationText>,
+            blocks: Vec<PresentationBlock>,
+        }
+
+        let raw = RawPresentationDocument::deserialize(deserializer)?;
+        if raw.schema_version != 1 {
+            return Err(serde::de::Error::custom(
+                PresentationError::UnsupportedSchema,
+            ));
+        }
+        Self::new(raw.title, raw.blocks).map_err(serde::de::Error::custom)
     }
 }

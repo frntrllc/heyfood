@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -21,6 +20,11 @@ use heyfood_core::{
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(10);
+const MAX_CONFIG_APPLIED_COMMITS: usize = 128;
+const MAX_CONVERSATION_POINTER_BYTES: usize = 4 * 1_024;
+const MAX_LOCAL_RECORD_KIND_BYTES: usize = 64;
+const MAX_LOCAL_RECORD_BYTES: usize = 1024 * 1024;
+const MAX_LOCAL_RECORDS: usize = 1_024;
 
 /// Same-directory, exclusive staging followed by a flushed atomic replace.
 pub struct AtomicFile;
@@ -54,18 +58,24 @@ impl AtomicFile {
             .map_err(|error| PortError::new("atomic_stage", error.to_string()))?
             .ok_or_else(|| PortError::new("atomic_stage", "could not allocate staging file"))?;
 
+        let mut replaced = false;
         if let Err(error) = (|| -> std::io::Result<()> {
             make_private_file(&staging_path)?;
             staging.write_all(bytes)?;
             staging.flush()?;
             staging.sync_all()?;
             fs::rename(&staging_path, path)?;
+            replaced = true;
             make_private_file(path)?;
             sync_directory(parent)?;
             Ok(())
         })() {
             let _ = fs::remove_file(&staging_path);
-            return Err(PortError::new("atomic_replace", error.to_string()));
+            return Err(if replaced {
+                PortError::uncertain("atomic_replace", error.to_string())
+            } else {
+                PortError::new("atomic_replace", error.to_string())
+            });
         }
         Ok(())
     }
@@ -151,6 +161,7 @@ pub struct NativeConfigStore {
     state_path: PathBuf,
     lock_path: PathBuf,
     records_path: PathBuf,
+    reconciliation_path: PathBuf,
     policy: NetworkPolicy,
     expected_account: Option<AccountId>,
 }
@@ -190,6 +201,7 @@ impl NativeConfigStore {
             state_path: root.join("config.native"),
             lock_path: root.join("config.lock"),
             records_path: root.join("records"),
+            reconciliation_path: root.join("config.reconciliation"),
             policy,
             expected_account,
         };
@@ -209,15 +221,32 @@ impl NativeConfigStore {
                     ));
                 }
                 (None, Some(expected)) => {
-                    // A schema-1/unbound document contains no credential and is
-                    // safely claimed exactly once after verified login.
+                    // An unbound document contains no credential and is
+                    // safely claimed exactly once after verified login. Any
+                    // account-scoped pointer/idempotency state is discarded,
+                    // matching the Python oracle's fail-closed binding rule.
+                    if store.records_path.exists()
+                        && store
+                            .records_path
+                            .read_dir()
+                            .map_err(|error| PortError::new("config_records", error.to_string()))?
+                            .next()
+                            .is_some()
+                    {
+                        return Err(PortError::new(
+                            "config_account_unbound_state",
+                            "unbound durable records require explicit reconciliation",
+                        ));
+                    }
                     state.account_id = Some(expected.clone());
+                    state.conversation = None;
+                    state.applied.clear();
                     AtomicFile::replace(&store.state_path, &state.encode())?;
                 }
                 _ => {
-                    // Re-encode legacy schema 1 into the current version even
+                    // Re-encode legacy schemas into the current version even
                     // when it remains intentionally unbound.
-                    if state.schema_version == 1 {
+                    if state.schema_version < heyfood_core::CURRENT_CONFIG_SCHEMA.get() {
                         AtomicFile::replace(&store.state_path, &state.encode())?;
                     }
                 }
@@ -239,6 +268,11 @@ impl NativeConfigStore {
         }
         Ok(state)
     }
+
+    pub fn reconciliation_required(&self) -> Result<bool, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, false)?;
+        Ok(self.reconciliation_path.exists())
+    }
 }
 
 impl ConfigPort for NativeConfigStore {
@@ -254,23 +288,87 @@ impl ConfigPort for NativeConfigStore {
             let _lock = FileLock::acquire_async(&self.lock_path, true).await?;
             let mut state = self.read_unlocked()?;
             if state.applied.contains(&commit.commit_id) {
-                return Ok(());
+                return clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id);
             }
+            let mut local_record_applied = false;
             match commit.mutation {
-                ConfigMutation::Replace(config) => state.config = config,
-                ConfigMutation::ConversationPointer(pointer) => state.conversation = pointer,
+                ConfigMutation::Replace(config) => {
+                    config
+                        .validate()
+                        .map_err(|error| PortError::new("config_validation", error))?;
+                    if config.revision <= state.config.revision {
+                        return Err(PortError::new(
+                            "config_revision_conflict",
+                            "replacement config revision must advance",
+                        ));
+                    }
+                    state.config = config;
+                }
+                ConfigMutation::ConversationPointer(pointer) => {
+                    validate_conversation_pointer(pointer.as_deref())?;
+                    state.conversation = pointer;
+                }
                 ConfigMutation::LocalFirstRecord { kind, payload } => {
+                    heyfood_core::validate_identifier(&kind, MAX_LOCAL_RECORD_KIND_BYTES).map_err(
+                        |_| PortError::new("config_record_kind", "record kind is invalid"),
+                    )?;
+                    if payload.is_empty() || payload.len() > MAX_LOCAL_RECORD_BYTES {
+                        return Err(PortError::new(
+                            "config_record_size",
+                            "record payload must contain 1 byte through 1 MiB",
+                        ));
+                    }
                     create_private_dir(&self.records_path)?;
                     let name = format!(
                         "{}-{}.record",
                         hex_encode(kind.as_bytes()),
                         commit.commit_id.as_uuid()
                     );
-                    AtomicFile::replace(&self.records_path.join(name), &payload)?;
+                    let path = self.records_path.join(name);
+                    if !path.exists()
+                        && count_directory_entries(&self.records_path)? >= MAX_LOCAL_RECORDS
+                    {
+                        return Err(PortError::new(
+                            "config_record_capacity",
+                            "durable record capacity is exhausted and requires reconciliation",
+                        ));
+                    }
+                    AtomicFile::replace(&path, &payload)?;
+                    local_record_applied = true;
                 }
             }
-            state.applied.insert(commit.commit_id);
-            AtomicFile::replace(&self.state_path, &state.encode())
+            state.remember_commit(commit.commit_id);
+            if let Err(error) = AtomicFile::replace(&self.state_path, &state.encode()) {
+                return Err(if local_record_applied && !error.outcome_uncertain {
+                    PortError::uncertain(error.code, error.message)
+                } else {
+                    error
+                });
+            }
+            clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id)
+        })
+    }
+
+    fn mark_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async move {
+            let _lock = FileLock::acquire_async(&self.lock_path, true).await?;
+            AtomicFile::replace(
+                &self.reconciliation_path,
+                format!("{}\n", commit_id.as_uuid()).as_bytes(),
+            )
+        })
+    }
+
+    fn clear_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async move {
+            let _lock = FileLock::acquire_async(&self.lock_path, true).await?;
+            clear_reconciliation_marker(&self.reconciliation_path, commit_id)
         })
     }
 }
@@ -280,7 +378,7 @@ struct ConfigState {
     account_id: Option<AccountId>,
     config: ClientConfig,
     conversation: Option<String>,
-    applied: HashSet<CommitId>,
+    applied: Vec<CommitId>,
 }
 
 impl ConfigState {
@@ -290,17 +388,26 @@ impl ConfigState {
             account_id,
             config,
             conversation: None,
-            applied: HashSet::new(),
+            applied: Vec::new(),
         }
     }
 
+    fn remember_commit(&mut self, commit_id: CommitId) {
+        if self.applied.contains(&commit_id) {
+            return;
+        }
+        if self.applied.len() == MAX_CONFIG_APPLIED_COMMITS {
+            self.applied.remove(0);
+        }
+        self.applied.push(commit_id);
+    }
+
     fn encode(&self) -> Vec<u8> {
-        let mut applied = self
+        let applied = self
             .applied
             .iter()
             .map(|value| value.as_uuid().to_string())
             .collect::<Vec<_>>();
-        applied.sort_unstable();
         let applied = applied.join(",");
         format!(
             "schema={}\naccount={}\nactive={}\napi={}\nauth={}\nrevision={}\nconversation={}\napplied={}\n",
@@ -325,7 +432,7 @@ impl ConfigState {
         let schema_version = required(&fields, "schema")?
             .parse::<u16>()
             .map_err(|_| PortError::new("config_schema", "invalid native config schema"))?;
-        if !matches!(schema_version, 1 | 2) {
+        if !matches!(schema_version, 1..=3) {
             return Err(PortError::new(
                 "config_schema",
                 "unsupported native config schema",
@@ -354,7 +461,17 @@ impl ConfigState {
             "" => None,
             value => Some(hex_string(value)?),
         };
-        let applied = parse_commit_set(required(&fields, "applied")?)?;
+        validate_conversation_pointer(conversation.as_deref())?;
+        let mut applied = parse_commit_set(required(&fields, "applied")?)?;
+        if schema_version == 3 && applied.len() > MAX_CONFIG_APPLIED_COMMITS {
+            return Err(PortError::new(
+                "config_commit_capacity",
+                "native config contains too many durable commit IDs",
+            ));
+        }
+        if applied.len() > MAX_CONFIG_APPLIED_COMMITS {
+            applied.drain(..applied.len() - MAX_CONFIG_APPLIED_COMMITS);
+        }
         let config = ClientConfig {
             active_context,
             api_url,
@@ -415,12 +532,30 @@ impl FileCredentialStore {
         AtomicFile::replace(
             &self.state_path,
             &CredentialState::new(credentials.clone()).encode(),
-        )
+        )?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
     pub fn reconciliation_required(&self) -> Result<bool, PortError> {
         let _lock = FileLock::acquire(&self.lock_path, false)?;
         Ok(self.reconciliation_path.exists())
+    }
+
+    /// Verified logout for the explicit owner-only fallback. The credential
+    /// document and any stale reconciliation marker are removed under one
+    /// process lock before another account can initialize this store.
+    pub fn delete(&self) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.state_path.exists() {
+            fs::remove_file(&self.state_path)
+                .map_err(|error| PortError::new("credential_file_delete", error.to_string()))?;
+            if let Some(parent) = self.state_path.parent() {
+                sync_directory(parent).map_err(|error| {
+                    PortError::uncertain("credential_file_delete", error.to_string())
+                })?;
+            }
+        }
+        clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
     fn read_unlocked(&self) -> Result<Option<CredentialState>, PortError> {
@@ -523,7 +658,8 @@ impl WindowsCredentialStore {
                 "credentials have already been initialized",
             ));
         }
-        self.write_unlocked(&CredentialState::new(credentials.clone()))
+        self.write_unlocked(&CredentialState::new(credentials.clone()))?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
     pub fn reconciliation_required(&self) -> Result<bool, PortError> {
@@ -535,7 +671,9 @@ impl WindowsCredentialStore {
     pub fn delete(&self) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
         match self.entry()?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Ok(()) | Err(keyring::Error::NoEntry) => {
+                clear_any_reconciliation_marker(&self.reconciliation_path)
+            }
             Err(error) => Err(keyring_error("credential_manager_delete", error)),
         }
     }
@@ -683,7 +821,8 @@ impl KeyringCredentialStore {
                 "credentials have already been initialized",
             ));
         }
-        self.write_unlocked(&CredentialState::new(credentials.clone()))
+        self.write_unlocked(&CredentialState::new(credentials.clone()))?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
     pub fn reconciliation_required(&self) -> Result<bool, PortError> {
@@ -694,7 +833,9 @@ impl KeyringCredentialStore {
     pub fn delete(&self) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
         match self.entry()?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Ok(()) | Err(keyring::Error::NoEntry) => {
+                clear_any_reconciliation_marker(&self.reconciliation_path)
+            }
             Err(error) => Err(keyring_error("native_keyring_delete", error)),
         }
     }
@@ -871,16 +1012,29 @@ fn clear_reconciliation_marker(path: &Path, commit_id: CommitId) -> Result<(), P
         return Ok(());
     }
     let marker = read_limited(path, 128)
-        .map_err(|error| PortError::new("reconciliation_read", error.to_string()))?;
+        .map_err(|error| PortError::uncertain("reconciliation_read", error.to_string()))?;
     let expected = format!("{}\n", commit_id.as_uuid());
     if marker != expected.as_bytes() {
         return Ok(());
     }
     fs::remove_file(path)
-        .map_err(|error| PortError::new("reconciliation_clear", error.to_string()))?;
+        .map_err(|error| PortError::uncertain("reconciliation_clear", error.to_string()))?;
     if let Some(parent) = path.parent() {
         sync_directory(parent)
-            .map_err(|error| PortError::new("reconciliation_clear", error.to_string()))?;
+            .map_err(|error| PortError::uncertain("reconciliation_clear", error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn clear_any_reconciliation_marker(path: &Path) -> Result<(), PortError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    fs::remove_file(path)
+        .map_err(|error| PortError::uncertain("reconciliation_clear", error.to_string()))?;
+    if let Some(parent) = path.parent() {
+        sync_directory(parent)
+            .map_err(|error| PortError::uncertain("reconciliation_clear", error.to_string()))?;
     }
     Ok(())
 }
@@ -971,11 +1125,11 @@ fn required<'a>(
         .ok_or_else(|| PortError::new("native_format", format!("native state is missing {name}")))
 }
 
-fn parse_commit_set(value: &str) -> Result<HashSet<CommitId>, PortError> {
+fn parse_commit_set(value: &str) -> Result<Vec<CommitId>, PortError> {
     if value.is_empty() {
-        return Ok(HashSet::new());
+        return Ok(Vec::new());
     }
-    value
+    let commits = value
         .split(',')
         .map(|value| {
             value
@@ -983,7 +1137,41 @@ fn parse_commit_set(value: &str) -> Result<HashSet<CommitId>, PortError> {
                 .map(CommitId::from_uuid)
                 .map_err(|_| PortError::new("native_commit", "invalid durable commit ID"))
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut unique = Vec::with_capacity(commits.len());
+    for commit in commits {
+        if !unique.contains(&commit) {
+            unique.push(commit);
+        }
+    }
+    Ok(unique)
+}
+
+fn validate_conversation_pointer(pointer: Option<&str>) -> Result<(), PortError> {
+    let Some(pointer) = pointer else {
+        return Ok(());
+    };
+    if pointer.is_empty()
+        || pointer.len() > MAX_CONVERSATION_POINTER_BYTES
+        || pointer.chars().any(char::is_control)
+    {
+        return Err(PortError::new(
+            "config_conversation",
+            "conversation pointer is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn count_directory_entries(path: &Path) -> Result<usize, PortError> {
+    path.read_dir()
+        .map_err(|error| PortError::new("config_records", error.to_string()))?
+        .take(MAX_LOCAL_RECORDS + 1)
+        .try_fold(0usize, |count, entry| {
+            entry
+                .map(|_| count + 1)
+                .map_err(|error| PortError::new("config_records", error.to_string()))
+        })
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

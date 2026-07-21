@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::validate_identifier;
 
@@ -22,7 +22,7 @@ pub enum ErrorCategory {
     Internal,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct ErrorCode(String);
 
@@ -39,16 +39,50 @@ impl ErrorCode {
     }
 }
 
+impl<'de> Deserialize<'de> for ErrorCode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::parse(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
 /// A client-safe error envelope. The message is explicitly public and must not
 /// be constructed from credentials, dietary values, health values, or raw
 /// provider responses.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ClientError {
     pub code: ErrorCode,
     pub category: ErrorCategory,
     pub public_message: String,
     pub retryable: bool,
     pub outcome_uncertain: bool,
+}
+
+impl<'de> Deserialize<'de> for ClientError {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawClientError {
+            code: ErrorCode,
+            category: ErrorCategory,
+            public_message: String,
+            retryable: bool,
+            outcome_uncertain: bool,
+        }
+
+        let raw = RawClientError::deserialize(deserializer)?;
+        Self::new(raw.code, raw.category, raw.public_message)
+            .map(|value| {
+                value
+                    .retryable(raw.retryable)
+                    .outcome_uncertain(raw.outcome_uncertain)
+            })
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 impl ClientError {

@@ -143,7 +143,7 @@ pub fn validate_identifier(value: &str, maximum_bytes: usize) -> Result<(), Vali
 /// retaining ordinary newlines and tabs. Renderers must still escape their own
 /// markup format; this prevents service content from emitting CSI/OSC bytes.
 #[must_use]
-pub(crate) fn without_terminal_controls(value: &str) -> String {
+pub fn terminal_safe_text(value: &str) -> String {
     value
         .chars()
         .filter(|character| {

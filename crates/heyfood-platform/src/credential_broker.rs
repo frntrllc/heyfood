@@ -68,7 +68,7 @@ impl CredentialBrokerStore {
                 "credential broker input exceeds its limit",
             ));
         }
-        let mut child = Command::new(&self.executable)
+        let child = Command::new(&self.executable)
             .arg(BROKER_MODE)
             .arg(action)
             .arg(&self.root)
@@ -78,6 +78,17 @@ impl CredentialBrokerStore {
             .kill_on_drop(true)
             .spawn()
             .map_err(|error| PortError::new("credential_broker_spawn", error.to_string()))?;
+        run_bounded_child(child, input, self.deadline, outcome_uncertain).await
+    }
+}
+
+async fn run_bounded_child(
+    mut child: tokio::process::Child,
+    input: Vec<u8>,
+    deadline: Duration,
+    outcome_uncertain: bool,
+) -> Result<Vec<u8>, PortError> {
+    let operation = async move {
         let mut stdin = child
             .stdin
             .take()
@@ -91,44 +102,46 @@ impl CredentialBrokerStore {
             .await
             .map_err(|error| PortError::new("credential_broker_pipe", error.to_string()))?;
         drop(stdin);
-
-        let output = match tokio::time::timeout(self.deadline, child.wait_with_output()).await {
-            Ok(result) => result
-                .map_err(|error| PortError::new("credential_broker_wait", error.to_string()))?,
-            Err(_) if outcome_uncertain => {
-                return Err(PortError::uncertain(
-                    "credential_broker_timeout",
-                    "native credential operation exceeded its deadline",
-                ));
-            }
-            Err(_) => {
-                return Err(PortError::new(
-                    "credential_broker_timeout",
-                    "native credential operation exceeded its deadline",
-                ));
-            }
-        };
-        if !output.status.success() {
-            return Err(if outcome_uncertain {
-                PortError::uncertain(
-                    "credential_broker_failed",
-                    "native credential operation failed",
-                )
-            } else {
-                PortError::new(
-                    "credential_broker_failed",
-                    "native credential operation failed",
-                )
-            });
-        }
-        if output.stdout.len() > MAX_BROKER_DOCUMENT_BYTES {
-            return Err(PortError::new(
-                "credential_broker_size",
-                "credential broker output exceeds its limit",
+        child
+            .wait_with_output()
+            .await
+            .map_err(|error| PortError::new("credential_broker_wait", error.to_string()))
+    };
+    let output = match tokio::time::timeout(deadline, operation).await {
+        Ok(result) => result?,
+        Err(_) if outcome_uncertain => {
+            return Err(PortError::uncertain(
+                "credential_broker_timeout",
+                "native credential operation exceeded its deadline",
             ));
         }
-        Ok(output.stdout)
+        Err(_) => {
+            return Err(PortError::new(
+                "credential_broker_timeout",
+                "native credential operation exceeded its deadline",
+            ));
+        }
+    };
+    if !output.status.success() {
+        return Err(if outcome_uncertain {
+            PortError::uncertain(
+                "credential_broker_failed",
+                "native credential operation failed",
+            )
+        } else {
+            PortError::new(
+                "credential_broker_failed",
+                "native credential operation failed",
+            )
+        });
     }
+    if output.stdout.len() > MAX_BROKER_DOCUMENT_BYTES {
+        return Err(PortError::new(
+            "credential_broker_size",
+            "credential broker output exceeds its limit",
+        ));
+    }
+    Ok(output.stdout)
 }
 
 impl CredentialPort for CredentialBrokerStore {
@@ -210,6 +223,9 @@ pub fn run_credential_broker_if_requested() -> Option<ExitCode> {
     if arguments.next().is_some() {
         return Some(ExitCode::from(2));
     }
+    if verify_broker_parent().is_err() {
+        return Some(ExitCode::from(2));
+    }
     Some(match run_broker_action(&action, &root) {
         Ok(output) => {
             if std::io::stdout().write_all(&output).is_ok() {
@@ -220,6 +236,49 @@ pub fn run_credential_broker_if_requested() -> Option<ExitCode> {
         }
         Err(_) => ExitCode::FAILURE,
     })
+}
+
+/// Prevent the hidden broker mode from becoming a confused-deputy credential
+/// oracle. Only the exact running heyfood executable may be the broker's
+/// immediate parent; shells, test runners, and unrelated processes fail before
+/// stdin or native credential storage is touched.
+fn verify_broker_parent() -> Result<(), PortError> {
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+
+    let current_pid = Pid::from_u32(std::process::id());
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::Some(&[current_pid]), true);
+    let parent_pid = system
+        .process(current_pid)
+        .and_then(sysinfo::Process::parent)
+        .ok_or_else(|| {
+            PortError::new(
+                "credential_broker_parent",
+                "credential broker parent identity is unavailable",
+            )
+        })?;
+    system.refresh_processes(ProcessesToUpdate::Some(&[parent_pid]), true);
+    let parent_executable = system
+        .process(parent_pid)
+        .and_then(sysinfo::Process::exe)
+        .ok_or_else(|| {
+            PortError::new(
+                "credential_broker_parent",
+                "credential broker parent executable is unavailable",
+            )
+        })?
+        .canonicalize()
+        .map_err(|error| PortError::new("credential_broker_parent", error.to_string()))?;
+    let broker_executable = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .map_err(|error| PortError::new("credential_broker_parent", error.to_string()))?;
+    if parent_executable != broker_executable {
+        return Err(PortError::new(
+            "credential_broker_parent",
+            "credential broker was not launched by the running heyfood executable",
+        ));
+    }
+    Ok(())
 }
 
 fn run_broker_action(action: &str, root: &Path) -> Result<Vec<u8>, PortError> {
@@ -307,4 +366,73 @@ fn trimmed_input(input: &[u8]) -> Result<&str, PortError> {
 fn parse_commit_id(value: &str) -> Result<CommitId, PortError> {
     serde_json::from_value(serde_json::Value::String(value.to_owned()))
         .map_err(|_| PortError::new("credential_broker_request", "invalid commit ID"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::process::Stdio;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+    use tokio::process::Command;
+
+    use super::run_bounded_child;
+
+    #[test]
+    #[ignore = "spawned only by the bounded broker lifecycle test"]
+    fn broker_prompt_fixture() {
+        let path = std::env::var_os("HEYFOOD_BROKER_TEST_PID_FILE")
+            .map(PathBuf::from)
+            .expect("fixture PID path");
+        std::fs::write(path, format!("{}\n", std::process::id())).expect("publish fixture PID");
+        std::thread::sleep(Duration::from_secs(30));
+    }
+
+    #[tokio::test]
+    async fn timeout_terminates_a_prompting_broker_without_an_orphan() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let pid_path =
+            std::env::temp_dir().join(format!("heyfood-broker-pid-{}-{nonce}", std::process::id()));
+        let mut child = Command::new(std::env::current_exe().expect("test executable"));
+        child
+            .args([
+                "--exact",
+                "credential_broker::tests::broker_prompt_fixture",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("HEYFOOD_BROKER_TEST_PID_FILE", &pid_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let child = child.spawn().expect("spawn prompt fixture");
+        let error = run_bounded_child(child, Vec::new(), Duration::from_millis(250), true)
+            .await
+            .expect_err("prompting broker must time out");
+        assert_eq!(error.code, "credential_broker_timeout");
+        assert!(error.outcome_uncertain);
+
+        let pid = std::fs::read_to_string(&pid_path)
+            .expect("fixture published PID")
+            .trim()
+            .parse::<u32>()
+            .expect("fixture PID");
+        let pid = Pid::from_u32(pid);
+        let mut system = System::new();
+        for _ in 0..100 {
+            system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+            if system.process(pid).is_none() {
+                let _ = std::fs::remove_file(&pid_path);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = std::fs::remove_file(&pid_path);
+        panic!("timed-out broker process remained alive");
+    }
 }

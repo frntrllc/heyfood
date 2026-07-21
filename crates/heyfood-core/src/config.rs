@@ -1,6 +1,6 @@
 //! Versioned native configuration captured by application operations.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::ServiceUrl;
 
@@ -22,9 +22,9 @@ impl ConfigSchemaVersion {
     }
 }
 
-/// Schema 2 adds explicit account binding to the native state envelope. The
-/// ordinary configuration document remains credential-free.
-pub const CURRENT_CONFIG_SCHEMA: ConfigSchemaVersion = ConfigSchemaVersion::new(2);
+/// Schema 2 added explicit account binding; schema 3 bounds the durable replay
+/// window. The ordinary configuration document remains credential-free.
+pub const CURRENT_CONFIG_SCHEMA: ConfigSchemaVersion = ConfigSchemaVersion::new(3);
 
 #[derive(
     Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
@@ -45,12 +45,37 @@ impl ConfigRevision {
 }
 
 /// Immutable configuration captured at operation start.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ClientConfig {
     pub active_context: String,
     pub api_url: ServiceUrl,
     pub auth_url: ServiceUrl,
     pub revision: ConfigRevision,
+}
+
+impl<'de> Deserialize<'de> for ClientConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawClientConfig {
+            active_context: String,
+            api_url: ServiceUrl,
+            auth_url: ServiceUrl,
+            revision: ConfigRevision,
+        }
+
+        let raw = RawClientConfig::deserialize(deserializer)?;
+        let config = Self {
+            active_context: raw.active_context,
+            api_url: raw.api_url,
+            auth_url: raw.auth_url,
+            revision: raw.revision,
+        };
+        config.validate().map_err(serde::de::Error::custom)?;
+        Ok(config)
+    }
 }
 
 impl ClientConfig {

@@ -10,7 +10,7 @@ publish.workspace = true
 
 [features]
 default = []
-native-credentials = ["dep:keyring"]
+native-credentials = ["dep:keyring", "dep:sysinfo"]
 
 [dependencies]
 directories.workspace = true
@@ -20,6 +20,7 @@ heyfood-core = { version = "=0.4.0", path = "../heyfood-core" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
 sha2 = { workspace = true, features = ["std"] }
+sysinfo = { workspace = true, features = ["system"], optional = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
 tracing = { workspace = true, features = ["attributes", "std"] }
 webbrowser = { workspace = true, features = ["hardened"] }

@@ -1,6 +1,8 @@
 //! Provider-neutral health semantics. Provider credentials and raw samples are
 //! intentionally not representable in this crate.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::SensitiveString;
@@ -47,12 +49,18 @@ pub struct HealthTrend {
     pub direction: TrendDirection,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HealthFreshness {
     pub status: HealthConnectionStatus,
     pub provider: Option<HealthProvider>,
     pub data_freshness_hours: Option<u32>,
     pub stale_since: Option<String>,
+}
+
+impl fmt::Debug for HealthFreshness {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("HealthFreshness([REDACTED])")
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

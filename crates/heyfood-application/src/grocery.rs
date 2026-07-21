@@ -87,9 +87,10 @@ impl GroceryCacheKey {
         preconditions: &FrozenGroceryPreconditions,
     ) -> Result<Self, &'static str> {
         let api_origin = api_origin.into();
-        if !api_origin.starts_with("https://") && !api_origin.starts_with("http://localhost") {
-            return Err("grocery cache origin is not an approved service origin");
-        }
+        let api_origin =
+            heyfood_core::ServiceUrl::parse(&api_origin, heyfood_core::NetworkPolicy::DEVELOPMENT)
+                .map_err(|_| "grocery cache origin is not an approved service origin")?
+                .to_string();
         let context = context.into();
         if context.is_empty() || context.len() > 128 || context.chars().any(char::is_control) {
             return Err("grocery cache context is invalid");

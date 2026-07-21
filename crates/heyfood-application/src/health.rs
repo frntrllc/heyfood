@@ -16,18 +16,30 @@ pub struct HealthContext {
     pub goals: Vec<SensitiveString>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct HealthConnection {
     pub provider: HealthProvider,
     pub status: HealthConnectionStatus,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl std::fmt::Debug for HealthConnection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("HealthConnection([REDACTED])")
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct HealthAuthorization {
     pub provider: HealthProvider,
     pub browser_url: BrowserUrl,
     /// Opaque server completion handle; never a provider OAuth credential.
-    pub completion_handle: String,
+    pub completion_handle: SensitiveString,
+}
+
+impl std::fmt::Debug for HealthAuthorization {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("HealthAuthorization([REDACTED])")
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -140,6 +140,43 @@ fn reconciliation_marker_is_durable_and_cleared_by_verified_rotation() {
 
 #[test]
 #[cfg(not(windows))]
+fn verified_new_login_clears_a_stale_reconciliation_marker() {
+    let root = TempRoot::new("reconciliation-new-login");
+    let store = FileCredentialStore::open(&root.0).unwrap();
+    block_on(store.mark_reconciliation_required(CommitId::new())).unwrap();
+    assert!(store.reconciliation_required().unwrap());
+    store.initialize(&credentials(1)).unwrap();
+    assert!(!store.reconciliation_required().unwrap());
+}
+
+#[test]
+#[cfg(not(windows))]
+fn verified_logout_allows_an_explicit_fallback_account_switch() {
+    let root = TempRoot::new("fallback-account-switch");
+    let store = FileCredentialStore::open(&root.0).unwrap();
+    store.initialize(&credentials(1)).unwrap();
+    block_on(store.mark_reconciliation_required(CommitId::new())).unwrap();
+    store.delete().unwrap();
+    assert!(!store.reconciliation_required().unwrap());
+    assert!(block_on(store.load()).unwrap().is_none());
+
+    let replacement = SessionCredentials::from_unix_expiry(
+        AccountId::parse("different-account").unwrap(),
+        SensitiveString::new("replacement-access"),
+        SensitiveString::new("replacement-refresh"),
+        CredentialVersion::new(1),
+        4_102_444_800,
+    )
+    .unwrap();
+    store.initialize(&replacement).unwrap();
+    assert_eq!(
+        block_on(store.load()).unwrap().unwrap().account_id,
+        replacement.account_id
+    );
+}
+
+#[test]
+#[cfg(not(windows))]
 fn unrelated_rotation_preserves_another_commits_reconciliation_marker() {
     let root = TempRoot::new("reconciliation-unrelated");
     let store = FileCredentialStore::open(&root.0).unwrap();
@@ -286,6 +323,12 @@ fn windows_credential_manager_rotates_and_reconciles_without_token_files() {
     let store = WindowsCredentialStore::open(&root.0).unwrap();
     store.delete().unwrap();
     let _cleanup = Cleanup(&store);
+    block_on(store.mark_reconciliation_required(CommitId::new())).unwrap();
+    store.initialize(&credentials(1)).unwrap();
+    assert!(!store.reconciliation_required().unwrap());
+    block_on(store.mark_reconciliation_required(CommitId::new())).unwrap();
+    store.delete().unwrap();
+    assert!(!store.reconciliation_required().unwrap());
     store.initialize(&credentials(1)).unwrap();
     let commit = CredentialCommit {
         commit_id: CommitId::new(),
@@ -328,6 +371,12 @@ fn native_keyring_rotates_and_reconciles_without_token_files() {
     let store = KeyringCredentialStore::open(&root.0).unwrap();
     let _ = store.delete();
     let _cleanup = Cleanup(&store);
+    block_on(store.mark_reconciliation_required(CommitId::new())).unwrap();
+    store.initialize(&credentials(1)).unwrap();
+    assert!(!store.reconciliation_required().unwrap());
+    block_on(store.mark_reconciliation_required(CommitId::new())).unwrap();
+    store.delete().unwrap();
+    assert!(!store.reconciliation_required().unwrap());
     store.initialize(&credentials(1)).unwrap();
     let commit = CredentialCommit {
         commit_id: CommitId::new(),
@@ -392,6 +441,107 @@ fn config_and_local_first_record_commits_survive_reopen() {
         .unwrap()
         .path();
     assert_eq!(std::fs::read(record).unwrap(), b"complete-record");
+}
+
+#[test]
+fn config_replacement_validates_and_cannot_roll_revision_backward() {
+    let root = TempRoot::new("config-validation");
+    let store =
+        NativeConfigStore::open(&root.0, config("initial", 4), NetworkPolicy::DEVELOPMENT).unwrap();
+
+    let invalid = ClientConfig {
+        active_context: String::new(),
+        ..config("ignored", 5)
+    };
+    assert_eq!(
+        block_on(store.commit(ConfigCommit {
+            commit_id: CommitId::new(),
+            mutation: ConfigMutation::Replace(invalid),
+        }))
+        .unwrap_err()
+        .code,
+        "config_validation"
+    );
+    assert_eq!(
+        block_on(store.commit(ConfigCommit {
+            commit_id: CommitId::new(),
+            mutation: ConfigMutation::Replace(config("rollback", 4)),
+        }))
+        .unwrap_err()
+        .code,
+        "config_revision_conflict"
+    );
+    assert_eq!(block_on(store.load()).unwrap().active_context, "initial");
+}
+
+#[test]
+fn config_inputs_and_replay_window_are_bounded() {
+    let root = TempRoot::new("config-bounds");
+    let store =
+        NativeConfigStore::open(&root.0, config("initial", 1), NetworkPolicy::DEVELOPMENT).unwrap();
+
+    assert_eq!(
+        block_on(store.commit(ConfigCommit {
+            commit_id: CommitId::new(),
+            mutation: ConfigMutation::ConversationPointer(Some("x".repeat(4 * 1024 + 1))),
+        }))
+        .unwrap_err()
+        .code,
+        "config_conversation"
+    );
+    assert_eq!(
+        block_on(store.commit(ConfigCommit {
+            commit_id: CommitId::new(),
+            mutation: ConfigMutation::LocalFirstRecord {
+                kind: "invalid kind".into(),
+                payload: vec![1],
+            },
+        }))
+        .unwrap_err()
+        .code,
+        "config_record_kind"
+    );
+    assert_eq!(
+        block_on(store.commit(ConfigCommit {
+            commit_id: CommitId::new(),
+            mutation: ConfigMutation::LocalFirstRecord {
+                kind: "bounded".into(),
+                payload: vec![0; 1024 * 1024 + 1],
+            },
+        }))
+        .unwrap_err()
+        .code,
+        "config_record_size"
+    );
+
+    for index in 0..150 {
+        block_on(store.commit(ConfigCommit {
+            commit_id: CommitId::new(),
+            mutation: ConfigMutation::ConversationPointer(Some(format!("conversation-{index}"))),
+        }))
+        .unwrap();
+    }
+    let document = std::fs::read_to_string(root.0.join("config.native")).unwrap();
+    let applied = document
+        .lines()
+        .find_map(|line| line.strip_prefix("applied="))
+        .unwrap();
+    assert_eq!(applied.split(',').count(), 128);
+    assert!(document.len() < 8 * 1024);
+}
+
+#[test]
+fn config_reconciliation_marker_is_exact_commit_and_durable() {
+    let root = TempRoot::new("config-reconciliation");
+    let store =
+        NativeConfigStore::open(&root.0, config("initial", 1), NetworkPolicy::DEVELOPMENT).unwrap();
+    let commit_id = CommitId::new();
+    block_on(store.mark_reconciliation_required(commit_id)).unwrap();
+    assert!(store.reconciliation_required().unwrap());
+    block_on(store.clear_reconciliation_required(CommitId::new())).unwrap();
+    assert!(store.reconciliation_required().unwrap());
+    block_on(store.clear_reconciliation_required(commit_id)).unwrap();
+    assert!(!store.reconciliation_required().unwrap());
 }
 
 #[test]
