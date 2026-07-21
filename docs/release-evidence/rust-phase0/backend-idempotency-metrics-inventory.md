@@ -4,7 +4,7 @@
 oracle `73494a57468dac83b4904ce6c390e36926f5c6fe` (27 endpoints).
 
 **Backend observed:** `frntrllc/hellofood` main
-`1a4a05b5799ba3050027171c1f98a2999c24df5c`.
+`70d79bf6d859ff7d45738663b52a9a1074e62738`.
 
 This is a conservative client-safety inventory. A row classified
 `no_automatic_retry` remains non-retriable even if an individual backend

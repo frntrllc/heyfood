@@ -44,16 +44,15 @@ unpublished Python `0.4.0` converse/SSE oracle at
 `73494a57468dac83b4904ce6c390e36926f5c6fe`.
 
 Companion backend main is
-`1a4a05b5799ba3050027171c1f98a2999c24df5c`: migration repair plus the
+`70d79bf6d859ff7d45738663b52a9a1074e62738`: migration repair plus the
 certifi-backed verified-TLS correction are merged, production is postflight
 verified at sole head `095`, H1/H2 PR #79 and H3 backend/mobile PRs #96/#95 are
 merged, and their health contracts are frozen under `fixtures/contracts/`.
-Grocery PR #107 now supersedes PR #90 with a revision-096 candidate
-at exact final-qualification head `8cd7baf2`, rebased onto PR #110 and claiming
-the authoritative-snapshot/frozen-list/C1, exact catalog, and PostgreSQL 18 NOT
-NULL corrections. Hosted checks and independent review remain in progress;
-final Phase A provenance remains gated on a current green reviewed merge,
-production migration, and live canaries.
+Grocery PR #107 supersedes PR #90 and is now merged at that main SHA from exact
+reviewed source head `8cd7baf2`, with the authoritative-snapshot/frozen-list/C1,
+exact catalog, and PostgreSQL 18 NOT NULL corrections. Production remains at
+`095`; signed attestation, `095 → 096`, exact-merge deployment, regenerated
+digest, and live canaries still gate authoritative Phase A provenance.
 Security PRs #108, #109, and #110 are merged; PR #110 still requires deployment
 and exact-build postflight. No Kroger B1/B2 or Security D2 implementation is
 visible. Exact merged C3/C4 schemas are now mirrored under

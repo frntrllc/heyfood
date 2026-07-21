@@ -60,13 +60,14 @@
     "grocery_phase_a": {
       "source_pr": 107,
       "observed_head_sha": "8cd7baf2c683bf5ad286af32c26d96bdb1742f86",
-      "status": "provisional_not_imported",
+      "observed_merge_sha": "70d79bf6d859ff7d45738663b52a9a1074e62738",
+      "status": "merged_not_deployed_not_imported",
       "authoritative_source_sha": null,
       "aggregate_digest": null,
       "required_before_import": [
-        "corrected_reviewed_phase_a_merge",
         "production_095_to_096",
-        "grocery_v1_live_canary"
+        "exact_grocery_merge_deployed_and_digest_regenerated",
+        "grocery_v1_capability_and_live_canary"
       ]
     }
   },

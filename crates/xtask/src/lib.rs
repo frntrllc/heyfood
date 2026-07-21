@@ -760,6 +760,7 @@ pub fn verify_grocery_contracts(root: &Path) -> Result<GroceryContractReport, St
         &[
             "source_pr",
             "observed_head_sha",
+            "observed_merge_sha",
             "status",
             "authoritative_source_sha",
             "aggregate_digest",
@@ -783,8 +784,28 @@ pub fn verify_grocery_contracts(root: &Path) -> Result<GroceryContractReport, St
     )?;
     expect_string(
         phase_a,
+        "observed_head_sha",
+        "8cd7baf2c683bf5ad286af32c26d96bdb1742f86",
+        "grocery contract provenance.external_dependencies.grocery_phase_a",
+    )?;
+    expect_string(
+        phase_a,
+        "observed_merge_sha",
+        "70d79bf6d859ff7d45738663b52a9a1074e62738",
+        "grocery contract provenance.external_dependencies.grocery_phase_a",
+    )?;
+    validate_git_sha(
+        required_string(
+            phase_a,
+            "observed_merge_sha",
+            "grocery contract provenance.external_dependencies.grocery_phase_a",
+        )?,
+        "grocery_phase_a.observed_merge_sha",
+    )?;
+    expect_string(
+        phase_a,
         "status",
-        "provisional_not_imported",
+        "merged_not_deployed_not_imported",
         "grocery contract provenance.external_dependencies.grocery_phase_a",
     )?;
     if !null_fields(phase_a, &["authoritative_source_sha", "aggregate_digest"])? {
@@ -806,9 +827,9 @@ pub fn verify_grocery_contracts(root: &Path) -> Result<GroceryContractReport, St
         .collect::<Result<_, _>>()?;
     if gates
         != [
-            "corrected_reviewed_phase_a_merge",
             "production_095_to_096",
-            "grocery_v1_live_canary",
+            "exact_grocery_merge_deployed_and_digest_regenerated",
+            "grocery_v1_capability_and_live_canary",
         ]
     {
         return Err("grocery Phase A import gates differ from the authoritative plan".to_owned());
@@ -1057,7 +1078,8 @@ pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, Strin
         | "superseded_by_pr_107_mergeable_096_candidate_hosted_gates_not_green"
         | "pr_107_mergeable_096_ci_green_public_preview_failed_provisional"
         | "pr_107_f5_catalog_candidate_checks_in_progress_provisional"
-        | "pr_107_8cd_pg18_candidate_checks_in_progress_provisional" => {
+        | "pr_107_8cd_pg18_candidate_checks_in_progress_provisional"
+        | "pr_107_merged_production_095_activation_gated" => {
             if !null_fields(
                 grocery,
                 &[
