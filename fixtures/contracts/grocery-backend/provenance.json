@@ -71,8 +71,8 @@
     }
   },
   "review": {
-    "status": "pending",
-    "reviewer": null,
-    "reviewed_commit_sha": null
+    "status": "approved",
+    "reviewer": "codex-rust-specialist:/root/rust_phase0_review",
+    "reviewed_commit_sha": "6157e1c78788336f16388c980b732b31d1c06dd3"
   }
 }

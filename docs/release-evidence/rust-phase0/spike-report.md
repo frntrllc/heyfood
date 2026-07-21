@@ -3,8 +3,8 @@
 **Evidence date:** 2026-07-20
 **Exact code lineage measured:** `08cecb3a00bff6bbd670faf066105205f6e93b0b`
 **Status:** local and exact hosted three-OS remediation evidence is green;
-asset and Grok provenance are specialist-approved; the new deterministic
-grocery C3/C4 freeze and overall Phase 0 approval are pending exact-SHA review.
+asset, Grok, and deterministic grocery C3/C4 provenance are specialist-approved;
+overall Phase 0 approval is pending the final-delta exact-SHA review.
 Cutover and Phase 1 are not authorized by this report.
 
 ## What the spike now proves
@@ -76,11 +76,11 @@ Measured from a detached, clean worktree at the exact code SHA on macOS 26.5
 | Terminal restoration | alternate screen left, bracketed paste disabled, canonical mode restored |
 | Release-profile panic restoration | passed |
 | Read-only Python local-state import | 5 passed; source immutable; credentials excluded; keyring disposition requires reauthentication |
-| Windows target compile | platform default/native credential feature compiles; exact hosted runtime run pending |
+| Windows hosted runtime | default/native-credential suites, real-console signal delivery, ConPTY restoration, and compilation passed |
 | First-frame controlled probe | 30 samples; optimized p95 104 µs |
 | Input-to-frame controlled probe | 2,000 samples with 500 semantic entries; optimized p95 470 µs |
 | Workspace format/strict Clippy/tests | passed locally |
-| Dependency DAG/contracts/assets/ledger/inventory validators | passed locally; assets and Grok ledger specialist-approved; grocery freeze and overall Phase 0 review pending |
+| Dependency DAG/contracts/assets/ledger/inventory validators | passed locally; assets, Grok ledger, and grocery freeze specialist-approved; overall Phase 0 review pending |
 
 The timing probes use Ratatui's controlled `TestBackend`; they are regression
 checks, not release-process startup, real terminal paint, network latency, idle
