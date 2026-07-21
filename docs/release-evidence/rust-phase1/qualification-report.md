@@ -1,7 +1,7 @@
 # Rust Phase 1 qualification report
 
 Phase 1 is implemented at code lineage
-`85ad15ae66538eafdfd1e3f4a34bf83ef680872b`. The full local workspace,
+`891270e362f3bf45ed1a8daec213bd107651f2b6`. The full local workspace,
 policy, contract, migration-freeze, native-feature, real macOS Keychain, and
 process-broker qualification passed. Phase 2 is not authorized by this report.
 
@@ -15,22 +15,31 @@ process-broker qualification passed. Phase 2 is not authorized by this report.
   provisional Grocery ports and ID-only account/list/version cache, and H1/H2
   Health ports.
 - `heyfood-platform` now owns separate native config/data/cache/runtime paths,
-  opaque per-account state directories, schema-2 account binding, validated
+  opaque per-account state directories, schema-3 account binding and bounded
+  replay state, validated
   TTY/proxy/custom-CA policy, native keyrings plus owner-only fallback, and a
-  deadline-bounded child-process credential broker using anonymous pipes.
+  deadline-bounded child-process credential broker using anonymous pipes and
+  exact-parent executable attestation.
 - The frozen Python `0.4.0` validation oracle is consumed by Rust tests. Python
   is not invoked by production Rust code.
 
 ## Durable and privacy evidence
 
 Tests cover cancellation before dispatch, uncertain outcomes after dispatch,
-cancel immediately after credential acceptance, durable replay after restart,
-stale presentation rejection, local-first repair records, bounded file locks,
-atomic replacement, interrupted staging, account-switch isolation, and
-read-only/idempotent Python non-secret import. The native broker round trip
-proves initialize/load/rotation/deletion through the actual macOS Keychain with
-no credential file. Credential, Grocery item, and Health values redact from
-diagnostics; the Grocery item-reference cache stores only server UUIDs.
+cancel immediately after credential acceptance, while queued behind the state
+writer, during the atomic adapter section, and immediately after adapter
+commit. They also cover durable replay after restart, stale presentation
+rejection, config and local-first repair markers, bounded file locks/replay
+state/record inputs, atomic replacement, interrupted staging, account-switch
+isolation, and read-only/idempotent Python non-secret import. Fixture rows—not
+hard-coded duplicates—drive the Python validation differential.
+
+The real macOS Keychain round trip proves initialize/load/rotation/deletion
+without a credential file. Broker evidence separately proves direct external
+invocation is rejected and a prompting/hung child is killed by its deadline
+without an orphan. Credential, Grocery item, Health, browser-auth, normalized
+SSE, and presentation values redact from diagnostics; the Grocery
+item-reference cache stores only server UUIDs.
 
 ## Deliberate external gates
 

@@ -4,8 +4,8 @@
   "rust_lineage": {
     "repository": "https://github.com/frntrllc/heyfood.git",
     "branch": "codex/rust-big-bang",
-    "code_commit_sha": "85ad15ae66538eafdfd1e3f4a34bf83ef680872b",
-    "evidence_commit_sha": "1856b500f3349423a93eab91be639e11d2b86da0"
+    "code_commit_sha": "891270e362f3bf45ed1a8daec213bd107651f2b6",
+    "evidence_commit_sha": "891270e362f3bf45ed1a8daec213bd107651f2b6"
   },
   "requirements": [
     {

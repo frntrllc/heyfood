@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "evidence_date": "2026-07-20",
-  "code_commit_sha": "85ad15ae66538eafdfd1e3f4a34bf83ef680872b",
-  "code_tree_sha": "64099f3d5c71f01094525998a9f066293f6ba923",
+  "code_commit_sha": "891270e362f3bf45ed1a8daec213bd107651f2b6",
+  "code_tree_sha": "f9d8573d91bb1d32242df4caa06f958e397ca8df",
   "source_tree_clean": true,
   "host": {
     "os": "macOS 26.5 (25F71)",
@@ -18,20 +18,23 @@
       "cargo test --locked --workspace",
       "cargo check --locked -p heyfood-platform -p heyfood-bin --all-targets --features native-credentials",
       "cargo clippy --locked -p heyfood-platform -p heyfood-bin --all-targets --features native-credentials -- -D warnings",
-      "cargo test --locked -p heyfood-platform --features native-credentials native_keyring_rotates_and_reconciles_without_token_files -- --exact",
+      "cargo test --locked -p heyfood-platform --features native-credentials",
       "cargo test --locked -p heyfood-bin --features native-credentials --test credential_broker",
+      "cargo test --release --locked --package heyfood-bin --test phase0_qualification",
+      "cargo test --release --locked --package heyfood-bin --test phase0_qualification qualification_render_and_input_performance_budgets -- --ignored --exact --nocapture",
       "cargo xtask dependency-dag",
       "cargo xtask verify-stable-contracts",
       "cargo xtask verify-grocery-contracts",
       "cargo xtask verify-assets",
       "cargo xtask verify-migration-ledger",
-      "cargo xtask verify-phase0-evidence"
+      "cargo xtask verify-phase0-evidence",
+      "cargo xtask verify-phase1-evidence"
     ],
     "result": "passed",
     "failed": 0
   },
   "dg_r3": {
-    "native_config_schema": 2,
+    "native_config_schema": 3,
     "atomic_replace_and_parent_sync": "passed",
     "bounded_cross_process_lock": "passed",
     "owner_only_unix_permissions": "passed",
@@ -40,10 +43,10 @@
     "python_non_secret_import": "passed_read_only_idempotent",
     "unsafe_secret_import": "reauthentication_required",
     "macos_keychain": "passed_local_real_backend",
-    "linux_secret_service": "pending_hosted_environment",
+    "linux_secret_service": "pending_exact_hosted_dbus_environment",
     "linux_headless_owner_only_fallback": "passed_local_file_contract",
     "windows_credential_manager": "pending_exact_hosted_evidence_sha",
-    "killable_process_broker": "passed_local_real_backend",
+    "killable_process_broker": "passed_parent_attestation_timeout_termination_no_orphan",
     "secrets_in_argv_or_environment": false,
     "token_file_created_by_native_backend": false
   },
@@ -55,13 +58,21 @@
     "refresh_rotation_cancel_after_acceptance": "passed",
     "durable_replay_after_restart": "passed",
     "local_first_repair_record": "passed",
-    "presentation_generation_rejection": "passed"
+    "presentation_generation_rejection": "passed",
+    "account_bound_proposal_on_unbound_writer": "rejected",
+    "accepted_config_reconciliation": "passed",
+    "cancellation_while_queued": "passed",
+    "cancellation_during_atomic_adapter_commit": "passed",
+    "cancellation_immediately_after_commit": "passed",
+    "bounded_persistent_replay_window": "passed"
   },
   "privacy": {
     "credential_debug_redaction": "passed",
     "health_value_debug_redaction": "passed",
     "grocery_item_debug_redaction": "passed",
     "terminal_control_filtering": "passed",
+    "validated_serde_ingress": "passed",
+    "fixture_driven_python_differential": "passed",
     "item_cache_contains_sensitive_labels": false,
     "provider_oauth_token_model_present": false
   },
