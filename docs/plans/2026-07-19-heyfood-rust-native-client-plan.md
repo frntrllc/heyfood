@@ -73,15 +73,25 @@ operational recovery dependency, not permission to weaken TLS, relax the boot
 gate, or let Rust encode a draft server contract.
 
 Grocery Phase A has been reconstructed from the superseded PR #90 onto current
-`main` as PR #107. Its exact final-qualification head is
-`af7e6f30a43ce4e975743143dcb18b8eb745844c`: migration `096` descends from
+`main` as PR #107. Its exact pushed final-qualification head is
+`a80f852c23e18b485a6a27a9f978aab5bbb35c93`: migration `096` descends from
 `095`; authoritative household snapshots and exact list/version preconditions
 are frozen into confirmations; Grocery writes require both read and write
 scopes; public provenance is manual-only; active-list reads are non-mutating;
 and existing/future accounts receive one active list at the account-write
-boundary. This head is not a Rust import authority until hosted PostgreSQL,
-hermetic, auth/audit, aggregate CI, and independent review all pass. Only its
-final reviewed merge SHA, regenerated fixture aggregate digest, deployed
+boundary. After PR #109 advanced the strict health/security attestation
+contract on `main`, this head was rebased onto that change and made `096` an
+explicit attestation/action-manifest head. Revision `096` retains every health
+envelope gate required at `095` and adds an exact Grocery catalog proof rather
+than bypassing readiness at the additive head. The confirmation contract now
+accepts the advertised 25-item/four-member prepared payload while rejecting an
+oversize proposal before emitting an unusable token, and the language-neutral
+scope contract exposes the full `required_scopes`/`missing_scopes` denial
+shape. Local qualification at this exact head is 5,396 hermetic tests passed
+(17 skipped), plus 28 real-PostgreSQL migration tests passed. This head is not
+a Rust import authority until hosted PostgreSQL, hermetic, auth/audit,
+aggregate CI, and independent review all pass. Only its final reviewed merge
+SHA, regenerated fixture aggregate digest, deployed
 `capabilities.grocery = "v1"`, and live scope/behavior canaries may become Rust
 contract provenance.
 
