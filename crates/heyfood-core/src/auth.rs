@@ -7,6 +7,53 @@ use serde::{Deserialize, Deserializer, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+pub const GROCERY_READ_SCOPE: &str = "grocery:read";
+pub const GROCERY_WRITE_SCOPE: &str = "grocery:write";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GroceryScopeAuthority {
+    Read,
+    ReadWrite,
+}
+
+/// Build a replacement grant in the authorization server's canonical order.
+/// Existing non-Grocery scopes are preserved, but Grocery authority is reduced
+/// to exactly what the requested operation requires. Optional scopes are never
+/// inferred from application capabilities or a failed metadata request.
+pub fn negotiate_grocery_scopes(
+    current_scopes: &[String],
+    supported_scopes: &[String],
+    authority: GroceryScopeAuthority,
+) -> Result<Vec<String>, &'static str> {
+    if supported_scopes.is_empty() {
+        return Err("authorization metadata did not publish any scopes");
+    }
+    let required = match authority {
+        GroceryScopeAuthority::Read => &[GROCERY_READ_SCOPE][..],
+        GroceryScopeAuthority::ReadWrite => &[GROCERY_READ_SCOPE, GROCERY_WRITE_SCOPE][..],
+    };
+    if required
+        .iter()
+        .any(|scope| !supported_scopes.iter().any(|candidate| candidate == scope))
+    {
+        return Err("the authorization server does not publish the required Grocery scopes");
+    }
+
+    let mut negotiated = Vec::new();
+    for supported in supported_scopes {
+        let preserve = current_scopes.iter().any(|scope| scope == supported)
+            && !matches!(supported.as_str(), GROCERY_READ_SCOPE | GROCERY_WRITE_SCOPE);
+        let require = required.iter().any(|scope| *scope == supported);
+        if (preserve || require) && !negotiated.iter().any(|scope| scope == supported) {
+            negotiated.push(supported.clone());
+        }
+    }
+    if negotiated.is_empty() {
+        return Err("authorization scope negotiation produced an empty grant");
+    }
+    Ok(negotiated)
+}
+
 /// The identity methods the hosted authorization page may offer. Authentication
 /// remains browser-owned; the native client only validates advertised launch
 /// capability and never handles verification codes itself.
@@ -389,5 +436,45 @@ impl RefreshResult {
     #[must_use]
     pub fn into_rotated(self) -> SessionCredentials {
         self.rotated
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    fn values(scopes: &[&str]) -> Vec<String> {
+        scopes.iter().map(|scope| (*scope).to_owned()).collect()
+    }
+
+    #[test]
+    fn read_authority_never_infers_or_preserves_grocery_write() {
+        let current = values(&["profile:read", "grocery:write"]);
+        let supported = values(&[
+            "profile:read",
+            "health:read",
+            GROCERY_READ_SCOPE,
+            GROCERY_WRITE_SCOPE,
+        ]);
+        assert_eq!(
+            negotiate_grocery_scopes(&current, &supported, GroceryScopeAuthority::Read).unwrap(),
+            values(&["profile:read", GROCERY_READ_SCOPE])
+        );
+    }
+
+    #[test]
+    fn write_authority_requires_both_published_scopes_in_server_order() {
+        let current = values(&["profile:read"]);
+        let supported = values(&["profile:read", GROCERY_WRITE_SCOPE]);
+        assert!(
+            negotiate_grocery_scopes(&current, &supported, GroceryScopeAuthority::ReadWrite)
+                .is_err()
+        );
+        let supported = values(&["profile:read", GROCERY_READ_SCOPE, GROCERY_WRITE_SCOPE]);
+        assert_eq!(
+            negotiate_grocery_scopes(&current, &supported, GroceryScopeAuthority::ReadWrite)
+                .unwrap(),
+            supported
+        );
     }
 }

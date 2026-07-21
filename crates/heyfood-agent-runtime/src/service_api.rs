@@ -2,9 +2,10 @@
 
 use heyfood_application::PortError;
 use heyfood_core::{
-    AddItemsRequestWire, ApplicationCapabilitiesWire, GroceryEntityId, GroceryListWire,
-    GroceryMutationConfirmRequestWire, GroceryMutationProposalWire, GroceryMutationResultWire,
-    HealthContextWire, IntegrationAuthorizeRequestWire, IntegrationAuthorizeResponseWire,
+    AddItemsRequestWire, ApplicationCapabilitiesWire, AuthorizationServerMetadataWire,
+    GroceryEntityId, GroceryListWire, GroceryMutationConfirmRequestWire,
+    GroceryMutationProposalWire, GroceryMutationResultWire, HealthContextWire,
+    IntegrationAuthorizeRequestWire, IntegrationAuthorizeResponseWire,
     IntegrationDisconnectResponseWire, IntegrationListWire, IntegrationRedirectTargetWire,
     IntegrationSyncResponseWire, OperationId, RemoveItemsRequestWire, SessionCredentials,
     UpdateItemStateRequestWire, terminal_safe_text,
@@ -52,6 +53,30 @@ impl DispatchKind {
 }
 
 impl HttpService {
+    pub async fn discover_authorization_metadata(
+        &self,
+        cancellation: CancellationToken,
+    ) -> Result<AuthorizationServerMetadataWire, PortError> {
+        let builder = self
+            .request(
+                Method::GET,
+                "/.well-known/oauth-authorization-server",
+                None,
+                OperationId::new(),
+            )?
+            .header(header::ACCEPT, "application/json");
+        let metadata: AuthorizationServerMetadataWire = self
+            .dispatch_json(builder, cancellation, DispatchKind::Safe)
+            .await?;
+        if metadata.scopes_supported.is_empty() {
+            return Err(PortError::new(
+                "authorization_metadata",
+                "authorization metadata did not publish any scopes",
+            ));
+        }
+        Ok(metadata)
+    }
+
     pub async fn discover_capabilities(
         &self,
         cancellation: CancellationToken,

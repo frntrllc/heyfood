@@ -21,6 +21,12 @@ pub const GROCERY_WIRE_SCHEMA_SHA256: &str =
     "783472779f3f1209c1daca6d33088b36415e5ea8b51ec6113750d453e0654930";
 pub const HEALTH_H1_H2_SOURCE_COMMIT: &str = "7cfadc55c103257b588b237c65fe7b5031a3f745";
 
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+pub struct AuthorizationServerMetadataWire {
+    #[serde(default)]
+    pub scopes_supported: Vec<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApplicationCapabilitiesWire {

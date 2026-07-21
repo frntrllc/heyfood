@@ -197,6 +197,36 @@ async fn capability_discovery_gates_typed_grocery_reads() {
 }
 
 #[tokio::test]
+async fn optional_scope_negotiation_uses_live_authorization_metadata() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("GET /.well-known/oauth-authorization-server "));
+        assert!(
+            !request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer")
+        );
+        respond(
+            &mut socket,
+            200,
+            json!({
+                "issuer": "https://auth.hello.food",
+                "scopes_supported": ["profile:read", "grocery:read", "grocery:write"]
+            }),
+        )
+        .await;
+    });
+    let metadata = service
+        .discover_authorization_metadata(CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(metadata.scopes_supported.last().unwrap(), "grocery:write");
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn every_grocery_post_preserves_the_contract_payload() {
     let (listener, service) = fixture_service().await;
     let server = tokio::spawn(async move {
