@@ -1,6 +1,6 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v11 — Rust Phase 1 remediation after REQUEST CHANGES; Grocery 096 activation and final wire integration remain gated on exact deployment and canaries
+**Status:** Draft v12 — Rust Phase 1 remediation after REQUEST CHANGES; Grocery 096 is deployed at the exact reviewed backend SHA, while final Rust wire integration remains gated on pinned provenance and scoped mutation canaries
 **Baseline:** final unpublished Python `0.4.0` candidate at `73494a57468dac83b4904ce6c390e36926f5c6fe`; the last public Python release remains `0.3.2`
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`
@@ -114,19 +114,49 @@ Production API process class before work or authorization consumption. It also
 requires any future first-attestation dry run/apply to derive from the exact
 suspended API deploy rather than the migration runner.
 
-Activation remains fail-closed. Although Render reports the isolated runner at
-`f7b0eebca879840995226ede9ea715dc8702313a`, a postflight job proved Python had
-loaded a stale cached pre-096 schema-verifier artifact; direct read-only catalog
-inventory nevertheless matches every expected Grocery aggregate above. Both
-the API and migration runner are currently suspended, so Render rejected the
-required cache-cleared rebuild. The remaining Production sequence is: resume
-under containment, rebuild/deploy exact `f7b0eebc...` with a clear cache,
-require the code-owned revision-096 verifier to return true, deploy the full
-fleet at that exact SHA, refresh/verify the existing signed attestation, and
-pass live capability, scope, confirmation, conflict, and non-mutation canaries
-before public Grocery activation. Only that deployed SHA, regenerated fixture
-aggregate digest, `capabilities.grocery = "v1"`, and the live canaries may
-become authoritative Rust contract provenance.
+Production activation completed through the deploy-and-readiness gates on
+2026-07-20. The isolated runner was resumed, then rebuilt with cache clearing
+at exact commit `f7b0eebca879840995226ede9ea715dc8702313a` as Render deploy
+`dep-d9fdog1kh4rs73c9a3r0`. Read-only job
+`job-d9fdq8r7uimc73efuqp0` then returned
+`schema_ready = true` and runtime source SHA-256
+`ed28bc337d371f66cfa39842c35e1d91950b393666458526f6cff2c3909dfa27`,
+which exactly matches the committed revision-096 schema-contract source and
+closes the stale-build-cache defect. The API, general worker, menu worker,
+Beat, legal-retention worker, and migration runner are all running at the same
+reviewed commit. The API's final environment-bearing deploy is
+`dep-d9fe9hvavr4c73c2c3h0`; `/health` returns HTTP 200; the signed singleton
+attestation is present, contract version 3, and HMAC-verifies from the API
+process class; and the public capabilities surface advertises
+`application_capabilities.grocery = "v1"`. RFC 8414 metadata publicly lists
+both `grocery:read` and `grocery:write`. A real pre-Grocery CLI session remains
+usable but receives the intended typed 403 on `GET /v1/grocery/list`:
+`This CLI session is missing required scope(s): grocery:read.` This proves the
+optional-scope boundary without widening the released Python client's grant.
+
+Two Rust-import gates remain. First, the backend Grocery provenance manifest
+and regenerated aggregate fixture digest must be pinned to the deployed merge
+and source hashes rather than the pre-merge/manual placeholder. Second, a
+fresh least-privilege session that explicitly requests both Grocery scopes
+must pass the positive list, prepare/cancel, stale-version conflict, and
+active-list non-mutation canaries. The released Python `0.3.2` client
+deliberately does not request these server-ahead scopes and must not be patched
+into a disposable Grocery client merely to satisfy that gate; the native Rust
+client owns the scoped positive canary and final surface.
+
+The same activation audit exposed a separate net-new-user release dependency.
+Production authorization is restored and publicly advertises both loopback
+PKCE and device code with SMS/email identity methods, after reconciling the
+API-only authorization-transaction key, recovery flag, agreement keyring,
+terms version, self-registration flag, and account-deletion flag. Public
+self-registration nevertheless remains `unavailable` because the immutable
+PITR plaintext-removal T0 has not yet aged through the required seven-day
+window. Required flags, Vault, KMS, database TLS, Redis TLS, conversation-state
+encryption, exact schema, signed evidence, and transport proofs all pass; only
+the T0 age gate fails. No client, deployment, or operator may backdate or waive
+that evidence. The scheduled attestation refresher must preserve T0 and keep
+the HMAC fresh until the window matures, after which a real net-new registration
+canary is mandatory before native `0.4.0` release qualification.
 
 This dependency does not stop generic Rust work. Auth, state, terminal
 supervision, cancellation, rendering, generic voice, provisional semantic
