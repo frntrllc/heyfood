@@ -126,10 +126,9 @@ The hosted authorization page resolves both new and existing accounts. Native
 follow-up work; invoking one returns `command_not_available` instead of implying
 that it ran.
 
-Windows builds must include the `native-credentials` feature. That build stores
-the complete authorization grant and rotating session in Windows Credential
-Manager; a portable build without that feature fails closed instead of writing
-reversible credentials to disk.
+Windows builds automatically store the complete authorization grant and
+rotating session in Windows Credential Manager; the binary never writes
+reversible Windows credentials to disk.
 
 ## Common workflows
 

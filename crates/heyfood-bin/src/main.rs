@@ -16,9 +16,9 @@ use heyfood_core::{
     BrowserUrl, NetworkPolicy, OperationId, SensitiveString, ServiceUrl, SessionSnapshot,
     terminal_safe_text,
 };
-#[cfg(not(all(windows, feature = "native-credentials")))]
+#[cfg(not(windows))]
 use heyfood_platform::FileCredentialStore as NativeSessionStore;
-#[cfg(all(windows, feature = "native-credentials"))]
+#[cfg(windows)]
 use heyfood_platform::WindowsCredentialStore as NativeSessionStore;
 use heyfood_platform::{NativeAuthStore, NativeBrowser, NativeClock, NativePaths};
 use tokio_util::sync::CancellationToken;
