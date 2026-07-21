@@ -42,9 +42,8 @@ foundation.
 
 [Grocery Phase A PR #107](https://github.com/frntrllc/hellofood/pull/107)
 supersedes conflicting PR #90. Its exact pushed final-qualification head is
-`f5bf2656d4f47a40aaeb17ee1f791f3dbe5a566c`, with migration `096` over `095`.
-It predates the newly merged PR #110 main and must remain provisional. Its
-candidate contract
+`8cd7baf2c683bf5ad286af32c26d96bdb1742f86`, with migration `096` over `095`,
+rebased onto the PR #110 merge. It remains provisional. Its candidate contract
 claims to close the two mandatory corrections:
 
 - thread the authoritative `HouseholdContextSnapshot` through REST,
@@ -57,12 +56,14 @@ claims to close the two mandatory corrections:
 The candidate also claims the C1 native `_self`, complete-consent, persisted
 single-profile version, order-independent hash hardening, and an exact Grocery
 catalog proof covering 51 columns, 16 semantic constraints, 14 indexes, and
-account-initializer function/trigger semantics across PostgreSQL 16/18. Its
-reported local qualification is 5,396 hermetic tests and 28 real-PostgreSQL
-migration tests passed. Hosted checks and independent review are still in
-progress. Final Phase A contract provenance cannot be pinned until the
-candidate is current, fully green, reviewed, and merged, then migrated in
-production from `095 → 096` and proven by live `grocery:v1` canaries.
+account-initializer function/trigger semantics, including PostgreSQL 18's exact
+34 validated/enforced Grocery NOT NULL constraints. Its reported local
+qualification is 5,396 hermetic tests, 87 PostgreSQL 18 data-protection tests,
+and 39 PostgreSQL 16 tests with 48 PostgreSQL-18-only skips. Hosted checks and
+independent review are still in progress. Final Phase A contract provenance
+cannot be pinned until the candidate is current, fully green, reviewed, and
+merged, then migrated in production from `095 → 096` and proven by live
+`grocery:v1` canaries.
 
 No visible B1 provider-foundation or B2 Kroger-binding PR exists. Security D2
 also remains absent: current backend integration encryption still derives its

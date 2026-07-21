@@ -1056,7 +1056,8 @@ pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, Strin
         | "open_conflicting_green_contract_corrections_and_migration_096_required"
         | "superseded_by_pr_107_mergeable_096_candidate_hosted_gates_not_green"
         | "pr_107_mergeable_096_ci_green_public_preview_failed_provisional"
-        | "pr_107_f5_catalog_candidate_checks_in_progress_provisional" => {
+        | "pr_107_f5_catalog_candidate_checks_in_progress_provisional"
+        | "pr_107_8cd_pg18_candidate_checks_in_progress_provisional" => {
             if !null_fields(
                 grocery,
                 &[

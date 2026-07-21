@@ -49,10 +49,11 @@ certifi-backed verified-TLS correction are merged, production is postflight
 verified at sole head `095`, H1/H2 PR #79 and H3 backend/mobile PRs #96/#95 are
 merged, and their health contracts are frozen under `fixtures/contracts/`.
 Grocery PR #107 now supersedes PR #90 with a revision-096 candidate
-at exact final-qualification head `f5bf2656`, claiming the authoritative-
-snapshot/frozen-list/C1 and exact catalog corrections. Hosted checks and
-independent review remain in progress; final Phase A provenance remains gated
-on a current green reviewed merge, production migration, and live canaries.
+at exact final-qualification head `8cd7baf2`, rebased onto PR #110 and claiming
+the authoritative-snapshot/frozen-list/C1, exact catalog, and PostgreSQL 18 NOT
+NULL corrections. Hosted checks and independent review remain in progress;
+final Phase A provenance remains gated on a current green reviewed merge,
+production migration, and live canaries.
 Security PRs #108, #109, and #110 are merged; PR #110 still requires deployment
 and exact-build postflight. No Kroger B1/B2 or Security D2 implementation is
 visible. Exact merged C3/C4 schemas are now mirrored under

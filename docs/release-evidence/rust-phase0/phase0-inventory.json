@@ -85,7 +85,7 @@
     "hellofood_repository": "/Users/justinhambleton/Dev/hellofood",
     "grocery": {
       "observed_branch": "codex/grocery-phase-a-096",
-      "observed_head_sha": "f5bf2656d4f47a40aaeb17ee1f791f3dbe5a566c",
+      "observed_head_sha": "8cd7baf2c683bf5ad286af32c26d96bdb1742f86",
       "observed_main_sha": "1a4a05b5799ba3050027171c1f98a2999c24df5c",
       "merged_prerequisite_shas": [
         "4b7bcdfaf80053c087f5aa68fea8bd5f78732160",
@@ -93,10 +93,10 @@
         "9e0a9f220751270da56996ba7004ae25e67b06d0",
         "9e1011d75be9b919452c82cc7dd849bc3f5823a2"
       ],
-      "phase_a_status": "pr_107_f5_catalog_candidate_checks_in_progress_provisional",
+      "phase_a_status": "pr_107_8cd_pg18_candidate_checks_in_progress_provisional",
       "authoritative_contract_sha": null,
       "authoritative_contract_digest": null,
-      "blocker": "PR #107 supersedes PR #90 at exact final-qualification head f5bf2656 with revision 096, authoritative-snapshot, frozen-list, C1, and exact Grocery catalog corrections. Hosted checks and independent review remain in progress; final Phase A provenance still requires a green merge, Production 095 to 096, and live grocery:v1 canaries."
+      "blocker": "PR #107 supersedes PR #90 at exact final-qualification head 8cd7baf2 with revision 096, authoritative-snapshot, frozen-list, C1, exact Grocery catalog, and PostgreSQL 18 NOT NULL corrections. Hosted checks and independent review remain in progress; final Phase A provenance still requires a green merge, Production 095 to 096, and live grocery:v1 canaries."
     },
     "kroger": {
       "provider_foundation_pr": null,
