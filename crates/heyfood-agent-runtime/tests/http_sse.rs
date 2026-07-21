@@ -456,12 +456,12 @@ async fn missing_session_refresh_token_reexchanges_without_primary_request() {
 }
 
 #[tokio::test]
-async fn every_raw_sse_type_is_normalized_including_multiline_and_error() {
+async fn every_nonterminal_sse_type_is_normalized_before_result_and_done() {
     let (listener, base) = fixture_service().await;
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         read_request(&mut socket).await;
-        let stream = b": comment\nevent: thinking\ndata: {\"stage\":\"one\"}\n\nevent: progress\ndata: {\"message\":\"two\",\"current\":1,\"total\":2}\n\nevent: partial\ndata: {\"delta\":\"three\",\ndata: \"ignored\":true}\n\nevent: choices\ndata: {\"choices\":[\"four\",{\"label\":\"five\",\"value\":\"5\"}]}\n\nevent: result\ndata: {\"conversation_id\":\"six\"}\n\nevent: error\ndata: {\"code\":\"seven\",\"message\":\"failed\",\"retryable\":false}\n\n";
+        let stream = b": comment\nevent: thinking\ndata: {\"stage\":\"one\"}\n\nevent: progress\ndata: {\"message\":\"two\",\"current\":1,\"total\":2}\n\nevent: partial\ndata: {\"delta\":\"three\",\ndata: \"ignored\":true}\n\nevent: choices\ndata: {\"choices\":[\"four\",{\"label\":\"five\",\"value\":\"5\"}]}\n\nevent: result\ndata: {\"conversation_id\":\"six\"}\n\nevent: done\ndata: {}\n\n";
         respond(&mut socket, "text/event-stream", stream).await;
     });
     let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines())
@@ -486,7 +486,7 @@ async fn every_raw_sse_type_is_normalized_including_multiline_and_error() {
     while let Some(event) = events.next().await.unwrap() {
         received.push(event);
     }
-    assert_eq!(received.len(), 6);
+    assert_eq!(received.len(), 5);
     assert!(matches!(received[0], AgentEvent::Thinking { .. }));
     assert!(matches!(received[1], AgentEvent::Progress { .. }));
     assert_eq!(
@@ -497,7 +497,6 @@ async fn every_raw_sse_type_is_normalized_including_multiline_and_error() {
     );
     assert!(matches!(received[3], AgentEvent::Choices { .. }));
     assert!(matches!(received[4], AgentEvent::Result { .. }));
-    assert!(matches!(received[5], AgentEvent::Error { .. }));
     events.close().await.unwrap();
     server.await.unwrap();
 }

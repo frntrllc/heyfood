@@ -141,6 +141,26 @@ async fn respond_stream(socket: &mut TcpStream, body: &[u8]) {
     socket.write_all(body).await.unwrap();
 }
 
+async fn respond_stream_chunks(socket: &mut TcpStream, chunks: &[Vec<u8>]) {
+    socket
+        .write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    for chunk in chunks {
+        socket
+            .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+            .await
+            .unwrap();
+        socket.write_all(chunk).await.unwrap();
+        socket.write_all(b"\r\n").await.unwrap();
+        socket.flush().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    socket.write_all(b"0\r\n\r\n").await.unwrap();
+}
+
 async fn respond_capabilities(socket: &mut TcpStream) {
     respond(
         socket,
@@ -314,9 +334,12 @@ async fn one_shot_ask_collects_sse_into_exactly_one_json_value() {
         let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
         assert_eq!(body["query"], "what can I eat?");
         assert_eq!(body["input_mode"], "text");
-        respond_stream(
+        respond_stream_chunks(
             &mut socket,
-            b"event: thinking\ndata: {\"stage\":\"route\"}\n\nevent: partial\ndata: {\"text\":\"Try soup.\"}\n\nevent: result\ndata: {\"conversation_id\":\"conversation-2\",\"message\":\"Try soup.\"}\n\n",
+            &[
+                b"event: thinking\ndata: {\"stage\":\"route\"}\n\nevent: partial\ndata: {\"text\":\"Try soup.\"}\n\nevent: result\ndata: {\"conversation_id\":\"conversation-2\",\"message\":\"Try soup.\"}\n\n".to_vec(),
+                b"event: done\ndata: {}\n\n".to_vec(),
+            ],
         )
         .await;
     });
@@ -332,6 +355,84 @@ async fn one_shot_ask_collects_sse_into_exactly_one_json_value() {
         serde_json::from_str::<Value>(&output).unwrap()["message"],
         "Try soup."
     );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn invalid_terminal_events_fail_without_returning_partial_machine_output() {
+    for (terminal, expected_code) in [
+        (
+            "event: done\ndata: {\"unexpected\":true}\n\n",
+            "sse_payload",
+        ),
+        ("event: future_terminal\ndata: {}\n\n", "sse_event"),
+    ] {
+        let (listener, service) = fixture_service().await;
+        let result = b"event: partial\ndata: {\"text\":\"Do not emit me.\"}\n\nevent: result\ndata: {\"message\":\"Do not emit me.\"}\n\n".to_vec();
+        let terminal = terminal.as_bytes().to_vec();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_request(&mut socket).await;
+            respond_stream_chunks(&mut socket, &[result, terminal]).await;
+        });
+        let parsed = CommandLine::try_parse_from(["heyfood", "--json", "ask", "fixture"]).unwrap();
+        let error = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+            .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, expected_code);
+        assert!(error.outcome_uncertain);
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn clean_legacy_eof_after_result_preserves_one_value_json_output() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_request(&mut socket).await;
+        respond_stream(
+            &mut socket,
+            b"event: partial\ndata: {\"text\":\"Legacy.\"}\n\nevent: result\ndata: {\"message\":\"Legacy.\"}\n\n",
+        )
+        .await;
+    });
+    let parsed = CommandLine::try_parse_from(["heyfood", "--json", "ask", "legacy"]).unwrap();
+    let output = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(output.lines().count(), 1);
+    assert_eq!(
+        serde_json::from_str::<Value>(&output).unwrap()["message"],
+        "Legacy."
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn split_error_and_done_preserve_authoritative_error_semantics() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_request(&mut socket).await;
+        respond_stream_chunks(
+            &mut socket,
+            &[
+                b"event: error\ndata: {\"code\":\"service_error\",\"message\":\"Unable to answer.\",\"retryable\":false}\n\n".to_vec(),
+                b"event: done\ndata: {}\n\n".to_vec(),
+            ],
+        )
+        .await;
+    });
+    let parsed = CommandLine::try_parse_from(["heyfood", "--json", "ask", "fixture"]).unwrap();
+    let error = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "agent_error");
+    assert!(!error.outcome_uncertain);
     server.await.unwrap();
 }
 
