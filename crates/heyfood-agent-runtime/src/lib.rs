@@ -18,7 +18,9 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 pub use registration::{
-    DeviceAuthorization, RegistrationClient, RegistrationError, RegistrationOutcome,
+    DeviceAuthorization, ProvisionalReauthorization, ReauthorizationStageStatus,
+    ReauthorizationStatus, RegistrationClient, RegistrationError, RegistrationOutcome,
+    StagedReauthorization,
 };
 pub use service_api::GroceryExport;
 pub use sse::SseEventStream;

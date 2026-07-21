@@ -12,6 +12,7 @@ use heyfood_core::{
 };
 use heyfood_platform::{FileCredentialStore, NativeAuthStore};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
@@ -432,12 +433,41 @@ async fn public_login_preserves_old_credentials_until_complete_then_replaces_bot
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let verification_uri = format!("{base_url}/authorize");
     let server = tokio::spawn(async move {
+        let mut client_transaction_id = String::new();
+        let authorization_transaction_id = "authorization-transaction-login";
+        let stage_id = "stage-transaction-login";
+        let bundle = json!({
+            "channel": {
+                "access_token": "expanded-channel-access",
+                "token_type": "bearer",
+                "expires_in": 3600,
+                "refresh_token": "expanded-channel-refresh",
+                "scope": FULL_SCOPE,
+                "link_id": "link-transaction-login",
+                "resource": null,
+                "authorization_transaction_id": authorization_transaction_id,
+                "access_expires_at": "2999-01-01T00:00:00Z",
+                "refresh_expires_at": "2999-02-01T00:00:00Z"
+            },
+            "session": {
+                "user_id": "activated-account",
+                "device_id": "heyfood-activated-device",
+                "session_id": "expanded-session-id",
+                "access_token": "expanded-session-access",
+                "refresh_token": "expanded-session-refresh",
+                "access_expires_at": "2999-01-01T00:00:00Z",
+                "refresh_expires_at": "2999-02-01T00:00:00Z",
+                "scopes": FULL_SCOPE.split_whitespace().collect::<Vec<_>>(),
+                "is_anonymous": false
+            }
+        });
+        let bundle_digest = format!("{:x}", Sha256::digest(serde_json::to_vec(&bundle).unwrap()));
         for expected in [
             "/v1/auth/capabilities",
             "/v1/channel/oauth/device/authorize",
             "/v1/channel/oauth/device/token",
-            "/v1/channel/oauth/cli/session",
-            "/v1/channel/tools/profile/readiness",
+            "/v1/channel/oauth/cli/reauthorizations",
+            "/v1/channel/oauth/cli/reauthorizations/stage-transaction-login/promote",
         ] {
             let (mut socket, _) = listener.accept().await.unwrap();
             let request = read_request(&mut socket).await;
@@ -456,6 +486,11 @@ async fn public_login_preserves_old_credentials_until_complete_then_replaces_bot
                         serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
                     assert_eq!(request["intent"], "sign_in");
                     assert_eq!(request["scope"], FULL_SCOPE);
+                    assert_eq!(request["device_id"], "heyfood-activated-device");
+                    client_transaction_id = request["client_transaction_id"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned();
                     json!({
                         "device_code": "hf_dc_01234567890123456789",
                         "user_code": "ABCD-EFGH",
@@ -466,28 +501,70 @@ async fn public_login_preserves_old_credentials_until_complete_then_replaces_bot
                     })
                 }
                 "/v1/channel/oauth/device/token" => json!({
-                    "access_token": "expanded-channel-access",
-                    "refresh_token": "expanded-channel-refresh",
+                    "access_token": "provisional-channel-access",
+                    "token_type": "bearer",
+                    "refresh_token": "provisional-channel-refresh",
                     "expires_in": 3600,
-                    "scope": FULL_SCOPE
+                    "scope": FULL_SCOPE,
+                    "link_id": "link-transaction-login",
+                    "resource": null,
+                    "authorization_transaction_id": authorization_transaction_id
                 }),
-                "/v1/channel/oauth/cli/session" => json!({
-                    "user_id": "activated-account",
-                    "device_id": "heyfood-activated-device",
-                    "session_id": "expanded-session-id",
-                    "access_token": "expanded-session-access",
-                    "refresh_token": "expanded-session-refresh",
-                    "access_expires_at": "2999-01-01T00:00:00Z",
-                    "scopes": FULL_SCOPE.split_whitespace().collect::<Vec<_>>(),
-                    "is_anonymous": false
-                }),
-                "/v1/channel/tools/profile/readiness" => json!({
-                    "schema_version": 1,
-                    "status": "ready",
-                    "member_id": "_self",
-                    "has_profile_sync_consent": true,
-                    "profile_version": 1
-                }),
+                "/v1/channel/oauth/cli/reauthorizations" => {
+                    assert!(
+                        request
+                            .to_ascii_lowercase()
+                            .contains("authorization: bearer provisional-channel-access\r\n")
+                    );
+                    let request_body: Value =
+                        serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+                    assert_eq!(request_body["client_transaction_id"], client_transaction_id);
+                    assert_eq!(
+                        request_body["authorization_transaction_id"],
+                        authorization_transaction_id
+                    );
+                    assert_eq!(request_body["device_id"], "heyfood-activated-device");
+                    json!({
+                        "stage_id": stage_id,
+                        "client_transaction_id": client_transaction_id.clone(),
+                        "authorization_transaction_id": authorization_transaction_id,
+                        "device_id": "heyfood-activated-device",
+                        "status": "staged",
+                        "scopes": FULL_SCOPE.split_whitespace().collect::<Vec<_>>(),
+                        "bundle_digest": bundle_digest.clone(),
+                        "recovery_token": "recovery-token-login-fixture",
+                        "bundle": bundle.clone(),
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "recoverable_until": "2999-01-02T00:00:00Z",
+                        "promoted_at": null,
+                        "aborted_at": null
+                    })
+                }
+                "/v1/channel/oauth/cli/reauthorizations/stage-transaction-login/promote" => {
+                    assert!(request.to_ascii_lowercase().contains(
+                        "authorization: reauthorization recovery-token-login-fixture\r\n"
+                    ));
+                    let request_body: Value =
+                        serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+                    assert_eq!(request_body["client_transaction_id"], client_transaction_id);
+                    assert_eq!(request_body["device_id"], "heyfood-activated-device");
+                    assert_eq!(request_body["bundle_digest"], bundle_digest);
+                    json!({
+                        "stage_id": stage_id,
+                        "client_transaction_id": client_transaction_id.clone(),
+                        "authorization_transaction_id": authorization_transaction_id,
+                        "device_id": "heyfood-activated-device",
+                        "status": "promoted",
+                        "scopes": FULL_SCOPE.split_whitespace().collect::<Vec<_>>(),
+                        "bundle_digest": bundle_digest.clone(),
+                        "recovery_token": "recovery-token-login-fixture",
+                        "bundle": bundle.clone(),
+                        "expires_at": "2999-01-01T00:00:00Z",
+                        "recoverable_until": "2999-01-02T00:00:00Z",
+                        "promoted_at": "2026-07-21T00:00:00Z",
+                        "aborted_at": null
+                    })
+                }
                 _ => unreachable!(),
             };
             respond(
@@ -591,4 +668,161 @@ async fn rejected_login_leaves_both_existing_credentials_byte_for_byte_authorita
     assert_eq!(auth_store.load().unwrap(), Some(old_auth));
     assert_eq!(session_store.load().await.unwrap(), Some(old_session));
     assert!(!root.0.join("auth.reconciliation").exists());
+}
+
+#[tokio::test]
+async fn lost_prepare_response_then_expiry_recovers_old_authority_without_second_issuance() {
+    let root = TempRoot::new("login-prepare-loss-expiry");
+    initialize(&root.0, old_scope());
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let old_auth = auth_store.load().unwrap().unwrap();
+    let old_session = session_store.load().await.unwrap().unwrap();
+    let authorization_transaction_id = "authorization-transaction-prepare-loss";
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let verification_uri = format!("{base_url}/authorize");
+    let first = tokio::spawn(async move {
+        let mut client_transaction_id = String::new();
+        for expected in [
+            "/v1/auth/capabilities",
+            "/v1/channel/oauth/device/authorize",
+            "/v1/channel/oauth/device/token",
+            "/v1/channel/oauth/cli/reauthorizations",
+        ] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            let path = request
+                .lines()
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .nth(1)
+                .unwrap();
+            assert_eq!(path, expected);
+            match path {
+                "/v1/auth/capabilities" => {
+                    respond(
+                        &mut socket,
+                        "application/json",
+                        &serde_json::to_vec(&capabilities(false)).unwrap(),
+                    )
+                    .await;
+                }
+                "/v1/channel/oauth/device/authorize" => {
+                    let body: Value =
+                        serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+                    client_transaction_id =
+                        body["client_transaction_id"].as_str().unwrap().to_owned();
+                    respond(
+                        &mut socket,
+                        "application/json",
+                        &serde_json::to_vec(&json!({
+                            "device_code": "hf_dc_01234567890123456789",
+                            "user_code": "ABCD-EFGH",
+                            "verification_uri": verification_uri,
+                            "verification_uri_complete": null,
+                            "expires_in": 600,
+                            "interval": 1
+                        }))
+                        .unwrap(),
+                    )
+                    .await;
+                }
+                "/v1/channel/oauth/device/token" => {
+                    respond(
+                        &mut socket,
+                        "application/json",
+                        &serde_json::to_vec(&json!({
+                            "access_token": "provisional-prepare-loss-access",
+                            "token_type": "bearer",
+                            "refresh_token": "provisional-prepare-loss-refresh",
+                            "expires_in": 3600,
+                            "scope": FULL_SCOPE,
+                            "link_id": "link-prepare-loss",
+                            "resource": null,
+                            "authorization_transaction_id": authorization_transaction_id
+                        }))
+                        .unwrap(),
+                    )
+                    .await;
+                }
+                "/v1/channel/oauth/cli/reauthorizations" => {
+                    assert!(request.contains(&client_transaction_id));
+                    // The backend committed the stage but the response was
+                    // lost. Closing the socket exercises idempotent replay.
+                    drop(socket);
+                }
+                _ => unreachable!(),
+            }
+        }
+        client_transaction_id
+    });
+    let first_output = run(
+        &root.0,
+        &base_url,
+        &["--json", "login", "--no-browser", "--timeout", "5"],
+        None,
+    )
+    .await;
+    assert!(!first_output.status.success());
+    let client_transaction_id = first.await.unwrap();
+    let pending = auth_store
+        .pending_authorization_replacement()
+        .unwrap()
+        .unwrap();
+    assert_eq!(pending.client_transaction_id, client_transaction_id);
+    assert_eq!(
+        pending.phase,
+        heyfood_platform::AuthorizationReplacementPhase::Preparing
+    );
+
+    let recovery_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let recovery_url = format!("http://{}", recovery_listener.local_addr().unwrap());
+    let recovery_client_transaction_id = client_transaction_id.clone();
+    let recovery = tokio::spawn(async move {
+        let (mut socket, _) = recovery_listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/channel/oauth/cli/reauthorizations "));
+        assert!(request.contains(&recovery_client_transaction_id));
+        respond(
+            &mut socket,
+            "application/json",
+            &serde_json::to_vec(&json!({
+                "stage_id": "stage-transaction-prepare-loss",
+                "client_transaction_id": recovery_client_transaction_id,
+                "authorization_transaction_id": authorization_transaction_id,
+                "device_id": "heyfood-activated-device",
+                "status": "expired",
+                "scopes": FULL_SCOPE.split_whitespace().collect::<Vec<_>>(),
+                "bundle_digest": "a".repeat(64),
+                "recovery_token": null,
+                "bundle": null,
+                "expires_at": "2026-07-21T00:00:00Z",
+                "recoverable_until": "2999-01-01T00:00:00Z",
+                "promoted_at": null,
+                "aborted_at": null
+            }))
+            .unwrap(),
+        )
+        .await;
+    });
+    let recovery_output = run(
+        &root.0,
+        &recovery_url,
+        &["--json", "login", "--no-browser", "--timeout", "5"],
+        None,
+    )
+    .await;
+    assert!(!recovery_output.status.success());
+    recovery.await.unwrap();
+    assert_eq!(auth_store.load().unwrap(), Some(old_auth));
+    assert_eq!(session_store.load().await.unwrap(), Some(old_session));
+    assert!(
+        auth_store
+            .pending_authorization_replacement()
+            .unwrap()
+            .is_none()
+    );
 }

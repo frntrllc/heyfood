@@ -8,19 +8,24 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use heyfood_agent_runtime::{
-    CliAuthContext, HttpDeadlines, HttpService, RegistrationClient, RegistrationError,
+    CliAuthContext, HttpDeadlines, HttpService, ProvisionalReauthorization,
+    ReauthorizationStageStatus, ReauthorizationStatus, RegistrationClient, RegistrationError,
+    StagedReauthorization,
 };
 use heyfood_application::{BrowserPort, CredentialPort, EnsureSession};
 use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
 use heyfood_core::{
-    BrowserUrl, NetworkPolicy, OperationId, SensitiveString, ServiceUrl, SessionSnapshot,
-    terminal_safe_text,
+    BrowserUrl, NetworkPolicy, OperationId, ProfileStatus, SensitiveString, ServiceUrl,
+    SessionSnapshot, terminal_safe_text,
 };
 #[cfg(not(windows))]
 use heyfood_platform::FileCredentialStore as NativeSessionStore;
 #[cfg(windows)]
 use heyfood_platform::WindowsCredentialStore as NativeSessionStore;
-use heyfood_platform::{NativeAuthStore, NativeBrowser, NativeClock, NativePaths};
+use heyfood_platform::{
+    AuthorizationReplacementJournal, AuthorizationReplacementPhase, NativeAuthStore, NativeBrowser,
+    NativeClock, NativePaths,
+};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
@@ -125,8 +130,21 @@ async fn one_shot_inner(
     let credential_store = Arc::new(
         NativeSessionStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?,
     );
+    auth_store
+        .finish_authorization_terminal_cleanup()
+        .map_err(heyfood_bin::OneShotError::from)?;
+    if auth_store
+        .pending_authorization_replacement()
+        .map_err(heyfood_bin::OneShotError::from)?
+        .is_some()
+    {
+        return Err(heyfood_bin::OneShotError::new(
+            "reauthorization_reconciliation_required",
+            "A staged login must be reconciled before any command can run. Run `heyfood login`.",
+        ));
+    }
     let mut auth = auth_store
-        .load_reconciling_authorization(credential_store.as_ref())
+        .load()
         .map_err(heyfood_bin::OneShotError::from)?
         .ok_or_else(|| {
             heyfood_bin::OneShotError::new(
@@ -372,8 +390,22 @@ async fn login_inner(
     let paths = NativePaths::discover().map_err(platform_error)?;
     let auth_store = NativeAuthStore::open(paths.config_dir()).map_err(platform_error)?;
     let session_store = NativeSessionStore::open(paths.config_dir()).map_err(platform_error)?;
-    let current = auth_store
-        .load_reconciling_authorization(&session_store)
+    auth_store
+        .finish_authorization_terminal_cleanup()
+        .map_err(platform_error)?;
+    let (service_url, policy) = service_url()?;
+    let client = RegistrationClient::new(service_url, policy)?;
+
+    if let Some(journal) = auth_store
+        .pending_authorization_replacement()
+        .map_err(platform_error)?
+    {
+        return resume_authorization_replacement(&client, &auth_store, &session_store, journal)
+            .await;
+    }
+
+    auth_store
+        .load()
         .map_err(platform_error)?
         .ok_or_else(|| RegistrationError {
             code: "login_required",
@@ -383,10 +415,16 @@ async fn login_inner(
             retryable: false,
             outcome_uncertain: false,
         })?;
-    let (service_url, policy) = service_url()?;
-    let client = RegistrationClient::new(service_url, policy)?;
+    let client_transaction_id = OperationId::new().as_uuid().to_string();
+    let journal = auth_store
+        .begin_authorization_replacement(client_transaction_id.clone(), &session_store)
+        .map_err(platform_error)?;
     let authorization = client
-        .start_device_reauthorization(&current.channel.scope)
+        .start_device_reauthorization(
+            &journal.previous.channel.scope,
+            &client_transaction_id,
+            &journal.previous.channel.device_id,
+        )
         .await?;
     eprintln!(
         "Open this URL to continue: {}",
@@ -407,35 +445,367 @@ async fn login_inner(
             signal_cancellation.cancel();
         }
     });
-    let outcome = client
-        .complete_device_authorization(
+    let provisional = client
+        .complete_device_reauthorization_grant(
             authorization,
-            current.channel.device_id.clone(),
+            client_transaction_id.clone(),
+            journal.previous.channel.device_id.clone(),
             arguments.timeout(),
-            cancellation,
+            cancellation.clone(),
         )
         .await;
     signal.abort();
-    let outcome = outcome?;
-    if outcome.credentials.session.account_id != current.session.account_id {
+    let provisional = match provisional {
+        Ok(value) => value,
+        Err(error) => {
+            // Prepare was never dispatched, so old server authority remains
+            // active. Verify active stores and discard only this local intent.
+            auth_store
+                .finalize_unpromoted_authorization(&client_transaction_id, &session_store)
+                .map_err(platform_error)?;
+            return Err(error);
+        }
+    };
+    auth_store
+        .record_provisional_authorization(
+            &client_transaction_id,
+            provisional.authorization_transaction_id.clone(),
+            provisional.access_token.clone(),
+        )
+        .map_err(platform_error)?;
+    if cancellation.is_cancelled() {
+        auth_store
+            .finalize_unpromoted_authorization(&client_transaction_id, &session_store)
+            .map_err(platform_error)?;
         return Err(RegistrationError {
-            code: "reauthorization_account_conflict",
-            public_message: "The approved account does not match the connected account. Existing credentials were not changed.".into(),
+            code: "cancelled",
+            public_message:
+                "Login canceled before authority was staged. Existing credentials remain active."
+                    .into(),
             retryable: false,
             outcome_uncertain: false,
         });
     }
-    auth_store
-        .replace_authorization_bundle(&current, &outcome.credentials, &session_store)
-        .map_err(|_| RegistrationError {
-            code: "reauthorization_persistence_outcome_uncertain",
-            public_message: "The expanded grant completed, but both native credential stores could not be committed. Stop and reconcile native account state before retrying.".into(),
+    let prepared = client.prepare_device_reauthorization(&provisional).await?;
+    if matches!(
+        prepared.status,
+        ReauthorizationStageStatus::Aborted | ReauthorizationStageStatus::Expired
+    ) {
+        auth_store
+            .finalize_unpromoted_authorization(&client_transaction_id, &session_store)
+            .map_err(platform_error)?;
+        return Err(RegistrationError {
+            code: "reauthorization_not_promoted",
+            public_message:
+                "Login expired or was aborted before promotion. Existing credentials remain active."
+                    .into(),
+            retryable: prepared.status == ReauthorizationStageStatus::Expired,
+            outcome_uncertain: false,
+        });
+    }
+    let staged = staged_from_status(prepared)?;
+    persist_and_promote_reauthorization(
+        &client,
+        &auth_store,
+        &session_store,
+        journal,
+        staged,
+        cancellation.is_cancelled(),
+    )
+    .await
+}
+
+async fn persist_and_promote_reauthorization(
+    client: &RegistrationClient,
+    auth_store: &NativeAuthStore,
+    session_store: &NativeSessionStore,
+    previous_journal: AuthorizationReplacementJournal,
+    staged: StagedReauthorization,
+    cancel_before_promotion: bool,
+) -> Result<RegistrationResultDocument, RegistrationError> {
+    let journal = AuthorizationReplacementJournal {
+        phase: AuthorizationReplacementPhase::Prepared,
+        client_transaction_id: staged.client_transaction_id.clone(),
+        stage_id: Some(staged.stage_id.clone()),
+        authorization_transaction_id: Some(staged.authorization_transaction_id.clone()),
+        provisional_access_token: None,
+        recovery_token: Some(staged.recovery_token.clone()),
+        bundle_digest: Some(staged.bundle_digest.clone()),
+        previous: previous_journal.previous.clone(),
+        replacement: Some(staged.credentials.clone()),
+    };
+    if staged.credentials.session.account_id != previous_journal.previous.session.account_id
+        || staged.credentials.channel.device_id != previous_journal.previous.channel.device_id
+        || staged.credentials.channel.client_id != previous_journal.previous.channel.client_id
+    {
+        // The staged server authority is not safe to activate. Persist abort
+        // intent and the exact recovery capability before dispatch.
+        auth_store
+            .mark_authorization_abort_dispatched(journal)
+            .map_err(platform_error)?;
+        let terminal = client.abort_reauthorization(&staged).await?;
+        if matches!(
+            terminal.status,
+            ReauthorizationStageStatus::Aborted | ReauthorizationStageStatus::Expired
+        ) {
+            auth_store
+                .finalize_unpromoted_authorization(
+                    &previous_journal.client_transaction_id,
+                    session_store,
+                )
+                .map_err(platform_error)?;
+        }
+        return Err(RegistrationError {
+            code: "reauthorization_account_conflict",
+            public_message: "The approved account, device, or client does not match the connected account. Existing credentials remain active.".into(),
             retryable: false,
-            outcome_uncertain: true,
-        })?;
-    Ok(RegistrationResultDocument::completed(
-        outcome.profile_status,
-    ))
+            outcome_uncertain: !matches!(
+                terminal.status,
+                ReauthorizationStageStatus::Aborted | ReauthorizationStageStatus::Expired
+            ),
+        });
+    }
+    if let Err(error) = auth_store.stage_authorization_replacement(journal.clone(), session_store) {
+        // A local expected-version race must not leave a server stage waiting
+        // for accidental promotion. Abort is idempotent; lost abort response
+        // remains recoverable from the still-durable preparing journal.
+        auth_store
+            .mark_authorization_abort_dispatched(journal.clone())
+            .map_err(platform_error)?;
+        if let Ok(terminal) = client.abort_reauthorization(&staged).await
+            && matches!(
+                terminal.status,
+                ReauthorizationStageStatus::Aborted | ReauthorizationStageStatus::Expired
+            )
+        {
+            auth_store
+                .finalize_unpromoted_authorization(
+                    &previous_journal.client_transaction_id,
+                    session_store,
+                )
+                .map_err(platform_error)?;
+        }
+        return Err(platform_error(error));
+    }
+    if cancel_before_promotion {
+        auth_store
+            .mark_authorization_abort_dispatched(journal)
+            .map_err(platform_error)?;
+        let terminal = client.abort_reauthorization(&staged).await?;
+        return finish_authoritative_status(auth_store, session_store, terminal.status, &staged);
+    }
+    auth_store
+        .mark_authorization_promotion_dispatched(&staged.client_transaction_id, session_store)
+        .map_err(platform_error)?;
+    let terminal = client.promote_reauthorization(&staged).await?;
+    finish_authoritative_status(auth_store, session_store, terminal.status, &staged)
+}
+
+async fn resume_authorization_replacement(
+    client: &RegistrationClient,
+    auth_store: &NativeAuthStore,
+    session_store: &NativeSessionStore,
+    journal: AuthorizationReplacementJournal,
+) -> Result<RegistrationResultDocument, RegistrationError> {
+    if journal.phase == AuthorizationReplacementPhase::Preparing {
+        let Some(provisional_access_token) = journal.provisional_access_token.clone() else {
+            auth_store
+                .finalize_unpromoted_authorization(&journal.client_transaction_id, session_store)
+                .map_err(platform_error)?;
+            return Err(RegistrationError {
+                code: "reauthorization_restarted",
+                public_message: "The interrupted login had not staged authority. Run `heyfood login` again to restart approval.".into(),
+                retryable: true,
+                outcome_uncertain: false,
+            });
+        };
+        let provisional = ProvisionalReauthorization {
+            client_transaction_id: journal.client_transaction_id.clone(),
+            authorization_transaction_id: journal.authorization_transaction_id.clone().ok_or_else(|| RegistrationError {
+                code: "reauthorization_reconciliation_required",
+                public_message: "The interrupted login journal is incomplete. Local credentials remain blocked.".into(),
+                retryable: false,
+                outcome_uncertain: true,
+            })?,
+            device_id: journal.previous.channel.device_id.clone(),
+            access_token: provisional_access_token,
+        };
+        let prepared = client.prepare_device_reauthorization(&provisional).await?;
+        if matches!(
+            prepared.status,
+            ReauthorizationStageStatus::Aborted | ReauthorizationStageStatus::Expired
+        ) {
+            auth_store
+                .finalize_unpromoted_authorization(&journal.client_transaction_id, session_store)
+                .map_err(platform_error)?;
+            return Err(RegistrationError {
+                code: "reauthorization_not_promoted",
+                public_message: "The interrupted login expired or was aborted. Existing credentials remain active.".into(),
+                retryable: prepared.status == ReauthorizationStageStatus::Expired,
+                outcome_uncertain: false,
+            });
+        }
+        let staged = staged_from_status(prepared)?;
+        return persist_and_promote_reauthorization(
+            client,
+            auth_store,
+            session_store,
+            journal,
+            staged,
+            false,
+        )
+        .await;
+    }
+    let staged = staged_from_journal(&journal)?;
+    let status = client
+        .reauthorization_status(
+            &staged.stage_id,
+            &staged.recovery_token,
+            &staged.client_transaction_id,
+            &staged.authorization_transaction_id,
+            &staged.device_id,
+            &staged.bundle_digest,
+        )
+        .await?;
+    if journal.phase == AuthorizationReplacementPhase::AbortDispatched {
+        return match status.status {
+            ReauthorizationStageStatus::Staged => {
+                let aborted = client.abort_reauthorization(&staged).await?;
+                finish_authoritative_status(auth_store, session_store, aborted.status, &staged)
+            }
+            ReauthorizationStageStatus::Aborted | ReauthorizationStageStatus::Expired => {
+                finish_authoritative_status(auth_store, session_store, status.status, &staged)
+            }
+            ReauthorizationStageStatus::Promoted => Err(RegistrationError {
+                code: "reauthorization_abort_conflict",
+                public_message: "A canceled login was unexpectedly promoted. Local credentials remain blocked for operator reconciliation.".into(),
+                retryable: false,
+                outcome_uncertain: true,
+            }),
+        };
+    }
+    match status.status {
+        ReauthorizationStageStatus::Staged => {
+            auth_store
+                .mark_authorization_promotion_dispatched(
+                    &staged.client_transaction_id,
+                    session_store,
+                )
+                .map_err(platform_error)?;
+            let promoted = client.promote_reauthorization(&staged).await?;
+            finish_authoritative_status(auth_store, session_store, promoted.status, &staged)
+        }
+        terminal => {
+            if terminal == ReauthorizationStageStatus::Promoted
+                && journal.phase == AuthorizationReplacementPhase::Prepared
+            {
+                auth_store
+                    .mark_authorization_promotion_dispatched(
+                        &staged.client_transaction_id,
+                        session_store,
+                    )
+                    .map_err(platform_error)?;
+            }
+            finish_authoritative_status(auth_store, session_store, terminal, &staged)
+        }
+    }
+}
+
+fn staged_from_status(
+    status: ReauthorizationStatus,
+) -> Result<StagedReauthorization, RegistrationError> {
+    if status.status != ReauthorizationStageStatus::Staged {
+        return Err(reconciliation_error());
+    }
+    Ok(StagedReauthorization {
+        stage_id: status.stage_id,
+        client_transaction_id: status.client_transaction_id,
+        authorization_transaction_id: status.authorization_transaction_id,
+        device_id: status.device_id,
+        status: status.status,
+        scopes: status.scopes,
+        bundle_digest: status.bundle_digest,
+        recovery_token: status.recovery_token.ok_or_else(reconciliation_error)?,
+        credentials: status.credentials.ok_or_else(reconciliation_error)?,
+    })
+}
+
+fn staged_from_journal(
+    journal: &AuthorizationReplacementJournal,
+) -> Result<StagedReauthorization, RegistrationError> {
+    Ok(StagedReauthorization {
+        stage_id: journal.stage_id.clone().ok_or_else(reconciliation_error)?,
+        client_transaction_id: journal.client_transaction_id.clone(),
+        authorization_transaction_id: journal
+            .authorization_transaction_id
+            .clone()
+            .ok_or_else(reconciliation_error)?,
+        device_id: journal.previous.channel.device_id.clone(),
+        status: ReauthorizationStageStatus::Staged,
+        scopes: journal
+            .replacement
+            .as_ref()
+            .ok_or_else(reconciliation_error)?
+            .channel
+            .scope
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect(),
+        bundle_digest: journal
+            .bundle_digest
+            .clone()
+            .ok_or_else(reconciliation_error)?,
+        recovery_token: journal
+            .recovery_token
+            .clone()
+            .ok_or_else(reconciliation_error)?,
+        credentials: journal
+            .replacement
+            .clone()
+            .ok_or_else(reconciliation_error)?,
+    })
+}
+
+fn finish_authoritative_status(
+    auth_store: &NativeAuthStore,
+    session_store: &NativeSessionStore,
+    status: ReauthorizationStageStatus,
+    staged: &StagedReauthorization,
+) -> Result<RegistrationResultDocument, RegistrationError> {
+    match status {
+        ReauthorizationStageStatus::Promoted => {
+            auth_store
+                .finalize_promoted_authorization(&staged.client_transaction_id, session_store)
+                .map_err(platform_error)?;
+            Ok(RegistrationResultDocument::completed(
+                ProfileStatus::Unknown,
+            ))
+        }
+        ReauthorizationStageStatus::Aborted | ReauthorizationStageStatus::Expired => {
+            auth_store
+                .finalize_unpromoted_authorization(&staged.client_transaction_id, session_store)
+                .map_err(platform_error)?;
+            Err(RegistrationError {
+                code: "reauthorization_not_promoted",
+                public_message: "Login was not promoted. Existing credentials remain active."
+                    .into(),
+                retryable: status == ReauthorizationStageStatus::Expired,
+                outcome_uncertain: false,
+            })
+        }
+        ReauthorizationStageStatus::Staged => Err(reconciliation_error()),
+    }
+}
+
+fn reconciliation_error() -> RegistrationError {
+    RegistrationError {
+        code: "reauthorization_reconciliation_required",
+        public_message:
+            "The staged login is incomplete. Local credentials remain blocked until it is reconciled."
+                .into(),
+        retryable: false,
+        outcome_uncertain: true,
+    }
 }
 
 async fn register(arguments: heyfood_cli::RegisterArgs, machine: bool) -> ExitCode {

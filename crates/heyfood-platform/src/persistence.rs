@@ -509,6 +509,7 @@ impl ConfigState {
 #[derive(Clone, Debug)]
 pub struct FileCredentialStore {
     state_path: PathBuf,
+    authorization_stage_path: PathBuf,
     lock_path: PathBuf,
     reconciliation_path: PathBuf,
 }
@@ -520,10 +521,170 @@ pub struct FileCredentialStore {
 pub struct NativeAuthStore {
     #[cfg(not(windows))]
     state_path: PathBuf,
+    #[cfg(not(windows))]
+    replacement_path: PathBuf,
     lock_path: PathBuf,
     reconciliation_path: PathBuf,
     #[cfg(all(windows, feature = "native-credentials"))]
     target: String,
+    #[cfg(all(windows, feature = "native-credentials"))]
+    replacement_target: String,
+    #[cfg(all(windows, feature = "native-credentials"))]
+    replacement_previous_target: String,
+    #[cfg(all(windows, feature = "native-credentials"))]
+    replacement_pending_target: String,
+}
+
+/// Durable phase of an explicit staged authority replacement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthorizationReplacementPhase {
+    /// The client transaction ID is durable, but the server result has not yet
+    /// been observed and staged locally.
+    Preparing,
+    /// Both complete bundles and the server recovery capability are durable;
+    /// the old bundle remains active.
+    Prepared,
+    /// The promote request may have reached the server. Only authoritative
+    /// status recovery may decide whether to activate or roll back locally.
+    PromotionDispatched,
+    /// Abort intent is durable. Recovery may retry abort, but must never
+    /// promote even when the server still reports `staged`.
+    AbortDispatched,
+}
+
+/// Owner-only write-ahead record for a staged server authority replacement.
+///
+/// The previous and replacement bundles deliberately coexist until terminal
+/// server status is known. This makes both promotion and abort/expiry
+/// recoverable after a crash without reconstructing credentials.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizationReplacementJournal {
+    pub phase: AuthorizationReplacementPhase,
+    pub client_transaction_id: String,
+    pub stage_id: Option<String>,
+    pub authorization_transaction_id: Option<String>,
+    /// Present only between the device-token response and idempotent prepare.
+    /// It is persisted so a lost prepare response can replay the exact request
+    /// after a process crash without issuing a second authority bundle.
+    pub provisional_access_token: Option<SensitiveString>,
+    pub recovery_token: Option<SensitiveString>,
+    pub bundle_digest: Option<String>,
+    pub previous: AuthCredentialBundle,
+    pub replacement: Option<AuthCredentialBundle>,
+}
+
+impl AuthorizationReplacementJournal {
+    fn validate(&self) -> Result<(), PortError> {
+        validate_transaction_id("client transaction", &self.client_transaction_id)?;
+        self.previous
+            .validate()
+            .map_err(|error| PortError::new("auth_validation", error))?;
+        match self.phase {
+            AuthorizationReplacementPhase::Preparing => {
+                if self.stage_id.is_some()
+                    || self.recovery_token.is_some()
+                    || self.bundle_digest.is_some()
+                    || self.replacement.is_some()
+                {
+                    return Err(PortError::new(
+                        "authorization_journal",
+                        "preparing authorization journal contains staged result data",
+                    ));
+                }
+                if self.provisional_access_token.is_some()
+                    != self.authorization_transaction_id.is_some()
+                {
+                    return Err(PortError::new(
+                        "authorization_journal",
+                        "provisional credential binding is incomplete",
+                    ));
+                }
+                if let Some(token) = &self.provisional_access_token
+                    && (token.expose_secret().len() < 20
+                        || token.expose_secret().len() > 1_024
+                        || token.expose_secret().chars().any(char::is_control))
+                {
+                    return Err(PortError::new(
+                        "authorization_journal",
+                        "provisional credential is invalid",
+                    ));
+                }
+                if let Some(transaction_id) = &self.authorization_transaction_id {
+                    validate_transaction_id("authorization transaction", transaction_id)?;
+                }
+            }
+            AuthorizationReplacementPhase::Prepared
+            | AuthorizationReplacementPhase::PromotionDispatched
+            | AuthorizationReplacementPhase::AbortDispatched => {
+                validate_transaction_id(
+                    "stage",
+                    self.stage_id.as_deref().ok_or_else(|| {
+                        PortError::new("authorization_journal", "stage ID is missing")
+                    })?,
+                )?;
+                validate_transaction_id(
+                    "authorization transaction",
+                    self.authorization_transaction_id
+                        .as_deref()
+                        .ok_or_else(|| {
+                            PortError::new(
+                                "authorization_journal",
+                                "authorization transaction ID is missing",
+                            )
+                        })?,
+                )?;
+                let recovery_token = self.recovery_token.as_ref().ok_or_else(|| {
+                    PortError::new("authorization_journal", "recovery capability is missing")
+                })?;
+                if self.provisional_access_token.is_some() {
+                    return Err(PortError::new(
+                        "authorization_journal",
+                        "staged journal retained a provisional credential",
+                    ));
+                }
+                if recovery_token.expose_secret().len() < 20
+                    || recovery_token.expose_secret().len() > 1_024
+                    || recovery_token.expose_secret().chars().any(char::is_control)
+                {
+                    return Err(PortError::new(
+                        "authorization_journal",
+                        "recovery capability is invalid",
+                    ));
+                }
+                let digest = self.bundle_digest.as_deref().ok_or_else(|| {
+                    PortError::new("authorization_journal", "bundle digest is missing")
+                })?;
+                if digest.len() != 64
+                    || !digest
+                        .as_bytes()
+                        .iter()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+                {
+                    return Err(PortError::new(
+                        "authorization_journal",
+                        "bundle digest is invalid",
+                    ));
+                }
+                let replacement = self.replacement.as_ref().ok_or_else(|| {
+                    PortError::new("authorization_journal", "replacement bundle is missing")
+                })?;
+                replacement
+                    .validate()
+                    .map_err(|error| PortError::new("auth_validation", error))?;
+                if self.phase != AuthorizationReplacementPhase::AbortDispatched
+                    && (replacement.session.account_id != self.previous.session.account_id
+                        || replacement.channel.device_id != self.previous.channel.device_id
+                        || replacement.channel.client_id != self.previous.channel.client_id)
+                {
+                    return Err(PortError::new(
+                        "authorization_binding",
+                        "staged authorization changed its account, device, or client binding",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Exclusive channel-refresh transaction. The lock is held from the second
@@ -538,8 +699,36 @@ pub struct NativeAuthRefreshGuard<'a> {
 /// must either leave the previous credential intact or return an uncertain
 /// error; the auth-store transaction marker blocks use after either outcome.
 pub trait AuthorizationSessionStore {
+    /// Load the authoritative active session under the store's own lock. The
+    /// session embedded in the auth bundle may lag normal app-session rotation
+    /// and must never be used as rollback authority.
+    fn load_authorized_session(&self) -> Result<Option<SessionCredentials>, PortError>;
+
     fn replace_authorized_session(&self, credentials: &SessionCredentials)
     -> Result<(), PortError>;
+
+    /// Persist a pending session without making it visible to ordinary loads.
+    fn stage_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError>;
+
+    /// Verify that the exact pending session is durable.
+    fn verify_staged_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError>;
+
+    /// Remove pending session state after terminal reconciliation.
+    fn clear_staged_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        expected_replacement: &SessionCredentials,
+    ) -> Result<(), PortError>;
 }
 
 #[cfg(any(not(windows), feature = "native-credentials"))]
@@ -576,6 +765,7 @@ impl NativeAuthStore {
         create_private_dir(root)?;
         Ok(Self {
             state_path: root.join("auth.native"),
+            replacement_path: root.join("auth.authorization-replacement"),
             lock_path: root.join("auth.lock"),
             reconciliation_path: root.join("auth.reconciliation"),
         })
@@ -598,6 +788,18 @@ impl NativeAuthStore {
                 "{WINDOWS_CREDENTIAL_SERVICE}:auth:{}",
                 hex_encode(&identity)
             ),
+            replacement_target: format!(
+                "{WINDOWS_CREDENTIAL_SERVICE}:auth-replacement:{}",
+                hex_encode(&identity)
+            ),
+            replacement_previous_target: format!(
+                "{WINDOWS_CREDENTIAL_SERVICE}:auth-replacement-previous:{}",
+                hex_encode(&identity)
+            ),
+            replacement_pending_target: format!(
+                "{WINDOWS_CREDENTIAL_SERVICE}:auth-replacement-pending:{}",
+                hex_encode(&identity)
+            ),
         })
     }
 
@@ -612,14 +814,416 @@ impl NativeAuthStore {
         })
     }
 
+    #[cfg(any(not(windows), feature = "native-credentials"))]
     fn ensure_reconciled_unlocked(&self) -> Result<(), PortError> {
-        if self.reconciliation_path.exists() {
+        if self.reconciliation_path.exists()
+            || self.load_authorization_journal_unlocked()?.is_some()
+        {
             return Err(PortError::uncertain(
                 "auth_reconciliation_required",
                 "authorization credentials have an unresolved refresh or replacement outcome; stop and reconcile native account state before retrying",
             ));
         }
         Ok(())
+    }
+
+    /// Begin an explicit authority replacement before any staged server
+    /// prepare request can be dispatched. The authoritative current session
+    /// is loaded from its own store; the possibly stale session mirror in the
+    /// auth bundle is never used as rollback authority.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn begin_authorization_replacement(
+        &self,
+        client_transaction_id: String,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<AuthorizationReplacementJournal, PortError> {
+        validate_transaction_id("client transaction", &client_transaction_id)?;
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        self.ensure_reconciled_unlocked()?;
+        let current_auth = self
+            .load_unlocked()?
+            .ok_or_else(|| PortError::new("auth_missing", "authorization state is missing"))?;
+        let current_session = session_store
+            .load_authorized_session()?
+            .ok_or_else(|| PortError::new("credentials_missing", "credentials are missing"))?;
+        if current_auth.session.account_id != current_session.account_id {
+            return Err(PortError::new(
+                "authorization_account_conflict",
+                "authorization and active session belong to different accounts",
+            ));
+        }
+        let journal = AuthorizationReplacementJournal {
+            phase: AuthorizationReplacementPhase::Preparing,
+            client_transaction_id,
+            stage_id: None,
+            authorization_transaction_id: None,
+            provisional_access_token: None,
+            recovery_token: None,
+            bundle_digest: None,
+            previous: AuthCredentialBundle {
+                channel: current_auth.channel,
+                session: current_session,
+            },
+            replacement: None,
+        };
+        journal.validate()?;
+        self.write_authorization_journal_unlocked(&journal)?;
+        AtomicFile::replace(
+            &self.reconciliation_path,
+            b"authorization_replacement_pending\n",
+        )
+        .map_err(|error| PortError::uncertain("auth_reconciliation_write", error.to_string()))?;
+        Ok(journal)
+    }
+
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn record_provisional_authorization(
+        &self,
+        client_transaction_id: &str,
+        authorization_transaction_id: String,
+        provisional_access_token: SensitiveString,
+    ) -> Result<AuthorizationReplacementJournal, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let mut journal = self.load_authorization_journal_unlocked()?.ok_or_else(|| {
+            PortError::uncertain(
+                "authorization_journal_missing",
+                "authorization replacement marker exists without its journal",
+            )
+        })?;
+        if journal.phase != AuthorizationReplacementPhase::Preparing
+            || journal.client_transaction_id != client_transaction_id
+        {
+            return Err(PortError::new(
+                "authorization_transaction_conflict",
+                "a different authorization replacement is already pending",
+            ));
+        }
+        journal.authorization_transaction_id = Some(authorization_transaction_id);
+        journal.provisional_access_token = Some(provisional_access_token);
+        journal.validate()?;
+        self.write_authorization_journal_unlocked(&journal)?;
+        Ok(journal)
+    }
+
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn stage_authorization_replacement(
+        &self,
+        staged: AuthorizationReplacementJournal,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<(), PortError> {
+        staged.validate()?;
+        if staged.phase != AuthorizationReplacementPhase::Prepared {
+            return Err(PortError::new(
+                "authorization_journal_phase",
+                "only a prepared replacement can be staged",
+            ));
+        }
+        let replacement = staged.replacement.as_ref().ok_or_else(|| {
+            PortError::new("authorization_journal", "replacement bundle is missing")
+        })?;
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let current = self.load_authorization_journal_unlocked()?.ok_or_else(|| {
+            PortError::uncertain(
+                "authorization_journal_missing",
+                "authorization replacement marker exists without its journal",
+            )
+        })?;
+        let resumable_preparing = current.phase == AuthorizationReplacementPhase::Preparing
+            && current.client_transaction_id == staged.client_transaction_id
+            && current.previous == staged.previous
+            && current.authorization_transaction_id == staged.authorization_transaction_id;
+        let resumable_prepared = current == staged;
+        if !resumable_preparing && !resumable_prepared {
+            return Err(PortError::new(
+                "authorization_transaction_conflict",
+                "staged replacement does not match its durable prepare transaction",
+            ));
+        }
+        let active_session = session_store
+            .load_authorized_session()?
+            .ok_or_else(|| PortError::new("credentials_missing", "credentials are missing"))?;
+        if active_session != staged.previous.session {
+            return Err(PortError::new(
+                "authorization_session_version_conflict",
+                "session changed while authorization replacement was prepared",
+            ));
+        }
+        // The complete owner-only journal is durable before the second store
+        // is touched. Active credentials remain unchanged throughout.
+        self.write_authorization_journal_unlocked(&staged)?;
+        session_store.stage_authorized_session(
+            &staged.client_transaction_id,
+            &staged.previous.session,
+            &replacement.session,
+        )?;
+        session_store.verify_staged_authorized_session(
+            &staged.client_transaction_id,
+            &staged.previous.session,
+            &replacement.session,
+        )?;
+        let verified = self.load_authorization_journal_unlocked()?.ok_or_else(|| {
+            PortError::uncertain(
+                "authorization_journal_missing",
+                "staged authorization journal disappeared before promotion",
+            )
+        })?;
+        if verified != staged {
+            return Err(PortError::uncertain(
+                "authorization_journal_verify",
+                "staged authorization journal changed before promotion",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn mark_authorization_promotion_dispatched(
+        &self,
+        client_transaction_id: &str,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<AuthorizationReplacementJournal, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let mut journal = self.load_authorization_journal_unlocked()?.ok_or_else(|| {
+            PortError::uncertain(
+                "authorization_journal_missing",
+                "staged authorization journal is missing",
+            )
+        })?;
+        if journal.client_transaction_id != client_transaction_id
+            || !matches!(
+                journal.phase,
+                AuthorizationReplacementPhase::Prepared
+                    | AuthorizationReplacementPhase::PromotionDispatched
+            )
+        {
+            return Err(PortError::new(
+                "authorization_transaction_conflict",
+                "authorization promotion does not match the staged transaction",
+            ));
+        }
+        let replacement = journal.replacement.as_ref().ok_or_else(|| {
+            PortError::new("authorization_journal", "replacement bundle is missing")
+        })?;
+        session_store.verify_staged_authorized_session(
+            &journal.client_transaction_id,
+            &journal.previous.session,
+            &replacement.session,
+        )?;
+        journal.phase = AuthorizationReplacementPhase::PromotionDispatched;
+        journal.validate()?;
+        self.write_authorization_journal_unlocked(&journal)?;
+        Ok(journal)
+    }
+
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn mark_authorization_abort_dispatched(
+        &self,
+        mut abort_journal: AuthorizationReplacementJournal,
+    ) -> Result<AuthorizationReplacementJournal, PortError> {
+        abort_journal.phase = AuthorizationReplacementPhase::AbortDispatched;
+        abort_journal.validate()?;
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let current = self.load_authorization_journal_unlocked()?.ok_or_else(|| {
+            PortError::uncertain(
+                "authorization_journal_missing",
+                "authorization abort journal is missing",
+            )
+        })?;
+        let matches_preparing = current.phase == AuthorizationReplacementPhase::Preparing
+            && current.client_transaction_id == abort_journal.client_transaction_id
+            && current.previous == abort_journal.previous
+            && current.authorization_transaction_id == abort_journal.authorization_transaction_id;
+        let matches_prepared = current.phase == AuthorizationReplacementPhase::Prepared
+            && current.client_transaction_id == abort_journal.client_transaction_id
+            && current.previous == abort_journal.previous
+            && current.stage_id == abort_journal.stage_id
+            && current.authorization_transaction_id == abort_journal.authorization_transaction_id
+            && current.bundle_digest == abort_journal.bundle_digest
+            && current.replacement == abort_journal.replacement;
+        if current != abort_journal && !matches_preparing && !matches_prepared {
+            return Err(PortError::new(
+                "authorization_transaction_conflict",
+                "authorization abort does not match its durable transaction",
+            ));
+        }
+        self.write_authorization_journal_unlocked(&abort_journal)?;
+        Ok(abort_journal)
+    }
+
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn pending_authorization_replacement(
+        &self,
+    ) -> Result<Option<AuthorizationReplacementJournal>, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, false)?;
+        self.load_authorization_journal_unlocked()
+    }
+
+    /// Forward-complete a server-promoted replacement. Re-entry after any
+    /// split local write is idempotent because the journal retains both exact
+    /// bundles until both active stores and pending cleanup are verified.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn finalize_promoted_authorization(
+        &self,
+        client_transaction_id: &str,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<AuthCredentialBundle, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let journal = self.load_authorization_journal_unlocked()?.ok_or_else(|| {
+            PortError::uncertain(
+                "authorization_journal_missing",
+                "promoted authorization journal is missing",
+            )
+        })?;
+        if journal.client_transaction_id != client_transaction_id
+            || journal.phase != AuthorizationReplacementPhase::PromotionDispatched
+        {
+            return Err(PortError::new(
+                "authorization_transaction_conflict",
+                "promoted authorization does not match the durable transaction",
+            ));
+        }
+        let replacement = journal.replacement.as_ref().ok_or_else(|| {
+            PortError::new("authorization_journal", "replacement bundle is missing")
+        })?;
+        let active_auth = self
+            .load_unlocked()?
+            .ok_or_else(|| PortError::new("auth_missing", "authorization state is missing"))?;
+        if active_auth.channel != journal.previous.channel
+            && active_auth.channel != replacement.channel
+        {
+            return Err(PortError::uncertain(
+                "authorization_version_conflict",
+                "active channel changed outside the promoted transaction",
+            ));
+        }
+        let active_session = session_store
+            .load_authorized_session()?
+            .ok_or_else(|| PortError::new("credentials_missing", "credentials are missing"))?;
+        if active_session.account_id != journal.previous.session.account_id {
+            return Err(PortError::uncertain(
+                "authorization_session_version_conflict",
+                "active session changed accounts outside the promoted transaction",
+            ));
+        }
+        self.replace_unlocked(replacement).map_err(|error| {
+            PortError::uncertain("authorization_bundle_replace", error.to_string())
+        })?;
+        session_store
+            .replace_authorized_session(&replacement.session)
+            .map_err(|error| {
+                PortError::uncertain("authorization_session_replace", error.to_string())
+            })?;
+        let verified_auth = self.load_unlocked()?.ok_or_else(|| {
+            PortError::uncertain("authorization_bundle_verify", "active bundle disappeared")
+        })?;
+        let verified_session = session_store.load_authorized_session()?.ok_or_else(|| {
+            PortError::uncertain("authorization_session_verify", "active session disappeared")
+        })?;
+        if verified_auth != *replacement || verified_session != replacement.session {
+            return Err(PortError::uncertain(
+                "authorization_activation_verify",
+                "promoted credentials were not durably activated in both stores",
+            ));
+        }
+        session_store.clear_staged_authorized_session(
+            &journal.client_transaction_id,
+            &replacement.session,
+        )?;
+        write_authorization_cleanup_marker(
+            &self.reconciliation_path,
+            "promoted",
+            &journal.client_transaction_id,
+        )?;
+        self.delete_authorization_journal_unlocked()?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)?;
+        Ok(replacement.clone())
+    }
+
+    /// Finalize an authoritative aborted/expired stage. Active stores are
+    /// verified, never overwritten from a possibly stale mirror.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn finalize_unpromoted_authorization(
+        &self,
+        client_transaction_id: &str,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<AuthCredentialBundle, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let journal = self.load_authorization_journal_unlocked()?.ok_or_else(|| {
+            PortError::uncertain(
+                "authorization_journal_missing",
+                "authorization replacement journal is missing",
+            )
+        })?;
+        if journal.client_transaction_id != client_transaction_id {
+            return Err(PortError::new(
+                "authorization_transaction_conflict",
+                "terminal authorization does not match the durable transaction",
+            ));
+        }
+        let active_auth = self
+            .load_unlocked()?
+            .ok_or_else(|| PortError::new("auth_missing", "authorization state is missing"))?;
+        let active_session = session_store
+            .load_authorized_session()?
+            .ok_or_else(|| PortError::new("credentials_missing", "credentials are missing"))?;
+        if active_auth.channel.client_id != journal.previous.channel.client_id
+            || active_auth.channel.device_id != journal.previous.channel.device_id
+            || active_auth.channel.scope != journal.previous.channel.scope
+            || active_auth.session.account_id != journal.previous.session.account_id
+            || active_session.account_id != journal.previous.session.account_id
+        {
+            return Err(PortError::uncertain(
+                "authorization_abort_local_conflict",
+                "active credentials changed account or channel while the server stage was unpromoted",
+            ));
+        }
+        if let Some(replacement) = &journal.replacement {
+            session_store.clear_staged_authorized_session(
+                &journal.client_transaction_id,
+                &replacement.session,
+            )?;
+            write_authorization_cleanup_marker(
+                &self.reconciliation_path,
+                "unpromoted",
+                &journal.client_transaction_id,
+            )?;
+        } else {
+            write_authorization_cleanup_marker(
+                &self.reconciliation_path,
+                "unpromoted",
+                &journal.client_transaction_id,
+            )?;
+        }
+        self.delete_authorization_journal_unlocked()?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)?;
+        Ok(AuthCredentialBundle {
+            channel: active_auth.channel,
+            session: active_session,
+        })
+    }
+
+    /// Complete the final marker-only cleanup window. Data-bearing journal and
+    /// pending-session entries are always removed before metadata and before
+    /// this marker is cleared, so marker-only recovery contains no secrets.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn finish_authorization_terminal_cleanup(&self) -> Result<bool, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if !self.reconciliation_path.exists() {
+            return Ok(false);
+        }
+        let marker = read_limited(&self.reconciliation_path, 512)?;
+        let Some((_terminal, _client_transaction_id)) =
+            parse_authorization_cleanup_marker(&marker)?
+        else {
+            return Ok(false);
+        };
+        // The validated terminal marker is the cleanup commit and is written
+        // only after active-state verification. Do not attempt to decode a
+        // partially deleted split journal: idempotently remove data entries,
+        // then metadata, then the marker.
+        self.delete_authorization_journal_unlocked()?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)?;
+        Ok(true)
     }
 
     #[cfg(all(windows, not(feature = "native-credentials")))]
@@ -631,11 +1235,41 @@ impl NativeAuthStore {
     }
 
     #[cfg(not(windows))]
+    fn write_authorization_journal_unlocked(
+        &self,
+        journal: &AuthorizationReplacementJournal,
+    ) -> Result<(), PortError> {
+        journal.validate()?;
+        AtomicFile::replace(
+            &self.replacement_path,
+            &encode_authorization_journal(journal),
+        )
+        .map_err(|error| PortError::uncertain("authorization_journal_write", error.to_string()))
+    }
+
+    #[cfg(not(windows))]
+    fn load_authorization_journal_unlocked(
+        &self,
+    ) -> Result<Option<AuthorizationReplacementJournal>, PortError> {
+        if !self.replacement_path.exists() {
+            return Ok(None);
+        }
+        decode_authorization_journal(&read_limited(&self.replacement_path, 4 * 1024 * 1024)?)
+            .map(Some)
+    }
+
+    #[cfg(not(windows))]
+    fn delete_authorization_journal_unlocked(&self) -> Result<(), PortError> {
+        remove_private_state_file(&self.replacement_path)
+    }
+
+    #[cfg(not(windows))]
     pub fn initialize(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
         bundle
             .validate()
             .map_err(|error| PortError::new("auth_validation", error))?;
         let _lock = FileLock::acquire(&self.lock_path, true)?;
+        self.ensure_reconciled_unlocked()?;
         if self.state_path.exists() {
             return Err(PortError::new(
                 "auth_exists",
@@ -685,95 +1319,13 @@ impl NativeAuthStore {
         AtomicFile::replace(&self.state_path, &encode_auth_bundle(bundle))
     }
 
-    /// Atomically publish an already-complete expanded grant across the
-    /// channel bundle and rotating app-session store. The previous credentials
-    /// remain untouched while browser/device authorization and session exchange
-    /// run. A durable marker is written before the first local replacement and
-    /// is cleared only after both owner-only stores commit.
-    #[cfg(any(not(windows), feature = "native-credentials"))]
-    pub fn replace_authorization_bundle(
-        &self,
-        expected: &AuthCredentialBundle,
-        replacement: &AuthCredentialBundle,
-        session_store: &impl AuthorizationSessionStore,
-    ) -> Result<(), PortError> {
-        replacement
-            .validate()
-            .map_err(|error| PortError::new("auth_validation", error))?;
-        if replacement.session.account_id != expected.session.account_id {
-            return Err(PortError::new(
-                "authorization_account_conflict",
-                "reauthorization cannot change accounts",
-            ));
-        }
-        let _lock = FileLock::acquire(&self.lock_path, true)?;
-        self.ensure_reconciled_unlocked()?;
-        let current = self
-            .load_unlocked()?
-            .ok_or_else(|| PortError::new("auth_missing", "authorization state is missing"))?;
-        if &current != expected {
-            return Err(PortError::new(
-                "authorization_version_conflict",
-                "authorization changed while reauthorization was in progress; restart login",
-            ));
-        }
-        AtomicFile::replace(
-            &self.reconciliation_path,
-            b"authorization_replacement_outcome_uncertain\n",
-        )
-        .map_err(|error| PortError::uncertain("auth_reconciliation_write", error.to_string()))?;
-        self.replace_unlocked(replacement).map_err(|error| {
-            PortError::uncertain("authorization_bundle_replace", error.to_string())
-        })?;
-        session_store
-            .replace_authorized_session(&replacement.session)
-            .map_err(|error| {
-                PortError::uncertain("authorization_session_replace", error.to_string())
-            })?;
-        clear_any_reconciliation_marker(&self.reconciliation_path)
-    }
-
-    /// Finish or roll back an interrupted explicit authorization replacement.
-    /// The complete auth bundle is the transaction record: if its atomic write
-    /// landed, mirror its session; if it did not, mirror the still-current old
-    /// session. Refresh markers are deliberately not eligible for this repair.
-    #[cfg(any(not(windows), feature = "native-credentials"))]
-    pub fn load_reconciling_authorization(
-        &self,
-        session_store: &impl AuthorizationSessionStore,
-    ) -> Result<Option<AuthCredentialBundle>, PortError> {
-        let _lock = FileLock::acquire(&self.lock_path, true)?;
-        if !self.reconciliation_path.exists() {
-            return self.load_unlocked();
-        }
-        let marker = read_limited(&self.reconciliation_path, 128)?;
-        if marker != b"authorization_replacement_outcome_uncertain\n" {
-            return Err(PortError::uncertain(
-                "auth_reconciliation_required",
-                "channel refresh has an unresolved outcome and cannot be repaired by authorization replacement",
-            ));
-        }
-        let bundle = self.load_unlocked()?.ok_or_else(|| {
-            PortError::uncertain(
-                "auth_reconciliation_required",
-                "authorization replacement marker exists without a credential bundle",
-            )
-        })?;
-        session_store
-            .replace_authorized_session(&bundle.session)
-            .map_err(|error| {
-                PortError::uncertain("authorization_session_reconcile", error.to_string())
-            })?;
-        clear_any_reconciliation_marker(&self.reconciliation_path)?;
-        Ok(Some(bundle))
-    }
-
     #[cfg(all(windows, feature = "native-credentials"))]
     pub fn initialize(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
         bundle
             .validate()
             .map_err(|error| PortError::new("auth_validation", error))?;
         let _lock = FileLock::acquire(&self.lock_path, true)?;
+        self.ensure_reconciled_unlocked()?;
         if self.read_windows_unlocked()?.is_some() {
             return Err(PortError::new(
                 "auth_exists",
@@ -841,6 +1393,7 @@ impl NativeAuthStore {
     #[cfg(all(windows, feature = "native-credentials"))]
     pub fn delete(&self) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
+        self.ensure_reconciled_unlocked()?;
         match self.windows_entry()?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => {
                 clear_any_reconciliation_marker(&self.reconciliation_path)
@@ -853,6 +1406,175 @@ impl NativeAuthStore {
     fn windows_entry(&self) -> Result<keyring::Entry, PortError> {
         keyring::Entry::new_with_target(&self.target, WINDOWS_CREDENTIAL_SERVICE, "authorization")
             .map_err(|error| keyring_error("credential_manager_entry", error))
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    fn replacement_entry(&self, target: &str, username: &str) -> Result<keyring::Entry, PortError> {
+        keyring::Entry::new_with_target(target, WINDOWS_CREDENTIAL_SERVICE, username)
+            .map_err(|error| keyring_error("authorization_journal_entry", error))
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    fn write_authorization_journal_unlocked(
+        &self,
+        journal: &AuthorizationReplacementJournal,
+    ) -> Result<(), PortError> {
+        journal.validate()?;
+        let previous = encode_bound_auth_bundle(&journal.client_transaction_id, &journal.previous);
+        let pending = journal
+            .replacement
+            .as_ref()
+            .map(|bundle| encode_bound_auth_bundle(&journal.client_transaction_id, bundle));
+        let metadata = encode_authorization_journal_metadata(journal);
+        for (document, label) in [
+            (&previous, "previous authorization bundle"),
+            (&metadata, "authorization replacement metadata"),
+        ] {
+            if document.len() > WINDOWS_CREDENTIAL_BLOB_MAX_BYTES {
+                return Err(PortError::new(
+                    "credential_manager_size",
+                    format!("{label} exceeds the Windows Credential Manager limit"),
+                ));
+            }
+        }
+        if pending
+            .as_ref()
+            .is_some_and(|document| document.len() > WINDOWS_CREDENTIAL_BLOB_MAX_BYTES)
+        {
+            return Err(PortError::new(
+                "credential_manager_size",
+                "pending authorization bundle exceeds the Windows Credential Manager limit",
+            ));
+        }
+        self.replacement_entry(
+            &self.replacement_previous_target,
+            "authorization-replacement-previous",
+        )?
+        .set_secret(&previous)
+        .map_err(|error| keyring_error("authorization_journal_previous_write", error))?;
+        if let Some(pending) = pending {
+            self.replacement_entry(
+                &self.replacement_pending_target,
+                "authorization-replacement-pending",
+            )?
+            .set_secret(&pending)
+            .map_err(|error| keyring_error("authorization_journal_pending_write", error))?;
+        }
+        // Metadata is the commit record and is written last.
+        self.replacement_entry(&self.replacement_target, "authorization-replacement")?
+            .set_secret(&metadata)
+            .map_err(|error| keyring_error("authorization_journal_write", error))
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    fn load_authorization_journal_unlocked(
+        &self,
+    ) -> Result<Option<AuthorizationReplacementJournal>, PortError> {
+        let metadata = match self
+            .replacement_entry(&self.replacement_target, "authorization-replacement")?
+            .get_secret()
+        {
+            Ok(document) => decode_authorization_journal_metadata(&document)?,
+            Err(keyring::Error::NoEntry) => {
+                let previous_exists = keyring_secret_exists(&self.replacement_entry(
+                    &self.replacement_previous_target,
+                    "authorization-replacement-previous",
+                )?)?;
+                let pending_exists = keyring_secret_exists(&self.replacement_entry(
+                    &self.replacement_pending_target,
+                    "authorization-replacement-pending",
+                )?)?;
+                if previous_exists || pending_exists {
+                    return Err(PortError::uncertain(
+                        "authorization_journal_incomplete",
+                        "authorization journal data exists without its generation metadata",
+                    ));
+                }
+                return Ok(None);
+            }
+            Err(error) => return Err(keyring_error("authorization_journal_read", error)),
+        };
+        let (previous_transaction_id, previous) = self
+            .replacement_entry(
+                &self.replacement_previous_target,
+                "authorization-replacement-previous",
+            )?
+            .get_secret()
+            .map_err(|error| keyring_error("authorization_journal_previous_read", error))
+            .and_then(|document| decode_bound_auth_bundle(&document))?;
+        if previous_transaction_id != metadata.client_transaction_id {
+            return Err(PortError::uncertain(
+                "authorization_journal_generation",
+                "authorization journal previous bundle belongs to another generation",
+            ));
+        }
+        let replacement = if metadata.phase == AuthorizationReplacementPhase::Preparing {
+            // Metadata is the commit record. A pending blob written before a
+            // crashed Prepared metadata update is intentionally invisible.
+            None
+        } else {
+            match self
+                .replacement_entry(
+                    &self.replacement_pending_target,
+                    "authorization-replacement-pending",
+                )?
+                .get_secret()
+            {
+                Ok(document) => {
+                    let (transaction_id, bundle) = decode_bound_auth_bundle(&document)?;
+                    if transaction_id != metadata.client_transaction_id {
+                        return Err(PortError::uncertain(
+                            "authorization_journal_generation",
+                            "authorization journal pending bundle belongs to another generation",
+                        ));
+                    }
+                    Some(bundle)
+                }
+                Err(keyring::Error::NoEntry) => {
+                    return Err(PortError::uncertain(
+                        "authorization_journal_incomplete",
+                        "prepared authorization journal is missing its pending bundle",
+                    ));
+                }
+                Err(error) => {
+                    return Err(keyring_error("authorization_journal_pending_read", error));
+                }
+            }
+        };
+        let journal = AuthorizationReplacementJournal {
+            phase: metadata.phase,
+            client_transaction_id: metadata.client_transaction_id,
+            stage_id: metadata.stage_id,
+            authorization_transaction_id: metadata.authorization_transaction_id,
+            provisional_access_token: metadata.provisional_access_token,
+            recovery_token: metadata.recovery_token,
+            bundle_digest: metadata.bundle_digest,
+            previous,
+            replacement,
+        };
+        journal.validate()?;
+        Ok(Some(journal))
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    fn delete_authorization_journal_unlocked(&self) -> Result<(), PortError> {
+        for (target, username) in [
+            (
+                &self.replacement_pending_target,
+                "authorization-replacement-pending",
+            ),
+            (
+                &self.replacement_previous_target,
+                "authorization-replacement-previous",
+            ),
+            (&self.replacement_target, "authorization-replacement"),
+        ] {
+            delete_keyring_entry(
+                &self.replacement_entry(target, username)?,
+                "authorization_journal_delete",
+            )?;
+        }
+        Ok(())
     }
 
     #[cfg(all(windows, feature = "native-credentials"))]
@@ -896,6 +1618,7 @@ impl FileCredentialStore {
         create_private_dir(root)?;
         Ok(Self {
             state_path: root.join("credentials.native"),
+            authorization_stage_path: root.join("credentials.authorization-stage"),
             lock_path: root.join("credentials.lock"),
             reconciliation_path: root.join("credentials.reconciliation"),
         })
@@ -914,6 +1637,12 @@ impl FileCredentialStore {
 
     pub fn initialize(&self, credentials: &SessionCredentials) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.reconciliation_path.exists() || self.authorization_stage_path.exists() {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "session state has an unresolved rotation or authorization replacement",
+            ));
+        }
         if self.state_path.exists() {
             return Err(PortError::new(
                 "credentials_exist",
@@ -929,7 +1658,7 @@ impl FileCredentialStore {
 
     pub fn reconciliation_required(&self) -> Result<bool, PortError> {
         let _lock = FileLock::acquire(&self.lock_path, false)?;
-        Ok(self.reconciliation_path.exists())
+        Ok(self.reconciliation_path.exists() || self.authorization_stage_path.exists())
     }
 
     /// Verified logout for the explicit owner-only fallback. The credential
@@ -937,6 +1666,12 @@ impl FileCredentialStore {
     /// process lock before another account can initialize this store.
     pub fn delete(&self) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.reconciliation_path.exists() || self.authorization_stage_path.exists() {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "session state has an unresolved rotation or authorization replacement",
+            ));
+        }
         if self.state_path.exists() {
             fs::remove_file(&self.state_path)
                 .map_err(|error| PortError::new("credential_file_delete", error.to_string()))?;
@@ -946,6 +1681,7 @@ impl FileCredentialStore {
                 })?;
             }
         }
+        remove_private_state_file(&self.authorization_stage_path)?;
         clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
@@ -958,6 +1694,17 @@ impl FileCredentialStore {
 }
 
 impl AuthorizationSessionStore for FileCredentialStore {
+    fn load_authorized_session(&self) -> Result<Option<SessionCredentials>, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, false)?;
+        if self.reconciliation_path.exists() {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "session rotation has an unresolved outcome",
+            ));
+        }
+        Ok(self.read_unlocked()?.map(|state| state.credentials))
+    }
+
     fn replace_authorized_session(
         &self,
         credentials: &SessionCredentials,
@@ -976,6 +1723,75 @@ impl AuthorizationSessionStore for FileCredentialStore {
             &self.state_path,
             &CredentialState::new(credentials.clone()).encode(),
         )
+    }
+
+    fn stage_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        validate_transaction_id("client transaction", client_transaction_id)?;
+        if previous.account_id != replacement.account_id {
+            return Err(PortError::new(
+                "credential_account_conflict",
+                "staged authorization cannot change accounts",
+            ));
+        }
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let current = self.read_unlocked()?.ok_or_else(|| {
+            PortError::new("credentials_missing", "credentials are not initialized")
+        })?;
+        if current.credentials != *previous {
+            return Err(PortError::new(
+                "authorization_session_version_conflict",
+                "session changed while staged authorization was prepared",
+            ));
+        }
+        let stage = AuthorizationSessionStage {
+            client_transaction_id: client_transaction_id.to_owned(),
+            previous: previous.clone(),
+            replacement: replacement.clone(),
+        };
+        AtomicFile::replace(&self.authorization_stage_path, &stage.encode())
+    }
+
+    fn verify_staged_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, false)?;
+        let stage = AuthorizationSessionStage::decode(&read_limited(
+            &self.authorization_stage_path,
+            1024 * 1024,
+        )?)?;
+        stage.verify(client_transaction_id, previous, replacement)
+    }
+
+    fn clear_staged_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        expected_replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if !self.authorization_stage_path.exists() {
+            return Ok(());
+        }
+        let stage = AuthorizationSessionStage::decode(&read_limited(
+            &self.authorization_stage_path,
+            1024 * 1024,
+        )?)?;
+        if stage.client_transaction_id != client_transaction_id
+            || stage.replacement != *expected_replacement
+        {
+            return Err(PortError::new(
+                "authorization_session_stage_conflict",
+                "stale cleanup cannot remove a different staged session",
+            ));
+        }
+        remove_private_state_file(&self.authorization_stage_path)
     }
 }
 
@@ -1041,6 +1857,7 @@ const WINDOWS_CREDENTIAL_BLOB_MAX_BYTES: usize = 2_560;
 #[derive(Clone, Debug)]
 pub struct WindowsCredentialStore {
     target: String,
+    authorization_stage_target: String,
     lock_path: PathBuf,
     reconciliation_path: PathBuf,
 }
@@ -1056,8 +1873,12 @@ impl WindowsCredentialStore {
         for unit in root.as_os_str().encode_wide() {
             identity.extend_from_slice(&unit.to_le_bytes());
         }
+        let identity = hex_encode(&identity);
         Ok(Self {
-            target: format!("{WINDOWS_CREDENTIAL_SERVICE}:{}", hex_encode(&identity)),
+            target: format!("{WINDOWS_CREDENTIAL_SERVICE}:{identity}"),
+            authorization_stage_target: format!(
+                "{WINDOWS_CREDENTIAL_SERVICE}:session-authorization-stage:{identity}"
+            ),
             lock_path: root.join("credentials.lock"),
             reconciliation_path: root.join("credentials.reconciliation"),
         })
@@ -1065,6 +1886,13 @@ impl WindowsCredentialStore {
 
     pub fn initialize(&self, credentials: &SessionCredentials) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.reconciliation_path.exists() || self.read_authorization_stage_unlocked()?.is_some()
+        {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "session state has an unresolved rotation or authorization replacement",
+            ));
+        }
         if self.read_unlocked()?.is_some() {
             return Err(PortError::new(
                 "credentials_exist",
@@ -1077,23 +1905,64 @@ impl WindowsCredentialStore {
 
     pub fn reconciliation_required(&self) -> Result<bool, PortError> {
         let _lock = FileLock::acquire(&self.lock_path, false)?;
-        Ok(self.reconciliation_path.exists())
+        Ok(
+            self.reconciliation_path.exists()
+                || self.read_authorization_stage_unlocked()?.is_some(),
+        )
     }
 
     /// Delete the native credential. This is also the logout/test-cleanup seam.
     pub fn delete(&self) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
-        match self.entry()?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => {
-                clear_any_reconciliation_marker(&self.reconciliation_path)
-            }
-            Err(error) => Err(keyring_error("credential_manager_delete", error)),
+        if self.reconciliation_path.exists() || self.read_authorization_stage_unlocked()?.is_some()
+        {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "session state has an unresolved rotation or authorization replacement",
+            ));
         }
+        delete_keyring_entry(&self.entry()?, "credential_manager_delete")?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
     fn entry(&self) -> Result<keyring::Entry, PortError> {
         keyring::Entry::new_with_target(&self.target, WINDOWS_CREDENTIAL_SERVICE, "session")
             .map_err(|error| keyring_error("credential_manager_entry", error))
+    }
+
+    fn authorization_stage_entry(&self) -> Result<keyring::Entry, PortError> {
+        keyring::Entry::new_with_target(
+            &self.authorization_stage_target,
+            WINDOWS_CREDENTIAL_SERVICE,
+            "authorization-session-stage",
+        )
+        .map_err(|error| keyring_error("credential_manager_stage_entry", error))
+    }
+
+    fn read_authorization_stage_unlocked(
+        &self,
+    ) -> Result<Option<AuthorizationSessionStage>, PortError> {
+        match self.authorization_stage_entry()?.get_secret() {
+            Ok(document) => AuthorizationSessionStage::decode(&document).map(Some),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(keyring_error("credential_manager_stage_read", error)),
+        }
+    }
+
+    fn write_authorization_stage_unlocked(
+        &self,
+        stage: &AuthorizationSessionStage,
+    ) -> Result<(), PortError> {
+        let document = stage.encode();
+        if document.len() > WINDOWS_CREDENTIAL_BLOB_MAX_BYTES {
+            return Err(PortError::new(
+                "credential_manager_size",
+                "staged session exceeds the Windows Credential Manager limit",
+            ));
+        }
+        self.authorization_stage_entry()?
+            .set_secret(&document)
+            .map_err(|error| keyring_error("credential_manager_stage_write", error))
     }
 
     fn read_unlocked(&self) -> Result<Option<CredentialState>, PortError> {
@@ -1152,6 +2021,17 @@ impl WindowsCredentialStore {
 
 #[cfg(all(windows, feature = "native-credentials"))]
 impl AuthorizationSessionStore for WindowsCredentialStore {
+    fn load_authorized_session(&self) -> Result<Option<SessionCredentials>, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, false)?;
+        if self.reconciliation_path.exists() {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "session rotation has an unresolved outcome",
+            ));
+        }
+        Ok(self.read_unlocked()?.map(|state| state.credentials))
+    }
+
     fn replace_authorized_session(
         &self,
         credentials: &SessionCredentials,
@@ -1167,6 +2047,76 @@ impl AuthorizationSessionStore for WindowsCredentialStore {
             ));
         }
         self.write_unlocked(&CredentialState::new(credentials.clone()))
+    }
+
+    fn stage_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        validate_transaction_id("client transaction", client_transaction_id)?;
+        if previous.account_id != replacement.account_id {
+            return Err(PortError::new(
+                "credential_account_conflict",
+                "staged authorization cannot change accounts",
+            ));
+        }
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let current = self.read_unlocked()?.ok_or_else(|| {
+            PortError::new("credentials_missing", "credentials are not initialized")
+        })?;
+        if current.credentials != *previous {
+            return Err(PortError::new(
+                "authorization_session_version_conflict",
+                "session changed while staged authorization was prepared",
+            ));
+        }
+        self.write_authorization_stage_unlocked(&AuthorizationSessionStage {
+            client_transaction_id: client_transaction_id.to_owned(),
+            previous: previous.clone(),
+            replacement: replacement.clone(),
+        })
+    }
+
+    fn verify_staged_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, false)?;
+        self.read_authorization_stage_unlocked()?
+            .ok_or_else(|| {
+                PortError::new(
+                    "authorization_session_stage_missing",
+                    "staged session is missing",
+                )
+            })?
+            .verify(client_transaction_id, previous, replacement)
+    }
+
+    fn clear_staged_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        expected_replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let Some(stage) = self.read_authorization_stage_unlocked()? else {
+            return Ok(());
+        };
+        if stage.client_transaction_id != client_transaction_id
+            || stage.replacement != *expected_replacement
+        {
+            return Err(PortError::new(
+                "authorization_session_stage_conflict",
+                "stale cleanup cannot remove a different staged session",
+            ));
+        }
+        delete_keyring_entry(
+            &self.authorization_stage_entry()?,
+            "credential_manager_stage_delete",
+        )
     }
 }
 
@@ -1472,9 +2422,148 @@ fn clear_any_reconciliation_marker(path: &Path) -> Result<(), PortError> {
     Ok(())
 }
 
+fn write_authorization_cleanup_marker(
+    path: &Path,
+    terminal: &str,
+    client_transaction_id: &str,
+) -> Result<(), PortError> {
+    if !matches!(terminal, "promoted" | "unpromoted") {
+        return Err(PortError::new(
+            "authorization_cleanup_marker",
+            "invalid terminal cleanup state",
+        ));
+    }
+    validate_transaction_id("client transaction", client_transaction_id)?;
+    AtomicFile::replace(
+        path,
+        format!(
+            "authorization_replacement_cleanup:{terminal}:{}\n",
+            hex_encode(client_transaction_id.as_bytes())
+        )
+        .as_bytes(),
+    )
+    .map_err(|error| PortError::uncertain("authorization_cleanup_marker", error.to_string()))
+}
+
+fn parse_authorization_cleanup_marker(
+    marker: &[u8],
+) -> Result<Option<(&'static str, String)>, PortError> {
+    let marker = std::str::from_utf8(marker).map_err(|_| {
+        PortError::uncertain(
+            "authorization_cleanup_marker",
+            "authorization cleanup marker is invalid",
+        )
+    })?;
+    let Some(value) = marker
+        .strip_prefix("authorization_replacement_cleanup:")
+        .and_then(|value| value.strip_suffix('\n'))
+    else {
+        return Ok(None);
+    };
+    let (terminal, transaction) = value.split_once(':').ok_or_else(|| {
+        PortError::uncertain(
+            "authorization_cleanup_marker",
+            "authorization cleanup marker is incomplete",
+        )
+    })?;
+    let terminal = match terminal {
+        "promoted" => "promoted",
+        "unpromoted" => "unpromoted",
+        _ => {
+            return Err(PortError::uncertain(
+                "authorization_cleanup_marker",
+                "authorization cleanup marker has an unknown terminal state",
+            ));
+        }
+    };
+    let transaction = hex_string(transaction)?;
+    validate_transaction_id("client transaction", &transaction)?;
+    Ok(Some((terminal, transaction)))
+}
+
 #[cfg(feature = "native-credentials")]
 fn keyring_error(code: &'static str, error: keyring::Error) -> PortError {
     PortError::new(code, error.to_string())
+}
+
+#[cfg(all(windows, feature = "native-credentials"))]
+fn delete_keyring_entry(entry: &keyring::Entry, code: &'static str) -> Result<(), PortError> {
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(keyring_error(code, error)),
+    }
+}
+
+#[cfg(all(windows, feature = "native-credentials"))]
+fn keyring_secret_exists(entry: &keyring::Entry) -> Result<bool, PortError> {
+    match entry.get_secret() {
+        Ok(_) => Ok(true),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(error) => Err(keyring_error("credential_manager_read", error)),
+    }
+}
+
+struct AuthorizationSessionStage {
+    client_transaction_id: String,
+    previous: SessionCredentials,
+    replacement: SessionCredentials,
+}
+
+impl AuthorizationSessionStage {
+    fn encode(&self) -> Vec<u8> {
+        format!(
+            "schema=1\nclient_transaction={}\nprevious={}\nreplacement={}\n",
+            hex_encode(self.client_transaction_id.as_bytes()),
+            hex_encode(&CredentialState::new(self.previous.clone()).encode()),
+            hex_encode(&CredentialState::new(self.replacement.clone()).encode()),
+        )
+        .into_bytes()
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, PortError> {
+        let values = fields(bytes)?;
+        if required(&values, "schema")? != "1" {
+            return Err(PortError::new(
+                "authorization_session_stage_schema",
+                "unsupported staged session schema",
+            ));
+        }
+        let client_transaction_id = hex_string(required(&values, "client_transaction")?)?;
+        validate_transaction_id("client transaction", &client_transaction_id)?;
+        let previous =
+            CredentialState::decode(&hex_decode(required(&values, "previous")?)?)?.credentials;
+        let replacement =
+            CredentialState::decode(&hex_decode(required(&values, "replacement")?)?)?.credentials;
+        if previous.account_id != replacement.account_id {
+            return Err(PortError::new(
+                "authorization_session_stage_account",
+                "staged session changed accounts",
+            ));
+        }
+        Ok(Self {
+            client_transaction_id,
+            previous,
+            replacement,
+        })
+    }
+
+    fn verify(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        if self.client_transaction_id != client_transaction_id
+            || self.previous != *previous
+            || self.replacement != *replacement
+        {
+            return Err(PortError::new(
+                "authorization_session_stage_conflict",
+                "staged session does not match the authorization journal",
+            ));
+        }
+        Ok(())
+    }
 }
 
 pub(crate) struct CredentialState {
@@ -1611,6 +2700,235 @@ fn decode_auth_bundle(bytes: &[u8]) -> Result<AuthCredentialBundle, PortError> {
     Ok(bundle)
 }
 
+#[cfg(all(windows, feature = "native-credentials"))]
+fn encode_bound_auth_bundle(client_transaction_id: &str, bundle: &AuthCredentialBundle) -> Vec<u8> {
+    format!(
+        "schema=1\nclient_transaction={}\nbundle={}\n",
+        hex_encode(client_transaction_id.as_bytes()),
+        hex_encode(&encode_auth_bundle(bundle)),
+    )
+    .into_bytes()
+}
+
+#[cfg(all(windows, feature = "native-credentials"))]
+fn decode_bound_auth_bundle(bytes: &[u8]) -> Result<(String, AuthCredentialBundle), PortError> {
+    let values = fields(bytes)?;
+    if required(&values, "schema")? != "1" {
+        return Err(PortError::new(
+            "authorization_journal_schema",
+            "unsupported bound authorization bundle schema",
+        ));
+    }
+    let client_transaction_id = hex_string(required(&values, "client_transaction")?)?;
+    validate_transaction_id("client transaction", &client_transaction_id)?;
+    let bundle = decode_auth_bundle(&hex_decode(required(&values, "bundle")?)?)?;
+    Ok((client_transaction_id, bundle))
+}
+
+#[cfg(not(windows))]
+fn encode_authorization_journal(journal: &AuthorizationReplacementJournal) -> Vec<u8> {
+    let phase = match journal.phase {
+        AuthorizationReplacementPhase::Preparing => "preparing",
+        AuthorizationReplacementPhase::Prepared => "prepared",
+        AuthorizationReplacementPhase::PromotionDispatched => "promotion_dispatched",
+        AuthorizationReplacementPhase::AbortDispatched => "abort_dispatched",
+    };
+    format!(
+        concat!(
+            "schema=1\n",
+            "phase={}\n",
+            "client_transaction={}\n",
+            "stage={}\n",
+            "authorization_transaction={}\n",
+            "provisional_access={}\n",
+            "recovery={}\n",
+            "digest={}\n",
+            "previous={}\n",
+            "replacement={}\n"
+        ),
+        phase,
+        hex_encode(journal.client_transaction_id.as_bytes()),
+        hex_encode(journal.stage_id.as_deref().unwrap_or_default().as_bytes()),
+        hex_encode(
+            journal
+                .authorization_transaction_id
+                .as_deref()
+                .unwrap_or_default()
+                .as_bytes()
+        ),
+        hex_encode(
+            journal
+                .provisional_access_token
+                .as_ref()
+                .map(SensitiveString::expose_secret)
+                .unwrap_or_default()
+                .as_bytes()
+        ),
+        hex_encode(
+            journal
+                .recovery_token
+                .as_ref()
+                .map(SensitiveString::expose_secret)
+                .unwrap_or_default()
+                .as_bytes()
+        ),
+        journal.bundle_digest.as_deref().unwrap_or_default(),
+        hex_encode(&encode_auth_bundle(&journal.previous)),
+        journal
+            .replacement
+            .as_ref()
+            .map(encode_auth_bundle)
+            .map_or_else(String::new, |bundle| hex_encode(&bundle)),
+    )
+    .into_bytes()
+}
+
+#[cfg(not(windows))]
+fn decode_authorization_journal(
+    bytes: &[u8],
+) -> Result<AuthorizationReplacementJournal, PortError> {
+    let values = fields(bytes)?;
+    if required(&values, "schema")? != "1" {
+        return Err(PortError::new(
+            "authorization_journal_schema",
+            "unsupported authorization journal schema",
+        ));
+    }
+    let phase = match required(&values, "phase")? {
+        "preparing" => AuthorizationReplacementPhase::Preparing,
+        "prepared" => AuthorizationReplacementPhase::Prepared,
+        "promotion_dispatched" => AuthorizationReplacementPhase::PromotionDispatched,
+        "abort_dispatched" => AuthorizationReplacementPhase::AbortDispatched,
+        _ => {
+            return Err(PortError::new(
+                "authorization_journal_phase",
+                "unknown authorization journal phase",
+            ));
+        }
+    };
+    let optional_hex = |name| -> Result<Option<String>, PortError> {
+        let value = hex_string(required(&values, name)?)?;
+        Ok((!value.is_empty()).then_some(value))
+    };
+    let replacement = required(&values, "replacement")?;
+    let journal = AuthorizationReplacementJournal {
+        phase,
+        client_transaction_id: hex_string(required(&values, "client_transaction")?)?,
+        stage_id: optional_hex("stage")?,
+        authorization_transaction_id: optional_hex("authorization_transaction")?,
+        provisional_access_token: optional_hex("provisional_access")?.map(SensitiveString::new),
+        recovery_token: optional_hex("recovery")?.map(SensitiveString::new),
+        bundle_digest: {
+            let value = required(&values, "digest")?;
+            (!value.is_empty()).then(|| value.to_owned())
+        },
+        previous: decode_auth_bundle(&hex_decode(required(&values, "previous")?)?)?,
+        replacement: if replacement.is_empty() {
+            None
+        } else {
+            Some(decode_auth_bundle(&hex_decode(replacement)?)?)
+        },
+    };
+    journal.validate()?;
+    Ok(journal)
+}
+
+#[cfg(all(windows, feature = "native-credentials"))]
+struct AuthorizationJournalMetadata {
+    phase: AuthorizationReplacementPhase,
+    client_transaction_id: String,
+    stage_id: Option<String>,
+    authorization_transaction_id: Option<String>,
+    provisional_access_token: Option<SensitiveString>,
+    recovery_token: Option<SensitiveString>,
+    bundle_digest: Option<String>,
+}
+
+#[cfg(all(windows, feature = "native-credentials"))]
+fn encode_authorization_journal_metadata(journal: &AuthorizationReplacementJournal) -> Vec<u8> {
+    let phase = match journal.phase {
+        AuthorizationReplacementPhase::Preparing => "preparing",
+        AuthorizationReplacementPhase::Prepared => "prepared",
+        AuthorizationReplacementPhase::PromotionDispatched => "promotion_dispatched",
+        AuthorizationReplacementPhase::AbortDispatched => "abort_dispatched",
+    };
+    format!(
+        concat!(
+            "schema=1\nphase={}\nclient_transaction={}\nstage={}\n",
+            "authorization_transaction={}\nprovisional_access={}\nrecovery={}\ndigest={}\n"
+        ),
+        phase,
+        hex_encode(journal.client_transaction_id.as_bytes()),
+        hex_encode(journal.stage_id.as_deref().unwrap_or_default().as_bytes()),
+        hex_encode(
+            journal
+                .authorization_transaction_id
+                .as_deref()
+                .unwrap_or_default()
+                .as_bytes()
+        ),
+        hex_encode(
+            journal
+                .provisional_access_token
+                .as_ref()
+                .map(SensitiveString::expose_secret)
+                .unwrap_or_default()
+                .as_bytes()
+        ),
+        hex_encode(
+            journal
+                .recovery_token
+                .as_ref()
+                .map(SensitiveString::expose_secret)
+                .unwrap_or_default()
+                .as_bytes()
+        ),
+        journal.bundle_digest.as_deref().unwrap_or_default(),
+    )
+    .into_bytes()
+}
+
+#[cfg(all(windows, feature = "native-credentials"))]
+fn decode_authorization_journal_metadata(
+    bytes: &[u8],
+) -> Result<AuthorizationJournalMetadata, PortError> {
+    let values = fields(bytes)?;
+    if required(&values, "schema")? != "1" {
+        return Err(PortError::new(
+            "authorization_journal_schema",
+            "unsupported authorization journal schema",
+        ));
+    }
+    let phase = match required(&values, "phase")? {
+        "preparing" => AuthorizationReplacementPhase::Preparing,
+        "prepared" => AuthorizationReplacementPhase::Prepared,
+        "promotion_dispatched" => AuthorizationReplacementPhase::PromotionDispatched,
+        "abort_dispatched" => AuthorizationReplacementPhase::AbortDispatched,
+        _ => {
+            return Err(PortError::new(
+                "authorization_journal_phase",
+                "unknown authorization journal phase",
+            ));
+        }
+    };
+    let optional_hex = |name| -> Result<Option<String>, PortError> {
+        let value = hex_string(required(&values, name)?)?;
+        Ok((!value.is_empty()).then_some(value))
+    };
+    Ok(AuthorizationJournalMetadata {
+        phase,
+        client_transaction_id: hex_string(required(&values, "client_transaction")?)?,
+        stage_id: optional_hex("stage")?,
+        authorization_transaction_id: optional_hex("authorization_transaction")?,
+        provisional_access_token: optional_hex("provisional_access")?.map(SensitiveString::new),
+        recovery_token: optional_hex("recovery")?.map(SensitiveString::new),
+        bundle_digest: {
+            let value = required(&values, "digest")?;
+            (!value.is_empty()).then(|| value.to_owned())
+        },
+    })
+}
+
 fn fields(bytes: &[u8]) -> Result<std::collections::BTreeMap<&str, &str>, PortError> {
     let text = std::str::from_utf8(bytes)
         .map_err(|_| PortError::new("native_format", "native state is not UTF-8"))?;
@@ -1693,6 +3011,11 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_string(value: &str) -> Result<String, PortError> {
+    String::from_utf8(hex_decode(value)?)
+        .map_err(|_| PortError::new("native_utf8", "native field is not valid UTF-8"))
+}
+
+fn hex_decode(value: &str) -> Result<Vec<u8>, PortError> {
     if !value.len().is_multiple_of(2) {
         return Err(PortError::new("native_hex", "invalid hex-encoded field"));
     }
@@ -1702,8 +3025,40 @@ fn hex_string(value: &str) -> Result<String, PortError> {
         let low = hex_digit(pair[1])?;
         bytes.push((high << 4) | low);
     }
-    String::from_utf8(bytes)
-        .map_err(|_| PortError::new("native_utf8", "native field is not valid UTF-8"))
+    Ok(bytes)
+}
+
+fn validate_transaction_id(label: &str, value: &str) -> Result<(), PortError> {
+    if value.len() < 16
+        || value.len() > 128
+        || !value.is_ascii()
+        || value.trim() != value
+        || value.chars().any(char::is_control)
+    {
+        return Err(PortError::new(
+            "authorization_transaction",
+            format!("{label} identifier is invalid"),
+        ));
+    }
+    Ok(())
+}
+
+fn remove_private_state_file(path: &Path) -> Result<(), PortError> {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(PortError::uncertain(
+                "authorization_cleanup",
+                error.to_string(),
+            ));
+        }
+    }
+    if let Some(parent) = path.parent() {
+        sync_directory(parent)
+            .map_err(|error| PortError::uncertain("authorization_cleanup", error.to_string()))?;
+    }
+    Ok(())
 }
 
 fn hex_digit(value: u8) -> Result<u8, PortError> {
@@ -2170,5 +3525,158 @@ mod windows_acl_tests {
             false,
         )
         .expect("atomic replacement installs a protected owner-only DACL");
+    }
+
+    #[cfg(feature = "native-credentials")]
+    fn windows_bundle(suffix: &str, version: u64) -> AuthCredentialBundle {
+        AuthCredentialBundle {
+            channel: ChannelCredentials::from_unix_expiry(
+                "hf_cid_heyfood_cli",
+                "windows-staged-device",
+                SensitiveString::new(format!("channel-access-{suffix}")),
+                SensitiveString::new(format!("channel-refresh-{suffix}")),
+                4_102_444_800,
+                "account:link profile:read",
+            )
+            .unwrap(),
+            session: SessionCredentials::from_unix_expiry(
+                AccountId::parse("windows-staged-account").unwrap(),
+                SensitiveString::new(format!("session-access-{suffix}")),
+                SensitiveString::new(format!("session-refresh-{suffix}")),
+                CredentialVersion::new(version),
+                4_102_444_800,
+            )
+            .unwrap(),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "native-credentials")]
+    fn windows_preparing_metadata_ignores_uncommitted_pending_and_rejects_mixed_generation() {
+        let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "heyfood-windows-journal-generation-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let _cleanup = Cleanup(root.clone());
+        let auth = NativeAuthStore::open(&root).unwrap();
+        let session = WindowsCredentialStore::open(&root).unwrap();
+        let previous = windows_bundle("previous", 1);
+        let pending = windows_bundle("pending", 2);
+        auth.initialize(&previous).unwrap();
+        session.initialize(&previous.session).unwrap();
+        let client_transaction_id = "windows-client-transaction-generation".to_owned();
+        let preparing = auth
+            .begin_authorization_replacement(client_transaction_id.clone(), &session)
+            .unwrap();
+
+        auth.replacement_entry(
+            &auth.replacement_pending_target,
+            "authorization-replacement-pending",
+        )
+        .unwrap()
+        .set_secret(&encode_bound_auth_bundle(
+            "different-client-transaction-generation",
+            &pending,
+        ))
+        .unwrap();
+        assert_eq!(
+            auth.pending_authorization_replacement().unwrap(),
+            Some(preparing.clone()),
+            "Preparing metadata is the commit record and must ignore orphan pending data"
+        );
+
+        let mut prepared = preparing;
+        prepared.phase = AuthorizationReplacementPhase::Prepared;
+        prepared.stage_id = Some("windows-stage-transaction-generation".into());
+        prepared.authorization_transaction_id =
+            Some("windows-authorization-transaction-generation".into());
+        prepared.recovery_token = Some(SensitiveString::new("windows-recovery-token-generation"));
+        prepared.bundle_digest = Some("e".repeat(64));
+        prepared.replacement = Some(pending);
+        auth.replacement_entry(&auth.replacement_target, "authorization-replacement")
+            .unwrap()
+            .set_secret(&encode_authorization_journal_metadata(&prepared))
+            .unwrap();
+        assert_eq!(
+            auth.pending_authorization_replacement().unwrap_err().code,
+            "authorization_journal_generation"
+        );
+        auth.delete_authorization_journal_unlocked().unwrap();
+        clear_any_reconciliation_marker(&auth.reconciliation_path).unwrap();
+        auth.delete().unwrap();
+        session.delete().unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "native-credentials")]
+    fn windows_terminal_cleanup_converges_after_each_split_delete_boundary() {
+        for delete_pending_first in [false, true] {
+            let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir().join(format!(
+                "heyfood-windows-journal-delete-{}-{sequence}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root).unwrap();
+            let _cleanup = Cleanup(root.clone());
+            let auth = NativeAuthStore::open(&root).unwrap();
+            let session = WindowsCredentialStore::open(&root).unwrap();
+            let previous = windows_bundle("delete-previous", 1);
+            let pending = windows_bundle("delete-pending", 2);
+            auth.initialize(&previous).unwrap();
+            session.initialize(&previous.session).unwrap();
+            let client_transaction_id = format!("windows-client-transaction-delete-{sequence}");
+            auth.begin_authorization_replacement(client_transaction_id.clone(), &session)
+                .unwrap();
+            let preparing = auth
+                .record_provisional_authorization(
+                    &client_transaction_id,
+                    format!("windows-authorization-transaction-delete-{sequence}"),
+                    SensitiveString::new("windows-provisional-access-delete"),
+                )
+                .unwrap();
+            let prepared = AuthorizationReplacementJournal {
+                phase: AuthorizationReplacementPhase::Prepared,
+                client_transaction_id: client_transaction_id.clone(),
+                stage_id: Some(format!("windows-stage-transaction-delete-{sequence}")),
+                authorization_transaction_id: preparing.authorization_transaction_id,
+                provisional_access_token: None,
+                recovery_token: Some(SensitiveString::new("windows-recovery-token-delete")),
+                bundle_digest: Some("f".repeat(64)),
+                previous: preparing.previous,
+                replacement: Some(pending.clone()),
+            };
+            auth.stage_authorization_replacement(prepared.clone(), &session)
+                .unwrap();
+            auth.mark_authorization_abort_dispatched(prepared).unwrap();
+            write_authorization_cleanup_marker(
+                &auth.reconciliation_path,
+                "unpromoted",
+                &client_transaction_id,
+            )
+            .unwrap();
+            session
+                .clear_staged_authorized_session(&client_transaction_id, &pending.session)
+                .unwrap();
+            if delete_pending_first {
+                delete_keyring_entry(
+                    &auth
+                        .replacement_entry(
+                            &auth.replacement_pending_target,
+                            "authorization-replacement-pending",
+                        )
+                        .unwrap(),
+                    "fixture-delete",
+                )
+                .unwrap();
+            }
+            assert!(auth.finish_authorization_terminal_cleanup().unwrap());
+            assert!(!auth.reconciliation_path.exists());
+            assert!(auth.pending_authorization_replacement().unwrap().is_none());
+            assert_eq!(auth.load().unwrap().unwrap().channel, previous.channel);
+            auth.delete().unwrap();
+            session.delete().unwrap();
+        }
     }
 }

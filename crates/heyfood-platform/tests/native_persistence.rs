@@ -27,6 +27,13 @@ use heyfood_platform::NativeAuthStore;
 #[cfg(all(windows, feature = "native-credentials"))]
 use heyfood_platform::WindowsCredentialStore;
 use heyfood_platform::{AtomicFile, FileCredentialStore, NativeConfigStore};
+#[cfg(any(not(windows), feature = "native-credentials"))]
+use heyfood_platform::{AuthorizationReplacementJournal, AuthorizationReplacementPhase};
+
+#[cfg(not(windows))]
+type AuthorizationTestSessionStore = FileCredentialStore;
+#[cfg(all(windows, feature = "native-credentials"))]
+type AuthorizationTestSessionStore = WindowsCredentialStore;
 
 fn block_on<T>(future: impl Future<Output = T>) -> T {
     tokio::runtime::Builder::new_current_thread()
@@ -182,11 +189,16 @@ fn channel_refresh_transaction_is_single_flight_and_reconciliation_is_durable() 
 }
 
 #[test]
-#[cfg(not(windows))]
-fn complete_reauthorization_replaces_both_stores_only_after_full_bundle_exists() {
+#[cfg(any(not(windows), feature = "native-credentials"))]
+fn staged_reauthorization_keeps_old_active_then_replaces_both_stores_after_promotion() {
     let root = TempRoot::new("authorization-replacement");
     let auth_store = NativeAuthStore::open(&root.0).unwrap();
-    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let session_store = AuthorizationTestSessionStore::open(&root.0).unwrap();
+    #[cfg(windows)]
+    {
+        let _ = auth_store.delete();
+        let _ = session_store.delete();
+    }
     let current = auth_bundle();
     auth_store.initialize(&current).unwrap();
     session_store.initialize(&current.session).unwrap();
@@ -199,8 +211,42 @@ fn complete_reauthorization_replaces_both_stores_only_after_full_bundle_exists()
             .into();
     replacement.session = credentials(2);
 
+    let client_transaction_id = "client-transaction-combined".to_owned();
     auth_store
-        .replace_authorization_bundle(&current, &replacement, &session_store)
+        .begin_authorization_replacement(client_transaction_id.clone(), &session_store)
+        .unwrap();
+    let preparing = auth_store
+        .record_provisional_authorization(
+            &client_transaction_id,
+            "authorization-transaction-combined".to_owned(),
+            SensitiveString::new("provisional-access-token-combined"),
+        )
+        .unwrap();
+    let prepared = AuthorizationReplacementJournal {
+        phase: AuthorizationReplacementPhase::Prepared,
+        client_transaction_id: client_transaction_id.clone(),
+        stage_id: Some("stage-transaction-combined".to_owned()),
+        authorization_transaction_id: Some("authorization-transaction-combined".to_owned()),
+        provisional_access_token: None,
+        recovery_token: Some(SensitiveString::new("recovery-token-combined")),
+        bundle_digest: Some("a".repeat(64)),
+        previous: preparing.previous,
+        replacement: Some(replacement.clone()),
+    };
+    auth_store
+        .stage_authorization_replacement(prepared, &session_store)
+        .unwrap();
+    assert!(auth_store.load().is_err(), "ordinary auth load must block");
+    assert_eq!(
+        block_on(session_store.load()).unwrap(),
+        Some(current.session.clone()),
+        "pending session must not become active before promotion"
+    );
+    auth_store
+        .mark_authorization_promotion_dispatched(&client_transaction_id, &session_store)
+        .unwrap();
+    auth_store
+        .finalize_promoted_authorization(&client_transaction_id, &session_store)
         .unwrap();
     assert_eq!(auth_store.load().unwrap(), Some(replacement.clone()));
     assert_eq!(
@@ -208,21 +254,61 @@ fn complete_reauthorization_replaces_both_stores_only_after_full_bundle_exists()
         Some(replacement.session)
     );
     assert!(!root.0.join("auth.reconciliation").exists());
+    #[cfg(windows)]
+    {
+        auth_store.delete().unwrap();
+        session_store.delete().unwrap();
+    }
 }
 
 #[test]
 #[cfg(not(windows))]
-fn partial_reauthorization_write_is_durably_blocked_for_reconciliation() {
+fn partial_pending_session_write_replays_exact_prepared_journal() {
     struct FailingSessionStore;
     impl AuthorizationSessionStore for FailingSessionStore {
+        fn load_authorized_session(
+            &self,
+        ) -> Result<Option<SessionCredentials>, heyfood_application::PortError> {
+            Ok(Some(credentials(1)))
+        }
+
         fn replace_authorized_session(
             &self,
             _credentials: &SessionCredentials,
+        ) -> Result<(), heyfood_application::PortError> {
+            unreachable!()
+        }
+
+        fn stage_authorized_session(
+            &self,
+            _client_transaction_id: &str,
+            _previous: &SessionCredentials,
+            _replacement: &SessionCredentials,
         ) -> Result<(), heyfood_application::PortError> {
             Err(heyfood_application::PortError::new(
                 "fixture_write_failure",
                 "controlled failure",
             ))
+        }
+
+        fn verify_staged_authorized_session(
+            &self,
+            _client_transaction_id: &str,
+            _previous: &SessionCredentials,
+            _replacement: &SessionCredentials,
+        ) -> Result<(), heyfood_application::PortError> {
+            Err(heyfood_application::PortError::new(
+                "fixture_write_failure",
+                "controlled failure",
+            ))
+        }
+
+        fn clear_staged_authorized_session(
+            &self,
+            _client_transaction_id: &str,
+            _expected_replacement: &SessionCredentials,
+        ) -> Result<(), heyfood_application::PortError> {
+            Ok(())
         }
     }
 
@@ -238,26 +324,212 @@ fn partial_reauthorization_write_is_durably_blocked_for_reconciliation() {
             .into();
     replacement.session = credentials(2);
 
-    let error = auth_store
-        .replace_authorization_bundle(&current, &replacement, &FailingSessionStore)
-        .unwrap_err();
-    assert_eq!(error.code, "authorization_session_replace");
-    assert!(error.outcome_uncertain);
-    assert!(root.0.join("auth.reconciliation").exists());
-    let blocked = auth_store.load().unwrap_err();
-    assert_eq!(blocked.code, "auth_reconciliation_required");
-    assert!(blocked.outcome_uncertain);
-
-    let reconciled = auth_store
-        .load_reconciling_authorization(&session_store)
-        .unwrap()
+    let client_transaction_id = "client-transaction-partial".to_owned();
+    auth_store
+        .begin_authorization_replacement(client_transaction_id.clone(), &session_store)
         .unwrap();
-    assert_eq!(reconciled, replacement);
+    let preparing = auth_store
+        .record_provisional_authorization(
+            &client_transaction_id,
+            "authorization-transaction-partial".to_owned(),
+            SensitiveString::new("provisional-access-token-partial"),
+        )
+        .unwrap();
+    let prepared = AuthorizationReplacementJournal {
+        phase: AuthorizationReplacementPhase::Prepared,
+        client_transaction_id: client_transaction_id.clone(),
+        stage_id: Some("stage-transaction-partial".to_owned()),
+        authorization_transaction_id: preparing.authorization_transaction_id,
+        provisional_access_token: None,
+        recovery_token: Some(SensitiveString::new("recovery-token-partial")),
+        bundle_digest: Some("b".repeat(64)),
+        previous: preparing.previous,
+        replacement: Some(replacement),
+    };
+    let error = auth_store
+        .stage_authorization_replacement(prepared.clone(), &FailingSessionStore)
+        .unwrap_err();
+    assert_eq!(error.code, "fixture_write_failure");
+    assert_eq!(
+        auth_store.pending_authorization_replacement().unwrap(),
+        Some(prepared.clone()),
+        "complete prepared journal must survive second-store failure"
+    );
+    auth_store
+        .stage_authorization_replacement(prepared, &session_store)
+        .unwrap();
+}
+
+#[test]
+#[cfg(not(windows))]
+fn aborted_stage_preserves_authoritative_session_rotations_instead_of_restoring_stale_mirror() {
+    let root = TempRoot::new("authorization-abort-session-race");
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let current = auth_bundle();
+    auth_store.initialize(&current).unwrap();
+    session_store.initialize(&current.session).unwrap();
+
+    block_on(session_store.commit(CredentialCommit {
+        commit_id: CommitId::new(),
+        expected_version: CredentialVersion::new(1),
+        credentials: credentials(2),
+    }))
+    .unwrap();
+    let client_transaction_id = "client-transaction-session-race".to_owned();
+    let preparing = auth_store
+        .begin_authorization_replacement(client_transaction_id.clone(), &session_store)
+        .unwrap();
+    assert_eq!(preparing.previous.session, credentials(2));
+    assert_ne!(preparing.previous.session, current.session);
+    let preparing = auth_store
+        .record_provisional_authorization(
+            &client_transaction_id,
+            "authorization-transaction-session-race".to_owned(),
+            SensitiveString::new("provisional-access-token-session-race"),
+        )
+        .unwrap();
+    let mut replacement = preparing.previous.clone();
+    replacement.channel.scope =
+        "account:link profile:read health:read integrations:manage grocery:read grocery:write"
+            .into();
+    replacement.session = credentials(9);
+    let prepared = AuthorizationReplacementJournal {
+        phase: AuthorizationReplacementPhase::Prepared,
+        client_transaction_id: client_transaction_id.clone(),
+        stage_id: Some("stage-transaction-session-race".to_owned()),
+        authorization_transaction_id: preparing.authorization_transaction_id,
+        provisional_access_token: None,
+        recovery_token: Some(SensitiveString::new("recovery-token-session-race")),
+        bundle_digest: Some("c".repeat(64)),
+        previous: preparing.previous,
+        replacement: Some(replacement),
+    };
+    auth_store
+        .stage_authorization_replacement(prepared.clone(), &session_store)
+        .unwrap();
+    auth_store
+        .mark_authorization_abort_dispatched(prepared)
+        .unwrap();
+
+    // A refresh dispatched before the journal fence may legitimately finish
+    // afterward. Aborted cleanup must retain it, never restore version 2.
+    block_on(session_store.commit(CredentialCommit {
+        commit_id: CommitId::new(),
+        expected_version: CredentialVersion::new(2),
+        credentials: credentials(3),
+    }))
+    .unwrap();
+    auth_store
+        .finalize_unpromoted_authorization(&client_transaction_id, &session_store)
+        .unwrap();
     assert_eq!(
         block_on(session_store.load()).unwrap(),
-        Some(reconciled.session)
+        Some(credentials(3))
     );
-    assert!(!root.0.join("auth.reconciliation").exists());
+    assert_eq!(auth_store.load().unwrap().unwrap().channel, current.channel);
+}
+
+#[test]
+#[cfg(not(windows))]
+fn promoted_activation_replays_after_split_auth_and_session_write() {
+    struct FailActivation<'a>(&'a FileCredentialStore);
+    impl AuthorizationSessionStore for FailActivation<'_> {
+        fn load_authorized_session(
+            &self,
+        ) -> Result<Option<SessionCredentials>, heyfood_application::PortError> {
+            self.0.load_authorized_session()
+        }
+        fn replace_authorized_session(
+            &self,
+            _credentials: &SessionCredentials,
+        ) -> Result<(), heyfood_application::PortError> {
+            Err(heyfood_application::PortError::new(
+                "fixture_activation_failure",
+                "controlled failure",
+            ))
+        }
+        fn stage_authorized_session(
+            &self,
+            client_transaction_id: &str,
+            previous: &SessionCredentials,
+            replacement: &SessionCredentials,
+        ) -> Result<(), heyfood_application::PortError> {
+            self.0
+                .stage_authorized_session(client_transaction_id, previous, replacement)
+        }
+        fn verify_staged_authorized_session(
+            &self,
+            client_transaction_id: &str,
+            previous: &SessionCredentials,
+            replacement: &SessionCredentials,
+        ) -> Result<(), heyfood_application::PortError> {
+            self.0
+                .verify_staged_authorized_session(client_transaction_id, previous, replacement)
+        }
+        fn clear_staged_authorized_session(
+            &self,
+            client_transaction_id: &str,
+            expected_replacement: &SessionCredentials,
+        ) -> Result<(), heyfood_application::PortError> {
+            self.0
+                .clear_staged_authorized_session(client_transaction_id, expected_replacement)
+        }
+    }
+
+    let root = TempRoot::new("authorization-promoted-split");
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let current = auth_bundle();
+    auth_store.initialize(&current).unwrap();
+    session_store.initialize(&current.session).unwrap();
+    let client_transaction_id = "client-transaction-promoted-split".to_owned();
+    auth_store
+        .begin_authorization_replacement(client_transaction_id.clone(), &session_store)
+        .unwrap();
+    let preparing = auth_store
+        .record_provisional_authorization(
+            &client_transaction_id,
+            "authorization-transaction-promoted-split".to_owned(),
+            SensitiveString::new("provisional-access-promoted-split"),
+        )
+        .unwrap();
+    let mut replacement = preparing.previous.clone();
+    replacement.channel.access_token = SensitiveString::new("promoted-channel-access");
+    replacement.channel.scope =
+        "account:link profile:read health:read integrations:manage grocery:read grocery:write"
+            .into();
+    replacement.session = credentials(8);
+    let prepared = AuthorizationReplacementJournal {
+        phase: AuthorizationReplacementPhase::Prepared,
+        client_transaction_id: client_transaction_id.clone(),
+        stage_id: Some("stage-transaction-promoted-split".to_owned()),
+        authorization_transaction_id: preparing.authorization_transaction_id,
+        provisional_access_token: None,
+        recovery_token: Some(SensitiveString::new("recovery-token-promoted-split")),
+        bundle_digest: Some("d".repeat(64)),
+        previous: preparing.previous,
+        replacement: Some(replacement.clone()),
+    };
+    auth_store
+        .stage_authorization_replacement(prepared, &session_store)
+        .unwrap();
+    auth_store
+        .mark_authorization_promotion_dispatched(&client_transaction_id, &session_store)
+        .unwrap();
+    let error = auth_store
+        .finalize_promoted_authorization(&client_transaction_id, &FailActivation(&session_store))
+        .unwrap_err();
+    assert_eq!(error.code, "authorization_session_replace");
+    assert!(auth_store.load().is_err());
+    auth_store
+        .finalize_promoted_authorization(&client_transaction_id, &session_store)
+        .unwrap();
+    assert_eq!(auth_store.load().unwrap(), Some(replacement.clone()));
+    assert_eq!(
+        block_on(session_store.load()).unwrap(),
+        Some(replacement.session)
+    );
 }
 
 #[test]
@@ -326,11 +598,17 @@ fn reconciliation_marker_is_durable_and_cleared_by_verified_rotation() {
 
 #[test]
 #[cfg(not(windows))]
-fn verified_new_login_clears_a_stale_reconciliation_marker() {
+fn new_login_fails_closed_until_stale_reconciliation_is_explicitly_cleared() {
     let root = TempRoot::new("reconciliation-new-login");
     let store = FileCredentialStore::open(&root.0).unwrap();
-    block_on(store.mark_reconciliation_required(CommitId::new())).unwrap();
+    let commit_id = CommitId::new();
+    block_on(store.mark_reconciliation_required(commit_id)).unwrap();
     assert!(store.reconciliation_required().unwrap());
+    assert_eq!(
+        store.initialize(&credentials(1)).unwrap_err().code,
+        "credential_reconciliation_required"
+    );
+    block_on(store.clear_reconciliation_required(commit_id)).unwrap();
     store.initialize(&credentials(1)).unwrap();
     assert!(!store.reconciliation_required().unwrap());
 }
@@ -341,7 +619,13 @@ fn verified_logout_allows_an_explicit_fallback_account_switch() {
     let root = TempRoot::new("fallback-account-switch");
     let store = FileCredentialStore::open(&root.0).unwrap();
     store.initialize(&credentials(1)).unwrap();
-    block_on(store.mark_reconciliation_required(CommitId::new())).unwrap();
+    let commit_id = CommitId::new();
+    block_on(store.mark_reconciliation_required(commit_id)).unwrap();
+    assert_eq!(
+        store.delete().unwrap_err().code,
+        "credential_reconciliation_required"
+    );
+    block_on(store.clear_reconciliation_required(commit_id)).unwrap();
     store.delete().unwrap();
     assert!(!store.reconciliation_required().unwrap());
     assert!(block_on(store.load()).unwrap().is_none());
@@ -510,12 +794,24 @@ fn windows_credential_manager_rotates_and_reconciles_without_token_files() {
     store.delete().unwrap();
     let _cleanup = Cleanup(&store);
     block_on(store.mark_reconciliation_required(CommitId::new())).unwrap();
+    assert_eq!(
+        store.initialize(&credentials(1)).unwrap_err().code,
+        "credential_reconciliation_required"
+    );
+    assert_eq!(
+        store.delete().unwrap_err().code,
+        "credential_reconciliation_required"
+    );
+    std::fs::remove_file(root.0.join("credentials.reconciliation")).unwrap();
     store.initialize(&credentials(1)).unwrap();
     assert!(!store.reconciliation_required().unwrap());
     block_on(store.mark_reconciliation_required(CommitId::new())).unwrap();
-    store.delete().unwrap();
+    assert_eq!(
+        store.delete().unwrap_err().code,
+        "credential_reconciliation_required"
+    );
+    std::fs::remove_file(root.0.join("credentials.reconciliation")).unwrap();
     assert!(!store.reconciliation_required().unwrap());
-    store.initialize(&credentials(1)).unwrap();
     let commit = CredentialCommit {
         commit_id: CommitId::new(),
         expected_version: CredentialVersion::new(1),

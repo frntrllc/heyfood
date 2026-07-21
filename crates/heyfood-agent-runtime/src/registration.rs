@@ -7,6 +7,7 @@ use heyfood_core::{
 };
 use reqwest::{Client, Response, StatusCode};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 const OFFICIAL_CLIENT_ID: &str = "hf_cid_heyfood_cli";
@@ -51,6 +52,48 @@ pub struct DeviceAuthorization {
 pub struct RegistrationOutcome {
     pub credentials: AuthCredentialBundle,
     pub profile_status: ProfileStatus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReauthorizationStageStatus {
+    Staged,
+    Promoted,
+    Aborted,
+    Expired,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StagedReauthorization {
+    pub stage_id: String,
+    pub client_transaction_id: String,
+    pub authorization_transaction_id: String,
+    pub device_id: String,
+    pub status: ReauthorizationStageStatus,
+    pub scopes: Vec<String>,
+    pub bundle_digest: String,
+    pub recovery_token: SensitiveString,
+    pub credentials: AuthCredentialBundle,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProvisionalReauthorization {
+    pub client_transaction_id: String,
+    pub authorization_transaction_id: String,
+    pub device_id: String,
+    pub access_token: SensitiveString,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReauthorizationStatus {
+    pub stage_id: String,
+    pub client_transaction_id: String,
+    pub authorization_transaction_id: String,
+    pub device_id: String,
+    pub status: ReauthorizationStageStatus,
+    pub scopes: Vec<String>,
+    pub bundle_digest: String,
+    pub recovery_token: Option<SensitiveString>,
+    pub credentials: Option<AuthCredentialBundle>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -106,6 +149,10 @@ struct DeviceAuthorizationRequest<'a> {
     client_id: &'a str,
     scope: String,
     intent: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_transaction_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_id: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -146,12 +193,19 @@ struct ChannelRefreshRequest<'a> {
     refresh_token: &'a str,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct OAuthTokenResponse {
     access_token: String,
+    token_type: String,
     refresh_token: String,
     expires_in: u64,
     scope: String,
+    #[serde(default)]
+    link_id: Option<String>,
+    #[serde(default)]
+    resource: Option<String>,
+    #[serde(default)]
+    authorization_transaction_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -164,7 +218,7 @@ struct CliSessionRequest<'a> {
     device_id: &'a str,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct CliSessionResponse {
     user_id: String,
     device_id: String,
@@ -172,9 +226,51 @@ struct CliSessionResponse {
     access_token: String,
     refresh_token: String,
     access_expires_at: String,
+    refresh_expires_at: String,
     scopes: Vec<String>,
     #[serde(default)]
     is_anonymous: bool,
+}
+
+#[derive(Serialize)]
+struct CliReauthorizationPrepareRequest<'a> {
+    authorization_transaction_id: &'a str,
+    client_transaction_id: &'a str,
+    device_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct CliReauthorizationPromoteRequest<'a> {
+    client_transaction_id: &'a str,
+    device_id: &'a str,
+    bundle_digest: &'a str,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct CliReauthorizationBundle {
+    channel: StagedChannelResponse,
+    session: CliSessionResponse,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct StagedChannelResponse {
+    #[serde(flatten)]
+    grant: OAuthTokenResponse,
+    access_expires_at: String,
+    refresh_expires_at: String,
+}
+
+#[derive(Deserialize)]
+struct CliReauthorizationResponse {
+    stage_id: String,
+    client_transaction_id: String,
+    authorization_transaction_id: String,
+    device_id: String,
+    status: String,
+    scopes: Vec<String>,
+    bundle_digest: String,
+    recovery_token: Option<String>,
+    bundle: Option<CliReauthorizationBundle>,
 }
 
 #[derive(Deserialize)]
@@ -337,7 +433,7 @@ impl RegistrationClient {
         &self,
     ) -> Result<DeviceAuthorization, RegistrationError> {
         self.capabilities().await?;
-        self.start_device_authorization(AuthorizationIntent::CreateAccount)
+        self.start_device_authorization(AuthorizationIntent::CreateAccount, None, None)
             .await
     }
 
@@ -347,6 +443,8 @@ impl RegistrationClient {
     pub async fn start_device_reauthorization(
         &self,
         current_scope: &str,
+        client_transaction_id: &str,
+        device_id: &str,
     ) -> Result<DeviceAuthorization, RegistrationError> {
         let capabilities = self.authorization_capabilities().await?;
         if capabilities.schema_version != 1 || !capabilities.authorization.device_code {
@@ -356,18 +454,28 @@ impl RegistrationClient {
             ));
         }
         assert_preservable_scope(current_scope)?;
-        self.start_device_authorization(AuthorizationIntent::SignIn)
-            .await
+        validate_client_transaction_id(client_transaction_id)?;
+        validate_device_id(device_id)?;
+        self.start_device_authorization(
+            AuthorizationIntent::SignIn,
+            Some(client_transaction_id),
+            Some(device_id),
+        )
+        .await
     }
 
     async fn start_device_authorization(
         &self,
         intent: AuthorizationIntent,
+        client_transaction_id: Option<&str>,
+        device_id: Option<&str>,
     ) -> Result<DeviceAuthorization, RegistrationError> {
         let request = DeviceAuthorizationRequest {
             client_id: OFFICIAL_CLIENT_ID,
             scope: LOGIN_SCOPES.join(" "),
             intent: intent.wire_value(),
+            client_transaction_id,
+            device_id,
         };
         let response = self
             .client
@@ -441,6 +549,222 @@ impl RegistrationClient {
             .await
     }
 
+    /// Consume an approved sign-in device grant without activating it. The
+    /// provisional access token is accepted only by the staged prepare
+    /// endpoint and must be durably journaled before prepare is dispatched.
+    pub async fn complete_device_reauthorization_grant(
+        &self,
+        authorization: DeviceAuthorization,
+        client_transaction_id: String,
+        device_id: String,
+        maximum_wait: Duration,
+        cancellation: CancellationToken,
+    ) -> Result<ProvisionalReauthorization, RegistrationError> {
+        validate_client_transaction_id(&client_transaction_id)?;
+        validate_device_id(&device_id)?;
+        let oauth = self
+            .poll_until_authorized(authorization, maximum_wait, &cancellation)
+            .await?;
+        validate_oauth_grant(&oauth)?;
+        let authorization_transaction_id = oauth.authorization_transaction_id.ok_or_else(|| {
+            RegistrationError::uncertain(
+                "reauthorization_transaction_missing",
+                "The provisional grant omitted its staged authorization binding. Existing credentials remain active; reconcile the login transaction before retrying.",
+            )
+        })?;
+        validate_server_transaction_id(
+            "reauthorization_transaction_invalid",
+            &authorization_transaction_id,
+        )?;
+        Ok(ProvisionalReauthorization {
+            client_transaction_id,
+            authorization_transaction_id,
+            device_id,
+            access_token: SensitiveString::new(oauth.access_token),
+        })
+    }
+
+    /// Idempotently prepare or recover the exact staged authority bundle.
+    pub async fn prepare_device_reauthorization(
+        &self,
+        provisional: &ProvisionalReauthorization,
+    ) -> Result<ReauthorizationStatus, RegistrationError> {
+        let response = self
+            .client
+            .post(self.endpoint("/v1/channel/oauth/cli/reauthorizations")?)
+            .header("Accept", "application/json")
+            .header("X-App-Client-ID", APP_CLIENT_ID)
+            .header("X-Device-ID", &provisional.device_id)
+            .header("X-Request-ID", OperationId::new().as_uuid().to_string())
+            .bearer_auth(provisional.access_token.expose_secret())
+            .json(&CliReauthorizationPrepareRequest {
+                authorization_transaction_id: &provisional.authorization_transaction_id,
+                client_transaction_id: &provisional.client_transaction_id,
+                device_id: &provisional.device_id,
+            })
+            .send()
+            .await
+            .map_err(|_| {
+                RegistrationError::uncertain(
+                    "reauthorization_prepare_outcome_uncertain",
+                    "The staged login response was not observed. Run `heyfood login` again to recover this exact transaction.",
+                )
+            })?;
+        let response = staged_successful(response, "reauthorization_prepare").await?;
+        let decoded: CliReauthorizationResponse = response.json().await.map_err(|_| {
+            RegistrationError::uncertain(
+                "reauthorization_prepare_contract_uncertain",
+                "The staged login returned an unsupported result. Existing credentials remain active; recover this exact transaction before retrying.",
+            )
+        })?;
+        validate_reauthorization_response(
+            decoded,
+            &provisional.client_transaction_id,
+            &provisional.authorization_transaction_id,
+            &provisional.device_id,
+            None,
+        )
+    }
+
+    pub async fn reauthorization_status(
+        &self,
+        stage_id: &str,
+        recovery_token: &SensitiveString,
+        client_transaction_id: &str,
+        authorization_transaction_id: &str,
+        device_id: &str,
+        expected_digest: &str,
+    ) -> Result<ReauthorizationStatus, RegistrationError> {
+        validate_server_transaction_id("reauthorization_stage_invalid", stage_id)?;
+        let response = self
+            .client
+            .get(self.endpoint(&format!(
+                "/v1/channel/oauth/cli/reauthorizations/{stage_id}"
+            ))?)
+            .header("Accept", "application/json")
+            .header(
+                "Authorization",
+                format!("Reauthorization {}", recovery_token.expose_secret()),
+            )
+            .header("X-Request-ID", OperationId::new().as_uuid().to_string())
+            .send()
+            .await
+            .map_err(|_| {
+                RegistrationError::uncertain(
+                    "reauthorization_status_unavailable",
+                    "Could not recover the authoritative login status. Local credentials remain blocked.",
+                )
+            })?;
+        let response = staged_successful(response, "reauthorization_status").await?;
+        let decoded = response
+            .json::<CliReauthorizationResponse>()
+            .await
+            .map_err(|_| {
+                RegistrationError::uncertain(
+                    "reauthorization_status_contract_uncertain",
+                    "The authoritative login status was unsupported. Local credentials remain blocked.",
+                )
+            })?;
+        validate_reauthorization_response(
+            decoded,
+            client_transaction_id,
+            authorization_transaction_id,
+            device_id,
+            Some(expected_digest),
+        )
+    }
+
+    pub async fn promote_reauthorization(
+        &self,
+        staged: &StagedReauthorization,
+    ) -> Result<ReauthorizationStatus, RegistrationError> {
+        let response = self
+            .client
+            .post(self.endpoint(&format!(
+                "/v1/channel/oauth/cli/reauthorizations/{}/promote",
+                staged.stage_id
+            ))?)
+            .header("Accept", "application/json")
+            .header(
+                "Authorization",
+                format!("Reauthorization {}", staged.recovery_token.expose_secret()),
+            )
+            .header("X-Request-ID", OperationId::new().as_uuid().to_string())
+            .json(&CliReauthorizationPromoteRequest {
+                client_transaction_id: &staged.client_transaction_id,
+                device_id: &staged.device_id,
+                bundle_digest: &staged.bundle_digest,
+            })
+            .send()
+            .await
+            .map_err(|_| {
+                RegistrationError::uncertain(
+                    "reauthorization_promotion_outcome_uncertain",
+                    "The promotion response was not observed. Local credentials remain blocked until authoritative status recovery completes.",
+                )
+            })?;
+        let response = staged_successful(response, "reauthorization_promote").await?;
+        let decoded = response
+            .json::<CliReauthorizationResponse>()
+            .await
+            .map_err(|_| {
+                RegistrationError::uncertain(
+                    "reauthorization_promotion_contract_uncertain",
+                    "The promotion result was unsupported. Local credentials remain blocked until authoritative status recovery completes.",
+                )
+            })?;
+        validate_reauthorization_response(
+            decoded,
+            &staged.client_transaction_id,
+            &staged.authorization_transaction_id,
+            &staged.device_id,
+            Some(&staged.bundle_digest),
+        )
+    }
+
+    pub async fn abort_reauthorization(
+        &self,
+        staged: &StagedReauthorization,
+    ) -> Result<ReauthorizationStatus, RegistrationError> {
+        let response = self
+            .client
+            .post(self.endpoint(&format!(
+                "/v1/channel/oauth/cli/reauthorizations/{}/abort",
+                staged.stage_id
+            ))?)
+            .header("Accept", "application/json")
+            .header(
+                "Authorization",
+                format!("Reauthorization {}", staged.recovery_token.expose_secret()),
+            )
+            .header("X-Request-ID", OperationId::new().as_uuid().to_string())
+            .send()
+            .await
+            .map_err(|_| {
+                RegistrationError::uncertain(
+                    "reauthorization_abort_outcome_uncertain",
+                    "The cancellation response was not observed. Existing credentials remain blocked until authoritative status recovery completes.",
+                )
+            })?;
+        let response = staged_successful(response, "reauthorization_abort").await?;
+        let decoded = response
+            .json::<CliReauthorizationResponse>()
+            .await
+            .map_err(|_| {
+                RegistrationError::uncertain(
+                    "reauthorization_abort_contract_uncertain",
+                    "The cancellation result was unsupported. Existing credentials remain blocked until authoritative status recovery completes.",
+                )
+            })?;
+        validate_reauthorization_response(
+            decoded,
+            &staged.client_transaction_id,
+            &staged.authorization_transaction_id,
+            &staged.device_id,
+            Some(&staged.bundle_digest),
+        )
+    }
+
     /// Complete either registration or explicit reauthorization. The returned
     /// bundle is produced only when both the channel grant and app session
     /// contain the complete canonical native grant.
@@ -451,99 +775,11 @@ impl RegistrationClient {
         maximum_wait: Duration,
         cancellation: CancellationToken,
     ) -> Result<RegistrationOutcome, RegistrationError> {
-        if device_id.len() < 3 || device_id.len() > 255 || device_id.trim() != device_id {
-            return Err(RegistrationError::new(
-                "device_id",
-                "The native device identifier is invalid.",
-            ));
-        }
-        let advertised_deadline = authorization.issued_at + authorization.expires_in;
-        let deadline = std::cmp::min(
-            advertised_deadline,
-            tokio::time::Instant::now() + maximum_wait.max(Duration::from_secs(1)),
-        );
-        let mut interval = authorization.interval;
-        let mut consecutive_server_failures = 0_u8;
-        let oauth = loop {
-            if tokio::time::Instant::now() >= deadline {
-                return Err(RegistrationError::new(
-                    "authorization_expired",
-                    "The approval window ended. Run heyfood register again.",
-                ));
-            }
-            // Cancellation is clean only before the consuming token request is
-            // dispatched. Once dispatched, observe its bounded response rather
-            // than dropping the future: a successful exchange consumes the
-            // device grant, so its outcome must not be reported as retryable.
-            if cancellation.is_cancelled() {
-                return Err(RegistrationError::new(
-                    "cancelled",
-                    "Registration canceled. Nothing was saved.",
-                ));
-            }
-            let response = self.poll_device_token(&authorization).await?;
-            if response.status().is_success() {
-                break response.json::<OAuthTokenResponse>().await.map_err(|_| {
-                    RegistrationError::uncertain(
-                        "device_token_contract_uncertain",
-                        "The device authorization was consumed, but its token response was unsupported. Reconcile account state before retrying registration.",
-                    )
-                })?;
-            }
-            let status = response.status();
-            let error = response
-                .json::<OAuthErrorResponse>()
-                .await
-                .ok()
-                .and_then(|value| value.error);
-            if status.is_server_error() || error.as_deref() == Some("temporarily_unavailable") {
-                consecutive_server_failures = consecutive_server_failures.saturating_add(1);
-                if consecutive_server_failures >= 10 {
-                    return Err(RegistrationError::retryable(
-                        "device_token_unavailable",
-                        "hello.food could not complete registration after repeated service errors.",
-                    ));
-                }
-                sleep_before_next_poll(interval, deadline, &cancellation).await?;
-                continue;
-            }
-            match error.as_deref() {
-                Some("authorization_pending") => consecutive_server_failures = 0,
-                Some("slow_down") => {
-                    consecutive_server_failures = 0;
-                    interval = interval.saturating_add(Duration::from_secs(5));
-                }
-                Some("access_denied") => {
-                    return Err(RegistrationError::new(
-                        "access_denied",
-                        "The registration request was declined.",
-                    ));
-                }
-                Some("expired_token") | Some("invalid_grant") => {
-                    return Err(RegistrationError::new(
-                        "authorization_expired",
-                        "The approval window ended. Run heyfood register again.",
-                    ));
-                }
-                _ => {
-                    return Err(RegistrationError::new(
-                        "device_token",
-                        format!("Device authorization failed with HTTP {}.", status.as_u16()),
-                    ));
-                }
-            }
-            sleep_before_next_poll(interval, deadline, &cancellation).await?;
-        };
-        if oauth.access_token.is_empty()
-            || oauth.refresh_token.is_empty()
-            || oauth.expires_in == 0
-            || parse_scope(&oauth.scope) != LOGIN_SCOPES
-        {
-            return Err(RegistrationError::uncertain(
-                "device_token_contract_uncertain",
-                "The device authorization was consumed, but it did not preserve the complete requested grant. Existing credentials remain authoritative until account state is reconciled.",
-            ));
-        }
+        validate_device_id(&device_id)?;
+        let oauth = self
+            .poll_until_authorized(authorization, maximum_wait, &cancellation)
+            .await?;
+        validate_oauth_grant(&oauth)?;
         // A successful device-token response consumed the grant. Finish the
         // bounded session exchange even if cancellation arrived while that
         // response was in flight, preserving the known authorization outcome.
@@ -579,6 +815,91 @@ impl RegistrationClient {
             },
             profile_status,
         })
+    }
+
+    async fn poll_until_authorized(
+        &self,
+        authorization: DeviceAuthorization,
+        maximum_wait: Duration,
+        cancellation: &CancellationToken,
+    ) -> Result<OAuthTokenResponse, RegistrationError> {
+        let advertised_deadline = authorization.issued_at + authorization.expires_in;
+        let deadline = std::cmp::min(
+            advertised_deadline,
+            tokio::time::Instant::now() + maximum_wait.max(Duration::from_secs(1)),
+        );
+        let mut interval = authorization.interval;
+        let mut consecutive_server_failures = 0_u8;
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(RegistrationError::new(
+                    "authorization_expired",
+                    "The approval window ended. Run heyfood register again.",
+                ));
+            }
+            // Cancellation is clean only before the consuming token request is
+            // dispatched. Once dispatched, observe its bounded response rather
+            // than dropping the future: a successful exchange consumes the
+            // device grant, so its outcome must not be reported as retryable.
+            if cancellation.is_cancelled() {
+                return Err(RegistrationError::new(
+                    "cancelled",
+                    "Registration canceled. Nothing was saved.",
+                ));
+            }
+            let response = self.poll_device_token(&authorization).await?;
+            if response.status().is_success() {
+                return response.json::<OAuthTokenResponse>().await.map_err(|_| {
+                    RegistrationError::uncertain(
+                        "device_token_contract_uncertain",
+                        "The device authorization was consumed, but its token response was unsupported. Reconcile account state before retrying registration.",
+                    )
+                });
+            }
+            let status = response.status();
+            let error = response
+                .json::<OAuthErrorResponse>()
+                .await
+                .ok()
+                .and_then(|value| value.error);
+            if status.is_server_error() || error.as_deref() == Some("temporarily_unavailable") {
+                consecutive_server_failures = consecutive_server_failures.saturating_add(1);
+                if consecutive_server_failures >= 10 {
+                    return Err(RegistrationError::retryable(
+                        "device_token_unavailable",
+                        "hello.food could not complete registration after repeated service errors.",
+                    ));
+                }
+                sleep_before_next_poll(interval, deadline, cancellation).await?;
+                continue;
+            }
+            match error.as_deref() {
+                Some("authorization_pending") => consecutive_server_failures = 0,
+                Some("slow_down") => {
+                    consecutive_server_failures = 0;
+                    interval = interval.saturating_add(Duration::from_secs(5));
+                }
+                Some("access_denied") => {
+                    return Err(RegistrationError::new(
+                        "access_denied",
+                        "The registration request was declined.",
+                    ));
+                }
+                Some("expired_token") | Some("invalid_grant") => {
+                    return Err(RegistrationError::new(
+                        "authorization_expired",
+                        "The approval window ended. Run heyfood register again.",
+                    ));
+                }
+                _ => {
+                    return Err(RegistrationError::new(
+                        "device_token",
+                        format!("Device authorization failed with HTTP {}.", status.as_u16()),
+                    ));
+                }
+            }
+            sleep_before_next_poll(interval, deadline, cancellation).await?;
+        }
     }
 
     async fn poll_device_token(
@@ -790,6 +1111,231 @@ fn parse_scope(scope: &str) -> Vec<&str> {
     scope.split_whitespace().collect()
 }
 
+fn validate_client_transaction_id(value: &str) -> Result<(), RegistrationError> {
+    if value.len() < 16
+        || value.len() > 128
+        || !value.is_ascii()
+        || value.chars().any(char::is_control)
+        || value.trim() != value
+    {
+        return Err(RegistrationError::new(
+            "reauthorization_transaction_invalid",
+            "The local login transaction identifier is invalid.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_server_transaction_id(
+    code: &'static str,
+    value: &str,
+) -> Result<(), RegistrationError> {
+    if value.len() < 16
+        || value.len() > 128
+        || !value.is_ascii()
+        || value.chars().any(char::is_control)
+        || value.trim() != value
+    {
+        return Err(RegistrationError::uncertain(
+            code,
+            "hello.food returned an invalid staged login binding. Existing credentials remain blocked pending reconciliation.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_device_id(value: &str) -> Result<(), RegistrationError> {
+    if value.len() < 3
+        || value.len() > 255
+        || value.trim() != value
+        || value.chars().any(char::is_control)
+    {
+        return Err(RegistrationError::new(
+            "device_id",
+            "The native device identifier is invalid.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_oauth_grant(oauth: &OAuthTokenResponse) -> Result<(), RegistrationError> {
+    if oauth.access_token.is_empty()
+        || oauth.refresh_token.is_empty()
+        || oauth.access_token.len() > 16 * 1024
+        || oauth.refresh_token.len() > 16 * 1024
+        || !oauth.token_type.eq_ignore_ascii_case("bearer")
+        || oauth.expires_in == 0
+        || parse_scope(&oauth.scope) != LOGIN_SCOPES
+    {
+        return Err(RegistrationError::uncertain(
+            "device_token_contract_uncertain",
+            "The device authorization was consumed, but it did not preserve the complete requested grant. Existing credentials remain authoritative until account state is reconciled.",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_reauthorization_status(
+    value: &str,
+) -> Result<ReauthorizationStageStatus, RegistrationError> {
+    match value {
+        "staged" => Ok(ReauthorizationStageStatus::Staged),
+        "promoted" => Ok(ReauthorizationStageStatus::Promoted),
+        "aborted" => Ok(ReauthorizationStageStatus::Aborted),
+        "expired" => Ok(ReauthorizationStageStatus::Expired),
+        _ => Err(RegistrationError::uncertain(
+            "reauthorization_status_contract_uncertain",
+            "hello.food returned an unknown staged login status. Local credentials remain blocked.",
+        )),
+    }
+}
+
+fn validate_reauthorization_response(
+    response: CliReauthorizationResponse,
+    expected_client_transaction_id: &str,
+    expected_authorization_transaction_id: &str,
+    expected_device_id: &str,
+    expected_digest: Option<&str>,
+) -> Result<ReauthorizationStatus, RegistrationError> {
+    validate_server_transaction_id("reauthorization_stage_invalid", &response.stage_id)?;
+    if response.client_transaction_id != expected_client_transaction_id
+        || response.authorization_transaction_id != expected_authorization_transaction_id
+        || response.device_id != expected_device_id
+    {
+        return Err(RegistrationError::uncertain(
+            "reauthorization_binding_conflict",
+            "The staged login response did not match its client, authorization, or device binding. Local credentials remain blocked.",
+        ));
+    }
+    if response
+        .scopes
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        != LOGIN_SCOPES
+    {
+        return Err(RegistrationError::uncertain(
+            "reauthorization_scope_conflict",
+            "The staged login response did not preserve the complete canonical grant. Local credentials remain blocked.",
+        ));
+    }
+    if response.bundle_digest.len() != 64
+        || !response
+            .bundle_digest
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        || expected_digest.is_some_and(|value| value != response.bundle_digest)
+    {
+        return Err(RegistrationError::uncertain(
+            "reauthorization_digest_conflict",
+            "The staged login bundle digest changed. Local credentials remain blocked.",
+        ));
+    }
+    let credentials = response
+        .bundle
+        .map(|bundle| {
+            validate_staged_bundle(
+                bundle,
+                expected_device_id,
+                expected_authorization_transaction_id,
+                &response.bundle_digest,
+            )
+        })
+        .transpose()?;
+    let recovery_token = response
+        .recovery_token
+        .map(|token| {
+            if token.len() < 20 || token.len() > 1_024 || token.chars().any(char::is_control) {
+                return Err(RegistrationError::uncertain(
+                    "reauthorization_recovery_invalid",
+                    "The staged login recovery capability is invalid. Local credentials remain blocked.",
+                ));
+            }
+            Ok(SensitiveString::new(token))
+        })
+        .transpose()?;
+    Ok(ReauthorizationStatus {
+        stage_id: response.stage_id,
+        client_transaction_id: response.client_transaction_id,
+        authorization_transaction_id: response.authorization_transaction_id,
+        device_id: response.device_id,
+        status: parse_reauthorization_status(&response.status)?,
+        scopes: response.scopes,
+        bundle_digest: response.bundle_digest,
+        recovery_token,
+        credentials,
+    })
+}
+
+fn validate_staged_bundle(
+    bundle: CliReauthorizationBundle,
+    expected_device_id: &str,
+    expected_authorization_transaction_id: &str,
+    expected_digest: &str,
+) -> Result<AuthCredentialBundle, RegistrationError> {
+    let (_canonical, actual_digest) = canonical_reauthorization_bundle(&bundle)?;
+    if actual_digest != expected_digest {
+        return Err(RegistrationError::uncertain(
+            "reauthorization_digest_conflict",
+            "The staged login bundle did not match its authenticated digest. Local credentials remain blocked.",
+        ));
+    }
+    if bundle.channel.refresh_expires_at.is_empty()
+        || bundle.channel.refresh_expires_at.len() > 128
+        || bundle
+            .channel
+            .refresh_expires_at
+            .chars()
+            .any(char::is_control)
+    {
+        return Err(RegistrationError::uncertain(
+            "reauthorization_bundle_contract_uncertain",
+            "The staged login refresh expiry is invalid. Local credentials remain blocked.",
+        ));
+    }
+    if bundle.channel.grant.authorization_transaction_id.as_deref()
+        != Some(expected_authorization_transaction_id)
+    {
+        return Err(RegistrationError::uncertain(
+            "reauthorization_binding_conflict",
+            "The staged channel grant did not match its authorization transaction. Local credentials remain blocked.",
+        ));
+    }
+    validate_oauth_grant(&bundle.channel.grant)?;
+    let session = validate_cli_session(bundle.session, expected_device_id, LOGIN_SCOPES)?;
+    let channel = ChannelCredentials::from_rfc3339_expiry(
+        OFFICIAL_CLIENT_ID,
+        expected_device_id,
+        SensitiveString::new(bundle.channel.grant.access_token),
+        SensitiveString::new(bundle.channel.grant.refresh_token),
+        &bundle.channel.access_expires_at,
+        bundle.channel.grant.scope,
+    )
+    .map_err(|_| {
+        RegistrationError::uncertain(
+            "reauthorization_bundle_contract_uncertain",
+            "The staged login channel credential is invalid. Local credentials remain blocked.",
+        )
+    })?;
+    Ok(AuthCredentialBundle { channel, session })
+}
+
+fn canonical_reauthorization_bundle(
+    bundle: &CliReauthorizationBundle,
+) -> Result<(Vec<u8>, String), RegistrationError> {
+    let canonical = serde_json::to_value(bundle)
+        .and_then(|value| serde_json::to_vec(&value))
+        .map_err(|_| {
+            RegistrationError::uncertain(
+                "reauthorization_bundle_contract_uncertain",
+                "The staged login bundle could not be canonicalized. Local credentials remain blocked.",
+            )
+        })?;
+    let digest = format!("{:x}", Sha256::digest(&canonical));
+    Ok((canonical, digest))
+}
+
 fn assert_preservable_scope(current_scope: &str) -> Result<(), RegistrationError> {
     let current = parse_scope(current_scope);
     if current.is_empty()
@@ -814,6 +1360,22 @@ async fn successful(response: Response, code: &'static str) -> Result<Response, 
     Err(RegistrationError::new(
         code,
         format!("hello.food returned HTTP {}.", response.status().as_u16()),
+    ))
+}
+
+async fn staged_successful(
+    response: Response,
+    code: &'static str,
+) -> Result<Response, RegistrationError> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    Err(RegistrationError::uncertain(
+        code,
+        format!(
+            "hello.food returned HTTP {} while reconciling staged login authority. Local credentials remain blocked.",
+            response.status().as_u16()
+        ),
     ))
 }
 
@@ -873,6 +1435,18 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn staged_bundle_canonical_json_and_digest_match_backend_fixture_byte_for_byte() {
+        const CANONICAL: &str = r#"{"channel":{"access_expires_at":"2030-01-02T03:04:05Z","access_token":"hf_ct_fixture","authorization_transaction_id":"22222222-2222-4222-8222-222222222222","expires_in":3599,"link_id":"11111111-1111-4111-8111-111111111111","refresh_expires_at":"2030-02-01T03:04:05Z","refresh_token":"hf_cr_fixture","resource":null,"scope":"account:link profile:read","token_type":"bearer"},"session":{"access_expires_at":"2030-01-02T03:04:05Z","access_token":"hf_at_fixture","device_id":"device-fixture-001","is_anonymous":false,"refresh_expires_at":"2030-02-01T03:04:05Z","refresh_token":"hf_rt_fixture","scopes":["account:link","profile:read"],"session_id":"44444444-4444-4444-8444-444444444444","user_id":"33333333-3333-4333-8333-333333333333"}}"#;
+        let bundle: CliReauthorizationBundle = serde_json::from_str(CANONICAL).unwrap();
+        let (wire, digest) = canonical_reauthorization_bundle(&bundle).unwrap();
+        assert_eq!(wire, CANONICAL.as_bytes());
+        assert_eq!(
+            digest,
+            "d886b5837aa5abe2688b26bda5e0984aa9288953a3b0ce6d7ee827e039a3d842"
+        );
     }
 
     #[test]
@@ -948,7 +1522,11 @@ mod tests {
         .unwrap();
         let previous = LOGIN_SCOPES[..LOGIN_SCOPES.len() - 4].join(" ");
         let authorization = client
-            .start_device_reauthorization(&previous)
+            .start_device_reauthorization(
+                &previous,
+                "client-transaction-fixture",
+                "heyfood-test-device",
+            )
             .await
             .unwrap();
         assert_eq!(authorization.user_code, "ABCD-EFGH");
@@ -1138,6 +1716,7 @@ mod tests {
             assert!(text.contains("\"refresh_token\":\"channel-refresh-old\""));
             let body = serde_json::to_vec(&serde_json::json!({
                 "access_token": "channel-access-new",
+                "token_type": "bearer",
                 "refresh_token": "channel-refresh-new",
                 "expires_in": 3600,
                 "scope": "account:link profile:read"
@@ -1253,6 +1832,7 @@ mod tests {
             access_token: "hf_at_test".into(),
             refresh_token: "hf_rt_test".into(),
             access_expires_at: "2999-01-01T00:00:00Z".into(),
+            refresh_expires_at: "2999-02-01T00:00:00Z".into(),
             scopes: LOGIN_SCOPES.iter().map(|scope| (*scope).into()).collect(),
             is_anonymous: false,
         }
@@ -1399,6 +1979,7 @@ mod tests {
                     }
                     "/v1/channel/oauth/device/token" => serde_json::json!({
                         "access_token": "hf_ct_test",
+                        "token_type": "bearer",
                         "refresh_token": "hf_cr_test",
                         "expires_in": 3600,
                         "scope": LOGIN_SCOPES.join(" ")
@@ -1434,6 +2015,7 @@ mod tests {
             "access_token": "hf_at_test",
             "refresh_token": "hf_rt_test",
             "access_expires_at": "2999-01-01T00:00:00Z",
+            "refresh_expires_at": "2999-02-01T00:00:00Z",
             "scopes": LOGIN_SCOPES,
             "is_anonymous": false
         })
