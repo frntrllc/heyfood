@@ -1,66 +1,107 @@
-name: Post-release smoke
+name: Post-release native smoke
 
-run-name: Public PyPI smoke v${{ inputs.version }}
+run-name: Public native smoke v${{ inputs.version }}
 
 on:
+  workflow_call:
+    inputs:
+      version:
+        description: GitHub Release version without the v prefix
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       version:
-        description: Published heyfood-cli version without the v prefix
+        description: GitHub Release version without the v prefix
         required: true
         type: string
 
 permissions:
+  attestations: read
   contents: read
 
 jobs:
-  public-pypi:
-    name: PyPI v${{ inputs.version }} / Python ${{ matrix.python }} / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+  public-native:
+    name: v${{ inputs.version }} / ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        python: ["3.11", "3.12", "3.13"]
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
     env:
-      PIP_INDEX_URL: https://pypi.org/simple
-      PIP_NO_CACHE_DIR: "1"
+      GH_TOKEN: ${{ github.token }}
+      TARGET: ${{ matrix.target }}
       VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Install the published package with pipx
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download the public release assets
         shell: bash
         run: |
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([abrc][0-9]+)?$ ]]
-          export PIPX_HOME="$RUNNER_TEMP/pipx-home"
-          export PIPX_BIN_DIR="$RUNNER_TEMP/pipx-bin"
-          echo "PIPX_HOME=$PIPX_HOME" >> "$GITHUB_ENV"
-          echo "PIPX_BIN_DIR=$PIPX_BIN_DIR" >> "$GITHUB_ENV"
-          python -m pip install "pipx>=1.7,<2"
-          python -m pipx install --python "$(command -v python)" "heyfood-cli==$VERSION"
-      - name: Smoke the public executable
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          mkdir release
+          gh release download "v$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'heyfood-*.tar.gz' \
+            --pattern SHA256SUMS \
+            --dir release
+      - name: Verify checksums, archive policy, and signed provenance
         shell: bash
         run: |
-          test "$($PIPX_BIN_DIR/heyfood --version)" = "heyfood $VERSION"
-          "$PIPX_BIN_DIR/heyfood" --help >/dev/null
-          "$PIPX_BIN_DIR/heyfood" login --help >/dev/null
-          set +e
-          "$PIPX_BIN_DIR/heyfood" doctor --json >doctor.json
-          doctor_status=$?
-          set -e
-          test "$doctor_status" = 1
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          raw = Path("doctor.json").read_text()
-          assert "\x1b" not in raw
-          json.loads(raw)
-          PY
-      - name: Uninstall cleanly
+          set -euo pipefail
+          scripts/release/verify-assets.sh release "$VERSION"
+          for asset in release/*.tar.gz release/SHA256SUMS; do
+            gh attestation verify "$asset" --repo "$GITHUB_REPOSITORY"
+          done
+      - name: Smoke the native public executable
+        shell: bash
+        run: scripts/release/smoke.sh release "$VERSION" "$TARGET"
+      - name: Verify hosted installer provenance
         shell: bash
         run: |
-          python -m pipx uninstall heyfood-cli
-          test ! -e "$PIPX_BIN_DIR/heyfood"
+          set -euo pipefail
+          mkdir hosted-installer
+          curl -qfsSL \
+            --proto '=https' \
+            --tlsv1.2 \
+            --output hosted-installer/install.sh \
+            https://hey.food/install.sh
+          curl -qfsSL \
+            --proto '=https' \
+            --tlsv1.2 \
+            --output hosted-installer/install.sh.sha256 \
+            https://hey.food/install.sh.sha256
+          cmp install.sh hosted-installer/install.sh
+          cmp install.sh.sha256 hosted-installer/install.sh.sha256
+          (
+            cd hosted-installer
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum -c install.sh.sha256
+            else
+              shasum -a 256 -c install.sh.sha256
+            fi
+          )
+      - name: Install through the public hosted path
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_home="$RUNNER_TEMP/heyfood-home"
+          install_bin="$RUNNER_TEMP/heyfood-bin"
+          mkdir -p "$install_home" "$install_bin"
+          chmod 0700 "$install_home" "$install_bin"
+          HOME="$install_home" \
+            HEYFOOD_BIN_DIR="$install_bin" \
+            HEYFOOD_VERSION="$VERSION" \
+            bash hosted-installer/install.sh
+          test "$("$install_bin/heyfood" --version)" = "heyfood $VERSION"
+          "$install_bin/heyfood" --help >/dev/null
+          rm "$install_bin/heyfood"
+          test ! -e "$install_bin/heyfood"

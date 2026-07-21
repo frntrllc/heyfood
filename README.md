@@ -8,6 +8,46 @@ deliberately small: `register`, `ask`, `reply`, `log`, and `item` are the only
 active product commands. Guidance comes from the hosted hello.food service and
 is not a substitute for professional medical advice or emergency care.
 
+## Installation
+
+On macOS or glibc-based Linux, install the native Rust release with:
+
+```bash
+curl -fsSL https://hey.food/install.sh | bash
+```
+
+The [installer source](install.sh) selects the matching Apple Darwin or GNU
+Linux archive for the current `aarch64` or `x86_64` CPU. It downloads that
+archive and `SHA256SUMS` from the same GitHub Release, verifies the checksum and
+single-file archive policy, runs the downloaded executable's exact `--version`
+check, and atomically installs it to
+`${HEYFOOD_BIN_DIR:-$HOME/.local/bin}/heyfood`. It never uses `sudo`, edits shell
+startup files, or requires Python or `pipx`.
+
+Pin an exact release or choose another user-owned installation directory with:
+
+```bash
+curl -fsSL https://hey.food/install.sh | HEYFOOD_VERSION=0.4.0 bash
+curl -fsSL https://hey.food/install.sh | \
+  HEYFOOD_BIN_DIR="$HOME/bin" bash
+```
+
+To inspect immutable installer bytes before running them, replace `REVISION`
+with a reviewed full commit SHA and verify the separately reviewed checksum:
+
+```bash
+REVISION="<full-reviewed-commit-sha>"
+curl -fsSLO "https://raw.githubusercontent.com/frntrllc/heyfood/${REVISION}/install.sh"
+curl -fsSLO "https://raw.githubusercontent.com/frntrllc/heyfood/${REVISION}/install.sh.sha256"
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum -c install.sh.sha256
+else
+  shasum -a 256 -c install.sh.sha256
+fi
+less install.sh
+bash install.sh
+```
+
 ## Build from source
 
 The native workspace requires the Rust toolchain declared in `Cargo.toml`.
@@ -20,9 +60,9 @@ cargo build --release --locked --package heyfood-bin
 ./target/release/heyfood --help
 ```
 
-Until a native release artifact and installer are published, building a
-reviewed source revision is the supported way to exercise this cut. The legacy
-Python/PyPI installer is not the native Rust distribution.
+GitHub Releases and the hosted installer are the only supported public binary
+distribution path. Building a reviewed source revision remains supported for
+contributors.
 
 ## Register
 
@@ -137,6 +177,19 @@ Additional project references:
 - [Release process](RELEASING.md)
 - [Security policy](SECURITY.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
+
+## Uninstall
+
+The installer prints the exact installed path and removal command. For the
+default directory:
+
+```bash
+rm "$HOME/.local/bin/heyfood"
+```
+
+This removes only the native executable. The current native cut does not expose
+logout or account-state removal yet, so uninstalling does not revoke the hosted
+authorization or delete owner-only local account state.
 
 ## License and project boundary
 
