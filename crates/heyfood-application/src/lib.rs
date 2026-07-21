@@ -2,9 +2,20 @@
 
 #![forbid(unsafe_code)]
 
+pub mod grocery;
+pub mod health;
 pub mod ports;
 pub mod run_turn;
 pub mod state_writer;
+pub mod supervisor;
+
+pub use grocery::{
+    GroceryCacheKey, GroceryItemReferenceCache, GroceryListSnapshot, GroceryMutationIntent,
+    GroceryPort, PreparedGroceryMutation,
+};
+pub use health::{
+    HealthAuthorization, HealthConnection, HealthContext, HealthManagementOutcome, HealthPort,
+};
 
 pub use ports::{
     AcceptedTurn, AudioCapture, AudioCapturePort, BoxEventStream, BoxFuture, BrowserPort,
@@ -19,6 +30,7 @@ pub use state_writer::{
     CommitError, CommitOutcome, Mutation, MutationClass, MutationMetadata, MutationProposal,
     OperationSnapshot, SerializedStateWriter,
 };
+pub use supervisor::{OperationSupervisor, SupervisorError, WorkflowLease};
 
 /// The package version shared by the native workspace.
 pub const VERSION: &str = heyfood_core::VERSION;

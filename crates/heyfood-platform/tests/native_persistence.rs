@@ -16,6 +16,8 @@ use heyfood_core::{AccountId, CredentialVersion, SensitiveString, SessionCredent
 use heyfood_core::{ClientConfig, CommitId, ConfigRevision, NetworkPolicy, ServiceUrl};
 #[cfg(not(windows))]
 use heyfood_core::{GenerationId, OperationId, SessionSnapshot};
+#[cfg(all(not(windows), feature = "native-credentials"))]
+use heyfood_platform::KeyringCredentialStore;
 #[cfg(all(windows, feature = "native-credentials"))]
 use heyfood_platform::WindowsCredentialStore;
 use heyfood_platform::{AtomicFile, FileCredentialStore, NativeConfigStore};
@@ -307,6 +309,37 @@ fn windows_credential_manager_rotates_and_reconciles_without_token_files() {
     let loaded = block_on(reopened.load()).unwrap().unwrap();
     assert_eq!(loaded.version, CredentialVersion::new(96));
     assert_eq!(loaded.refresh_token.expose_secret(), "refresh-96");
+    assert!(!store.reconciliation_required().unwrap());
+    assert!(!root.0.join("credentials.native").exists());
+}
+
+#[test]
+#[cfg(all(not(windows), feature = "native-credentials"))]
+fn native_keyring_rotates_and_reconciles_without_token_files() {
+    struct Cleanup<'a>(&'a KeyringCredentialStore);
+
+    impl Drop for Cleanup<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.delete();
+        }
+    }
+
+    let root = TempRoot::new("native-keyring");
+    let store = KeyringCredentialStore::open(&root.0).unwrap();
+    let _ = store.delete();
+    let _cleanup = Cleanup(&store);
+    store.initialize(&credentials(1)).unwrap();
+    let commit = CredentialCommit {
+        commit_id: CommitId::new(),
+        expected_version: CredentialVersion::new(1),
+        credentials: credentials(2),
+    };
+    block_on(store.commit(commit.clone())).unwrap();
+    block_on(store.mark_reconciliation_required(commit.commit_id)).unwrap();
+    block_on(store.commit(commit)).unwrap();
+
+    let loaded = block_on(store.load()).unwrap().unwrap();
+    assert_eq!(loaded.version, CredentialVersion::new(2));
     assert!(!store.reconciliation_required().unwrap());
     assert!(!root.0.join("credentials.native").exists());
 }

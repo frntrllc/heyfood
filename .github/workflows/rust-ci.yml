@@ -186,6 +186,8 @@ jobs:
         run: cargo clippy --locked --package heyfood-platform --all-targets --features native-credentials -- -D warnings
       - name: Test the target-native credential backend
         run: cargo test --locked --package heyfood-platform --features native-credentials
+      - name: Test the killable credential broker boundary
+        run: cargo test --locked --package heyfood-bin --features native-credentials --test credential_broker
 
   native-audio:
     name: Native audio / ${{ matrix.os }}

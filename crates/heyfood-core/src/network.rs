@@ -94,6 +94,44 @@ impl BrowserUrl {
     }
 }
 
+/// An HTTP(S) forward proxy URL. Plain HTTP proxies are standard and may carry
+/// encrypted HTTPS tunnels, so this is intentionally distinct from a service
+/// endpoint. Embedded credentials, query, and fragments are forbidden.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ProxyUrl(Url);
+
+impl ProxyUrl {
+    pub fn parse(value: &str) -> Result<Self, ServiceUrlError> {
+        let candidate = value.trim();
+        if candidate.is_empty() {
+            return Err(ServiceUrlError::Empty);
+        }
+        let url = Url::parse(candidate).map_err(|_| ServiceUrlError::Invalid)?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(ServiceUrlError::UnsupportedScheme);
+        }
+        if url.host().is_none() {
+            return Err(ServiceUrlError::MissingHost);
+        }
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err(ServiceUrlError::EmbeddedCredentials);
+        }
+        if url.query().is_some() {
+            return Err(ServiceUrlError::Query);
+        }
+        if url.fragment().is_some() {
+            return Err(ServiceUrlError::Fragment);
+        }
+        Ok(Self(url))
+    }
+
+    #[must_use]
+    pub fn as_url(&self) -> &Url {
+        &self.0
+    }
+}
+
 impl fmt::Display for BrowserUrl {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)

@@ -152,6 +152,7 @@ pub struct NativeConfigStore {
     lock_path: PathBuf,
     records_path: PathBuf,
     policy: NetworkPolicy,
+    expected_account: Option<AccountId>,
 }
 
 impl NativeConfigStore {
@@ -162,22 +163,81 @@ impl NativeConfigStore {
     ) -> Result<Self, PortError> {
         let root = root.as_ref();
         create_private_dir(root)?;
+        Self::open_with_binding(root, initial, policy, None)
+    }
+
+    pub fn open_account_bound(
+        root: impl AsRef<Path>,
+        account_id: AccountId,
+        initial: ClientConfig,
+        policy: NetworkPolicy,
+    ) -> Result<Self, PortError> {
+        Self::open_with_binding(root, initial, policy, Some(account_id))
+    }
+
+    fn open_with_binding(
+        root: impl AsRef<Path>,
+        initial: ClientConfig,
+        policy: NetworkPolicy,
+        expected_account: Option<AccountId>,
+    ) -> Result<Self, PortError> {
+        initial
+            .validate()
+            .map_err(|error| PortError::new("config_validation", error))?;
+        let root = root.as_ref();
+        create_private_dir(root)?;
         let store = Self {
             state_path: root.join("config.native"),
             lock_path: root.join("config.lock"),
             records_path: root.join("records"),
             policy,
+            expected_account,
         };
         let _lock = FileLock::acquire(&store.lock_path, true)?;
         if !store.state_path.exists() {
-            AtomicFile::replace(&store.state_path, &ConfigState::new(initial).encode())?;
+            AtomicFile::replace(
+                &store.state_path,
+                &ConfigState::new(initial, store.expected_account.clone()).encode(),
+            )?;
+        } else {
+            let mut state = store.read_unlocked()?;
+            match (&state.account_id, &store.expected_account) {
+                (Some(actual), Some(expected)) if actual != expected => {
+                    return Err(PortError::new(
+                        "config_account_conflict",
+                        "native state belongs to a different account",
+                    ));
+                }
+                (None, Some(expected)) => {
+                    // A schema-1/unbound document contains no credential and is
+                    // safely claimed exactly once after verified login.
+                    state.account_id = Some(expected.clone());
+                    AtomicFile::replace(&store.state_path, &state.encode())?;
+                }
+                _ => {
+                    // Re-encode legacy schema 1 into the current version even
+                    // when it remains intentionally unbound.
+                    if state.schema_version == 1 {
+                        AtomicFile::replace(&store.state_path, &state.encode())?;
+                    }
+                }
+            }
         }
         Ok(store)
     }
 
     fn read_unlocked(&self) -> Result<ConfigState, PortError> {
         let bytes = read_limited(&self.state_path, 1024 * 1024)?;
-        ConfigState::decode(&bytes, self.policy)
+        let state = ConfigState::decode(&bytes, self.policy)?;
+        if let (Some(actual), Some(expected)) = (&state.account_id, &self.expected_account)
+            && actual != expected
+        {
+            return Err(PortError::new(
+                "config_account_conflict",
+                "native state belongs to a different account",
+            ));
+        }
+        Ok(state)
     }
 }
 
@@ -216,14 +276,18 @@ impl ConfigPort for NativeConfigStore {
 }
 
 struct ConfigState {
+    schema_version: u16,
+    account_id: Option<AccountId>,
     config: ClientConfig,
     conversation: Option<String>,
     applied: HashSet<CommitId>,
 }
 
 impl ConfigState {
-    fn new(config: ClientConfig) -> Self {
+    fn new(config: ClientConfig, account_id: Option<AccountId>) -> Self {
         Self {
+            schema_version: heyfood_core::CURRENT_CONFIG_SCHEMA.get(),
+            account_id,
             config,
             conversation: None,
             applied: HashSet::new(),
@@ -239,7 +303,11 @@ impl ConfigState {
         applied.sort_unstable();
         let applied = applied.join(",");
         format!(
-            "schema=1\nactive={}\napi={}\nauth={}\nrevision={}\nconversation={}\napplied={}\n",
+            "schema={}\naccount={}\nactive={}\napi={}\nauth={}\nrevision={}\nconversation={}\napplied={}\n",
+            heyfood_core::CURRENT_CONFIG_SCHEMA.get(),
+            self.account_id
+                .as_ref()
+                .map_or_else(String::new, |value| hex_encode(value.as_str().as_bytes())),
             hex_encode(self.config.active_context.as_bytes()),
             hex_encode(self.config.api_url.as_url().as_str().as_bytes()),
             hex_encode(self.config.auth_url.as_url().as_str().as_bytes()),
@@ -254,12 +322,26 @@ impl ConfigState {
 
     fn decode(bytes: &[u8], policy: NetworkPolicy) -> Result<Self, PortError> {
         let fields = fields(bytes)?;
-        if required(&fields, "schema")? != "1" {
+        let schema_version = required(&fields, "schema")?
+            .parse::<u16>()
+            .map_err(|_| PortError::new("config_schema", "invalid native config schema"))?;
+        if !matches!(schema_version, 1 | 2) {
             return Err(PortError::new(
                 "config_schema",
                 "unsupported native config schema",
             ));
         }
+        let account_id = if schema_version == 1 {
+            None
+        } else {
+            match required(&fields, "account")? {
+                "" => None,
+                value => Some(
+                    AccountId::parse(hex_string(value)?)
+                        .map_err(|error| PortError::new("config_account", error))?,
+                ),
+            }
+        };
         let active_context = hex_string(required(&fields, "active")?)?;
         let api_url = ServiceUrl::parse(&hex_string(required(&fields, "api")?)?, policy)
             .map_err(|error| PortError::new("config_url", error.to_string()))?;
@@ -273,13 +355,19 @@ impl ConfigState {
             value => Some(hex_string(value)?),
         };
         let applied = parse_commit_set(required(&fields, "applied")?)?;
+        let config = ClientConfig {
+            active_context,
+            api_url,
+            auth_url,
+            revision: ConfigRevision::new(revision),
+        };
+        config
+            .validate()
+            .map_err(|error| PortError::new("config_validation", error))?;
         Ok(Self {
-            config: ClientConfig {
-                active_context,
-                api_url,
-                auth_url,
-                revision: ConfigRevision::new(revision),
-            },
+            schema_version,
+            account_id,
+            config,
             conversation,
             applied,
         })
@@ -392,9 +480,9 @@ impl CredentialPort for FileCredentialStore {
     }
 }
 
-#[cfg(all(windows, feature = "native-credentials"))]
+#[cfg(feature = "native-credentials")]
 const WINDOWS_CREDENTIAL_SERVICE: &str = "ai.frntr.heyfood";
-#[cfg(all(windows, feature = "native-credentials"))]
+#[cfg(feature = "native-credentials")]
 const WINDOWS_CREDENTIAL_BLOB_MAX_BYTES: usize = 2_560;
 
 /// Windows Credential Manager-backed session storage.
@@ -477,10 +565,201 @@ impl WindowsCredentialStore {
             .set_secret(&document)
             .map_err(|error| keyring_error("credential_manager_write", error))
     }
+
+    pub(crate) fn broker_load(&self) -> Result<Option<SessionCredentials>, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, false)?;
+        Ok(self.read_unlocked()?.map(|state| state.credentials))
+    }
+
+    pub(crate) fn broker_commit(&self, commit: CredentialCommit) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let mut state = self.read_unlocked()?.ok_or_else(|| {
+            PortError::new("credentials_missing", "credentials are not initialized")
+        })?;
+        if credential_commit_is_already_reflected(&state.credentials, &commit)? {
+            return clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id);
+        }
+        validate_credential_commit(&state.credentials, &commit)?;
+        state.credentials = commit.credentials;
+        self.write_unlocked(&state)?;
+        clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id)
+    }
+
+    pub(crate) fn broker_mark(&self, commit_id: CommitId) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        AtomicFile::replace(
+            &self.reconciliation_path,
+            format!("{}\n", commit_id.as_uuid()).as_bytes(),
+        )
+    }
+
+    pub(crate) fn broker_clear(&self, commit_id: CommitId) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        clear_reconciliation_marker(&self.reconciliation_path, commit_id)
+    }
 }
 
 #[cfg(all(windows, feature = "native-credentials"))]
 impl CredentialPort for WindowsCredentialStore {
+    fn load(&self) -> BoxFuture<'_, Result<Option<SessionCredentials>, PortError>> {
+        Box::pin(async move {
+            let _lock = FileLock::acquire_async(&self.lock_path, false).await?;
+            Ok(self.read_unlocked()?.map(|state| state.credentials))
+        })
+    }
+
+    fn commit(&self, commit: CredentialCommit) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async move {
+            let _lock = FileLock::acquire_async(&self.lock_path, true).await?;
+            let mut state = self.read_unlocked()?.ok_or_else(|| {
+                PortError::new("credentials_missing", "credentials are not initialized")
+            })?;
+            if credential_commit_is_already_reflected(&state.credentials, &commit)? {
+                clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id)?;
+                return Ok(());
+            }
+            validate_credential_commit(&state.credentials, &commit)?;
+            state.credentials = commit.credentials;
+            self.write_unlocked(&state)?;
+            clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id)
+        })
+    }
+
+    fn mark_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async move {
+            let _lock = FileLock::acquire_async(&self.lock_path, true).await?;
+            AtomicFile::replace(
+                &self.reconciliation_path,
+                format!("{}\n", commit_id.as_uuid()).as_bytes(),
+            )
+        })
+    }
+
+    fn clear_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async move {
+            let _lock = FileLock::acquire_async(&self.lock_path, true).await?;
+            clear_reconciliation_marker(&self.reconciliation_path, commit_id)
+        })
+    }
+}
+
+/// macOS Keychain / Linux Secret Service-backed session storage. The standard
+/// file store remains an explicit owner-only fallback for headless systems;
+/// selection is made by the composition root and is never silent downgrade.
+#[cfg(all(not(windows), feature = "native-credentials"))]
+#[derive(Clone, Debug)]
+pub struct KeyringCredentialStore {
+    target: String,
+    lock_path: PathBuf,
+    reconciliation_path: PathBuf,
+}
+
+#[cfg(all(not(windows), feature = "native-credentials"))]
+impl KeyringCredentialStore {
+    pub fn open(root: impl AsRef<Path>) -> Result<Self, PortError> {
+        let root = root.as_ref();
+        create_private_dir(root)?;
+        Ok(Self {
+            target: format!(
+                "{WINDOWS_CREDENTIAL_SERVICE}:{}",
+                hex_encode(root.to_string_lossy().as_bytes())
+            ),
+            lock_path: root.join("credentials.lock"),
+            reconciliation_path: root.join("credentials.reconciliation"),
+        })
+    }
+
+    pub fn initialize(&self, credentials: &SessionCredentials) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.read_unlocked()?.is_some() {
+            return Err(PortError::new(
+                "credentials_exist",
+                "credentials have already been initialized",
+            ));
+        }
+        self.write_unlocked(&CredentialState::new(credentials.clone()))
+    }
+
+    pub fn reconciliation_required(&self) -> Result<bool, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, false)?;
+        Ok(self.reconciliation_path.exists())
+    }
+
+    pub fn delete(&self) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        match self.entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(keyring_error("native_keyring_delete", error)),
+        }
+    }
+
+    fn entry(&self) -> Result<keyring::Entry, PortError> {
+        keyring::Entry::new(&self.target, "session")
+            .map_err(|error| keyring_error("native_keyring_entry", error))
+    }
+
+    fn read_unlocked(&self) -> Result<Option<CredentialState>, PortError> {
+        match self.entry()?.get_secret() {
+            Ok(document) => CredentialState::decode(&document).map(Some),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(keyring_error("native_keyring_read", error)),
+        }
+    }
+
+    fn write_unlocked(&self, state: &CredentialState) -> Result<(), PortError> {
+        let document = state.encode();
+        if document.len() > WINDOWS_CREDENTIAL_BLOB_MAX_BYTES {
+            return Err(PortError::new(
+                "native_keyring_size",
+                "credential document exceeds the native keyring limit",
+            ));
+        }
+        self.entry()?
+            .set_secret(&document)
+            .map_err(|error| keyring_error("native_keyring_write", error))
+    }
+
+    pub(crate) fn broker_load(&self) -> Result<Option<SessionCredentials>, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, false)?;
+        Ok(self.read_unlocked()?.map(|state| state.credentials))
+    }
+
+    pub(crate) fn broker_commit(&self, commit: CredentialCommit) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let mut state = self.read_unlocked()?.ok_or_else(|| {
+            PortError::new("credentials_missing", "credentials are not initialized")
+        })?;
+        if credential_commit_is_already_reflected(&state.credentials, &commit)? {
+            return clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id);
+        }
+        validate_credential_commit(&state.credentials, &commit)?;
+        state.credentials = commit.credentials;
+        self.write_unlocked(&state)?;
+        clear_reconciliation_marker(&self.reconciliation_path, commit.commit_id)
+    }
+
+    pub(crate) fn broker_mark(&self, commit_id: CommitId) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        AtomicFile::replace(
+            &self.reconciliation_path,
+            format!("{}\n", commit_id.as_uuid()).as_bytes(),
+        )
+    }
+
+    pub(crate) fn broker_clear(&self, commit_id: CommitId) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        clear_reconciliation_marker(&self.reconciliation_path, commit_id)
+    }
+}
+
+#[cfg(all(not(windows), feature = "native-credentials"))]
+impl CredentialPort for KeyringCredentialStore {
     fn load(&self) -> BoxFuture<'_, Result<Option<SessionCredentials>, PortError>> {
         Box::pin(async move {
             let _lock = FileLock::acquire_async(&self.lock_path, false).await?;
@@ -606,21 +885,21 @@ fn clear_reconciliation_marker(path: &Path, commit_id: CommitId) -> Result<(), P
     Ok(())
 }
 
-#[cfg(all(windows, feature = "native-credentials"))]
+#[cfg(feature = "native-credentials")]
 fn keyring_error(code: &'static str, error: keyring::Error) -> PortError {
     PortError::new(code, error.to_string())
 }
 
-struct CredentialState {
-    credentials: SessionCredentials,
+pub(crate) struct CredentialState {
+    pub(crate) credentials: SessionCredentials,
 }
 
 impl CredentialState {
-    fn new(credentials: SessionCredentials) -> Self {
+    pub(crate) fn new(credentials: SessionCredentials) -> Self {
         Self { credentials }
     }
 
-    fn encode(&self) -> Vec<u8> {
+    pub(crate) fn encode(&self) -> Vec<u8> {
         format!(
             "schema=2\naccount={}\naccess={}\nrefresh={}\nversion={}\nexpires={}\n",
             hex_encode(self.credentials.account_id.as_str().as_bytes()),
@@ -632,7 +911,7 @@ impl CredentialState {
         .into_bytes()
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, PortError> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, PortError> {
         let fields = fields(bytes)?;
         let schema = required(&fields, "schema")?;
         if schema != "1" && schema != "2" {

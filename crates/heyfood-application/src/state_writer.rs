@@ -108,6 +108,26 @@ impl MutationProposal {
     }
 
     #[must_use]
+    pub fn accepted_config(
+        snapshot: &OperationSnapshot,
+        commit_id: CommitId,
+        config: ClientConfig,
+    ) -> Self {
+        Self {
+            metadata: MutationMetadata {
+                operation_id: snapshot.operation_id,
+                generation: snapshot.generation,
+                class: MutationClass::ServerAcceptedDurable,
+                expected_account: Some(snapshot.session.credentials.account_id.clone()),
+                expected_credential_version: None,
+                credential_version: Some(snapshot.session.credentials.version),
+                commit_id,
+            },
+            mutation: Mutation::Config(config),
+        }
+    }
+
+    #[must_use]
     pub fn local_first(
         snapshot: &OperationSnapshot,
         commit_id: CommitId,
