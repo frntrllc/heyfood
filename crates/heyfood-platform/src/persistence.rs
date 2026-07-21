@@ -1270,18 +1270,25 @@ fn make_private_file(_path: &Path) -> std::io::Result<()> {
 #[cfg(windows)]
 fn apply_windows_owner_acl(path: &Path, directory: bool) -> std::io::Result<()> {
     let sid = windows_current_user_sid()?;
-    run_windows_acl_script(WINDOWS_SET_OWNER_ONLY_ACL, path, &sid, directory)?;
-    run_windows_acl_script(WINDOWS_VERIFY_OWNER_ONLY_ACL, path, &sid, directory)
+    run_windows_acl_script("install", WINDOWS_SET_OWNER_ONLY_ACL, path, &sid, directory)?;
+    run_windows_acl_script(
+        "verify",
+        WINDOWS_VERIFY_OWNER_ONLY_ACL,
+        path,
+        &sid,
+        directory,
+    )
 }
 
 #[cfg(windows)]
 fn run_windows_acl_script(
+    operation: &'static str,
     script: &str,
     path: &Path,
     sid: &str,
     directory: bool,
 ) -> std::io::Result<()> {
-    let status = Command::new("powershell.exe")
+    let output = Command::new("powershell.exe")
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -1296,13 +1303,21 @@ fn run_windows_acl_script(
             if directory { "directory" } else { "file" },
         )
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
-    if status.success() {
+        .output()?;
+    if output.status.success() {
         Ok(())
     } else {
+        let path = path.to_string_lossy();
+        let detail = String::from_utf8_lossy(&output.stderr)
+            .replace(path.as_ref(), "[PATH]")
+            .replace(sid, "[SID]");
+        let detail: String = heyfood_core::terminal_safe_text(&detail)
+            .chars()
+            .take(512)
+            .collect();
         Err(std::io::Error::other(format!(
-            "Windows rejected the owner-only ACL with status {status}"
+            "Windows owner-only ACL {operation} failed with status {}: {detail}",
+            output.status
         )))
     }
 }
@@ -1459,20 +1474,34 @@ mod windows_acl_tests {
 
         let owner = windows_current_user_sid().expect("resolve current Windows SID");
         assert!(
-            run_windows_acl_script(WINDOWS_VERIFY_OWNER_ONLY_ACL, &root, &owner, true).is_err(),
+            run_windows_acl_script("verify", WINDOWS_VERIFY_OWNER_ONLY_ACL, &root, &owner, true)
+                .is_err(),
             "broad directory ACEs must violate the owner-only contract"
         );
         assert!(
-            run_windows_acl_script(WINDOWS_VERIFY_OWNER_ONLY_ACL, &file, &owner, false).is_err(),
+            run_windows_acl_script(
+                "verify",
+                WINDOWS_VERIFY_OWNER_ONLY_ACL,
+                &file,
+                &owner,
+                false
+            )
+            .is_err(),
             "broad file ACEs must violate the owner-only contract"
         );
 
         apply_windows_owner_acl(&root, true).expect("replace directory DACL");
         apply_windows_owner_acl(&file, false).expect("replace file DACL");
 
-        run_windows_acl_script(WINDOWS_VERIFY_OWNER_ONLY_ACL, &root, &owner, true)
+        run_windows_acl_script("verify", WINDOWS_VERIFY_OWNER_ONLY_ACL, &root, &owner, true)
             .expect("directory DACL is protected and owner-only");
-        run_windows_acl_script(WINDOWS_VERIFY_OWNER_ONLY_ACL, &file, &owner, false)
-            .expect("file DACL is protected and owner-only");
+        run_windows_acl_script(
+            "verify",
+            WINDOWS_VERIFY_OWNER_ONLY_ACL,
+            &file,
+            &owner,
+            false,
+        )
+        .expect("file DACL is protected and owner-only");
     }
 }
