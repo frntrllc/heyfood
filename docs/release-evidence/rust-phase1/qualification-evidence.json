@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "evidence_date": "2026-07-20",
+  "code_commit_sha": "85ad15ae66538eafdfd1e3f4a34bf83ef680872b",
+  "code_tree_sha": "64099f3d5c71f01094525998a9f066293f6ba923",
+  "source_tree_clean": true,
+  "host": {
+    "os": "macOS 26.5 (25F71)",
+    "architecture": "aarch64",
+    "rustc": "1.94.0 (4a4ef493e 2026-03-02)",
+    "cargo": "1.94.0 (85eff7c80 2026-01-15)"
+  },
+  "local_qualification": {
+    "commands": [
+      "cargo fmt --all -- --check",
+      "cargo check --locked --workspace --all-targets",
+      "cargo clippy --locked --workspace --all-targets -- -D warnings",
+      "cargo test --locked --workspace",
+      "cargo check --locked -p heyfood-platform -p heyfood-bin --all-targets --features native-credentials",
+      "cargo clippy --locked -p heyfood-platform -p heyfood-bin --all-targets --features native-credentials -- -D warnings",
+      "cargo test --locked -p heyfood-platform --features native-credentials native_keyring_rotates_and_reconciles_without_token_files -- --exact",
+      "cargo test --locked -p heyfood-bin --features native-credentials --test credential_broker",
+      "cargo xtask dependency-dag",
+      "cargo xtask verify-stable-contracts",
+      "cargo xtask verify-grocery-contracts",
+      "cargo xtask verify-assets",
+      "cargo xtask verify-migration-ledger",
+      "cargo xtask verify-phase0-evidence"
+    ],
+    "result": "passed",
+    "failed": 0
+  },
+  "dg_r3": {
+    "native_config_schema": 2,
+    "atomic_replace_and_parent_sync": "passed",
+    "bounded_cross_process_lock": "passed",
+    "owner_only_unix_permissions": "passed",
+    "account_binding_and_isolated_paths": "passed",
+    "interrupted_write_recovery": "passed",
+    "python_non_secret_import": "passed_read_only_idempotent",
+    "unsafe_secret_import": "reauthentication_required",
+    "macos_keychain": "passed_local_real_backend",
+    "linux_secret_service": "pending_hosted_environment",
+    "linux_headless_owner_only_fallback": "passed_local_file_contract",
+    "windows_credential_manager": "pending_exact_hosted_evidence_sha",
+    "killable_process_broker": "passed_local_real_backend",
+    "secrets_in_argv_or_environment": false,
+    "token_file_created_by_native_backend": false
+  },
+  "application_safety": {
+    "immutable_operation_snapshots": "passed",
+    "single_flight_supervisor": "passed",
+    "cancel_and_join_before_generation_advance": "passed",
+    "timeout_keeps_replacement_closed": "passed",
+    "refresh_rotation_cancel_after_acceptance": "passed",
+    "durable_replay_after_restart": "passed",
+    "local_first_repair_record": "passed",
+    "presentation_generation_rejection": "passed"
+  },
+  "privacy": {
+    "credential_debug_redaction": "passed",
+    "health_value_debug_redaction": "passed",
+    "grocery_item_debug_redaction": "passed",
+    "terminal_control_filtering": "passed",
+    "item_cache_contains_sensitive_labels": false,
+    "provider_oauth_token_model_present": false
+  },
+  "hosted": {
+    "status": "pending",
+    "exact_head_sha": null,
+    "rust_ci_run_id": null,
+    "rust_ci_url": null,
+    "jobs_passed": null,
+    "jobs_failed": null
+  }
+}

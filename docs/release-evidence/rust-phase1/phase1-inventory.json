@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "evidence_date": "2026-07-20",
+  "rust_lineage": {
+    "repository": "https://github.com/frntrllc/heyfood.git",
+    "branch": "codex/rust-big-bang",
+    "code_commit_sha": "85ad15ae66538eafdfd1e3f4a34bf83ef680872b",
+    "evidence_commit_sha": null
+  },
+  "requirements": [
+    {
+      "id": "P1-1-core-contracts",
+      "status": "satisfied",
+      "evidence": ["crates/heyfood-core/src/error.rs", "crates/heyfood-core/src/validation.rs", "crates/heyfood-core/src/presentation.rs", "crates/heyfood-core/tests/contracts.rs"],
+      "blocker": null
+    },
+    {
+      "id": "P1-2-native-platform",
+      "status": "satisfied",
+      "evidence": ["crates/heyfood-platform/src/lib.rs", "crates/heyfood-platform/src/persistence.rs", "crates/heyfood-platform/tests/phase1_platform.rs"],
+      "blocker": null
+    },
+    {
+      "id": "P1-3-supervisor-and-snapshots",
+      "status": "satisfied",
+      "evidence": ["crates/heyfood-application/src/supervisor.rs", "crates/heyfood-application/src/state_writer.rs", "crates/heyfood-application/tests/phase1_foundation.rs"],
+      "blocker": null
+    },
+    {
+      "id": "P1-4-durable-mutation-boundary",
+      "status": "satisfied",
+      "evidence": ["crates/heyfood-application/tests/run_turn.rs", "crates/heyfood-platform/tests/native_persistence.rs"],
+      "blocker": null
+    },
+    {
+      "id": "P1-5-python-differential",
+      "status": "satisfied",
+      "evidence": ["fixtures/compat/phase1-core-python-0.4.0.json", "crates/heyfood-core/tests/contracts.rs"],
+      "blocker": null
+    },
+    {
+      "id": "P1-6-native-state-account-switch-and-import",
+      "status": "satisfied",
+      "evidence": ["crates/heyfood-platform/tests/phase1_platform.rs", "crates/heyfood-platform/tests/native_persistence.rs", "crates/heyfood-platform/tests/python_state_import.rs"],
+      "blocker": null
+    },
+    {
+      "id": "P1-7-provisional-grocery-seams",
+      "status": "satisfied",
+      "evidence": ["crates/heyfood-core/src/grocery.rs", "crates/heyfood-application/src/grocery.rs", "fixtures/contracts/grocery-backend/provenance.json"],
+      "blocker": null
+    },
+    {
+      "id": "P1-8-provider-neutral-health-seams",
+      "status": "satisfied",
+      "evidence": ["crates/heyfood-core/src/health.rs", "crates/heyfood-application/src/health.rs", "fixtures/contracts/health-h1h2.v1.json"],
+      "blocker": null
+    },
+    {
+      "id": "P1-9-dg-r3-three-os-hosted",
+      "status": "blocked",
+      "evidence": [".github/workflows/rust-ci.yml", "docs/release-evidence/rust-phase1/qualification-evidence.json"],
+      "blocker": "Exact evidence SHA must complete hosted macOS, Linux, and Windows CI, including target-native keyring/Credential Manager and the killable broker jobs."
+    },
+    {
+      "id": "P1-10-independent-rust-platform-security-review",
+      "status": "blocked",
+      "evidence": ["docs/release-evidence/rust-phase1/qualification-report.md"],
+      "blocker": "Independent specialized subagent review is in progress and must approve the exact evidence SHA."
+    }
+  ],
+  "external_gates": {
+    "grocery_phase_a_wire": {
+      "status": "deployment_and_canaries_required",
+      "authoritative_contract_sha": null,
+      "authoritative_contract_digest": null,
+      "permitted_phase1_scope": "generic_semantics_ports_and_id_only_cache",
+      "prohibited": ["final_wire_dtos", "grocery_rest_calls", "grocery_tool_binding"]
+    },
+    "kroger_token_storage": {
+      "status": "security_d2_required",
+      "integration_key_contract_sha": null,
+      "permitted_phase1_scope": "none",
+      "prohibited": ["provider_oauth_token_type", "provider_oauth_token_persistence", "provider_binding"]
+    },
+    "health": {
+      "status": "h1_h2_provider_neutral_seams_only",
+      "h1_h2_contract_sha": "7cfadc55c103257b588b237c65fe7b5031a3f745",
+      "h3_runtime_capability": false,
+      "provider_token_custody": "server_only"
+    }
+  },
+  "review": {
+    "status": "pending",
+    "reviewer": null,
+    "reviewed_commit_sha": null
+  }
+}

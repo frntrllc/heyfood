@@ -48,6 +48,14 @@ pub struct Phase0EvidenceReport {
     pub review_status: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Phase1EvidenceReport {
+    pub requirements: usize,
+    pub blockers: usize,
+    pub review_status: String,
+    pub hosted_status: String,
+}
+
 const FROZEN_COMPATIBILITY_SHA: &str = "73494a57468dac83b4904ce6c390e36926f5c6fe";
 const FROZEN_COMPATIBILITY_TREE: &str = "4c265cd9ae0623442dd8eba1f6f4388c4ebf5adf";
 const FROZEN_COMPATIBILITY_DIGEST: &str =
@@ -1225,6 +1233,270 @@ pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, Strin
     })
 }
 
+/// Validate Phase 1 evidence while preserving the two deliberately unresolved
+/// external boundaries. A structural pass is not an approval: blockers and the
+/// independent review status remain explicit in the returned report.
+pub fn verify_phase1_evidence(root: &Path) -> Result<Phase1EvidenceReport, String> {
+    let document = read_json(
+        root,
+        "docs/release-evidence/rust-phase1/phase1-inventory.json",
+    )?;
+    let inventory = document.object("Phase 1 inventory")?;
+    exact_keys(
+        inventory,
+        &[
+            "schema_version",
+            "evidence_date",
+            "rust_lineage",
+            "requirements",
+            "external_gates",
+            "review",
+        ],
+        "Phase 1 inventory",
+    )?;
+    expect_usize(inventory, "schema_version", 1, "Phase 1 inventory")?;
+    required_nonempty_string(inventory, "evidence_date", "Phase 1 inventory")?;
+
+    let lineage =
+        field(inventory, "rust_lineage", "Phase 1 inventory")?.object("Phase 1 rust lineage")?;
+    exact_keys(
+        lineage,
+        &[
+            "repository",
+            "branch",
+            "code_commit_sha",
+            "evidence_commit_sha",
+        ],
+        "Phase 1 rust lineage",
+    )?;
+    required_nonempty_string(lineage, "repository", "Phase 1 rust lineage")?;
+    required_nonempty_string(lineage, "branch", "Phase 1 rust lineage")?;
+    let code_sha = required_string(lineage, "code_commit_sha", "Phase 1 rust lineage")?;
+    validate_git_sha(code_sha, "Phase 1 rust_lineage.code_commit_sha")?;
+    if !matches!(
+        field(lineage, "evidence_commit_sha", "Phase 1 rust lineage")?,
+        Json::Null
+    ) {
+        validate_git_sha(
+            required_string(lineage, "evidence_commit_sha", "Phase 1 rust lineage")?,
+            "Phase 1 rust_lineage.evidence_commit_sha",
+        )?;
+    }
+
+    let requirements =
+        field(inventory, "requirements", "Phase 1 inventory")?.array("Phase 1 requirements")?;
+    if requirements.len() != 10 {
+        return Err("Phase 1 inventory must contain the ten approved requirements".to_owned());
+    }
+    let mut ids = BTreeSet::new();
+    let mut blockers = 0;
+    for (index, requirement) in requirements.iter().enumerate() {
+        let context = format!("Phase 1 requirements[{index}]");
+        let requirement = requirement.object(&context)?;
+        exact_keys(
+            requirement,
+            &["id", "status", "evidence", "blocker"],
+            &context,
+        )?;
+        let id = required_nonempty_string(requirement, "id", &context)?;
+        if !ids.insert(id) {
+            return Err(format!("duplicate Phase 1 requirement ID {id:?}"));
+        }
+        let evidence = field(requirement, "evidence", &context)?.array("evidence")?;
+        if evidence.is_empty() {
+            return Err(format!("{context}.evidence must not be empty"));
+        }
+        for value in evidence {
+            required_path_exists(root, value.string("Phase 1 evidence")?, &context)?;
+        }
+        match required_string(requirement, "status", &context)? {
+            "satisfied" => {
+                if !matches!(field(requirement, "blocker", &context)?, Json::Null) {
+                    return Err(format!("{context} satisfied requirement has a blocker"));
+                }
+            }
+            "blocked" => {
+                blockers += 1;
+                required_nonempty_string(requirement, "blocker", &context)?;
+            }
+            status => return Err(format!("{context}.status has invalid value {status:?}")),
+        }
+    }
+
+    let gates = field(inventory, "external_gates", "Phase 1 inventory")?
+        .object("Phase 1 external gates")?;
+    exact_keys(
+        gates,
+        &["grocery_phase_a_wire", "kroger_token_storage", "health"],
+        "Phase 1 external gates",
+    )?;
+    let grocery = field(gates, "grocery_phase_a_wire", "Phase 1 external gates")?
+        .object("Phase 1 Grocery gate")?;
+    exact_keys(
+        grocery,
+        &[
+            "status",
+            "authoritative_contract_sha",
+            "authoritative_contract_digest",
+            "permitted_phase1_scope",
+            "prohibited",
+        ],
+        "Phase 1 Grocery gate",
+    )?;
+    expect_string(
+        grocery,
+        "status",
+        "deployment_and_canaries_required",
+        "Phase 1 Grocery gate",
+    )?;
+    if !null_fields(
+        grocery,
+        &[
+            "authoritative_contract_sha",
+            "authoritative_contract_digest",
+        ],
+    )? {
+        return Err("Phase 1 must not claim final Grocery wire provenance".to_owned());
+    }
+    expect_string(
+        grocery,
+        "permitted_phase1_scope",
+        "generic_semantics_ports_and_id_only_cache",
+        "Phase 1 Grocery gate",
+    )?;
+    let grocery_prohibited = field(grocery, "prohibited", "Phase 1 Grocery gate")?
+        .array("Phase 1 Grocery prohibited list")?;
+    for required in [
+        "final_wire_dtos",
+        "grocery_rest_calls",
+        "grocery_tool_binding",
+    ] {
+        if !grocery_prohibited
+            .iter()
+            .any(|value| value.string("Grocery prohibition") == Ok(required))
+        {
+            return Err(format!("Phase 1 Grocery gate must prohibit {required}"));
+        }
+    }
+
+    let kroger = field(gates, "kroger_token_storage", "Phase 1 external gates")?
+        .object("Phase 1 Kroger gate")?;
+    exact_keys(
+        kroger,
+        &[
+            "status",
+            "integration_key_contract_sha",
+            "permitted_phase1_scope",
+            "prohibited",
+        ],
+        "Phase 1 Kroger gate",
+    )?;
+    expect_string(
+        kroger,
+        "status",
+        "security_d2_required",
+        "Phase 1 Kroger gate",
+    )?;
+    if !matches!(
+        field(
+            kroger,
+            "integration_key_contract_sha",
+            "Phase 1 Kroger gate"
+        )?,
+        Json::Null
+    ) {
+        return Err("Phase 1 must not claim a Security D2 key contract".to_owned());
+    }
+    expect_string(
+        kroger,
+        "permitted_phase1_scope",
+        "none",
+        "Phase 1 Kroger gate",
+    )?;
+
+    let health = field(gates, "health", "Phase 1 external gates")?.object("Phase 1 Health gate")?;
+    exact_keys(
+        health,
+        &[
+            "status",
+            "h1_h2_contract_sha",
+            "h3_runtime_capability",
+            "provider_token_custody",
+        ],
+        "Phase 1 Health gate",
+    )?;
+    expect_string(
+        health,
+        "status",
+        "h1_h2_provider_neutral_seams_only",
+        "Phase 1 Health gate",
+    )?;
+    validate_git_sha(
+        required_string(health, "h1_h2_contract_sha", "Phase 1 Health gate")?,
+        "Phase 1 Health h1_h2_contract_sha",
+    )?;
+    if field(health, "h3_runtime_capability", "Phase 1 Health gate")?
+        .boolean("Phase 1 Health h3_runtime_capability")?
+    {
+        return Err("Phase 1 H3 runtime capability must remain false".to_owned());
+    }
+    expect_string(
+        health,
+        "provider_token_custody",
+        "server_only",
+        "Phase 1 Health gate",
+    )?;
+
+    let qualification = read_json(
+        root,
+        "docs/release-evidence/rust-phase1/qualification-evidence.json",
+    )?;
+    let qualification = qualification.object("Phase 1 qualification evidence")?;
+    expect_string(
+        qualification,
+        "code_commit_sha",
+        code_sha,
+        "Phase 1 qualification evidence",
+    )?;
+    let hosted = field(qualification, "hosted", "Phase 1 qualification evidence")?
+        .object("Phase 1 hosted evidence")?;
+    let hosted_status = required_string(hosted, "status", "Phase 1 hosted evidence")?;
+    if !matches!(hosted_status, "pending" | "passed") {
+        return Err("Phase 1 hosted status must be pending or passed".to_owned());
+    }
+    let privacy = field(qualification, "privacy", "Phase 1 qualification evidence")?
+        .object("Phase 1 privacy evidence")?;
+    for name in [
+        "item_cache_contains_sensitive_labels",
+        "provider_oauth_token_model_present",
+    ] {
+        if field(privacy, name, "Phase 1 privacy evidence")?
+            .boolean(&format!("Phase 1 privacy evidence.{name}"))?
+        {
+            return Err(format!("Phase 1 privacy evidence.{name} must be false"));
+        }
+    }
+
+    let review = field(inventory, "review", "Phase 1 inventory")?.object("Phase 1 review")?;
+    let pending = validate_review(
+        field(inventory, "review", "Phase 1 inventory")?,
+        "Phase 1 review",
+    )?;
+    let review_status = required_string(review, "status", "Phase 1 review")?;
+    if !pending && (blockers != 0 || hosted_status != "passed") {
+        return Err(
+            "Phase 1 cannot be approved while blockers or hosted evidence remain".to_owned(),
+        );
+    }
+
+    Ok(Phase1EvidenceReport {
+        requirements: requirements.len(),
+        blockers,
+        review_status: review_status.to_owned(),
+        hosted_status: hosted_status.to_owned(),
+    })
+}
+
 fn validate_health_contract_provenance(root: &Path) -> Result<(), String> {
     let document = read_json(root, "fixtures/contracts/health-contract-provenance.json")?;
     let provenance = document.object("health contract provenance")?;
@@ -2382,7 +2654,7 @@ mod tests {
         import_grocery_contracts, validate_dependency_dag, validate_grok_pattern_provenance,
         validate_health_contract_provenance, verify_assets, verify_assets_approved,
         verify_grocery_contracts, verify_migration_ledger, verify_phase0_evidence,
-        verify_stable_contracts,
+        verify_phase1_evidence, verify_stable_contracts,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -2441,6 +2713,15 @@ mod tests {
         let phase0 = verify_phase0_evidence(&root()).expect("Phase 0 inventory must validate");
         assert_eq!(phase0.blockers, 0);
         assert_eq!(phase0.review_status, "approved");
+    }
+
+    #[test]
+    fn checked_in_phase1_evidence_preserves_external_gates() {
+        let phase1 = verify_phase1_evidence(&root()).expect("Phase 1 evidence must validate");
+        assert_eq!(phase1.requirements, 10);
+        assert_eq!(phase1.blockers, 2);
+        assert_eq!(phase1.hosted_status, "pending");
+        assert_eq!(phase1.review_status, "pending");
     }
 
     #[test]

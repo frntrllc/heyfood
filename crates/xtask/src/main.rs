@@ -88,6 +88,18 @@ fn main() {
                 )
             })
         }
+        Some("verify-phase1-evidence") => {
+            no_extra_arguments(&mut arguments);
+            xtask::verify_phase1_evidence(root).map(|report| {
+                format!(
+                    "Phase 1 inventory valid: {} requirements, {} blockers, hosted {}, review {}",
+                    report.requirements,
+                    report.blockers,
+                    report.hosted_status,
+                    report.review_status
+                )
+            })
+        }
         _ => usage(),
     };
 
@@ -108,7 +120,7 @@ fn no_extra_arguments(arguments: &mut impl Iterator<Item = String>) {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: cargo xtask <dependency-dag|verify-migration-ledger|verify-contracts|verify-grocery-contracts|import-grocery-contracts --source-repo PATH|verify-assets|verify-assets-approved|verify-phase0-evidence>"
+        "usage: cargo xtask <dependency-dag|verify-migration-ledger|verify-contracts|verify-grocery-contracts|import-grocery-contracts --source-repo PATH|verify-assets|verify-assets-approved|verify-phase0-evidence|verify-phase1-evidence>"
     );
     std::process::exit(2);
 }
