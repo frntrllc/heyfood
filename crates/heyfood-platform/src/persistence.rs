@@ -518,8 +518,47 @@ pub struct FileCredentialStore {
 /// cannot accidentally erase the channel grant required for re-exchange.
 #[derive(Clone, Debug)]
 pub struct NativeAuthStore {
+    #[cfg(not(windows))]
     state_path: PathBuf,
     lock_path: PathBuf,
+    reconciliation_path: PathBuf,
+    #[cfg(all(windows, feature = "native-credentials"))]
+    target: String,
+}
+
+/// Exclusive channel-refresh transaction. The lock is held from the second
+/// read through the remote rotation and its durable commit, preventing two
+/// CLI processes from consuming the same rotating refresh grant.
+pub struct NativeAuthRefreshGuard<'a> {
+    store: &'a NativeAuthStore,
+    _lock: FileLock,
+}
+
+#[cfg(any(not(windows), feature = "native-credentials"))]
+impl NativeAuthRefreshGuard<'_> {
+    pub fn load(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
+        self.store.ensure_reconciled_unlocked()?;
+        self.store.load_unlocked()
+    }
+
+    pub fn replace(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
+        self.store.replace_unlocked(bundle)?;
+        clear_any_reconciliation_marker(&self.store.reconciliation_path)
+    }
+
+    pub fn mark_reconciliation_required(&self) -> Result<(), PortError> {
+        AtomicFile::replace(
+            &self.store.reconciliation_path,
+            b"channel_refresh_outcome_uncertain\n",
+        )
+        .map_err(|error| PortError::uncertain("auth_reconciliation_write", error.to_string()))
+    }
+
+    /// Clear a write-ahead marker only after an observed response proves the
+    /// rotating grant was not accepted, or after the replacement is durable.
+    pub fn clear_reconciliation_required(&self) -> Result<(), PortError> {
+        clear_any_reconciliation_marker(&self.store.reconciliation_path)
+    }
 }
 
 impl NativeAuthStore {
@@ -530,17 +569,60 @@ impl NativeAuthStore {
         Ok(Self {
             state_path: root.join("auth.native"),
             lock_path: root.join("auth.lock"),
+            reconciliation_path: root.join("auth.reconciliation"),
         })
     }
 
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "native-credentials"))]
+    pub fn open(root: impl AsRef<Path>) -> Result<Self, PortError> {
+        use std::os::windows::ffi::OsStrExt;
+
+        let root = root.as_ref();
+        create_private_dir(root)?;
+        let mut identity = Vec::new();
+        for unit in root.as_os_str().encode_wide() {
+            identity.extend_from_slice(&unit.to_le_bytes());
+        }
+        Ok(Self {
+            lock_path: root.join("auth.lock"),
+            reconciliation_path: root.join("auth.reconciliation"),
+            target: format!(
+                "{WINDOWS_CREDENTIAL_SERVICE}:auth:{}",
+                hex_encode(&identity)
+            ),
+        })
+    }
+
+    /// Start a serialized refresh transaction. Callers must acquire this only
+    /// after a cheap initial load, then reload through the guard before making
+    /// a consuming refresh request.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn begin_refresh(&self) -> Result<NativeAuthRefreshGuard<'_>, PortError> {
+        Ok(NativeAuthRefreshGuard {
+            store: self,
+            _lock: FileLock::acquire(&self.lock_path, true)?,
+        })
+    }
+
+    fn ensure_reconciled_unlocked(&self) -> Result<(), PortError> {
+        if self.reconciliation_path.exists() {
+            return Err(PortError::uncertain(
+                "auth_reconciliation_required",
+                "channel credentials have an unresolved refresh outcome; stop and contact hello.food support for manual credential recovery before retrying",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(all(windows, not(feature = "native-credentials")))]
     pub fn open(_root: impl AsRef<Path>) -> Result<Self, PortError> {
         Err(PortError::new(
             "auth_file_unsupported",
-            "file authorization storage is disabled on Windows",
+            "native-credentials is required for authorization storage on Windows",
         ))
     }
 
+    #[cfg(not(windows))]
     pub fn initialize(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
         bundle
             .validate()
@@ -552,15 +634,167 @@ impl NativeAuthStore {
                 "an account is already connected; log out before registering another account",
             ));
         }
-        AtomicFile::replace(&self.state_path, &encode_auth_bundle(bundle))
+        AtomicFile::replace(&self.state_path, &encode_auth_bundle(bundle))?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
+    #[cfg(not(windows))]
     pub fn load(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
         let _lock = FileLock::acquire(&self.lock_path, false)?;
+        self.ensure_reconciled_unlocked()?;
+        self.load_unlocked()
+    }
+
+    #[cfg(not(windows))]
+    pub fn replace(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
+        bundle
+            .validate()
+            .map_err(|error| PortError::new("auth_validation", error))?;
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        self.replace_unlocked(bundle)?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
+    }
+
+    #[cfg(not(windows))]
+    fn load_unlocked(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
         if !self.state_path.exists() {
             return Ok(None);
         }
         decode_auth_bundle(&read_limited(&self.state_path, 1024 * 1024)?).map(Some)
+    }
+
+    #[cfg(not(windows))]
+    fn replace_unlocked(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
+        bundle
+            .validate()
+            .map_err(|error| PortError::new("auth_validation", error))?;
+        if !self.state_path.exists() {
+            return Err(PortError::new(
+                "auth_missing",
+                "authorization state is missing",
+            ));
+        }
+        AtomicFile::replace(&self.state_path, &encode_auth_bundle(bundle))
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    pub fn initialize(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
+        bundle
+            .validate()
+            .map_err(|error| PortError::new("auth_validation", error))?;
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.read_windows_unlocked()?.is_some() {
+            return Err(PortError::new(
+                "auth_exists",
+                "an account is already connected; log out before registering another account",
+            ));
+        }
+        let document = encode_auth_bundle(bundle);
+        if document.len() > WINDOWS_CREDENTIAL_BLOB_MAX_BYTES {
+            return Err(PortError::new(
+                "credential_manager_size",
+                "authorization document exceeds the Windows Credential Manager limit",
+            ));
+        }
+        self.windows_entry()?
+            .set_secret(&document)
+            .map_err(|error| keyring_error("credential_manager_write", error))?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    pub fn load(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, false)?;
+        self.ensure_reconciled_unlocked()?;
+        self.load_unlocked()
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    pub fn replace(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
+        bundle
+            .validate()
+            .map_err(|error| PortError::new("auth_validation", error))?;
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        self.replace_unlocked(bundle)?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    fn load_unlocked(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
+        self.read_windows_unlocked()
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    fn replace_unlocked(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
+        bundle
+            .validate()
+            .map_err(|error| PortError::new("auth_validation", error))?;
+        if self.read_windows_unlocked()?.is_none() {
+            return Err(PortError::new(
+                "auth_missing",
+                "authorization state is missing",
+            ));
+        }
+        let document = encode_auth_bundle(bundle);
+        if document.len() > WINDOWS_CREDENTIAL_BLOB_MAX_BYTES {
+            return Err(PortError::new(
+                "credential_manager_size",
+                "authorization document exceeds the Windows Credential Manager limit",
+            ));
+        }
+        self.windows_entry()?
+            .set_secret(&document)
+            .map_err(|error| keyring_error("credential_manager_write", error))
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    pub fn delete(&self) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        match self.windows_entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {
+                clear_any_reconciliation_marker(&self.reconciliation_path)
+            }
+            Err(error) => Err(keyring_error("credential_manager_delete", error)),
+        }
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    fn windows_entry(&self) -> Result<keyring::Entry, PortError> {
+        keyring::Entry::new_with_target(&self.target, WINDOWS_CREDENTIAL_SERVICE, "authorization")
+            .map_err(|error| keyring_error("credential_manager_entry", error))
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    fn read_windows_unlocked(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
+        match self.windows_entry()?.get_secret() {
+            Ok(document) => decode_auth_bundle(&document).map(Some),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(keyring_error("credential_manager_read", error)),
+        }
+    }
+
+    #[cfg(all(windows, not(feature = "native-credentials")))]
+    pub fn initialize(&self, _bundle: &AuthCredentialBundle) -> Result<(), PortError> {
+        Err(PortError::new(
+            "auth_file_unsupported",
+            "native-credentials is required for authorization storage on Windows",
+        ))
+    }
+
+    #[cfg(all(windows, not(feature = "native-credentials")))]
+    pub fn load(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
+        Err(PortError::new(
+            "auth_file_unsupported",
+            "native-credentials is required for authorization storage on Windows",
+        ))
+    }
+
+    #[cfg(all(windows, not(feature = "native-credentials")))]
+    pub fn replace(&self, _bundle: &AuthCredentialBundle) -> Result<(), PortError> {
+        Err(PortError::new(
+            "auth_file_unsupported",
+            "native-credentials is required for authorization storage on Windows",
+        ))
     }
 }
 

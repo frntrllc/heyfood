@@ -2,19 +2,25 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ensure_session;
 pub mod grocery;
 pub mod health;
+pub mod one_shot_turn;
 pub mod ports;
 pub mod run_turn;
 pub mod state_writer;
 pub mod supervisor;
 
+pub use ensure_session::{EnsureSession, EnsureSessionError, EnsureSessionOutcome};
 pub use grocery::{
     GroceryCacheKey, GroceryItemReferenceCache, GroceryListSnapshot, GroceryMutationIntent,
     GroceryPort, PreparedGroceryMutation,
 };
 pub use health::{
     HealthAuthorization, HealthConnection, HealthContext, HealthManagementOutcome, HealthPort,
+};
+pub use one_shot_turn::{
+    MAX_ONE_SHOT_EVENTS, MAX_ONE_SHOT_STREAM_BYTES, OneShotTurnResult, execute_one_shot_turn,
 };
 
 pub use ports::{

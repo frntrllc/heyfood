@@ -4,11 +4,594 @@
 
 use std::{fmt, io, time::Duration};
 
+use heyfood_agent_runtime::{GroceryExport, HttpService};
+use heyfood_application::{
+    EnsureSession, EnsureSessionError, EnsureSessionOutcome, RefreshPolicy, TurnContext,
+    TurnRequest, execute_one_shot_turn,
+};
+use heyfood_cli::{
+    AskArgs, Command, GroceryCommand, HealthCommand, OutputMode, render_agent_result,
+    render_grocery_list, render_grocery_proposal, render_health_context, render_json,
+};
+use heyfood_core::{
+    AddItemsRequestWire, GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId,
+    GroceryItemInputWire, GroceryListVersion, GroceryMutationConfirmRequestWire, OperationId,
+    RemoveItemsRequestWire, SessionCredentials, UpdateItemStateRequestWire, terminal_safe_text,
+};
 use heyfood_tui::{Effect, ExitReason, RuntimeEvent, TuiError};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
-pub const QUALIFICATION_MESSAGE: &str = "The native interactive session cannot start in this build. Use a native one-shot command such as `heyfood register`; run `heyfood -h` for available commands.";
 pub const QUALIFIED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+pub const MAX_CONFIRMATION_STDIN_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct OneShotError {
+    pub code: &'static str,
+    pub message: String,
+    pub outcome_uncertain: bool,
+}
+
+impl fmt::Debug for OneShotError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OneShotError")
+            .field("code", &self.code)
+            .field("message", &"[REDACTED]")
+            .field("outcome_uncertain", &self.outcome_uncertain)
+            .finish()
+    }
+}
+
+impl fmt::Display for OneShotError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for OneShotError {}
+
+impl From<heyfood_application::PortError> for OneShotError {
+    fn from(value: heyfood_application::PortError) -> Self {
+        Self {
+            code: value.code,
+            message: value.message,
+            outcome_uncertain: value.outcome_uncertain,
+        }
+    }
+}
+
+impl From<EnsureSessionError> for OneShotError {
+    fn from(value: EnsureSessionError) -> Self {
+        let (code, outcome_uncertain) = match &value {
+            EnsureSessionError::ReconciliationRequired => ("session_reconciliation_required", true),
+            EnsureSessionError::Service(error) => (error.code, error.outcome_uncertain),
+            EnsureSessionError::ServiceReconciliationRequired(_) => {
+                ("session_refresh_outcome_uncertain", true)
+            }
+            EnsureSessionError::CredentialReconciliationRequired(_) => {
+                ("session_refresh_persistence_uncertain", true)
+            }
+            EnsureSessionError::ReconciliationMarkerWrite { .. } => {
+                ("session_reconciliation_marker_write", true)
+            }
+        };
+        Self {
+            code,
+            message: terminal_safe_text(&value.to_string()),
+            outcome_uncertain,
+        }
+    }
+}
+
+/// Phase 2 executor over explicit, already-validated native state. The public
+/// binary constructs this for the native command families it advertises.
+pub struct OneShotExecutor<'a> {
+    service: &'a HttpService,
+    credentials: &'a SessionCredentials,
+    output_mode: OutputMode,
+}
+
+/// Refresh and durably reconcile the session before entering any authenticated
+/// one-shot command. A refresh cancellation observed before dispatch never
+/// reaches the command; accepted rotations are committed by `EnsureSession`
+/// before this function constructs the executor.
+pub async fn execute_qualified_one_shot(
+    service: &HttpService,
+    ensure_session: &EnsureSession,
+    snapshot: heyfood_core::SessionSnapshot,
+    output_mode: OutputMode,
+    command: Command,
+    stdin: &[u8],
+    cancellation: CancellationToken,
+) -> Result<String, OneShotError> {
+    let credentials = match ensure_session
+        .execute(snapshot, cancellation.child_token())
+        .await
+        .map_err(OneShotError::from)?
+    {
+        EnsureSessionOutcome::Current(credentials)
+        | EnsureSessionOutcome::Refreshed(credentials) => credentials,
+        EnsureSessionOutcome::CancelledBeforeDispatch => {
+            return Err(OneShotError::new(
+                "session_cancelled_before_dispatch",
+                "session refresh was cancelled before dispatch",
+            ));
+        }
+    };
+    OneShotExecutor::new(service, &credentials, output_mode)
+        .execute(command, stdin, cancellation)
+        .await
+}
+
+impl<'a> OneShotExecutor<'a> {
+    #[must_use]
+    pub const fn new(
+        service: &'a HttpService,
+        credentials: &'a SessionCredentials,
+        output_mode: OutputMode,
+    ) -> Self {
+        Self {
+            service,
+            credentials,
+            output_mode,
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        command: Command,
+        stdin: &[u8],
+        cancellation: CancellationToken,
+    ) -> Result<String, OneShotError> {
+        match command {
+            Command::Ask(arguments) | Command::Log(arguments) | Command::Item(arguments) => {
+                self.execute_agent(arguments, stdin, cancellation).await
+            }
+            Command::Reply(arguments) => {
+                if arguments.conversation_id.is_none() {
+                    return Err(OneShotError::new(
+                        "conversation_required",
+                        "native reply requires --conversation-id until conversation persistence is implemented",
+                    ));
+                }
+                self.execute_agent(arguments, stdin, cancellation).await
+            }
+            Command::Grocery { command } => {
+                self.execute_grocery(command, stdin, cancellation).await
+            }
+            Command::Health { command } => self.execute_health(command, cancellation).await,
+            Command::Completion { shell } => {
+                String::from_utf8(heyfood_cli::generate_completion(shell)).map_err(|_| {
+                    OneShotError::new("completion_encoding", "completion output is invalid UTF-8")
+                })
+            }
+            _ => Err(OneShotError::new(
+                "phase2_parity_pending",
+                "this command is present for topology parity but its Phase 2 use case is not yet qualified",
+            )),
+        }
+    }
+
+    async fn execute_agent(
+        &self,
+        arguments: AskArgs,
+        stdin: &[u8],
+        cancellation: CancellationToken,
+    ) -> Result<String, OneShotError> {
+        let prompt = if arguments.text.is_empty() {
+            if stdin.is_empty() || stdin.len() > MAX_CONFIRMATION_STDIN_BYTES {
+                return Err(OneShotError::new(
+                    "invalid_prompt",
+                    "prompt text or at most 1 MiB of UTF-8 stdin is required",
+                ));
+            }
+            std::str::from_utf8(stdin)
+                .map_err(|_| OneShotError::new("invalid_prompt", "prompt stdin is not UTF-8"))?
+                .trim_end_matches(['\r', '\n'])
+                .to_owned()
+        } else {
+            arguments.prompt()
+        };
+        let prompt = bounded_text(prompt, MAX_CONFIRMATION_STDIN_BYTES, "prompt")?;
+        let result = execute_one_shot_turn(
+            self.service,
+            TurnRequest {
+                prompt,
+                conversation_id: arguments.conversation_id,
+                context: TurnContext {
+                    latitude: arguments.latitude,
+                    longitude: arguments.longitude,
+                    ..TurnContext::default()
+                },
+                refresh: RefreshPolicy::Never,
+            },
+            self.credentials.clone(),
+            OperationId::new(),
+            cancellation,
+        )
+        .await?;
+        Ok(render_agent_result(&result.document, self.output_mode))
+    }
+
+    async fn execute_grocery(
+        &self,
+        command: GroceryCommand,
+        stdin: &[u8],
+        cancellation: CancellationToken,
+    ) -> Result<String, OneShotError> {
+        let capabilities = self
+            .service
+            .discover_capabilities(cancellation.child_token())
+            .await?;
+        HttpService::require_grocery_v1(&capabilities)?;
+        match command {
+            GroceryCommand::List => {
+                let list = self
+                    .service
+                    .grocery_list(
+                        &capabilities,
+                        self.credentials,
+                        OperationId::new(),
+                        cancellation,
+                    )
+                    .await?;
+                Ok(render_grocery_list(&list, self.output_mode))
+            }
+            GroceryCommand::Add(arguments) => {
+                if arguments.items.len() > 25 {
+                    return Err(OneShotError::new(
+                        "grocery_item_count",
+                        "a Grocery add request may contain at most 25 items",
+                    ));
+                }
+                let request = AddItemsRequestWire {
+                    list_id: parse_list_id(&arguments.list.list_id)?,
+                    expected_version: parse_list_version(arguments.list.version)?,
+                    items: arguments
+                        .items
+                        .into_iter()
+                        .map(|name| {
+                            let name = bounded_text(name, 255, "grocery item name")?;
+                            Ok(GroceryItemInputWire {
+                                name,
+                                quantity: None,
+                                unit: None,
+                                package_quantity: None,
+                                note: None,
+                                intended_for: arguments.intended_for.clone(),
+                                source_type: "manual".into(),
+                                source_ref: None,
+                                source_detail: None,
+                            })
+                        })
+                        .collect::<Result<_, OneShotError>>()?,
+                };
+                let proposal = self
+                    .service
+                    .grocery_prepare_add(
+                        &capabilities,
+                        self.credentials,
+                        OperationId::new(),
+                        &request,
+                        cancellation,
+                    )
+                    .await?;
+                Ok(render_grocery_proposal(&proposal, self.output_mode))
+            }
+            GroceryCommand::Remove(arguments) => {
+                let (list_id, version, item_ids) = self
+                    .resolve_references(
+                        &capabilities,
+                        &arguments.list.list_id,
+                        arguments.list.version,
+                        &arguments.items,
+                        cancellation.child_token(),
+                    )
+                    .await?;
+                let proposal = self
+                    .service
+                    .grocery_prepare_remove(
+                        &capabilities,
+                        self.credentials,
+                        OperationId::new(),
+                        &RemoveItemsRequestWire {
+                            list_id,
+                            expected_version: version,
+                            item_ids,
+                        },
+                        cancellation,
+                    )
+                    .await?;
+                Ok(render_grocery_proposal(&proposal, self.output_mode))
+            }
+            GroceryCommand::State(arguments) => {
+                let (list_id, version, item_ids) = self
+                    .resolve_references(
+                        &capabilities,
+                        &arguments.list.list_id,
+                        arguments.list.version,
+                        std::slice::from_ref(&arguments.item),
+                        cancellation.child_token(),
+                    )
+                    .await?;
+                let proposal = self
+                    .service
+                    .grocery_prepare_state(
+                        &capabilities,
+                        self.credentials,
+                        OperationId::new(),
+                        &UpdateItemStateRequestWire {
+                            list_id,
+                            expected_version: version,
+                            item_id: item_ids.into_iter().next().ok_or_else(|| {
+                                OneShotError::new("grocery_item_reference", "item is required")
+                            })?,
+                            state: arguments.state.into(),
+                        },
+                        cancellation,
+                    )
+                    .await?;
+                Ok(render_grocery_proposal(&proposal, self.output_mode))
+            }
+            GroceryCommand::Export(arguments) => {
+                let export = self
+                    .service
+                    .grocery_export(
+                        &capabilities,
+                        self.credentials,
+                        OperationId::new(),
+                        parse_list_id(&arguments.list_id)?,
+                        arguments.format.as_wire_value(),
+                        cancellation,
+                    )
+                    .await?;
+                match export {
+                    GroceryExport::Json(list) => render_json(&list).map_err(|_| {
+                        OneShotError::new("output_json", "could not encode Grocery export")
+                    }),
+                    GroceryExport::Markdown(text) | GroceryExport::Text(text) => Ok(text),
+                }
+            }
+            GroceryCommand::Confirm(arguments) => {
+                if !arguments.proposal_stdin {
+                    return Err(OneShotError::new(
+                        "confirmation_input",
+                        "confirmation proposals must be read from stdin",
+                    ));
+                }
+                if stdin.is_empty() || stdin.len() > MAX_CONFIRMATION_STDIN_BYTES {
+                    return Err(OneShotError::new(
+                        "confirmation_input",
+                        "confirmation proposal stdin must contain at most 1 MiB",
+                    ));
+                }
+                let proposal: heyfood_core::GroceryMutationProposalWire =
+                    serde_json::from_slice(stdin).map_err(|_| {
+                        OneShotError::new(
+                            "confirmation_input",
+                            "confirmation proposal stdin is invalid JSON",
+                        )
+                    })?;
+                let result = self
+                    .service
+                    .grocery_confirm(
+                        &capabilities,
+                        self.credentials,
+                        OperationId::new(),
+                        &GroceryMutationConfirmRequestWire {
+                            confirmation_token: GroceryConfirmationToken::parse(
+                                proposal
+                                    .confirmation_token
+                                    .expose_at_transport_boundary()
+                                    .to_owned(),
+                            )
+                            .map_err(|message| OneShotError::new("confirmation_input", message))?,
+                            decision: GroceryDecisionWire::from(arguments.decision),
+                        },
+                        cancellation,
+                    )
+                    .await?;
+                render_json(&result).map_err(|_| {
+                    OneShotError::new("output_json", "could not encode confirmation result")
+                })
+            }
+        }
+    }
+
+    async fn execute_health(
+        &self,
+        command: HealthCommand,
+        cancellation: CancellationToken,
+    ) -> Result<String, OneShotError> {
+        match command {
+            HealthCommand::Status => {
+                let integrations = self
+                    .service
+                    .health_integrations(self.credentials, OperationId::new(), cancellation)
+                    .await?;
+                if self.output_mode == OutputMode::Json {
+                    return render_json(&integrations).map_err(|_| {
+                        OneShotError::new("output_json", "could not encode integration status")
+                    });
+                }
+                let mut output = String::new();
+                if integrations.integrations.is_empty() {
+                    output.push_str("No health integrations connected.\n");
+                }
+                for integration in integrations.integrations {
+                    let provider = serde_json::to_value(integration.provider)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| "provider".into());
+                    let status = serde_json::to_value(integration.status)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| "unknown".into());
+                    output.push_str(&format!("{provider}: {status}\n"));
+                }
+                Ok(output)
+            }
+            HealthCommand::Show => {
+                let context = self
+                    .service
+                    .health_context(self.credentials, OperationId::new(), cancellation)
+                    .await?;
+                Ok(render_health_context(&context, self.output_mode))
+            }
+            HealthCommand::Connect(arguments) => {
+                ensure_oura(arguments.provider)?;
+                let authorization = self
+                    .service
+                    .health_authorize_oura(self.credentials, OperationId::new(), cancellation)
+                    .await?;
+                if self.output_mode == OutputMode::Json {
+                    render_json(&authorization).map_err(|_| {
+                        OneShotError::new("output_json", "could not encode authorization")
+                    })
+                } else {
+                    Ok(format!(
+                        "Open this authorization URL in your browser:\n{}\n",
+                        terminal_safe_text(&authorization.auth_url)
+                    ))
+                }
+            }
+            HealthCommand::Sync(arguments) => {
+                ensure_oura(arguments.provider)?;
+                let result = self
+                    .service
+                    .health_sync_oura(self.credentials, OperationId::new(), cancellation)
+                    .await?;
+                render_json(&result)
+                    .map_err(|_| OneShotError::new("output_json", "could not encode sync result"))
+            }
+            HealthCommand::Disconnect(arguments) => {
+                ensure_oura(arguments.provider.provider)?;
+                if !arguments.yes {
+                    return Err(OneShotError::new(
+                        "confirmation_required",
+                        "health disconnect requires --yes",
+                    ));
+                }
+                let result = self
+                    .service
+                    .health_disconnect_oura(self.credentials, OperationId::new(), cancellation)
+                    .await?;
+                render_json(&result).map_err(|_| {
+                    OneShotError::new("output_json", "could not encode disconnect result")
+                })
+            }
+        }
+    }
+
+    async fn resolve_references(
+        &self,
+        capabilities: &heyfood_core::ApplicationCapabilitiesWire,
+        requested_list_id: &str,
+        requested_version: u64,
+        references: &[String],
+        cancellation: CancellationToken,
+    ) -> Result<(GroceryEntityId, GroceryListVersion, Vec<String>), OneShotError> {
+        let list_id = parse_list_id(requested_list_id)?;
+        let version = parse_list_version(requested_version)?;
+        let list = self
+            .service
+            .grocery_list(
+                capabilities,
+                self.credentials,
+                OperationId::new(),
+                cancellation,
+            )
+            .await?;
+        if list.id != list_id.as_uuid().hyphenated().to_string() || list.version != version.get() {
+            return Err(OneShotError::new(
+                "version_conflict",
+                "the active Grocery list identity or version changed; fetch it again",
+            ));
+        }
+        let item_ids = references
+            .iter()
+            .map(|reference| {
+                if let Some(index) = reference.strip_prefix('#') {
+                    let index = index.parse::<usize>().map_err(|_| {
+                        OneShotError::new(
+                            "grocery_item_reference",
+                            "Grocery item index must be written as #N",
+                        )
+                    })?;
+                    if index == 0 {
+                        return Err(OneShotError::new(
+                            "grocery_item_reference",
+                            "Grocery item indexes are one-based",
+                        ));
+                    }
+                    list.items
+                        .get(index - 1)
+                        .map(|item| item.id.clone())
+                        .ok_or_else(|| {
+                            OneShotError::new(
+                                "grocery_item_reference",
+                                "Grocery item index is outside the current list",
+                            )
+                        })
+                } else {
+                    bounded_text(reference.clone(), 255, "grocery item ID")
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((list_id, version, item_ids))
+    }
+}
+
+impl OneShotError {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            outcome_uncertain: false,
+        }
+    }
+}
+
+fn parse_list_id(value: &str) -> Result<GroceryEntityId, OneShotError> {
+    GroceryEntityId::parse(value).map_err(|message| OneShotError::new("grocery_list_id", message))
+}
+
+fn parse_list_version(value: u64) -> Result<GroceryListVersion, OneShotError> {
+    GroceryListVersion::new(value)
+        .map_err(|message| OneShotError::new("grocery_list_version", message))
+}
+
+fn bounded_text(
+    value: String,
+    maximum: usize,
+    label: &'static str,
+) -> Result<String, OneShotError> {
+    if value.trim() != value || value.is_empty() || value.len() > maximum {
+        return Err(OneShotError::new(
+            "invalid_argument",
+            format!("{label} is invalid"),
+        ));
+    }
+    let value = terminal_safe_text(&value);
+    if value.is_empty() {
+        return Err(OneShotError::new(
+            "invalid_argument",
+            format!("{label} is invalid"),
+        ));
+    }
+    Ok(value)
+}
+
+fn ensure_oura(provider: heyfood_cli::HealthProviderArgument) -> Result<(), OneShotError> {
+    if !matches!(provider, heyfood_cli::HealthProviderArgument::Oura) {
+        return Err(OneShotError::new(
+            "health_provider",
+            "only provider-neutral Oura management is implemented",
+        ));
+    }
+    Ok(())
+}
 
 /// Runtime supervisor boundary used only after bootstrap has validated every
 /// required input. Implementations must enqueue work and return promptly; the
@@ -175,14 +758,6 @@ mod tests {
 
         route_effect(&mut driver, &sender, Effect::CancelTurn { operation_id: 7 }).unwrap();
         assert_eq!(driver.cancelled, [7]);
-    }
-
-    #[test]
-    fn qualification_message_is_fail_closed_and_does_not_advertise_a_spike_flag() {
-        assert!(QUALIFICATION_MESSAGE.contains("cannot start"));
-        assert!(QUALIFICATION_MESSAGE.contains("heyfood register"));
-        assert!(!QUALIFICATION_MESSAGE.contains("Python"));
-        assert!(!QUALIFICATION_MESSAGE.contains("--"));
     }
 
     #[test]

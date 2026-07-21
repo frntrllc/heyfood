@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod registration;
+mod service_api;
 mod sse;
 
 use std::time::Duration;
@@ -19,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 pub use registration::{
     DeviceAuthorization, RegistrationClient, RegistrationError, RegistrationOutcome,
 };
+pub use service_api::GroceryExport;
 pub use sse::SseEventStream;
 
 /// The package version shared by the native workspace.
@@ -314,6 +316,8 @@ impl ServicePort for HttpService {
             }
             let mut builder = client
                 .post(endpoint)
+                // Preserve the released Python request contract. The response
+                // is still required to be text/event-stream before parsing.
                 .header("Accept", "application/json")
                 .header("X-App-Client-ID", "heyfood-cli")
                 .header("X-Device-ID", &cli_auth.device_id)

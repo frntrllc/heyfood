@@ -120,6 +120,13 @@ struct DeviceTokenRequest<'a> {
     device_code: &'a str,
 }
 
+#[derive(Serialize)]
+struct ChannelRefreshRequest<'a> {
+    grant_type: &'static str,
+    client_id: &'a str,
+    refresh_token: &'a str,
+}
+
 #[derive(Deserialize)]
 struct OAuthTokenResponse {
     access_token: String,
@@ -229,6 +236,79 @@ impl RegistrationClient {
         Ok(capabilities)
     }
 
+    /// Rotate an expired channel grant before it is needed for app-session
+    /// re-exchange. Callers must durably replace the complete auth bundle
+    /// before using the returned access token.
+    pub async fn refresh_channel(
+        &self,
+        current: &ChannelCredentials,
+    ) -> Result<ChannelCredentials, RegistrationError> {
+        let response = self
+            .client
+            .post(self.endpoint("/v1/channel/oauth/token")?)
+            .header("Accept", "application/json")
+            .header("X-Request-ID", OperationId::new().as_uuid().to_string())
+            .json(&ChannelRefreshRequest {
+                grant_type: "refresh_token",
+                client_id: &current.client_id,
+                refresh_token: current.refresh_token.expose_secret(),
+            })
+            .send()
+            .await
+            .map_err(|_| {
+                RegistrationError::uncertain(
+                    "channel_refresh_outcome_uncertain",
+                    "The channel credential refresh response was not observed. Reconcile account state before retrying.",
+                )
+            })?;
+        if response.status().is_server_error() {
+            return Err(RegistrationError::uncertain(
+                "channel_refresh_outcome_uncertain",
+                "The channel refresh may have rotated before the service returned an error. Reconcile account state before retrying.",
+            ));
+        }
+        if !response.status().is_success() {
+            return Err(RegistrationError::new(
+                "login_required",
+                "The channel authorization expired. Contact hello.food support to reset the connection, then register again.",
+            ));
+        }
+        let refreshed: OAuthTokenResponse = response.json().await.map_err(|_| {
+            RegistrationError::uncertain(
+                "channel_refresh_contract_uncertain",
+                "The channel credential was rotated but its response was invalid. Reconcile account state before retrying.",
+            )
+        })?;
+        if refreshed.access_token.is_empty()
+            || refreshed.refresh_token.is_empty()
+            || refreshed.expires_in == 0
+            || refreshed.scope.split_whitespace().collect::<Vec<_>>()
+                != current.scope.split_whitespace().collect::<Vec<_>>()
+        {
+            return Err(RegistrationError::uncertain(
+                "channel_refresh_contract_uncertain",
+                "The channel credential was rotated with an invalid contract. Reconcile account state before retrying.",
+            ));
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |value| value.as_secs());
+        ChannelCredentials::from_unix_expiry(
+            current.client_id.clone(),
+            current.device_id.clone(),
+            SensitiveString::new(refreshed.access_token),
+            SensitiveString::new(refreshed.refresh_token),
+            i64::try_from(now.saturating_add(refreshed.expires_in)).unwrap_or(i64::MAX),
+            refreshed.scope,
+        )
+        .map_err(|_| {
+            RegistrationError::uncertain(
+                "channel_refresh_contract_uncertain",
+                "The channel credential was rotated with invalid bounds. Reconcile account state before retrying.",
+            )
+        })
+    }
+
     pub async fn start_device_registration(
         &self,
     ) -> Result<DeviceAuthorization, RegistrationError> {
@@ -316,7 +396,6 @@ impl RegistrationClient {
             tokio::time::Instant::now() + maximum_wait.max(Duration::from_secs(1)),
         );
         let mut interval = authorization.interval;
-        let mut consecutive_transport_failures = 0_u8;
         let mut consecutive_server_failures = 0_u8;
         let oauth = loop {
             if tokio::time::Instant::now() >= deadline {
@@ -325,31 +404,22 @@ impl RegistrationClient {
                     "The approval window ended. Run heyfood register again.",
                 ));
             }
-            let response = tokio::select! {
-                () = cancellation.cancelled() => return Err(RegistrationError::new("cancelled", "Registration canceled. Nothing was saved.")),
-                result = self.poll_device_token(&authorization) => result,
-            };
-            let response = match response {
-                Ok(response) => {
-                    consecutive_transport_failures = 0;
-                    response
-                }
-                Err(error) if error.retryable => {
-                    consecutive_transport_failures =
-                        consecutive_transport_failures.saturating_add(1);
-                    if consecutive_transport_failures >= 10 {
-                        return Err(error);
-                    }
-                    sleep_before_next_poll(interval, deadline, &cancellation).await?;
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
+            // Cancellation is clean only before the consuming token request is
+            // dispatched. Once dispatched, observe its bounded response rather
+            // than dropping the future: a successful exchange consumes the
+            // device grant, so its outcome must not be reported as retryable.
+            if cancellation.is_cancelled() {
+                return Err(RegistrationError::new(
+                    "cancelled",
+                    "Registration canceled. Nothing was saved.",
+                ));
+            }
+            let response = self.poll_device_token(&authorization).await?;
             if response.status().is_success() {
                 break response.json::<OAuthTokenResponse>().await.map_err(|_| {
-                    RegistrationError::new(
-                        "auth_contract_error",
-                        "Device token exchange returned an unsupported response.",
+                    RegistrationError::uncertain(
+                        "device_token_contract_uncertain",
+                        "The device authorization was consumed, but its token response was unsupported. Reconcile account state before retrying registration.",
                     )
                 })?;
             }
@@ -399,21 +469,14 @@ impl RegistrationClient {
         };
         if oauth.access_token.is_empty() || oauth.refresh_token.is_empty() || oauth.scope.is_empty()
         {
-            return Err(RegistrationError::new(
-                "auth_contract_error",
-                "Device token exchange returned incomplete credentials.",
+            return Err(RegistrationError::uncertain(
+                "device_token_contract_uncertain",
+                "The device authorization was consumed, but its token response was incomplete. Reconcile account state before retrying registration.",
             ));
         }
-        // Cancellation remains clean only before the session POST dispatch.
-        // Once dispatched, the backend may commit a trusted device and session;
-        // we therefore wait for the client's finite request deadline instead of
-        // dropping the response future on Ctrl-C.
-        if cancellation.is_cancelled() {
-            return Err(RegistrationError::new(
-                "cancelled",
-                "Registration canceled before session exchange. Nothing was saved.",
-            ));
-        }
+        // A successful device-token response consumed the grant. Finish the
+        // bounded session exchange even if cancellation arrived while that
+        // response was in flight, preserving the known authorization outcome.
         let session = self
             .exchange_cli_session(&oauth.access_token, &device_id)
             .await?;
@@ -430,9 +493,9 @@ impl RegistrationClient {
             oauth.scope,
         )
         .map_err(|_| {
-            RegistrationError::new(
-                "auth_contract_error",
-                "Device token exchange returned invalid credentials.",
+            RegistrationError::uncertain(
+                "device_token_contract_uncertain",
+                "The device authorization was consumed, but its token credentials were invalid. Reconcile account state before retrying registration.",
             )
         })?;
         let profile_status = self
@@ -463,9 +526,9 @@ impl RegistrationClient {
             .send()
             .await
             .map_err(|_| {
-                RegistrationError::retryable(
-                    "device_token",
-                    "Could not reach hello.food while waiting for approval.",
+                RegistrationError::uncertain(
+                    "device_token_outcome_uncertain",
+                    "hello.food may have consumed the device authorization, but the native client could not observe the token response. Do not retry registration until account state is reconciled.",
                 )
             })
     }
@@ -752,6 +815,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancellation_after_device_token_dispatch_waits_for_response_and_completes() {
+        let token_seen = Arc::new(Notify::new());
+        let release_token = Arc::new(Notify::new());
+        let (base_url, server) = fixture_server_with_token(DeviceTokenBehavior::Wait {
+            seen: token_seen.clone(),
+            release: release_token.clone(),
+        })
+        .await;
+        let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let client = RegistrationClient::new(service_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let authorization = client.start_device_registration().await.unwrap();
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+        let task = tokio::spawn(async move {
+            client
+                .complete_device_registration(
+                    authorization,
+                    "heyfood-test-device".into(),
+                    Duration::from_secs(5),
+                    task_cancellation,
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), token_seen.notified())
+            .await
+            .unwrap();
+        cancellation.cancel();
+        release_token.notify_one();
+        let result = task.await.unwrap().unwrap();
+        assert_eq!(result.profile_status, ProfileStatus::Ready);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn eof_after_device_token_dispatch_is_explicitly_outcome_uncertain() {
+        let (base_url, server) = fixture_server_with_token(DeviceTokenBehavior::Eof).await;
+        let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let client = RegistrationClient::new(service_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let authorization = client.start_device_registration().await.unwrap();
+        let error = client
+            .complete_device_registration(
+                authorization,
+                "heyfood-test-device".into(),
+                Duration::from_secs(5),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "device_token_outcome_uncertain");
+        assert!(error.outcome_uncertain);
+        assert!(!error.retryable);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn malformed_success_after_device_grant_consumption_is_outcome_uncertain() {
+        let (base_url, server) =
+            fixture_server_with_token(DeviceTokenBehavior::MalformedSuccess).await;
+        let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let client = RegistrationClient::new(service_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let authorization = client.start_device_registration().await.unwrap();
+        let error = client
+            .complete_device_registration(
+                authorization,
+                "heyfood-test-device".into(),
+                Duration::from_secs(5),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "device_token_contract_uncertain");
+        assert!(error.outcome_uncertain);
+        assert!(!error.retryable);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn eof_after_session_dispatch_is_explicitly_outcome_uncertain() {
         let (base_url, server) = fixture_server_with(SessionBehavior::Eof).await;
         let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
@@ -767,6 +907,108 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, "session_exchange_outcome_uncertain");
+        assert!(error.outcome_uncertain);
+        assert!(!error.retryable);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn expired_channel_grant_rotates_without_changing_scope_or_device() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let count = socket.read(&mut buffer).await.unwrap();
+                request.extend_from_slice(&buffer[..count]);
+                if complete_http_request(&request) {
+                    break;
+                }
+            }
+            let text = String::from_utf8(request).unwrap();
+            assert!(text.starts_with("POST /v1/channel/oauth/token "));
+            assert!(text.contains("\"grant_type\":\"refresh_token\""));
+            assert!(text.contains("\"client_id\":\"hf_cid_heyfood_cli\""));
+            assert!(text.contains("\"refresh_token\":\"channel-refresh-old\""));
+            let body = serde_json::to_vec(&serde_json::json!({
+                "access_token": "channel-access-new",
+                "refresh_token": "channel-refresh-new",
+                "expires_in": 3600,
+                "scope": "account:link profile:read"
+            }))
+            .unwrap();
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(header.as_bytes()).await.unwrap();
+            socket.write_all(&body).await.unwrap();
+        });
+        let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let client = RegistrationClient::new(service_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let current = ChannelCredentials::from_unix_expiry(
+            "hf_cid_heyfood_cli",
+            "heyfood-device",
+            SensitiveString::new("channel-access-old"),
+            SensitiveString::new("channel-refresh-old"),
+            1,
+            "account:link profile:read",
+        )
+        .unwrap();
+        let refreshed = client.refresh_channel(&current).await.unwrap();
+        assert_eq!(refreshed.client_id, current.client_id);
+        assert_eq!(refreshed.device_id, current.device_id);
+        assert_eq!(refreshed.scope, current.scope);
+        assert_eq!(refreshed.access_token.expose_secret(), "channel-access-new");
+        assert_eq!(
+            refreshed.refresh_token.expose_secret(),
+            "channel-refresh-new"
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn server_error_after_channel_refresh_dispatch_is_outcome_uncertain() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let count = socket.read(&mut buffer).await.unwrap();
+                request.extend_from_slice(&buffer[..count]);
+                if complete_http_request(&request) {
+                    break;
+                }
+            }
+            assert!(
+                String::from_utf8(request)
+                    .unwrap()
+                    .starts_with("POST /v1/channel/oauth/token ")
+            );
+            socket
+                .write_all(
+                    b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        });
+        let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let client = RegistrationClient::new(service_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let current = ChannelCredentials::from_unix_expiry(
+            "hf_cid_heyfood_cli",
+            "heyfood-device",
+            SensitiveString::new("channel-access-old"),
+            SensitiveString::new("channel-refresh-old"),
+            1,
+            "account:link profile:read",
+        )
+        .unwrap();
+        let error = client.refresh_channel(&current).await.unwrap_err();
+        assert_eq!(error.code, "channel_refresh_outcome_uncertain");
         assert!(error.outcome_uncertain);
         assert!(!error.retryable);
         server.await.unwrap();
@@ -812,6 +1054,16 @@ mod tests {
         Eof,
     }
 
+    enum DeviceTokenBehavior {
+        Immediate,
+        Wait {
+            seen: Arc<Notify>,
+            release: Arc<Notify>,
+        },
+        Eof,
+        MalformedSuccess,
+    }
+
     async fn fixture_server() -> (String, tokio::task::JoinHandle<()>) {
         fixture_server_with(SessionBehavior::Immediate).await
     }
@@ -819,15 +1071,28 @@ mod tests {
     async fn fixture_server_with(
         behavior: SessionBehavior,
     ) -> (String, tokio::task::JoinHandle<()>) {
+        fixture_server_with_behaviors(DeviceTokenBehavior::Immediate, behavior).await
+    }
+
+    async fn fixture_server_with_token(
+        behavior: DeviceTokenBehavior,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        fixture_server_with_behaviors(behavior, SessionBehavior::Immediate).await
+    }
+
+    async fn fixture_server_with_behaviors(
+        token_behavior: DeviceTokenBehavior,
+        session_behavior: SessionBehavior,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let base_url = format!("http://{address}");
         let verification_uri = format!("{base_url}/authorize?flow=device");
         let server = tokio::spawn(async move {
-            let request_count = if matches!(&behavior, SessionBehavior::Eof) {
-                4
-            } else {
-                5
+            let request_count = match (&token_behavior, &session_behavior) {
+                (DeviceTokenBehavior::Eof | DeviceTokenBehavior::MalformedSuccess, _) => 3,
+                (_, SessionBehavior::Eof) => 4,
+                _ => 5,
             };
             for _ in 0..request_count {
                 let (mut socket, _) = listener.accept().await.unwrap();
@@ -851,8 +1116,32 @@ mod tests {
                     .split_whitespace()
                     .nth(1)
                     .unwrap();
+                if path == "/v1/channel/oauth/device/token" {
+                    match &token_behavior {
+                        DeviceTokenBehavior::Immediate => {}
+                        DeviceTokenBehavior::Wait { seen, release } => {
+                            seen.notify_one();
+                            release.notified().await;
+                        }
+                        DeviceTokenBehavior::Eof => {
+                            socket.shutdown().await.unwrap();
+                            continue;
+                        }
+                        DeviceTokenBehavior::MalformedSuccess => {
+                            let body = b"not-json";
+                            let header = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            socket.write_all(header.as_bytes()).await.unwrap();
+                            socket.write_all(body).await.unwrap();
+                            socket.shutdown().await.unwrap();
+                            continue;
+                        }
+                    }
+                }
                 if path == "/v1/channel/oauth/cli/session" {
-                    match &behavior {
+                    match &session_behavior {
                         SessionBehavior::Immediate => {}
                         SessionBehavior::Wait { seen, release } => {
                             seen.notify_one();

@@ -1,6 +1,6 @@
-//! Provisional grocery application boundaries. These types intentionally stop
-//! before REST/SSE wire representation until Grocery Phase A is deployed and
-//! its exact fixtures are imported.
+//! Grocery application boundaries over the imported and independently approved
+//! Phase-A authority. Runtime adapters remain capability-gated and must not
+//! activate before the production canary gate passes.
 
 use std::collections::BTreeMap;
 
@@ -34,8 +34,8 @@ pub struct PreparedGroceryMutation {
     pub confirmation: GroceryConfirmation,
 }
 
-/// Provider-neutral service seam. An implementation is not authorized to bind
-/// this to final Grocery Phase-A wire DTOs until the deployment gate is met.
+/// Provider-neutral service seam. Phase 2 adapters may bind this to final
+/// contract-derived DTOs; runtime activation remains separately gated.
 pub trait GroceryPort: Send + Sync {
     fn capability(
         &self,

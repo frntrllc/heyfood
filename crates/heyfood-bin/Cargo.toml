@@ -24,10 +24,15 @@ heyfood-core = { version = "=0.4.0", path = "../heyfood-core" }
 heyfood-platform = { version = "=0.4.0", path = "../heyfood-platform" }
 heyfood-tui = { version = "=0.4.0", path = "../heyfood-tui" }
 heyfood-voice = { version = "=0.4.0", path = "../heyfood-voice" }
+serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tokio-util = { workspace = true, features = ["rt"] }
 
+[target.'cfg(windows)'.dependencies]
+heyfood-platform = { version = "=0.4.0", path = "../heyfood-platform", features = ["native-credentials"] }
+
 [dev-dependencies]
+clap = { workspace = true, features = ["derive", "std"] }
 portable-pty.workspace = true
 ratatui = { workspace = true, features = ["crossterm"] }
 serde_json = { workspace = true, features = ["std"] }

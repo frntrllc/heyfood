@@ -22,7 +22,9 @@ pub use credential_broker::{CredentialBrokerStore, run_credential_broker_if_requ
 pub use persistence::KeyringCredentialStore;
 #[cfg(all(windows, feature = "native-credentials"))]
 pub use persistence::WindowsCredentialStore;
-pub use persistence::{AtomicFile, FileCredentialStore, NativeAuthStore, NativeConfigStore};
+pub use persistence::{
+    AtomicFile, FileCredentialStore, NativeAuthRefreshGuard, NativeAuthStore, NativeConfigStore,
+};
 pub use python_import::PythonStateImporter;
 
 /// The package version shared by the native workspace.

@@ -1,15 +1,39 @@
-# heyfood CLI contract
+# heyfood native CLI contract
 
-This document defines the public process interface for heyfood. Human rendering
-may improve between compatible releases; the machine interface changes only
-through an announced compatibility policy.
+This document defines the process interface for the current Rust public cut.
+Its active product commands are `register`, `ask`, `reply`, `log`, and `item`.
+Human rendering may improve between compatible releases; machine-facing changes
+follow the compatibility policy below.
+
+## Availability boundary
+
+The following commands perform native product work:
+
+| Command | Contract |
+|---|---|
+| `register` | Starts device authorization, exchanges the approved grant, validates the response contract, and persists the complete native session. |
+| `ask` | Runs one hosted-agent turn. |
+| `reply` | Runs one hosted-agent turn and requires `--conversation-id`. |
+| `log` | Sends meal-log text through the hosted-agent turn endpoint. |
+| `item` | Sends a food or menu-item assessment through the hosted-agent turn endpoint. |
+
+`ask`, `reply`, `log`, and `item` accept positional UTF-8 text, an optional
+`--conversation-id`, and optional paired `--latitude`/`--longitude` values. If
+positional text is omitted and stdin is not a terminal, the command reads the
+prompt from stdin. `reply` fails locally when `--conversation-id` is absent.
+
+Legacy `recommend`, `location`, `search`, `household`, `chat`, `onboard`,
+`profile`, and other hidden topology are unavailable in this cut. Recognized
+legacy paths fail closed with `command_not_available`; recognition is not a
+support or compatibility promise. The bare `heyfood` invocation is an
+informational, network-free next-step message, not a TUI or workflow.
 
 ## Streams
 
 ### Standard output
 
-In human mode, stdout contains the requested result. In `--json` mode, stdout
-contains exactly one UTF-8 JSON value followed by one newline.
+In human mode, stdout contains a completed command result. In `--json` mode,
+stdout contains exactly one UTF-8 JSON value followed by one newline.
 
 JSON stdout never contains:
 
@@ -21,52 +45,39 @@ JSON stdout never contains:
 
 ### Standard error
 
-stderr contains progress, loading status, deprecation warnings, and human error
-diagnostics. Programs should not parse human stderr as a data format.
+stderr contains progress and human diagnostics. Programs must not parse human
+stderr as a data format. Registration prints its approval URL and short code to
+stderr before waiting for the terminal decision.
 
-Global `--verbose` adds safe request lifecycle diagnostics to stderr only. It
-does not change JSON stdout. Verbose fields are restricted to generated request
-ids, method/path, selected context, status, elapsed time, and named refresh or
-retry events; bodies, query text, authorization material, keys, profile data,
-and phone numbers are prohibited.
+Global `--verbose` is reserved for privacy-safe request diagnostics on stderr;
+it does not change JSON stdout. Diagnostics must not expose request bodies,
+query text, authorization material, keys, profile data, or phone numbers.
 
 ## JSON mode
 
-`--json` is the canonical machine-output flag for data-returning commands.
-`--raw` is a deprecated compatibility alias that uses the same writer and
-emits its deprecation warning to stderr.
+`--json` is the machine-output flag. `--raw` is a deprecated alias that uses the
+same writer and sends its deprecation warning to stderr.
 
-Successful JSON generally preserves the documented service response for the
-command. Local commands use an explicit object, for example:
-
-```json
-{"location": {"label": "Home", "latitude": 35.28, "longitude": -120.66}}
-```
-
-Machine-readable failures use this envelope and a nonzero exit code:
+Machine-readable failures use this envelope and a nonzero exit status:
 
 ```json
 {
   "ok": false,
   "error": {
     "type": "login_required",
-    "message": "Run `heyfood login` first.",
-    "hint": "Run `heyfood login` and retry."
+    "message": "No hello.food account is connected. Run `heyfood register` first.",
+    "hint": "Run `heyfood register` and retry."
   }
 }
 ```
 
-The `hint` field is optional. Consumers must tolerate additive fields.
+`hint` is optional. If a request may have committed on the server but the
+client cannot prove the result, the error includes
+`"outcome_uncertain": true`. Callers must reconcile state before retrying an
+uncertain operation. Consumers must tolerate additive fields.
 
-Interactive `chat` does not have a JSON streaming protocol and rejects
-`--json`. Use `ask --json` and `reply --json` for one-result interactions.
-When the agent emits an out-of-band choice set, those commands add a `choices`
-object containing `choices[]` and `allow_multiple` to the result document.
-Confirmed local household writes are reported under additive `client_effects`.
-
-`register --json` waits for one browser/device authorization decision and then
-emits exactly one terminal result. It never opens a browser or starts dietary
-onboarding:
+`register --json` never launches a browser. It waits for one authorization
+decision and emits one terminal result. A successful result has this shape:
 
 ```json
 {
@@ -74,111 +85,61 @@ onboarding:
   "authenticated": true,
   "account_outcome": null,
   "profile_status": "missing",
-  "next_command": "heyfood onboard"
+  "next_command": "heyfood ask \"What can I eat?\""
 }
 ```
 
-`profile_status` is `ready`, `missing`, or `unknown`. A service or contract
-failure after authentication is `unknown`, never guessed as `missing`, and does
-not remove the valid session. `account_outcome` is `null` because the OAuth grant
-does not expose a trustworthy created/existing distinction; the CLI never
-guesses it. Identity resolution remains authoritative in the browser/backend.
-This exact shape is the shared first-run contract and `registrationResult` in
-the v1 JSON schema.
+`profile_status` is `ready`, `missing`, or `unknown`. A contract or service
+failure after authentication is never guessed to mean `missing`.
+`account_outcome` remains `null` because the native grant does not expose a
+trustworthy created/existing distinction; browser/backend identity resolution
+is authoritative.
 
-Versioned safety, restaurant-fit, menu-evaluation, recommendation-ranking, and
-recipe-compatibility core shapes are documented in
-[`JSON_SCHEMAS.md`](JSON_SCHEMAS.md) and
-`schemas/v1/heyfood-output.schema.json`. Safety-bearing fields use
-`generally_safer`, `risky`, `avoid`, or `unable_to_evaluate`; the writer
-normalizes legacy safety aliases without changing operational job statuses.
+The JSON result from `ask`, `reply`, `log`, and `item` is the validated hosted
+agent result document. The human renderer prints its `message` field when one
+is present and otherwise prints compact JSON.
 
-## Exit codes
+## Registration behavior
+
+Registration uses the device-authorization transport. `--device` is accepted
+as the explicit spelling, `--no-browser` suppresses best-effort browser launch,
+and `--timeout SECONDS` accepts `1..=1800` with a default of 600. JSON mode also
+suppresses browser launch regardless of `--no-browser`.
+
+Native account state is written only after OAuth approval, application-session
+exchange, and response validation succeed. A complete authorization grant and
+rotating session are persisted together. Credentials are refreshed before an
+agent turn when necessary; a server-rotated refresh grant is durably accepted
+before the client proceeds.
+
+## Prompt and coordinate validation
+
+Prompt text is required. Redirected stdin must be UTF-8 and is capped at 1 MiB.
+Half-specified coordinate pairs are rejected by argument parsing. Latitude and
+longitude are forwarded only when both values are supplied.
+
+`--no-input` guarantees that the client will not prompt. The active one-shot
+commands do not require an interactive prompt: callers provide positional text
+or redirected stdin. Registration authorization itself is completed on the
+hosted approval page.
+
+## Exit status
 
 | Code | Meaning |
 |---:|---|
-| `0` | The requested operation completed successfully. |
-| `1` | Authentication, service, diagnostic, or incomplete runtime result. |
-| `2` | Invalid invocation, missing local input, or local validation error. |
-
-For example, unauthenticated `status` and an unhealthy `doctor` exit `1`.
-Invalid paired options such as `--lat` without `--lng` exit `2`. Menu
-acquisition that remains pending at the 30-second client ceiling returns the
-pending JSON or human resume guidance and exits `1`.
-
-## Local validation
-
-heyfood validates request bounds before calling the service. The initial public
-contract includes:
-
-- latitude `-90..90` and longitude `-180..180`, supplied together;
-- restaurant radius `0.1..50` miles;
-- search, recommendation, recipe-search, and saved-recipe limits of `50`, `20`,
-  `20`, and `100` respectively;
-- agent queries up to 500 characters and food/restaurant/recipe queries up to
-  200 characters where required by the service contract;
-- recipe cuisine up to 80 characters, notes up to 1000 characters, and
-  documented meal-type choices; and
-- daily dates in ISO `YYYY-MM-DD` form.
-
-Empty required text, non-finite numbers, out-of-range values, and half-specified
-coordinate pairs fail locally with exit code `2`.
-
-## Prompts and automation
-
-`--no-input` is the explicit prompt-suppression contract for prompt-capable
-commands. Non-TTY stdin is treated the same way even when the flag is omitted:
-the command either has enough options to continue or fails with exit code `2`
-and actionable guidance.
-
-Mutating onboarding commands require explicit approval with `--yes` when input
-is disabled. `--yes` approves consent and the final mutation only; it does not
-disable unrelated guided questions. The legacy `--no-interactive` onboarding
-flag remains a compatibility alias for disabling guided questions.
-
-`conversation clear` follows the same automation rule: `--json`, `--no-input`,
-and non-TTY use require `--yes`. It clears only the local resume pointer and
-does not claim to delete server conversation data.
-
-Household roster commands never prompt. `household list` refreshes synced
-profile ids unless `--local-only` is passed; `current`, `use`, and `label` are
-local configuration operations. Dietary contents are loaded just in time for
-agent requests and are never persisted in the CLI roster. Child profiles are
-the privacy-preserving exception: they stay in protected local storage and
-never use server profile sync. The OS keyring is used when available, with the
-documented owner-only `0600` file as the headless fallback. Failed adult sync
-writes also stay in this protected store as a lossless repair outbox, continue
-to scope agent turns, merge into later writes, and retry automatically on a
-consented scoped turn. Confirmation previews are stricter: they are vault-only,
-redacted from `config show`, and are not persisted between processes when no
-vault is available. Account-scoped state is bound to the authenticated user and
-cleared before saving credentials for a different user.
-
-When synced-member discovery returns `403: Sync consent required`, `household
-list` succeeds with the local roster and adds a `reconciliation` object with
-`status: skipped`, `reason: profile_sync_consent_required`, and
-`source: local_roster`. No other API error is downgraded.
-
-`onboard --dry-run --no-input` performs no network call, credential/config
-write, consent grant, or prompt. Interactive `chat` rejects `--no-input` and
-non-TTY stdin; automation uses `ask` and `reply` instead.
-
-Bare `heyfood` owns an interactive first-run state machine only when stdin,
-stdout, and stderr are usable TTYs. A fresh local state recommends registration;
-prior account state recommends sign-in. After authentication it strictly checks
-profile readiness, offers the existing onboarding flow when the profile is
-missing (typed input by default, with contextual voice or defer choices), and
-enters chat after readiness or an intentional defer.
-Non-TTY bare execution never performs network, credential, prompt, browser, or
-profile actions and exits `0` after printing plain next steps.
+| `0` | The requested operation completed successfully, or bare `heyfood` printed its informational next steps. |
+| `1` | Authentication, authorization, service, cancellation, unavailable-command, uncertain-outcome, or other runtime failure. |
+| `2` | Command-line parsing or argument validation failed before execution. |
 
 ## Compatibility and deprecation
 
 - Additive JSON fields are compatible changes.
-- Removing or renaming commands, options, JSON fields, error types, or exit-code
-  meanings requires release notes and migration guidance.
-- `--raw` remains an alias through at least the first public minor release and
-  may be removed only in a versioned breaking release.
-- Human spacing, colors, tables, and prose are not stable machine interfaces.
-- Compatibility fixtures under `tests/fixtures/compat/` must be reviewed and
-  updated with every intentional interface change.
+- Removing or renaming an active command, option, JSON field, error type, or
+  exit-status meaning requires release notes and migration guidance.
+- `--raw` remains a deprecated alias through the first public native minor
+  release and may be removed only in a versioned breaking release.
+- Human spacing, ANSI styling, and prose are not stable machine interfaces.
+- Hidden legacy topology is explicitly outside the public native contract.
+- Frozen contract JSON under `fixtures/contracts/` and `schemas/` is checked
+  out with LF line endings on every platform. Approved hashes and semantic
+  bytes must not be changed to accommodate platform line-ending conversion.
