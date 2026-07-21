@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(windows)]
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -18,6 +20,11 @@ use heyfood_core::{
 };
 
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+#[cfg(windows)]
+static WINDOWS_CURRENT_USER_SID: OnceLock<String> = OnceLock::new();
+#[cfg(windows)]
+static WINDOWS_HARDENED_PATHS: OnceLock<Mutex<std::collections::HashSet<(PathBuf, bool)>>> =
+    OnceLock::new();
 const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_CONFIG_APPLIED_COMMITS: usize = 128;
@@ -60,13 +67,14 @@ impl AtomicFile {
 
         let mut replaced = false;
         if let Err(error) = (|| -> std::io::Result<()> {
-            make_private_file(&staging_path)?;
+            make_private_staging_file(&staging_path)?;
             staging.write_all(bytes)?;
             staging.flush()?;
             staging.sync_all()?;
             fs::rename(&staging_path, path)?;
             replaced = true;
-            make_private_file(path)?;
+            #[cfg(windows)]
+            remember_windows_owner_acl(path, false)?;
             sync_directory(parent)?;
             Ok(())
         })() {
@@ -91,6 +99,8 @@ impl FileLock {
             .parent()
             .ok_or_else(|| PortError::new("lock_path", "lock file must have a parent"))?;
         create_private_dir(parent)?;
+        #[cfg(windows)]
+        let existed = path.exists();
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -98,6 +108,11 @@ impl FileLock {
             .truncate(false)
             .open(path)
             .map_err(|error| PortError::new("lock_open", error.to_string()))?;
+        #[cfg(windows)]
+        if !existed {
+            forget_windows_owner_acl(path, false)
+                .map_err(|error| PortError::new("lock_permissions", error.to_string()))?;
+        }
         make_private_file(path)
             .map_err(|error| PortError::new("lock_permissions", error.to_string()))?;
         let started = Instant::now();
@@ -1224,8 +1239,15 @@ fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>, PortError> {
 }
 
 pub(crate) fn create_private_dir(path: &Path) -> Result<(), PortError> {
+    #[cfg(windows)]
+    let existed = path.is_dir();
     fs::create_dir_all(path)
         .map_err(|error| PortError::new("native_directory", error.to_string()))?;
+    #[cfg(windows)]
+    if !existed {
+        forget_windows_owner_acl(path, true)
+            .map_err(|error| PortError::new("native_permissions", error.to_string()))?;
+    }
     make_private_dir(path).map_err(|error| PortError::new("native_permissions", error.to_string()))
 }
 
@@ -1237,7 +1259,7 @@ fn make_private_dir(path: &Path) -> std::io::Result<()> {
 
 #[cfg(windows)]
 fn make_private_dir(path: &Path) -> std::io::Result<()> {
-    apply_windows_owner_acl(path, true)
+    ensure_windows_owner_acl(path, true)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -1256,11 +1278,56 @@ fn make_private_file(path: &Path) -> std::io::Result<()> {
 
 #[cfg(windows)]
 fn make_private_file(path: &Path) -> std::io::Result<()> {
-    apply_windows_owner_acl(path, false)
+    ensure_windows_owner_acl(path, false)
 }
 
 #[cfg(not(any(unix, windows)))]
 fn make_private_file(_path: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "private file permissions are not implemented for this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn make_private_staging_file(path: &Path) -> std::io::Result<()> {
+    make_private_file(path)
+}
+
+#[cfg(windows)]
+fn make_private_staging_file(path: &Path) -> std::io::Result<()> {
+    // `AtomicFile` created this path with create-new semantics inside a
+    // directory whose only inheritable ACE belongs to the current owner.
+    // Converting that inherited ACE to an explicit owner grant is therefore
+    // safe: an arbitrary pre-existing explicit ACE cannot exist on this file.
+    let sid = windows_current_user_sid()?;
+    let grant = format!("*{sid}:F");
+    let output = Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(grant)
+        .stdout(Stdio::null())
+        .output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let path = path.to_string_lossy();
+        let detail = String::from_utf8_lossy(&output.stderr)
+            .replace(path.as_ref(), "[PATH]")
+            .replace(&sid, "[SID]");
+        let detail: String = heyfood_core::terminal_safe_text(&detail)
+            .chars()
+            .take(512)
+            .collect();
+        Err(std::io::Error::other(format!(
+            "Windows fresh-file ACL install failed with status {}: {detail}",
+            output.status
+        )))
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn make_private_staging_file(_path: &Path) -> std::io::Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "private file permissions are not implemented for this platform",
@@ -1277,6 +1344,42 @@ fn apply_windows_owner_acl(path: &Path, directory: bool) -> std::io::Result<()> 
         &sid,
         directory,
     )
+}
+
+#[cfg(windows)]
+fn ensure_windows_owner_acl(path: &Path, directory: bool) -> std::io::Result<()> {
+    let hardened =
+        WINDOWS_HARDENED_PATHS.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    let mut hardened = hardened
+        .lock()
+        .map_err(|_| std::io::Error::other("Windows ACL state lock is poisoned"))?;
+    let key = (path.to_path_buf(), directory);
+    if hardened.contains(&key) {
+        return Ok(());
+    }
+    apply_windows_owner_acl(path, directory)?;
+    hardened.insert(key);
+    Ok(())
+}
+
+#[cfg(windows)]
+fn forget_windows_owner_acl(path: &Path, directory: bool) -> std::io::Result<()> {
+    WINDOWS_HARDENED_PATHS
+        .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+        .lock()
+        .map_err(|_| std::io::Error::other("Windows ACL state lock is poisoned"))?
+        .remove(&(path.to_path_buf(), directory));
+    Ok(())
+}
+
+#[cfg(windows)]
+fn remember_windows_owner_acl(path: &Path, directory: bool) -> std::io::Result<()> {
+    WINDOWS_HARDENED_PATHS
+        .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+        .lock()
+        .map_err(|_| std::io::Error::other("Windows ACL state lock is poisoned"))?
+        .insert((path.to_path_buf(), directory));
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -1369,7 +1472,7 @@ if ($actualRule.InheritanceFlags -ne $inheritance) { throw 'owner ACE inheritanc
 if ($actualRule.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None) { throw 'owner ACE propagation flags are invalid after installation' }
 "#;
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 const WINDOWS_VERIFY_OWNER_ONLY_ACL: &str = r#"
 $ErrorActionPreference = 'Stop'
 $target = $env:HEYFOOD_ACL_TARGET
@@ -1405,6 +1508,9 @@ if ($rule.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]:
 
 #[cfg(windows)]
 fn windows_current_user_sid() -> std::io::Result<String> {
+    if let Some(sid) = WINDOWS_CURRENT_USER_SID.get() {
+        return Ok(sid.clone());
+    }
     let output = Command::new("whoami")
         .args(["/user", "/fo", "csv", "/nh"])
         .output()?;
@@ -1440,6 +1546,7 @@ fn windows_current_user_sid() -> std::io::Result<String> {
             "whoami returned an invalid Windows SID",
         ));
     }
+    let _ = WINDOWS_CURRENT_USER_SID.set(sid.clone());
     Ok(sid)
 }
 
@@ -1530,5 +1637,21 @@ mod windows_acl_tests {
             false,
         )
         .expect("file DACL is protected and owner-only");
+
+        let replacement = root.join("replacement.state");
+        fs::write(&replacement, b"legacy").expect("create replacement fixture file");
+        for sid in ["S-1-1-0", "S-1-5-32-545"] {
+            add_explicit_grant(&replacement, sid, false);
+        }
+        AtomicFile::replace(&replacement, b"private replacement")
+            .expect("atomically replace broadly accessible file");
+        run_windows_acl_script(
+            "verify",
+            WINDOWS_VERIFY_OWNER_ONLY_ACL,
+            &replacement,
+            &owner,
+            false,
+        )
+        .expect("atomic replacement installs a protected owner-only DACL");
     }
 }

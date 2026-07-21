@@ -898,6 +898,49 @@ fn percentile_95(samples: &mut [Duration]) -> Duration {
     samples[(samples.len() * 95).div_ceil(100) - 1]
 }
 
+fn strip_ansi_sequences(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut plain = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != 0x1b {
+            plain.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        index += 1;
+        match bytes.get(index).copied() {
+            Some(b'[') => {
+                index += 1;
+                while index < bytes.len() {
+                    let byte = bytes[index];
+                    index += 1;
+                    if (0x40..=0x7e).contains(&byte) {
+                        break;
+                    }
+                }
+            }
+            Some(b']') => {
+                index += 1;
+                while index < bytes.len() {
+                    if bytes[index] == 0x07 {
+                        index += 1;
+                        break;
+                    }
+                    if bytes[index] == 0x1b && bytes.get(index + 1) == Some(&b'\\') {
+                        index += 2;
+                        break;
+                    }
+                    index += 1;
+                }
+            }
+            Some(_) => index += 1,
+            None => {}
+        }
+    }
+    String::from_utf8_lossy(&plain).into_owned()
+}
+
 fn run_pty_child(signal: Option<&str>, expected: &str) {
     let pty = native_pty_system();
     let pair = pty
@@ -985,7 +1028,7 @@ fn run_pty_child(signal: Option<&str>, expected: &str) {
         "child did not enter harness: {output:?}"
     );
     assert!(
-        output.contains(&format!("QUALIFICATION_RESTORED:{expected}")),
+        strip_ansi_sequences(&output).contains(&format!("QUALIFICATION_RESTORED:{expected}")),
         "child did not restore after {expected}: {output:?}"
     );
     assert!(
