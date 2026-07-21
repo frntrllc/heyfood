@@ -27,6 +27,10 @@ improving discovery.
   service as `login`; registration adds `--no-onboard` and canonical `--json`.
   `register --json` suppresses browser launch and all prompts. Use `--device
   --no-browser --json` for headless automation with one human approval.
+- `login` performs an explicit sign-in for an already connected native account.
+  It is also the only scope-upgrade path: refresh and session re-exchange never
+  add authority. The replacement preserves every existing canonical scope and
+  commits only after both channel and app-session grants are complete.
 - `account delete` requires explicit destructive acknowledgement and browser
   identity confirmation. `--json` additionally requires `--yes`, never opens a
   browser, and emits a receipt only after the backend commit. Local credentials

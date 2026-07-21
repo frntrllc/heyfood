@@ -72,7 +72,10 @@ jobs:
           "$HEYFOOD_BIN" --version
           "$HEYFOOD_BIN" --help
           "$HEYFOOD_BIN" register --help
+          "$HEYFOOD_BIN" login --help
           "$HEYFOOD_BIN" ask --help
+          "$HEYFOOD_BIN" grocery --help
+          "$HEYFOOD_BIN" health --help
           "$HEYFOOD_BIN" completion bash > completion.bash
           test -s completion.bash
       - name: Run native CLI and composition-root tests

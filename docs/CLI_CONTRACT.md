@@ -1,7 +1,8 @@
 # heyfood native CLI contract
 
 This document defines the process interface for the current Rust public cut.
-Its active product commands are `register`, `ask`, `reply`, `log`, and `item`.
+Its active product commands are `register`, `login`, `ask`, `reply`, `log`,
+`item`, `grocery`, and `health`.
 Human rendering may improve between compatible releases; machine-facing changes
 follow the compatibility policy below.
 
@@ -12,15 +13,24 @@ The following commands perform native product work:
 | Command | Contract |
 |---|---|
 | `register` | Starts device authorization, exchanges the approved grant, validates the response contract, and persists the complete native session. |
+| `login` | Explicitly signs in again and atomically expands an existing native grant; refresh is never used for scope widening. |
 | `ask` | Runs one hosted-agent turn. |
 | `reply` | Runs one hosted-agent turn and requires `--conversation-id`. |
 | `log` | Sends meal-log text through the hosted-agent turn endpoint. |
 | `item` | Sends a food or menu-item assessment through the hosted-agent turn endpoint. |
+| `grocery` | Reads, prepares, exports, and explicitly confirms Grocery v1 operations after capability discovery. |
+| `health` | Reads server-held health context and manages the provider-neutral Oura integration. Disconnect requires `--yes`. |
 
 `ask`, `reply`, `log`, and `item` accept positional UTF-8 text, an optional
 `--conversation-id`, and optional paired `--latitude`/`--longitude` values. If
 positional text is omitted and stdin is not a terminal, the command reads the
 prompt from stdin. `reply` fails locally when `--conversation-id` is absent.
+
+Existing credentials missing a command's required scope fail locally with
+`authorization_scope_upgrade_required` and direct the user to `heyfood login`.
+The old channel and app-session credentials remain authoritative through the
+new browser/device grant and session exchange. A durable reconciliation marker
+blocks use if the final two-store replacement cannot complete.
 
 Legacy `recommend`, `location`, `search`, `household`, `chat`, `onboard`,
 `profile`, and other hidden topology are unavailable in this cut. Recognized

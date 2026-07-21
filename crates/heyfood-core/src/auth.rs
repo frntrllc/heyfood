@@ -263,6 +263,26 @@ pub struct ChannelCredentials {
 }
 
 impl ChannelCredentials {
+    pub fn from_rfc3339_expiry(
+        client_id: impl Into<String>,
+        device_id: impl Into<String>,
+        access_token: SensitiveString,
+        refresh_token: SensitiveString,
+        expires_at: &str,
+        scope: impl Into<String>,
+    ) -> Result<Self, &'static str> {
+        let expires_at = OffsetDateTime::parse(expires_at, &Rfc3339)
+            .map_err(|_| "channel credential expiry is invalid")?;
+        Self::from_unix_expiry(
+            client_id,
+            device_id,
+            access_token,
+            refresh_token,
+            expires_at.unix_timestamp(),
+            scope,
+        )
+    }
+
     pub fn from_unix_expiry(
         client_id: impl Into<String>,
         device_id: impl Into<String>,

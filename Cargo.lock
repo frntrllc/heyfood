@@ -1106,7 +1106,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "heyfood-agent-runtime"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "eventsource-stream",
  "heyfood-application",
@@ -1115,6 +1115,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tokio-util",
  "tracing",
@@ -1122,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-application"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "heyfood-core",
  "proptest",
@@ -1134,7 +1135,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-bin"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "clap",
  "heyfood-agent-runtime",
@@ -1147,13 +1148,14 @@ dependencies = [
  "portable-pty",
  "ratatui",
  "serde_json",
+ "sha2",
  "tokio",
  "tokio-util",
 ]
 
 [[package]]
 name = "heyfood-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1166,7 +1168,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "insta",
  "proptest",
@@ -1182,14 +1184,14 @@ dependencies = [
 
 [[package]]
 name = "heyfood-installer"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "heyfood-core",
 ]
 
 [[package]]
 name = "heyfood-platform"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "directories",
  "fs2",
@@ -1208,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-tui"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "crossterm",
  "heyfood-application",
@@ -1222,7 +1224,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-voice"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "cpal",
  "heyfood-application",
@@ -4071,7 +4073,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "cargo_metadata",
 ]

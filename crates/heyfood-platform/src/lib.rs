@@ -23,7 +23,9 @@ pub use persistence::KeyringCredentialStore;
 #[cfg(all(windows, feature = "native-credentials"))]
 pub use persistence::WindowsCredentialStore;
 pub use persistence::{
-    AtomicFile, FileCredentialStore, NativeAuthRefreshGuard, NativeAuthStore, NativeConfigStore,
+    AtomicFile, AuthorizationReplacementJournal, AuthorizationReplacementPhase,
+    AuthorizationSessionStore, FileCredentialStore, NativeAuthRefreshGuard, NativeAuthStore,
+    NativeConfigStore,
 };
 pub use python_import::PythonStateImporter;
 
@@ -53,6 +55,16 @@ impl NativePaths {
     }
 
     pub fn discover() -> Result<Self, PortError> {
+        if let Some(root) = std::env::var_os("HEYFOOD_STATE_DIR") {
+            let root = PathBuf::from(root);
+            if !root.is_absolute() {
+                return Err(PortError::new(
+                    "platform_paths",
+                    "HEYFOOD_STATE_DIR must be an absolute path",
+                ));
+            }
+            return Ok(Self::under(root));
+        }
         let project = ProjectDirs::from("ai", "frntr", "heyfood").ok_or_else(|| {
             PortError::new(
                 "platform_paths",

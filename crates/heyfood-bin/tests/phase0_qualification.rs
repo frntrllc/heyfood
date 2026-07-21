@@ -226,7 +226,7 @@ async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratat
         assert_eq!(request.path, "/v1/auth/session/refresh");
         let headers = request.headers.to_ascii_lowercase();
         assert!(headers.contains("accept: application/json"));
-        assert!(headers.contains("user-agent: heyfood-cli/0.4.0"));
+        assert!(headers.contains("user-agent: heyfood-cli/0.4.1"));
         assert!(headers.contains("x-app-client-id: heyfood-cli"));
         assert!(headers.contains("x-device-id: hellofood-cli-fixture-device"));
         assert!(headers.contains("x-api-key: fixture-api-key"));
