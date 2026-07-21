@@ -316,7 +316,7 @@ async fn one_shot_ask_collects_sse_into_exactly_one_json_value() {
         assert_eq!(body["input_mode"], "text");
         respond_stream(
             &mut socket,
-            b"event: thinking\ndata: {\"stage\":\"route\"}\n\nevent: partial\ndata: {\"text\":\"Try soup.\"}\n\nevent: result\ndata: {\"conversation_id\":\"conversation-2\",\"message\":\"Try soup.\"}\n\n",
+            b"event: thinking\ndata: {\"stage\":\"route\"}\n\nevent: partial\ndata: {\"text\":\"Try soup.\"}\n\nevent: result\ndata: {\"conversation_id\":\"conversation-2\",\"message\":\"Try soup.\"}\n\nevent: done\ndata: {}\n\n",
         )
         .await;
     });
@@ -333,6 +333,35 @@ async fn one_shot_ask_collects_sse_into_exactly_one_json_value() {
         "Try soup."
     );
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn invalid_terminal_events_fail_without_returning_partial_machine_output() {
+    for (terminal, expected_code) in [
+        (
+            "event: done\ndata: {\"unexpected\":true}\n\n",
+            "sse_payload",
+        ),
+        ("event: future_terminal\ndata: {}\n\n", "sse_event"),
+    ] {
+        let (listener, service) = fixture_service().await;
+        let body = format!(
+            "event: partial\ndata: {{\"text\":\"Do not emit me.\"}}\n\nevent: result\ndata: {{\"message\":\"Do not emit me.\"}}\n\n{terminal}"
+        );
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_request(&mut socket).await;
+            respond_stream(&mut socket, body.as_bytes()).await;
+        });
+        let parsed = CommandLine::try_parse_from(["heyfood", "--json", "ask", "fixture"]).unwrap();
+        let error = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+            .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, expected_code);
+        assert!(error.outcome_uncertain);
+        server.await.unwrap();
+    }
 }
 
 #[derive(Default)]

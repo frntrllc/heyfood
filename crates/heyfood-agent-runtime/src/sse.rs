@@ -84,6 +84,9 @@ impl EventStream for SseEventStream {
                     }
                 };
                 for raw in raw_events {
+                    if consume_done_marker(&raw)? {
+                        continue;
+                    }
                     self.normalized.push_back(normalize(raw)?);
                 }
             }
@@ -257,6 +260,21 @@ struct ErrorData {
     retryable: bool,
 }
 
+fn consume_done_marker(raw: &RawEvent) -> Result<bool, PortError> {
+    if raw.event_type != "done" {
+        return Ok(false);
+    }
+    let document: Value = serde_json::from_str(&raw.data)
+        .map_err(|_| PortError::new("sse_payload", "invalid done event payload"))?;
+    if !matches!(document, Value::Object(ref fields) if fields.is_empty()) {
+        return Err(PortError::new("sse_payload", "invalid done event payload"));
+    }
+    // Production sends this transport-level marker immediately after the
+    // domain-terminal `result` or `error`. It must not become a second
+    // terminal event or alter machine-readable output.
+    Ok(true)
+}
+
 fn normalize(raw: RawEvent) -> Result<AgentEvent, PortError> {
     let parse_error = || {
         PortError::new(
@@ -379,7 +397,10 @@ fn sanitize_json_strings(value: &mut Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_SSE_BUFFERED_BYTES, MAX_SSE_LINE_BYTES, RawEvent, RawSseParser, normalize};
+    use super::{
+        MAX_SSE_BUFFERED_BYTES, MAX_SSE_LINE_BYTES, RawEvent, RawSseParser, consume_done_marker,
+        normalize,
+    };
     use heyfood_core::AgentEvent;
 
     #[test]
@@ -452,6 +473,44 @@ mod tests {
             data: serde_json::json!({"choices": choices}).to_string(),
         };
         assert_eq!(normalize(event).unwrap_err().code, "sse_payload");
+    }
+
+    #[test]
+    fn empty_done_marker_is_consumed_without_a_domain_event() {
+        assert!(
+            consume_done_marker(&RawEvent {
+                event_type: "done".into(),
+                data: "{}".into(),
+            })
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn malformed_or_extended_done_markers_fail_closed() {
+        for data in ["", "not-json", "null", "[]", r#"{"unexpected":true}"#] {
+            let error = consume_done_marker(&RawEvent {
+                event_type: "done".into(),
+                data: data.into(),
+            })
+            .unwrap_err();
+            assert_eq!(error.code, "sse_payload", "payload: {data}");
+        }
+    }
+
+    #[test]
+    fn unknown_event_type_remains_rejected() {
+        let raw = RawEvent {
+            event_type: "future_terminal".into(),
+            data: "{}".into(),
+        };
+        assert!(!consume_done_marker(&raw).unwrap());
+        let error = normalize(RawEvent {
+            event_type: "future_terminal".into(),
+            data: "{}".into(),
+        })
+        .unwrap_err();
+        assert_eq!(error.code, "sse_event");
     }
 
     #[test]
