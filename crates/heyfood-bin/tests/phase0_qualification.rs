@@ -1107,7 +1107,11 @@ exit $child.ExitCode
         .env("HEYFOOD_QUALIFICATION_RESULT_FILE", &result_path)
         .spawn()
         .expect("spawn Windows console host");
-    let status = wait_for_process_child(&mut child, Duration::from_secs(25));
+    // The PowerShell host independently bounds readiness (8s), result
+    // publication (8s), and post-result exit (5s). Leave explicit headroom
+    // around those nested deadlines for cold pwsh/Add-Type startup, console
+    // allocation, and process launch on a contended Windows runner.
+    let status = wait_for_process_child(&mut child, Duration::from_secs(40));
     assert!(
         status.success(),
         "Windows console host or signal child failed: {status}"
