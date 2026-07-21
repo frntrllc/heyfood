@@ -16,7 +16,8 @@ the exact deployed commit `f7b0eebca879840995226ede9ea715dc8702313a`. PR
 authoritatively records their byte-identical 14-file tree and aggregate digest
 `781a14b9d05d70a4da245e2d80c24b0b040aa7ec742f852c65ca3815cc583911`.
 
-This is a fixture import only. The Rust-side import review and separate Phase 2
-authorization remain required before generating final wire DTOs or adding
-Grocery REST/tool bindings. Fresh least-privilege positive and conflict canaries
-remain required before runtime activation.
+This is a fixture import only. The exact import at `47282aea7047b1f3bb0642fff9d09b106fa1bb0c`
+received independent specialized Rust review with GO. Separate Phase 2
+authorization remains required before generating final wire DTOs or adding
+Grocery REST/tool bindings. Fresh least-privilege positive and conflict
+canaries remain required before runtime activation.

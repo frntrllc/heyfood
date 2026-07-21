@@ -1,6 +1,6 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v15 — Rust Phase 1 is closed with GO; the bounded Grocery Phase-A contract import is implemented and locally validated pending exact-SHA import review, while wire generation, Phase 2 implementation, and later Rust activation remain separately gated
+**Status:** Draft v16 — Rust Phase 1 is closed with GO; the bounded Grocery Phase-A contract import is independently approved at exact SHA `47282aea7047b1f3bb0642fff9d09b106fa1bb0c`, while wire generation, Phase 2 implementation, and later Rust activation remain separately gated
 **Baseline:** final unpublished Python `0.4.0` candidate at `73494a57468dac83b4904ce6c390e36926f5c6fe`; the last public Python release remains `0.3.2`
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`
@@ -146,8 +146,10 @@ Grocery provenance PR #115 froze that authority and was squash-merged as
 `781a14b9d05d70a4da245e2d80c24b0b040aa7ec742f852c65ca3815cc583911`.
 Rust now pins and validates that manifest, the source/deploy ancestry, all 14
 byte-identical files, and the deterministic aggregate before copying fixtures.
-The Rust import remains pending exact-SHA review. Import approval does not
-generate final wire DTOs or authorize Phase 2 Grocery implementation.
+The Rust import received independent specialized review with GO at exact SHA
+`47282aea7047b1f3bb0642fff9d09b106fa1bb0c` and tree
+`198850f2f70bc24acedf56c78e320752e778b0dd`. Import approval does not generate
+final wire DTOs or authorize Phase 2 Grocery implementation.
 Second, after separately authorized implementation exists, the **Rust
 activation/qualification gate** requires a fresh
 least-privilege session that explicitly requests both Grocery scopes to pass
@@ -180,8 +182,8 @@ Phase 1 is closed with GO at product SHA
 `92bf9bad3e2097cb0cc52416e23c4d24575213b0`, and final closure head
 `adf78438d55ac40e7e12c60fc7d4bd168da94a8e`. The team may execute the bounded
 Grocery contract import and validation authorized by PR #115. That bounded
-import is implemented and locally green, with independent exact-SHA import
-review still required before wire generation. The team may prepare Phase 2
+import is implemented, qualified, and independently approved at exact SHA
+`47282aea7047b1f3bb0642fff9d09b106fa1bb0c`. The team may prepare Phase 2
 design/backlog material, but it must not generate final Grocery wire DTOs, add
 REST/tool calls, or begin Phase 2 implementation. Grocery release
 qualification remains blocked until the later Rust activation/qualification
@@ -1515,11 +1517,13 @@ reviewed evidence SHA `92bf9bad3e2097cb0cc52416e23c4d24575213b0`, and
 final closure head `adf78438d55ac40e7e12c60fc7d4bd168da94a8e`.
 Grocery provenance PR #115 is squash-merged as
 `7871b20ae609a0fffd82b2a35efd39cf3385825d`, permitting only the bounded
-contract import and validation. Phase 2 implementation remains on hold pending
-separate owner authorization. The bounded import is implemented and locally
-validated but remains pending exact-SHA import review; planning or importing
-fixtures does not authorize wire DTO generation, REST/tool binding, or
-implementation of a later phase.
+contract import and validation. The bounded import received independent
+specialized review with GO at exact SHA
+`47282aea7047b1f3bb0642fff9d09b106fa1bb0c` and tree
+`198850f2f70bc24acedf56c78e320752e778b0dd`. Phase 2 implementation remains on
+hold pending separate owner authorization; approved fixture import does not
+authorize wire DTO generation, REST/tool binding, or implementation of a later
+phase.
 
 ### Phase 0 — Contracts and vertical Rust spike
 

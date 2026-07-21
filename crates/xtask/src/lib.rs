@@ -1164,7 +1164,7 @@ pub fn verify_grocery_contracts(root: &Path) -> Result<GroceryContractReport, St
     expect_string(
         phase_a,
         "status",
-        "deployed_contracts_imported_review_pending",
+        "deployed_contracts_imported_review_approved",
         "grocery contract provenance.external_dependencies.grocery_phase_a",
     )?;
     expect_string(
@@ -1210,7 +1210,7 @@ pub fn verify_grocery_contracts(root: &Path) -> Result<GroceryContractReport, St
         .iter()
         .map(|gate| gate.string("grocery Phase A wire-generation gate"))
         .collect::<Result<_, _>>()?;
-    if wire_gates != ["independent_rust_import_review", "phase_2_authorization"] {
+    if wire_gates != ["phase_2_authorization"] {
         return Err("Grocery Phase A wire-generation gates are incomplete".to_owned());
     }
 
