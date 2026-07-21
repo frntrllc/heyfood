@@ -44,17 +44,18 @@ unpublished Python `0.4.0` converse/SSE oracle at
 `73494a57468dac83b4904ce6c390e36926f5c6fe`.
 
 Companion backend main is
-`8633c0a5229178eefb1556edc6c136b0a88cff3f`: migration repair plus the
+`1a4a05b5799ba3050027171c1f98a2999c24df5c`: migration repair plus the
 certifi-backed verified-TLS correction are merged, production is postflight
 verified at sole head `095`, H1/H2 PR #79 and H3 backend/mobile PRs #96/#95 are
 merged, and their health contracts are frozen under `fixtures/contracts/`.
-Grocery PR #107 now supersedes PR #90 with a mergeable revision-096 candidate
-that claims the authoritative-snapshot/frozen-list/C1 corrections. Its
-aggregate GitHub CI is green but its public Vercel preview is red; final Phase A
-provenance remains gated on a fully green merge, production migration, and live
-canaries. Security PRs #108 and #109 are merged; PR #110 remains active for a
-PostgreSQL-18 attestation correction. No Kroger B1/B2 or Security D2
-implementation is visible. Exact merged C3/C4 schemas are now mirrored under
+Grocery PR #107 now supersedes PR #90 with a revision-096 candidate
+at exact final-qualification head `f5bf2656`, claiming the authoritative-
+snapshot/frozen-list/C1 and exact catalog corrections. Hosted checks and
+independent review remain in progress; final Phase A provenance remains gated
+on a current green reviewed merge, production migration, and live canaries.
+Security PRs #108, #109, and #110 are merged; PR #110 still requires deployment
+and exact-build postflight. No Kroger B1/B2 or Security D2 implementation is
+visible. Exact merged C3/C4 schemas are now mirrored under
 `fixtures/contracts/grocery-backend/` with deterministic import and validation.
 `external-contract-status.md` records the exact boundaries.
 

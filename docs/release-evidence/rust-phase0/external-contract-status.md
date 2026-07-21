@@ -22,28 +22,29 @@ the `092 → 094 → 095` lineage. The certifi-backed verified-TLS corrections i
 [PR #106](https://github.com/frntrllc/hellofood/pull/106), followed by the
 validated-constraint readiness correction in
 [PR #108](https://github.com/frntrllc/hellofood/pull/108), place current `main`
-at `8633c0a5229178eefb1556edc6c136b0a88cff3f`; the exact-build production
+at `1a4a05b5799ba3050027171c1f98a2999c24df5c`; the exact-build production
 postflight reports `095` as the sole current head with both health tables
 present. That main SHA includes merged
 [PR #109](https://github.com/frntrllc/hellofood/pull/109), which binds 095
 health rows to aggregate-only, zero-plaintext, decryptable-envelope
-attestation evidence. The database migration no longer blocks Rust work. Application-fleet
+attestation evidence, and merged
+[PR #110](https://github.com/frntrllc/hellofood/pull/110), which corrects the
+PostgreSQL-18 NOT NULL catalog interpretation while preserving exact semantic
+constraint enforcement. The database migration no longer blocks Rust work. Application-fleet
 alignment and the separately controlled writer/gate/AWS-credential actions
 remain backend operational work, not Rust Phase 0 blockers.
 
-One PostgreSQL-18 attestation correction remains active at
-[PR #110](https://github.com/frntrllc/hellofood/pull/110), head
-`d1960ab931326e04cbccd5b0acbea894c87a1fc6`. It excludes PostgreSQL 18 native
-NOT NULL catalog rows from the exact semantic-constraint count while retaining
-`pg_attribute.attnotnull` enforcement. It is a backend deployment/reactivation
-gate rather than a reason to stop the generic Rust Phase 0 foundation.
+Deployment and exact-build postflight of the PR #110 merge remain backend
+reactivation gates rather than reasons to stop the generic Rust Phase 0
+foundation.
 
 ## Grocery Phase A and Kroger
 
 [Grocery Phase A PR #107](https://github.com/frntrllc/hellofood/pull/107)
-supersedes conflicting PR #90. It is a mergeable reconstruction at
-`a80f852c23e18b485a6a27a9f978aab5bbb35c93` with migration `096` over `095`
-and is based on current main. Its candidate contract
+supersedes conflicting PR #90. Its exact pushed final-qualification head is
+`f5bf2656d4f47a40aaeb17ee1f791f3dbe5a566c`, with migration `096` over `095`.
+It predates the newly merged PR #110 main and must remain provisional. Its
+candidate contract
 claims to close the two mandatory corrections:
 
 - thread the authoritative `HouseholdContextSnapshot` through REST,
@@ -54,13 +55,14 @@ claims to close the two mandatory corrections:
   read-only.
 
 The candidate also claims the C1 native `_self`, complete-consent, persisted
-single-profile version, and order-independent hash hardening. Its reported
-local Grocery, scope/household/confirmation, and migration-history suites pass;
-hosted hermetic, PostgreSQL migration, auth, and aggregate CI are green. It is
-not authoritative yet: the public Vercel preview is red, and final Phase A
-contract provenance cannot be pinned until it is fully green and merged, then
-migrated in production from `095 → 096` and proven by live `grocery:v1`
-canaries.
+single-profile version, order-independent hash hardening, and an exact Grocery
+catalog proof covering 51 columns, 16 semantic constraints, 14 indexes, and
+account-initializer function/trigger semantics across PostgreSQL 16/18. Its
+reported local qualification is 5,396 hermetic tests and 28 real-PostgreSQL
+migration tests passed. Hosted checks and independent review are still in
+progress. Final Phase A contract provenance cannot be pinned until the
+candidate is current, fully green, reviewed, and merged, then migrated in
+production from `095 → 096` and proven by live `grocery:v1` canaries.
 
 No visible B1 provider-foundation or B2 Kroger-binding PR exists. Security D2
 also remains absent: current backend integration encryption still derives its
