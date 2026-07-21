@@ -1,7 +1,7 @@
 # Rust Phase 1 qualification report
 
-Phase 1 is implemented at code lineage
-`891270e362f3bf45ed1a8daec213bd107651f2b6`. The full local workspace,
+Phase 1 is implemented and independently approved at exact code lineage
+`a3b953ec571099c5f34f1d91aac29c2cc2bfa901`. The full local workspace,
 policy, contract, migration-freeze, native-feature, real macOS Keychain, and
 process-broker qualification passed. Phase 2 is not authorized by this report.
 
@@ -53,9 +53,16 @@ blocked until Security D2's purpose-specific versioned integration-key custody
 is deployed and reviewed. Health H1/H2 ports model server-held provider-neutral
 state only; H3 remains false unless a separate runtime capability is proven.
 
-## Remaining Phase 1 gates
+## Phase 1 disposition
 
-The evidence SHA must pass hosted macOS, Linux, and Windows CI, including the
-native credential jobs, and then receive independent exact-SHA Rust/platform/
-security approval. Until both complete, PR #18 remains draft and Phase 2
-remains unauthorized.
+GO. Exact-head Rust CI run
+[`29795094072`](https://github.com/frntrllc/heyfood/actions/runs/29795094072)
+passed 39 jobs with one intentional conditional skip and zero failures; general
+CI run
+[`29795094087`](https://github.com/frntrllc/heyfood/actions/runs/29795094087)
+passed 14 of 14 jobs. The independent Rust specialist subagent approved the
+same immutable SHA with no remaining P0, P1, or P2 Rust findings.
+
+PR #18 remains draft. This disposition approves Phase 1 only; Phase 2 remains
+unauthorized. The final Grocery Phase-A wire and Kroger token-storage gates
+above remain in force.

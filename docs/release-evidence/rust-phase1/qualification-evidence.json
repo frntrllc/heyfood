@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "evidence_date": "2026-07-20",
-  "code_commit_sha": "891270e362f3bf45ed1a8daec213bd107651f2b6",
-  "code_tree_sha": "f9d8573d91bb1d32242df4caa06f958e397ca8df",
+  "code_commit_sha": "a3b953ec571099c5f34f1d91aac29c2cc2bfa901",
+  "code_tree_sha": "cd66d710a965a4e319aafb98cc2ad6a7f88529fc",
   "source_tree_clean": true,
   "host": {
     "os": "macOS 26.5 (25F71)",
@@ -43,9 +43,9 @@
     "python_non_secret_import": "passed_read_only_idempotent",
     "unsafe_secret_import": "reauthentication_required",
     "macos_keychain": "passed_local_real_backend",
-    "linux_secret_service": "pending_exact_hosted_dbus_environment",
+    "linux_secret_service": "passed_hosted_dbus_secret_service",
     "linux_headless_owner_only_fallback": "passed_local_file_contract",
-    "windows_credential_manager": "pending_exact_hosted_evidence_sha",
+    "windows_credential_manager": "passed_hosted_native_backend",
     "killable_process_broker": "passed_parent_attestation_timeout_termination_no_orphan",
     "secrets_in_argv_or_environment": false,
     "token_file_created_by_native_backend": false
@@ -77,11 +77,11 @@
     "provider_oauth_token_model_present": false
   },
   "hosted": {
-    "status": "pending",
-    "exact_head_sha": null,
-    "rust_ci_run_id": null,
-    "rust_ci_url": null,
-    "jobs_passed": null,
-    "jobs_failed": null
+    "status": "passed",
+    "exact_head_sha": "a3b953ec571099c5f34f1d91aac29c2cc2bfa901",
+    "rust_ci_run_id": 29795094072,
+    "rust_ci_url": "https://github.com/frntrllc/heyfood/actions/runs/29795094072",
+    "jobs_passed": 39,
+    "jobs_failed": 0
   }
 }

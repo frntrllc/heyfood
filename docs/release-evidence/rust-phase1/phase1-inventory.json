@@ -4,8 +4,8 @@
   "rust_lineage": {
     "repository": "https://github.com/frntrllc/heyfood.git",
     "branch": "codex/rust-big-bang",
-    "code_commit_sha": "891270e362f3bf45ed1a8daec213bd107651f2b6",
-    "evidence_commit_sha": "891270e362f3bf45ed1a8daec213bd107651f2b6"
+    "code_commit_sha": "a3b953ec571099c5f34f1d91aac29c2cc2bfa901",
+    "evidence_commit_sha": "a3b953ec571099c5f34f1d91aac29c2cc2bfa901"
   },
   "requirements": [
     {
@@ -58,15 +58,15 @@
     },
     {
       "id": "P1-9-dg-r3-three-os-hosted",
-      "status": "blocked",
+      "status": "satisfied",
       "evidence": [".github/workflows/rust-ci.yml", "docs/release-evidence/rust-phase1/qualification-evidence.json"],
-      "blocker": "Exact evidence SHA must complete hosted macOS, Linux, and Windows CI, including target-native keyring/Credential Manager and the killable broker jobs."
+      "blocker": null
     },
     {
       "id": "P1-10-independent-rust-platform-security-review",
-      "status": "blocked",
+      "status": "satisfied",
       "evidence": ["docs/release-evidence/rust-phase1/qualification-report.md"],
-      "blocker": "Independent specialized subagent review is in progress and must approve the exact evidence SHA."
+      "blocker": null
     }
   ],
   "external_gates": {
@@ -91,8 +91,8 @@
     }
   },
   "review": {
-    "status": "pending",
-    "reviewer": null,
-    "reviewed_commit_sha": null
+    "status": "approved",
+    "reviewer": "independent Rust specialist subagent (Huygens)",
+    "reviewed_commit_sha": "a3b953ec571099c5f34f1d91aac29c2cc2bfa901"
   }
 }

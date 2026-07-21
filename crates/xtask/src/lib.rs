@@ -1233,9 +1233,9 @@ pub fn verify_phase0_evidence(root: &Path) -> Result<Phase0EvidenceReport, Strin
     })
 }
 
-/// Validate Phase 1 evidence while preserving the two deliberately unresolved
-/// external boundaries. A structural pass is not an approval: blockers and the
-/// independent review status remain explicit in the returned report.
+/// Validate Phase 1 evidence while preserving the deliberately unresolved
+/// external integration boundaries. Approval metadata remains exact-SHA bound
+/// and is invalid unless hosted evidence passed with no requirement blockers.
 pub fn verify_phase1_evidence(root: &Path) -> Result<Phase1EvidenceReport, String> {
     let document = read_json(
         root,
@@ -2719,9 +2719,9 @@ mod tests {
     fn checked_in_phase1_evidence_preserves_external_gates() {
         let phase1 = verify_phase1_evidence(&root()).expect("Phase 1 evidence must validate");
         assert_eq!(phase1.requirements, 10);
-        assert_eq!(phase1.blockers, 2);
-        assert_eq!(phase1.hosted_status, "pending");
-        assert_eq!(phase1.review_status, "pending");
+        assert_eq!(phase1.blockers, 0);
+        assert_eq!(phase1.hosted_status, "passed");
+        assert_eq!(phase1.review_status, "approved");
     }
 
     #[test]
