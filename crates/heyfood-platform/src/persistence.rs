@@ -521,8 +521,38 @@ pub struct NativeAuthStore {
     #[cfg(not(windows))]
     state_path: PathBuf,
     lock_path: PathBuf,
+    reconciliation_path: PathBuf,
     #[cfg(all(windows, feature = "native-credentials"))]
     target: String,
+}
+
+/// Exclusive channel-refresh transaction. The lock is held from the second
+/// read through the remote rotation and its durable commit, preventing two
+/// CLI processes from consuming the same rotating refresh grant.
+pub struct NativeAuthRefreshGuard<'a> {
+    store: &'a NativeAuthStore,
+    _lock: FileLock,
+}
+
+#[cfg(any(not(windows), feature = "native-credentials"))]
+impl NativeAuthRefreshGuard<'_> {
+    pub fn load(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
+        self.store.ensure_reconciled_unlocked()?;
+        self.store.load_unlocked()
+    }
+
+    pub fn replace(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
+        self.store.replace_unlocked(bundle)?;
+        clear_any_reconciliation_marker(&self.store.reconciliation_path)
+    }
+
+    pub fn mark_reconciliation_required(&self) -> Result<(), PortError> {
+        AtomicFile::replace(
+            &self.store.reconciliation_path,
+            b"channel_refresh_outcome_uncertain\n",
+        )
+        .map_err(|error| PortError::uncertain("auth_reconciliation_write", error.to_string()))
+    }
 }
 
 impl NativeAuthStore {
@@ -533,6 +563,7 @@ impl NativeAuthStore {
         Ok(Self {
             state_path: root.join("auth.native"),
             lock_path: root.join("auth.lock"),
+            reconciliation_path: root.join("auth.reconciliation"),
         })
     }
 
@@ -548,11 +579,33 @@ impl NativeAuthStore {
         }
         Ok(Self {
             lock_path: root.join("auth.lock"),
+            reconciliation_path: root.join("auth.reconciliation"),
             target: format!(
                 "{WINDOWS_CREDENTIAL_SERVICE}:auth:{}",
                 hex_encode(&identity)
             ),
         })
+    }
+
+    /// Start a serialized refresh transaction. Callers must acquire this only
+    /// after a cheap initial load, then reload through the guard before making
+    /// a consuming refresh request.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn begin_refresh(&self) -> Result<NativeAuthRefreshGuard<'_>, PortError> {
+        Ok(NativeAuthRefreshGuard {
+            store: self,
+            _lock: FileLock::acquire(&self.lock_path, true)?,
+        })
+    }
+
+    fn ensure_reconciled_unlocked(&self) -> Result<(), PortError> {
+        if self.reconciliation_path.exists() {
+            return Err(PortError::uncertain(
+                "auth_reconciliation_required",
+                "channel credentials have an unresolved refresh outcome; reconnect the account before retrying",
+            ));
+        }
+        Ok(())
     }
 
     #[cfg(all(windows, not(feature = "native-credentials")))]
@@ -575,16 +628,15 @@ impl NativeAuthStore {
                 "an account is already connected; log out before registering another account",
             ));
         }
-        AtomicFile::replace(&self.state_path, &encode_auth_bundle(bundle))
+        AtomicFile::replace(&self.state_path, &encode_auth_bundle(bundle))?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
     #[cfg(not(windows))]
     pub fn load(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
         let _lock = FileLock::acquire(&self.lock_path, false)?;
-        if !self.state_path.exists() {
-            return Ok(None);
-        }
-        decode_auth_bundle(&read_limited(&self.state_path, 1024 * 1024)?).map(Some)
+        self.ensure_reconciled_unlocked()?;
+        self.load_unlocked()
     }
 
     #[cfg(not(windows))]
@@ -593,6 +645,23 @@ impl NativeAuthStore {
             .validate()
             .map_err(|error| PortError::new("auth_validation", error))?;
         let _lock = FileLock::acquire(&self.lock_path, true)?;
+        self.replace_unlocked(bundle)?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
+    }
+
+    #[cfg(not(windows))]
+    fn load_unlocked(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
+        if !self.state_path.exists() {
+            return Ok(None);
+        }
+        decode_auth_bundle(&read_limited(&self.state_path, 1024 * 1024)?).map(Some)
+    }
+
+    #[cfg(not(windows))]
+    fn replace_unlocked(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
+        bundle
+            .validate()
+            .map_err(|error| PortError::new("auth_validation", error))?;
         if !self.state_path.exists() {
             return Err(PortError::new(
                 "auth_missing",
@@ -623,13 +692,15 @@ impl NativeAuthStore {
         }
         self.windows_entry()?
             .set_secret(&document)
-            .map_err(|error| keyring_error("credential_manager_write", error))
+            .map_err(|error| keyring_error("credential_manager_write", error))?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
     #[cfg(all(windows, feature = "native-credentials"))]
     pub fn load(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
         let _lock = FileLock::acquire(&self.lock_path, false)?;
-        self.read_windows_unlocked()
+        self.ensure_reconciled_unlocked()?;
+        self.load_unlocked()
     }
 
     #[cfg(all(windows, feature = "native-credentials"))]
@@ -638,6 +709,20 @@ impl NativeAuthStore {
             .validate()
             .map_err(|error| PortError::new("auth_validation", error))?;
         let _lock = FileLock::acquire(&self.lock_path, true)?;
+        self.replace_unlocked(bundle)?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    fn load_unlocked(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
+        self.read_windows_unlocked()
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    fn replace_unlocked(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
+        bundle
+            .validate()
+            .map_err(|error| PortError::new("auth_validation", error))?;
         if self.read_windows_unlocked()?.is_none() {
             return Err(PortError::new(
                 "auth_missing",
@@ -660,7 +745,9 @@ impl NativeAuthStore {
     pub fn delete(&self) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
         match self.windows_entry()?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Ok(()) | Err(keyring::Error::NoEntry) => {
+                clear_any_reconciliation_marker(&self.reconciliation_path)
+            }
             Err(error) => Err(keyring_error("credential_manager_delete", error)),
         }
     }

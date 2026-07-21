@@ -4,9 +4,10 @@ use std::time::Duration;
 use clap::Parser;
 use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
 use heyfood_application::{
-    BoxFuture, ClockPort, CredentialCommit, CredentialPort, EnsureSession, PortError,
+    BoxFuture, ClockPort, CredentialCommit, CredentialPort, EnsureSession, EnsureSessionError,
+    PortError,
 };
-use heyfood_bin::{OneShotExecutor, execute_qualified_one_shot};
+use heyfood_bin::{OneShotError, OneShotExecutor, execute_qualified_one_shot};
 use heyfood_cli::{CommandLine, OutputMode};
 use heyfood_core::{
     AccountId, CredentialVersion, NetworkPolicy, SensitiveString, ServiceUrl, SessionCredentials,
@@ -26,6 +27,30 @@ fn credentials() -> SessionCredentials {
         4_102_444_800,
     )
     .unwrap()
+}
+
+#[test]
+fn session_reconciliation_errors_remain_uncertain_at_the_cli_boundary() {
+    let cases = [
+        EnsureSessionError::ReconciliationRequired,
+        EnsureSessionError::ServiceReconciliationRequired(PortError::uncertain(
+            "refresh_transport",
+            "response was not observed",
+        )),
+        EnsureSessionError::CredentialReconciliationRequired(PortError::new(
+            "credential_write",
+            "write failed",
+        )),
+        EnsureSessionError::ReconciliationMarkerWrite {
+            operation: PortError::uncertain("refresh_transport", "response was not observed"),
+            marker: PortError::new("marker_write", "write failed"),
+        },
+    ];
+    for error in cases {
+        let converted = OneShotError::from(error);
+        assert!(converted.outcome_uncertain);
+        assert!(converted.code.contains("reconciliation") || converted.code.contains("uncertain"));
+    }
 }
 
 async fn fixture_service() -> (TcpListener, HttpService) {

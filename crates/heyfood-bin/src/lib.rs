@@ -6,8 +6,8 @@ use std::{fmt, io, time::Duration};
 
 use heyfood_agent_runtime::{GroceryExport, HttpService};
 use heyfood_application::{
-    EnsureSession, EnsureSessionOutcome, RefreshPolicy, TurnContext, TurnRequest,
-    execute_one_shot_turn,
+    EnsureSession, EnsureSessionError, EnsureSessionOutcome, RefreshPolicy, TurnContext,
+    TurnRequest, execute_one_shot_turn,
 };
 use heyfood_cli::{
     AskArgs, Command, GroceryCommand, HealthCommand, OutputMode, render_agent_result,
@@ -61,6 +61,29 @@ impl From<heyfood_application::PortError> for OneShotError {
     }
 }
 
+impl From<EnsureSessionError> for OneShotError {
+    fn from(value: EnsureSessionError) -> Self {
+        let (code, outcome_uncertain) = match &value {
+            EnsureSessionError::ReconciliationRequired => ("session_reconciliation_required", true),
+            EnsureSessionError::Service(error) => (error.code, error.outcome_uncertain),
+            EnsureSessionError::ServiceReconciliationRequired(_) => {
+                ("session_refresh_outcome_uncertain", true)
+            }
+            EnsureSessionError::CredentialReconciliationRequired(_) => {
+                ("session_refresh_persistence_uncertain", true)
+            }
+            EnsureSessionError::ReconciliationMarkerWrite { .. } => {
+                ("session_reconciliation_marker_write", true)
+            }
+        };
+        Self {
+            code,
+            message: terminal_safe_text(&value.to_string()),
+            outcome_uncertain,
+        }
+    }
+}
+
 /// Phase 2 executor over explicit, already-validated native state. The public
 /// binary constructs this for the native command families it advertises.
 pub struct OneShotExecutor<'a> {
@@ -85,9 +108,8 @@ pub async fn execute_qualified_one_shot(
     let credentials = match ensure_session
         .execute(snapshot, cancellation.child_token())
         .await
-        .map_err(|error| {
-            OneShotError::new("session_refresh", terminal_safe_text(&error.to_string()))
-        })? {
+        .map_err(OneShotError::from)?
+    {
         EnsureSessionOutcome::Current(credentials)
         | EnsureSessionOutcome::Refreshed(credentials) => credentials,
         EnsureSessionOutcome::CancelledBeforeDispatch => {

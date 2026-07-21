@@ -411,9 +411,9 @@ impl RegistrationClient {
             let response = self.poll_device_token(&authorization).await?;
             if response.status().is_success() {
                 break response.json::<OAuthTokenResponse>().await.map_err(|_| {
-                    RegistrationError::new(
-                        "auth_contract_error",
-                        "Device token exchange returned an unsupported response.",
+                    RegistrationError::uncertain(
+                        "device_token_contract_uncertain",
+                        "The device authorization was consumed, but its token response was unsupported. Reconcile account state before retrying registration.",
                     )
                 })?;
             }
@@ -463,9 +463,9 @@ impl RegistrationClient {
         };
         if oauth.access_token.is_empty() || oauth.refresh_token.is_empty() || oauth.scope.is_empty()
         {
-            return Err(RegistrationError::new(
-                "auth_contract_error",
-                "Device token exchange returned incomplete credentials.",
+            return Err(RegistrationError::uncertain(
+                "device_token_contract_uncertain",
+                "The device authorization was consumed, but its token response was incomplete. Reconcile account state before retrying registration.",
             ));
         }
         // A successful device-token response consumed the grant. Finish the
@@ -487,9 +487,9 @@ impl RegistrationClient {
             oauth.scope,
         )
         .map_err(|_| {
-            RegistrationError::new(
-                "auth_contract_error",
-                "Device token exchange returned invalid credentials.",
+            RegistrationError::uncertain(
+                "device_token_contract_uncertain",
+                "The device authorization was consumed, but its token credentials were invalid. Reconcile account state before retrying registration.",
             )
         })?;
         let profile_status = self
@@ -864,6 +864,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn malformed_success_after_device_grant_consumption_is_outcome_uncertain() {
+        let (base_url, server) =
+            fixture_server_with_token(DeviceTokenBehavior::MalformedSuccess).await;
+        let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let client = RegistrationClient::new(service_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let authorization = client.start_device_registration().await.unwrap();
+        let error = client
+            .complete_device_registration(
+                authorization,
+                "heyfood-test-device".into(),
+                Duration::from_secs(5),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "device_token_contract_uncertain");
+        assert!(error.outcome_uncertain);
+        assert!(!error.retryable);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn eof_after_session_dispatch_is_explicitly_outcome_uncertain() {
         let (base_url, server) = fixture_server_with(SessionBehavior::Eof).await;
         let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
@@ -988,6 +1010,7 @@ mod tests {
             release: Arc<Notify>,
         },
         Eof,
+        MalformedSuccess,
     }
 
     async fn fixture_server() -> (String, tokio::task::JoinHandle<()>) {
@@ -1016,7 +1039,7 @@ mod tests {
         let verification_uri = format!("{base_url}/authorize?flow=device");
         let server = tokio::spawn(async move {
             let request_count = match (&token_behavior, &session_behavior) {
-                (DeviceTokenBehavior::Eof, _) => 3,
+                (DeviceTokenBehavior::Eof | DeviceTokenBehavior::MalformedSuccess, _) => 3,
                 (_, SessionBehavior::Eof) => 4,
                 _ => 5,
             };
@@ -1050,6 +1073,17 @@ mod tests {
                             release.notified().await;
                         }
                         DeviceTokenBehavior::Eof => {
+                            socket.shutdown().await.unwrap();
+                            continue;
+                        }
+                        DeviceTokenBehavior::MalformedSuccess => {
+                            let body = b"not-json";
+                            let header = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            socket.write_all(header.as_bytes()).await.unwrap();
+                            socket.write_all(body).await.unwrap();
                             socket.shutdown().await.unwrap();
                             continue;
                         }

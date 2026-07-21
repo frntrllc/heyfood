@@ -118,17 +118,54 @@ async fn one_shot_inner(
         .duration_since(UNIX_EPOCH)
         .map_or(0, |value| value.as_secs());
     if auth.channel.expires_at_unix() <= i64::try_from(now).unwrap_or(i64::MAX) {
-        let client = RegistrationClient::new(service_url.clone(), policy)
-            .map_err(registration_to_one_shot)?;
-        auth.channel = client
-            .refresh_channel(&auth.channel)
-            .await
-            .map_err(registration_to_one_shot)?;
-        // A rotated refresh token is server-accepted state. Persist the whole
-        // bundle before allowing session re-exchange to consume it.
-        auth_store
-            .replace(&auth)
+        // Refresh tokens rotate. Serialize the reload, remote consumption, and
+        // durable replacement across CLI processes so a stale process cannot
+        // consume and then overwrite another process's grant.
+        let refresh = auth_store
+            .begin_refresh()
             .map_err(heyfood_bin::OneShotError::from)?;
+        auth = refresh
+            .load()
+            .map_err(heyfood_bin::OneShotError::from)?
+            .ok_or_else(|| {
+                heyfood_bin::OneShotError::new(
+                    "login_required",
+                    "No hello.food account is connected. Run `heyfood register` first.",
+                )
+            })?;
+        if auth.channel.expires_at_unix() > i64::try_from(now).unwrap_or(i64::MAX) {
+            drop(refresh);
+        } else {
+            let client = RegistrationClient::new(service_url.clone(), policy)
+                .map_err(registration_to_one_shot)?;
+            auth.channel = match client.refresh_channel(&auth.channel).await {
+                Ok(channel) => channel,
+                Err(error) if error.outcome_uncertain => {
+                    refresh.mark_reconciliation_required().map_err(|_| {
+                        uncertain_one_shot(
+                            "channel_refresh_reconciliation_write",
+                            "The channel credential refresh outcome is uncertain and its reconciliation marker could not be saved. Reconnect the account before retrying.",
+                        )
+                    })?;
+                    return Err(registration_to_one_shot(error));
+                }
+                Err(error) => return Err(registration_to_one_shot(error)),
+            };
+            // A rotated refresh token is server-accepted state. Persist the whole
+            // bundle before allowing session re-exchange to consume it.
+            if refresh.replace(&auth).is_err() {
+                refresh.mark_reconciliation_required().map_err(|_| {
+                    uncertain_one_shot(
+                        "channel_refresh_reconciliation_write",
+                        "The rotated channel credential could not be saved and its reconciliation marker also failed. Reconnect the account before retrying.",
+                    )
+                })?;
+                return Err(uncertain_one_shot(
+                    "channel_refresh_persistence_outcome_uncertain",
+                    "The channel credential rotated, but it could not be saved. Reconnect the account before retrying.",
+                ));
+            }
+        }
     }
 
     let credential_store = Arc::new(
@@ -200,6 +237,14 @@ fn registration_to_one_shot(error: RegistrationError) -> heyfood_bin::OneShotErr
         code: error.code,
         message: error.public_message,
         outcome_uncertain: error.outcome_uncertain,
+    }
+}
+
+fn uncertain_one_shot(code: &'static str, message: impl Into<String>) -> heyfood_bin::OneShotError {
+    heyfood_bin::OneShotError {
+        code,
+        message: message.into(),
+        outcome_uncertain: true,
     }
 }
 

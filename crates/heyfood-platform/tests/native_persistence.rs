@@ -148,6 +148,39 @@ fn complete_auth_bundle_is_atomic_owner_only_and_refuses_overwrite() {
 
 #[test]
 #[cfg(not(windows))]
+fn channel_refresh_transaction_is_single_flight_and_reconciliation_is_durable() {
+    let root = TempRoot::new("auth-refresh-transaction");
+    let store = Arc::new(NativeAuthStore::open(&root.0).unwrap());
+    store.initialize(&auth_bundle()).unwrap();
+
+    let refresh = store.begin_refresh().unwrap();
+    assert_eq!(refresh.load().unwrap(), Some(auth_bundle()));
+    let contender = Arc::clone(&store);
+    let blocked = std::thread::spawn(move || match contender.begin_refresh() {
+        Ok(_) => panic!("concurrent refresh unexpectedly acquired the auth lock"),
+        Err(error) => error,
+    })
+    .join()
+    .unwrap();
+    assert_eq!(blocked.code, "lock_timeout");
+
+    refresh.mark_reconciliation_required().unwrap();
+    drop(refresh);
+    let unresolved = store.load().unwrap_err();
+    assert_eq!(unresolved.code, "auth_reconciliation_required");
+    assert!(unresolved.outcome_uncertain);
+
+    let refresh = store.begin_refresh().unwrap();
+    let mut replacement = auth_bundle();
+    replacement.channel.refresh_token = SensitiveString::new("channel-refresh-rotated");
+    refresh.replace(&replacement).unwrap();
+    drop(refresh);
+    assert_eq!(store.load().unwrap(), Some(replacement));
+    assert!(!root.0.join("auth.reconciliation").exists());
+}
+
+#[test]
+#[cfg(not(windows))]
 fn credential_rotation_is_versioned_idempotent_and_owner_only() {
     let root = TempRoot::new("credentials");
     let store = FileCredentialStore::open(&root.0).unwrap();
