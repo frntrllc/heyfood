@@ -55,14 +55,12 @@ state only; H3 remains false unless a separate runtime capability is proven.
 
 ## Phase 1 disposition
 
-GO. Exact-head Rust CI run
-[`29795094072`](https://github.com/frntrllc/heyfood/actions/runs/29795094072)
-passed 39 jobs with one intentional conditional skip and zero failures; general
-CI run
-[`29795094087`](https://github.com/frntrllc/heyfood/actions/runs/29795094087)
-passed 14 of 14 jobs. The independent Rust specialist subagent approved the
-same immutable SHA with no remaining P0, P1, or P2 Rust findings.
+REQUEST CHANGES. A subsequent independent review at evidence head `326c50c6`
+identified two P1 defects: incomplete frozen C3 confirmation semantics and
+incomplete removal of explicit foreign Windows ACL entries. It also identified
+overbroad Health status domains and stale review-packet metadata. The prior GO
+is superseded until those findings are corrected, a new exact remediation SHA
+passes hosted qualification, and the Rust specialist approves that SHA.
 
-PR #18 remains draft. This disposition approves Phase 1 only; Phase 2 remains
-unauthorized. The final Grocery Phase-A wire and Kroger token-storage gates
-above remain in force.
+PR #18 remains draft. Phase 2 remains unauthorized. The final Grocery Phase-A
+wire and Kroger token-storage gates above remain in force.

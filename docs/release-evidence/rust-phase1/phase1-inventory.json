@@ -10,15 +10,15 @@
   "requirements": [
     {
       "id": "P1-1-core-contracts",
-      "status": "satisfied",
+      "status": "blocked",
       "evidence": ["crates/heyfood-core/src/error.rs", "crates/heyfood-core/src/validation.rs", "crates/heyfood-core/src/presentation.rs", "crates/heyfood-core/tests/contracts.rs"],
-      "blocker": null
+      "blocker": "A new exact remediation SHA must complete hosted macOS, Linux, and Windows CI, including target-native keyring/Credential Manager and the killable broker jobs."
     },
     {
       "id": "P1-2-native-platform",
-      "status": "satisfied",
+      "status": "blocked",
       "evidence": ["crates/heyfood-platform/src/lib.rs", "crates/heyfood-platform/src/persistence.rs", "crates/heyfood-platform/tests/phase1_platform.rs"],
-      "blocker": null
+      "blocker": "Independent review requested changes at evidence head 326c50c6; the specialist must approve the exact remediation SHA."
     },
     {
       "id": "P1-3-supervisor-and-snapshots",
@@ -91,8 +91,8 @@
     }
   },
   "review": {
-    "status": "approved",
-    "reviewer": "independent Rust specialist subagent (Huygens)",
-    "reviewed_commit_sha": "a3b953ec571099c5f34f1d91aac29c2cc2bfa901"
+    "status": "pending",
+    "reviewer": null,
+    "reviewed_commit_sha": null
   }
 }

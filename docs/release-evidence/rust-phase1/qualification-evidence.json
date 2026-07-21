@@ -77,11 +77,11 @@
     "provider_oauth_token_model_present": false
   },
   "hosted": {
-    "status": "passed",
-    "exact_head_sha": "a3b953ec571099c5f34f1d91aac29c2cc2bfa901",
-    "rust_ci_run_id": 29795094072,
-    "rust_ci_url": "https://github.com/frntrllc/heyfood/actions/runs/29795094072",
-    "jobs_passed": 39,
-    "jobs_failed": 0
+    "status": "pending",
+    "exact_head_sha": null,
+    "rust_ci_run_id": null,
+    "rust_ci_url": null,
+    "jobs_passed": null,
+    "jobs_failed": null
   }
 }
