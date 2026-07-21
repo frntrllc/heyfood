@@ -12,18 +12,19 @@ use heyfood_application::{ConfigCommit, ConfigMutation, ConfigPort};
 #[cfg(any(not(windows), feature = "native-credentials"))]
 use heyfood_application::{CredentialCommit, CredentialPort};
 #[cfg(any(not(windows), feature = "native-credentials"))]
-use heyfood_core::{
-    AccountId, AuthCredentialBundle, ChannelCredentials, CredentialVersion, SensitiveString,
-    SessionCredentials,
-};
+use heyfood_core::{AccountId, CredentialVersion, SensitiveString, SessionCredentials};
+#[cfg(not(windows))]
+use heyfood_core::{AuthCredentialBundle, ChannelCredentials};
 use heyfood_core::{ClientConfig, CommitId, ConfigRevision, NetworkPolicy, ServiceUrl};
 #[cfg(not(windows))]
 use heyfood_core::{GenerationId, OperationId, SessionSnapshot};
 #[cfg(all(not(windows), feature = "native-credentials"))]
 use heyfood_platform::KeyringCredentialStore;
+#[cfg(not(windows))]
+use heyfood_platform::NativeAuthStore;
 #[cfg(all(windows, feature = "native-credentials"))]
 use heyfood_platform::WindowsCredentialStore;
-use heyfood_platform::{AtomicFile, FileCredentialStore, NativeAuthStore, NativeConfigStore};
+use heyfood_platform::{AtomicFile, FileCredentialStore, NativeConfigStore};
 
 fn block_on<T>(future: impl Future<Output = T>) -> T {
     tokio::runtime::Builder::new_current_thread()
