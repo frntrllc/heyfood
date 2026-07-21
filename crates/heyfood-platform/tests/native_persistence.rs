@@ -13,14 +13,14 @@ use heyfood_application::{ConfigCommit, ConfigMutation, ConfigPort};
 use heyfood_application::{CredentialCommit, CredentialPort};
 #[cfg(any(not(windows), feature = "native-credentials"))]
 use heyfood_core::{AccountId, CredentialVersion, SensitiveString, SessionCredentials};
-#[cfg(not(windows))]
+#[cfg(any(not(windows), feature = "native-credentials"))]
 use heyfood_core::{AuthCredentialBundle, ChannelCredentials};
 use heyfood_core::{ClientConfig, CommitId, ConfigRevision, NetworkPolicy, ServiceUrl};
 #[cfg(not(windows))]
 use heyfood_core::{GenerationId, OperationId, SessionSnapshot};
 #[cfg(all(not(windows), feature = "native-credentials"))]
 use heyfood_platform::KeyringCredentialStore;
-#[cfg(not(windows))]
+#[cfg(any(not(windows), feature = "native-credentials"))]
 use heyfood_platform::NativeAuthStore;
 #[cfg(all(windows, feature = "native-credentials"))]
 use heyfood_platform::WindowsCredentialStore;
@@ -78,7 +78,7 @@ fn credentials(version: u64) -> SessionCredentials {
     .unwrap()
 }
 
-#[cfg(not(windows))]
+#[cfg(any(not(windows), feature = "native-credentials"))]
 fn auth_bundle() -> AuthCredentialBundle {
     AuthCredentialBundle {
         channel: ChannelCredentials::from_unix_expiry(
@@ -95,6 +95,27 @@ fn auth_bundle() -> AuthCredentialBundle {
 }
 
 #[test]
+#[cfg(all(windows, feature = "native-credentials"))]
+fn complete_auth_bundle_uses_windows_credential_manager_and_refuses_overwrite() {
+    let root = TempRoot::new("windows-auth-bundle");
+    let store = NativeAuthStore::open(&root.0).unwrap();
+    let expected = auth_bundle();
+    store.initialize(&expected).unwrap();
+    assert_eq!(store.load().unwrap(), Some(expected));
+    assert_eq!(
+        store.initialize(&auth_bundle()).unwrap_err().code,
+        "auth_exists"
+    );
+    let mut replacement = auth_bundle();
+    replacement.channel.access_token = SensitiveString::new("channel-access-rotated");
+    store.replace(&replacement).unwrap();
+    assert_eq!(store.load().unwrap(), Some(replacement));
+    assert!(!root.0.join("auth.native").exists());
+    store.delete().unwrap();
+    assert!(store.load().unwrap().is_none());
+}
+
+#[test]
 #[cfg(not(windows))]
 fn complete_auth_bundle_is_atomic_owner_only_and_refuses_overwrite() {
     let root = TempRoot::new("auth-bundle");
@@ -106,6 +127,10 @@ fn complete_auth_bundle_is_atomic_owner_only_and_refuses_overwrite() {
         store.initialize(&auth_bundle()).unwrap_err().code,
         "auth_exists"
     );
+    let mut replacement = auth_bundle();
+    replacement.channel.access_token = SensitiveString::new("channel-access-rotated");
+    store.replace(&replacement).unwrap();
+    assert_eq!(store.load().unwrap(), Some(replacement));
 
     #[cfg(unix)]
     {

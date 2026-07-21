@@ -88,84 +88,108 @@ pub type Cli = CommandLine;
 pub enum Command {
     /// Ask the hosted agent a one-shot question.
     Ask(AskArgs),
-    /// Reply in the remembered conversation.
+    /// Reply to an explicit conversation ID.
     Reply(AskArgs),
     /// Run classic line-oriented chat.
+    #[command(hide = true)]
     Chat(LegacyArgs),
     /// Log a meal through the hosted agent.
     Log(AskArgs),
     /// Assess a menu or food item.
     Item(AskArgs),
     /// Display the daily meal summary.
+    #[command(hide = true)]
     Daily(LegacyArgs),
     /// Display a dietary profile.
+    #[command(hide = true)]
     Profile(LegacyArgs),
     /// Complete dietary onboarding; retained for parity but implemented in Phase 4.
+    #[command(hide = true)]
     Onboard(LegacyArgs),
     /// Authenticate an existing account.
+    #[command(hide = true)]
     Login(LegacyArgs),
     /// Create and connect a hello.food account.
     Register(RegisterArgs),
     /// Revoke the local/server session.
+    #[command(hide = true)]
     Logout(LegacyArgs),
     /// Show session status.
+    #[command(hide = true)]
     Status(LegacyArgs),
     /// Run safe diagnostics.
+    #[command(hide = true)]
     Doctor(LegacyArgs),
     /// Search restaurants.
+    #[command(hide = true)]
     Search(LegacyArgs),
     /// Fetch a restaurant menu.
+    #[command(hide = true)]
     Menu(LegacyArgs),
     /// Compatibility alias for menu lookup.
+    #[command(hide = true)]
     GetMenu(LegacyArgs),
     /// Request recommendations.
+    #[command(hide = true)]
     Recommend(LegacyArgs),
     /// Grocery Phase-A commands.
+    #[command(hide = true)]
     Grocery {
         #[command(subcommand)]
         command: GroceryCommand,
     },
     /// Provider-neutral H1/H2 health commands.
+    #[command(hide = true)]
     Health {
         #[command(subcommand)]
         command: HealthCommand,
     },
+    #[command(hide = true)]
     Recipes {
         #[command(subcommand)]
         command: RecipesCommand,
     },
+    #[command(hide = true)]
     Location {
         #[command(subcommand)]
         command: LocationCommand,
     },
+    #[command(hide = true)]
     Context {
         #[command(subcommand)]
         command: ContextCommand,
     },
+    #[command(hide = true)]
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    #[command(hide = true)]
     Members {
         #[command(subcommand)]
         command: MembersCommand,
     },
+    #[command(hide = true)]
     Household {
         #[command(subcommand)]
         command: HouseholdCommand,
     },
+    #[command(hide = true)]
     Conversation {
         #[command(subcommand)]
         command: ConversationCommand,
     },
+    #[command(hide = true)]
     Voice {
         #[command(subcommand)]
         command: VoiceCommand,
     },
+    #[command(hide = true)]
     Account {
         #[command(subcommand)]
         command: AccountCommand,
     },
+    #[command(hide = true)]
     Channels {
         #[command(subcommand)]
         command: ChannelsCommand,

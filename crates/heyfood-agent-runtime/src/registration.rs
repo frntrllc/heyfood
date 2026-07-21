@@ -120,6 +120,13 @@ struct DeviceTokenRequest<'a> {
     device_code: &'a str,
 }
 
+#[derive(Serialize)]
+struct ChannelRefreshRequest<'a> {
+    grant_type: &'static str,
+    client_id: &'a str,
+    refresh_token: &'a str,
+}
+
 #[derive(Deserialize)]
 struct OAuthTokenResponse {
     access_token: String,
@@ -227,6 +234,73 @@ impl RegistrationClient {
                 RegistrationError::new(code, message)
             })?;
         Ok(capabilities)
+    }
+
+    /// Rotate an expired channel grant before it is needed for app-session
+    /// re-exchange. Callers must durably replace the complete auth bundle
+    /// before using the returned access token.
+    pub async fn refresh_channel(
+        &self,
+        current: &ChannelCredentials,
+    ) -> Result<ChannelCredentials, RegistrationError> {
+        let response = self
+            .client
+            .post(self.endpoint("/v1/channel/oauth/token")?)
+            .header("Accept", "application/json")
+            .header("X-Request-ID", OperationId::new().as_uuid().to_string())
+            .json(&ChannelRefreshRequest {
+                grant_type: "refresh_token",
+                client_id: &current.client_id,
+                refresh_token: current.refresh_token.expose_secret(),
+            })
+            .send()
+            .await
+            .map_err(|_| {
+                RegistrationError::uncertain(
+                    "channel_refresh_outcome_uncertain",
+                    "The channel credential refresh response was not observed. Reconcile account state before retrying.",
+                )
+            })?;
+        if !response.status().is_success() {
+            return Err(RegistrationError::new(
+                "login_required",
+                "The channel authorization expired. Reconnect the hello.food account.",
+            ));
+        }
+        let refreshed: OAuthTokenResponse = response.json().await.map_err(|_| {
+            RegistrationError::uncertain(
+                "channel_refresh_contract_uncertain",
+                "The channel credential was rotated but its response was invalid. Reconcile account state before retrying.",
+            )
+        })?;
+        if refreshed.access_token.is_empty()
+            || refreshed.refresh_token.is_empty()
+            || refreshed.expires_in == 0
+            || refreshed.scope.split_whitespace().collect::<Vec<_>>()
+                != current.scope.split_whitespace().collect::<Vec<_>>()
+        {
+            return Err(RegistrationError::uncertain(
+                "channel_refresh_contract_uncertain",
+                "The channel credential was rotated with an invalid contract. Reconcile account state before retrying.",
+            ));
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |value| value.as_secs());
+        ChannelCredentials::from_unix_expiry(
+            current.client_id.clone(),
+            current.device_id.clone(),
+            SensitiveString::new(refreshed.access_token),
+            SensitiveString::new(refreshed.refresh_token),
+            i64::try_from(now.saturating_add(refreshed.expires_in)).unwrap_or(i64::MAX),
+            refreshed.scope,
+        )
+        .map_err(|_| {
+            RegistrationError::uncertain(
+                "channel_refresh_contract_uncertain",
+                "The channel credential was rotated with invalid bounds. Reconcile account state before retrying.",
+            )
+        })
     }
 
     pub async fn start_device_registration(
@@ -769,6 +843,63 @@ mod tests {
         assert_eq!(error.code, "session_exchange_outcome_uncertain");
         assert!(error.outcome_uncertain);
         assert!(!error.retryable);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn expired_channel_grant_rotates_without_changing_scope_or_device() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let count = socket.read(&mut buffer).await.unwrap();
+                request.extend_from_slice(&buffer[..count]);
+                if complete_http_request(&request) {
+                    break;
+                }
+            }
+            let text = String::from_utf8(request).unwrap();
+            assert!(text.starts_with("POST /v1/channel/oauth/token "));
+            assert!(text.contains("\"grant_type\":\"refresh_token\""));
+            assert!(text.contains("\"client_id\":\"hf_cid_heyfood_cli\""));
+            assert!(text.contains("\"refresh_token\":\"channel-refresh-old\""));
+            let body = serde_json::to_vec(&serde_json::json!({
+                "access_token": "channel-access-new",
+                "refresh_token": "channel-refresh-new",
+                "expires_in": 3600,
+                "scope": "account:link profile:read"
+            }))
+            .unwrap();
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(header.as_bytes()).await.unwrap();
+            socket.write_all(&body).await.unwrap();
+        });
+        let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let client = RegistrationClient::new(service_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let current = ChannelCredentials::from_unix_expiry(
+            "hf_cid_heyfood_cli",
+            "heyfood-device",
+            SensitiveString::new("channel-access-old"),
+            SensitiveString::new("channel-refresh-old"),
+            1,
+            "account:link profile:read",
+        )
+        .unwrap();
+        let refreshed = client.refresh_channel(&current).await.unwrap();
+        assert_eq!(refreshed.client_id, current.client_id);
+        assert_eq!(refreshed.device_id, current.device_id);
+        assert_eq!(refreshed.scope, current.scope);
+        assert_eq!(refreshed.access_token.expose_secret(), "channel-access-new");
+        assert_eq!(
+            refreshed.refresh_token.expose_secret(),
+            "channel-refresh-new"
+        );
         server.await.unwrap();
     }
 

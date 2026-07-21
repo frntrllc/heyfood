@@ -5,6 +5,7 @@
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use heyfood_agent_runtime::{
     CliAuthContext, HttpDeadlines, HttpService, RegistrationClient, RegistrationError,
@@ -15,9 +16,11 @@ use heyfood_core::{
     BrowserUrl, NetworkPolicy, OperationId, SensitiveString, ServiceUrl, SessionSnapshot,
     terminal_safe_text,
 };
-use heyfood_platform::{
-    FileCredentialStore, NativeAuthStore, NativeBrowser, NativeClock, NativePaths,
-};
+#[cfg(not(all(windows, feature = "native-credentials")))]
+use heyfood_platform::FileCredentialStore as NativeSessionStore;
+#[cfg(all(windows, feature = "native-credentials"))]
+use heyfood_platform::WindowsCredentialStore as NativeSessionStore;
+use heyfood_platform::{NativeAuthStore, NativeBrowser, NativeClock, NativePaths};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
@@ -50,12 +53,7 @@ async fn main() -> ExitCode {
 const fn is_native_one_shot(command: &Command) -> bool {
     matches!(
         command,
-        Command::Ask(_)
-            | Command::Reply(_)
-            | Command::Log(_)
-            | Command::Item(_)
-            | Command::Grocery { .. }
-            | Command::Health { .. }
+        Command::Ask(_) | Command::Reply(_) | Command::Log(_) | Command::Item(_)
     )
 }
 
@@ -76,9 +74,7 @@ fn pending_command(machine: bool) -> ExitCode {
     failure(
         "command_not_available",
         "This command has not been implemented in the native Rust client yet.",
-        Some(
-            "Run `heyfood --help`; native register, ask, reply, log, item, Grocery, and Health commands are available.",
-        ),
+        Some("Native register, ask, reply, log, and item commands are available."),
         machine,
         false,
     )
@@ -107,7 +103,7 @@ async fn one_shot_inner(
     let paths = NativePaths::discover().map_err(heyfood_bin::OneShotError::from)?;
     let auth_store =
         NativeAuthStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?;
-    let auth = auth_store
+    let mut auth = auth_store
         .load()
         .map_err(heyfood_bin::OneShotError::from)?
         .ok_or_else(|| {
@@ -117,8 +113,26 @@ async fn one_shot_inner(
             )
         })?;
 
+    let (service_url, policy) = service_url().map_err(registration_to_one_shot)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |value| value.as_secs());
+    if auth.channel.expires_at_unix() <= i64::try_from(now).unwrap_or(i64::MAX) {
+        let client = RegistrationClient::new(service_url.clone(), policy)
+            .map_err(registration_to_one_shot)?;
+        auth.channel = client
+            .refresh_channel(&auth.channel)
+            .await
+            .map_err(registration_to_one_shot)?;
+        // A rotated refresh token is server-accepted state. Persist the whole
+        // bundle before allowing session re-exchange to consume it.
+        auth_store
+            .replace(&auth)
+            .map_err(heyfood_bin::OneShotError::from)?;
+    }
+
     let credential_store = Arc::new(
-        FileCredentialStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?,
+        NativeSessionStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?,
     );
     let credentials = match credential_store
         .load()
@@ -139,8 +153,6 @@ async fn one_shot_inner(
         .reconciliation_required()
         .map_err(heyfood_bin::OneShotError::from)?;
 
-    let (service_url, policy) = service_url()
-        .map_err(|error| heyfood_bin::OneShotError::new(error.code, error.public_message))?;
     let api_key = std::env::var("HEYFOOD_API_KEY")
         .ok()
         .filter(|value| !value.is_empty())
@@ -181,6 +193,14 @@ async fn one_shot_inner(
     .await;
     signal.abort();
     result
+}
+
+fn registration_to_one_shot(error: RegistrationError) -> heyfood_bin::OneShotError {
+    heyfood_bin::OneShotError {
+        code: error.code,
+        message: error.public_message,
+        outcome_uncertain: error.outcome_uncertain,
+    }
 }
 
 fn read_command_stdin(command: &Command) -> Result<Vec<u8>, heyfood_bin::OneShotError> {
@@ -299,7 +319,7 @@ async fn register_inner(
         retryable: false,
         outcome_uncertain: true,
     })?;
-    FileCredentialStore::open(paths.config_dir())
+    NativeSessionStore::open(paths.config_dir())
         .and_then(|store| store.initialize(&outcome.credentials.session))
         .map_err(|_| RegistrationError {
             code: "registration_persistence_outcome_uncertain",

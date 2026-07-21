@@ -126,6 +126,11 @@ The hosted authorization page resolves both new and existing accounts. Native
 follow-up work; invoking one returns `command_not_available` instead of implying
 that it ran.
 
+Windows builds must include the `native-credentials` feature. That build stores
+the complete authorization grant and rotating session in Windows Credential
+Manager; a portable build without that feature fails closed instead of writing
+reversible credentials to disk.
+
 ## Common workflows
 
 ```bash
@@ -133,14 +138,16 @@ heyfood ask "What can I order at this restaurant?"
 heyfood reply --conversation-id CONVERSATION_ID "Log the first option"
 heyfood log "I ate the first option"
 heyfood item "pad thai at Pismo's"
-
-heyfood grocery list
-heyfood health status
 ```
 
 These native one-shot commands use the hosted agent/runtime. The product uses
 “generally safer,” “risky,” “avoid,” and “unable to evaluate” rather than
 presenting food as absolutely safe.
+
+Grocery and Health remain fail-closed in the public binary until their optional
+OAuth scopes are negotiated and the rotated grant is durably accepted. Their
+typed runtime implementations remain covered by internal tests but are not
+advertised as usable commands.
 
 See the [command grammar](docs/COMMAND_GRAMMAR.md) for positional inputs,
 selectors, compatibility aliases, and the rationale for optional search flags.

@@ -13,7 +13,7 @@ name = "heyfood"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["native-credentials"]
 native-credentials = ["heyfood-platform/native-credentials"]
 
 [dependencies]
