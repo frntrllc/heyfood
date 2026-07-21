@@ -1,482 +1,142 @@
 # heyfood
 
-Developer-first command-line access to personalized food and dietary guidance
-from [hello.food](https://hello.food).
+Native command-line access to personalized food and dietary guidance from
+[hello.food](https://hello.food).
 
-heyfood is the open-source CLI client. It provides terminal-native workflows
-for dietary profiles, food checks, restaurant and menu discovery, recipes, meal
-logging, and the hello.food conversational agent. Guidance is provided by the
-hosted hello.food service and is not a substitute for professional medical
-advice or emergency care.
+This repository is moving the CLI to Rust. The current public native cut is
+deliberately small: `register`, `ask`, `reply`, `log`, and `item` are the only
+active product commands. Guidance comes from the hosted hello.food service and
+is not a substitute for professional medical advice or emergency care.
 
-## Installation
+## Build from source
 
-On macOS or Linux, run the hosted installer:
-
-```bash
-curl -fsSL https://hey.food/install.sh | bash
-```
-
-The public [installer source](install.sh) selects a supported Python, uses or
-bootstraps an isolated [`pipx`](https://pipx.pypa.io/stable/installation/),
-installs only `heyfood-cli` from PyPI, and verifies `heyfood --version`. It does
-not use `sudo`, install Python or Homebrew, edit shell startup files, or start
-authentication. If the command directory is not already on `PATH`, it prints
-the exact export command. Python 3.11, 3.12, and 3.13 are supported.
-
-To inspect pinned repository bytes before running them, replace `REVISION` with
-a reviewed full commit SHA from this repository, then download and verify both
-files from that immutable revision:
-
-```bash
-REVISION="<full-reviewed-commit-sha>"
-curl -fsSLO "https://raw.githubusercontent.com/frntrllc/heyfood/${REVISION}/install.sh"
-curl -fsSLO "https://raw.githubusercontent.com/frntrllc/heyfood/${REVISION}/install.sh.sha256"
-if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum -c install.sh.sha256
-else
-  shasum -a 256 -c install.sh.sha256
-fi
-less install.sh
-bash install.sh
-```
-
-The SHA-256 file is meaningful only when it comes from a separately reviewed,
-pinned repository revision. Fetching a script and checksum from the same
-mutable endpoint does not protect against that endpoint being compromised.
-
-To select an exact release or add operating-system credential-vault support:
-
-```bash
-curl -fsSL https://hey.food/install.sh | HEYFOOD_VERSION=0.4.0 bash
-curl -fsSL https://hey.food/install.sh | HEYFOOD_WITH_KEYRING=1 bash
-curl -fsSL https://hey.food/install.sh | HEYFOOD_WITH_VOICE=1 bash
-```
-
-Direct `pipx` installation remains fully supported:
-
-```bash
-pipx install heyfood-cli
-heyfood --version
-heyfood --help
-```
-
-With an existing `pipx`, install the optional keyring extra directly with:
-
-```bash
-pipx install 'heyfood-cli[keyring]'
-```
-
-To capture voice directly from your microphone (see [Voice input](#voice-input)),
-install the optional voice extra:
-
-```bash
-pipx install 'heyfood-cli[voice]'
-```
-
-Contributors can install from a reviewed source checkout:
+The native workspace requires the Rust toolchain declared in `Cargo.toml`.
 
 ```bash
 git clone https://github.com/frntrllc/heyfood.git
 cd heyfood
-python3.11 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e .
-# Optional: store tokens in the operating-system credential vault
-python -m pip install -e '.[keyring]'
-heyfood --version
-heyfood --help
+cargo build --release --locked --package heyfood-bin
+./target/release/heyfood --version
+./target/release/heyfood --help
 ```
 
-## Get started
+Until a native release artifact and installer are published, building a
+reviewed source revision is the supported way to exercise this cut. The legacy
+Python/PyPI installer is not the native Rust distribution.
 
-Run the bare command after installation for concise, runnable native next
-steps. It never opens a browser or claims to start the not-yet-implemented TUI.
+## Register
 
-```bash
-heyfood
-```
-
-New users can also start explicitly:
+Connect a hello.food account before running an agent command:
 
 ```bash
 heyfood register
 ```
 
-Registration preflights the production capability contract before opening the
-browser. Identity verification, current Terms and Privacy acceptance, account
-resolution, and capability consent stay on `auth.hello.food`. The native result
-reports profile readiness; native dietary onboarding remains a separate,
-unimplemented command slice and is not advertised as a runnable next step.
+Registration starts the native device-authorization flow and prints a URL and
+short approval code. Identity verification and current Terms and Privacy
+acceptance happen on `auth.hello.food`; the hosted page offers the SMS and email
+methods enabled for the deployment. SMS registration is US-only.
 
-For a headless machine, use the one-decision short-code flow. JSON mode never
-opens a browser or starts onboarding; progress and the approval URL use stderr,
-and stdout receives exactly one JSON result after the decision:
+On a headless machine, keep browser launch disabled:
 
 ```bash
-heyfood register --device --no-browser --json
+heyfood register --device --no-browser
 ```
 
-SMS registration is US-only. Email remains available without a phone. The auth
-page advertises only identity methods that are genuinely enabled.
-
-The hosted authorization page resolves both new and existing accounts. Native
-`login`, `status`, `logout`, and account-management commands are still explicit
-follow-up work; invoking one returns `command_not_available` instead of implying
-that it ran.
-
-Windows builds automatically store the complete authorization grant and
-rotating session in Windows Credential Manager; the binary never writes
-reversible Windows credentials to disk.
-
-## Common workflows
+For automation, `--json` also prevents browser launch and emits one terminal
+JSON result after approval, expiry, cancellation, or failure:
 
 ```bash
-heyfood ask "What can I order at this restaurant?"
-heyfood reply --conversation-id CONVERSATION_ID "Log the first option"
+heyfood register --device --no-browser --json --timeout 600
+```
+
+The native client persists credentials only after authorization, session
+exchange, and response-contract validation all succeed. If it reports an
+uncertain session-exchange or persistence outcome, do not start another
+registration attempt until account state is reconciled.
+
+## Active commands
+
+```bash
+heyfood ask "What can I eat?"
+heyfood reply --conversation-id CONVERSATION_ID "The second option"
 heyfood log "I ate the first option"
 heyfood item "pad thai at Pismo's"
 ```
 
-These native one-shot commands use the hosted agent/runtime. The product uses
-“generally safer,” “risky,” “avoid,” and “unable to evaluate” rather than
-presenting food as absolutely safe.
-
-Grocery and Health remain fail-closed in the public binary until their optional
-OAuth scopes are negotiated and the rotated grant is durably accepted. Their
-typed runtime implementations remain covered by internal tests but are not
-advertised as usable commands.
-
-See the [command grammar](docs/COMMAND_GRAMMAR.md) for positional inputs,
-selectors, compatibility aliases, and the rationale for optional search flags.
-
-`recommend` shows a composite **Match** rank and ranking confidence, not a
-safety verdict. Each row includes an `heyfood item ...` command for the separate
-safety evaluation. The ranking and canonical safety JSON contracts are defined
-in the [versioned schema guide](docs/JSON_SCHEMAS.md).
-
-## Location
-
-Restaurant search accepts coordinates, a one-off place name, or a saved default:
+`reply` requires an explicit `--conversation-id` in this cut because native
+conversation persistence is not active. `ask`, `log`, and `item` may also use
+`--conversation-id` to continue a known conversation. All four commands accept
+an optional coordinate pair:
 
 ```bash
-heyfood location set "San Luis Obispo, CA"
-heyfood location set --lat 35.28 --lng -120.66 --label Home
-heyfood location show
-
-heyfood search --query "thai"
-heyfood search --near "Fresno, CA" --query "thai"
-heyfood search --lat 36.74 --lng -119.79 --query "thai"
-
-heyfood location clear
+heyfood ask --latitude 35.28 --longitude -120.66 "What can I order nearby?"
 ```
 
-Explicit coordinates take precedence over `--near`, which takes precedence
-over the saved location. Place-name lookup requires a service deployment that
-supports the geocoding channel tool.
-
-Search and recipe results are remembered locally so later commands can use a
-numbered selector such as `heyfood menu 1` or `heyfood recipes save 2`.
-
-Saved location is also supplied to `ask`, `reply`, and `chat` when no explicit
-location is provided. Override it with `--lat/--lng` or `--near`, or suppress
-location for a request with `--no-location`.
-
-## Households and conversational scope
-
-heyfood can ask for you, one household member, or everyone. The local roster
-mirrors the mobile app's local-first household model. Adult dietary graphs are
-loaded from profile sync only for the active turn; child graphs remain local.
+If command text is omitted and stdin is not a terminal, the client reads the
+UTF-8 prompt from stdin:
 
 ```bash
-heyfood household list
-heyfood household label MEMBER_ID --name Sarah --relationship spouse
-
-heyfood household use Sarah
-heyfood ask "What can she order here?"
-
-heyfood ask --for everyone "What can we all eat?"
-heyfood chat --for Sarah
+printf '%s\n' "What can I eat?" | heyfood ask --json
 ```
 
-`household list` discovers synced member profile ids. Because names and
-relationships remain device-local by design, a member created in the mobile
-app may first appear by id; use `household label` once on this machine. Child
-members remain device-local and do not appear through sync. Inside
-chat, `/household` shows the roster and `/for Sarah`, `/for everyone`, or `/for
-me` switches scope and starts a fresh conversation. Numbered agent choices can
-be answered with `2` or, for multi-select questions, `1, 3`.
-
-On an account without profile-sync consent, `household list` still returns the
-local roster and marks synced-member reconciliation as skipped in JSON output.
-Other authentication and service errors remain failures rather than being
-silently hidden.
-
-As in the mobile app, child dietary profiles stay on this machine and never
-enter profile sync. Other members' dietary graphs are loaded from profile sync
-only for the active agent turn. If an adult profile write fails, heyfood keeps
-the confirmed change in a protected local outbox, includes its full safety
-context in later turns, and automatically retries it on a consented scoped
-agent turn. A later mutation merges with pending fields instead of replacing
-them, so subsequent safety checks do not silently lose an allergy write.
-
-## Dietary graph onboarding
-
-Run `heyfood onboard` for the guided questionnaire, or start with natural
-language and review the extracted values:
-
-```bash
-heyfood onboard "I'm low-FODMAP, avoid onion and garlic, and prefer Thai food"
-```
-
-In an interactive terminal, heyfood shows the extracted sections first, lets
-you reject them in favor of the full questionnaire, and asks only for sections
-the text did not answer. Explicit statements such as “no food allergies” count
-as answered and are not prompted again.
-
-Repeatable automation can pass fields directly:
-
-```bash
-heyfood onboard \
-  --diet low-fodmap \
-  --condition IBS \
-  --allergy peanuts \
-  --avoid onion \
-  --avoid garlic \
-  --cuisine Thai \
-  --activity moderate \
-  --yes \
-  --no-input
-```
-
-Use `heyfood onboard --list-options` to inspect accepted labels and identifiers,
-`--dry-run` to preview the profile payload, and `heyfood profile` to inspect the
-synced graph. `--no-input` guarantees the command will never prompt; mutations
-must combine it with `--yes`. Passing `none` (or an explicit empty repeatable
-field from an API caller) clears only that source category and its derived
-values; unrelated diet, allergy, condition, avoid, cuisine, and activity data
-is preserved. `--replace` discards the complete existing graph before applying
-the supplied fields.
-
-## Voice input
-
-Speak instead of type. `--voice` is available on `onboard`, `ask`, and `log`:
-
-```bash
-heyfood onboard --voice
-heyfood ask --voice
-heyfood log --voice
-```
-
-The default capture mode is `auto`, which prefers native capture and never
-changes speech processors without asking you first:
-
-1. **Native microphone** (needs the `voice` extra) — records into memory and
-   uploads the audio once over HTTPS to hello.food's authenticated transcription
-   endpoint. The audio is processed by hello.food and its configured
-   transcription provider, then discarded; it is never written to disk. The
-   upload happens **before** you review the transcript — reviewing gates whether
-   the resulting *text* is submitted to your profile, meal history, or the agent,
-   not whether the audio is uploaded.
-2. **Browser speech recognition** — a localhost page that uses your browser's
-   built-in speech engine. This is a **different processor**: your browser vendor
-   (a third party) receives the audio, not hello.food. In `auto` mode the CLI
-   never crosses to it silently — if native capture is unavailable or fails, it
-   asks first, defaulting to *no*, with a one-line disclosure. Declining goes
-   straight to typed input.
-3. **Typed input** — always works.
-
-Before recording, native capture verifies your login carries the
-`audio:transcribe` permission; an older session is asked to re-run
-`heyfood login` **before** any audio is recorded. If your microphone's native
-rate is above the supported range, the CLI negotiates a supported rate rather
-than producing an upload the server would reject.
-
-After capture, the transcript is shown for review: **accept**, **edit**, **record
-again**, **type instead**, or **cancel** (nothing is submitted). A recording that
-dropped audio can't be accepted as-is for a saved profile or meal — edit it,
-record again, or type.
-
-Choose a mode explicitly with `--voice-capture native|browser|typed`. An explicit
-`native` never opens a browser: if native can't run, it falls back to typed input
-(or asks you to re-login for a missing permission). `--voice` is interactive-only
-— combined with `--json`, `--raw`, `--no-input`, a non-TTY, CI, or `TERM=dumb` it
-prints one stable error and never opens a microphone or browser. Positional text
-and `--voice` are mutually exclusive.
-
-List and select microphones, and manage preferences:
-
-```bash
-heyfood voice devices              # list input devices (also `--json`)
-heyfood ask --voice --audio-device 1
-heyfood voice status               # show persisted capture preferences
-heyfood voice set --mode native    # persist a preference (an omitted mode
-                                   # stays distinct from an explicit `auto`)
-heyfood voice reset                # clear persisted preferences
-```
-
-`--voice-timeout` and `--no-browser` apply to the browser rung only.
-
-### Platform notes
-
-- **Linux:** the `sounddevice` wheel needs the system PortAudio library. Install
-  it with your package manager, e.g. `sudo apt-get install libportaudio2`.
-  Without it, native capture is skipped; `auto` then asks (default no) before
-  using browser speech recognition, otherwise types.
-- **WSL:** prefer a native Windows install of the CLI for microphone access;
-  inside WSL, native capture generally cannot reach the microphone, so `auto`
-  asks before browser capture or falls back to typed input.
-- **SSH / headless:** the browser capture server binds on the remote host and
-  can't reach your local microphone, so over SSH voice falls back to typed input
-  with an explanation rather than opening a dead localhost URL.
+The product uses “generally safer,” “risky,” “avoid,” and “unable to evaluate”
+rather than presenting food as absolutely safe.
 
 ## Machine output
 
-Use `--json` for automation. Data commands emit exactly one ANSI-free JSON
-value to stdout; progress, hints, and deprecation warnings use stderr. The
-existing `--raw` flag is a deprecated compatibility alias for the same writer.
-
-See the [CLI process contract](docs/CLI_CONTRACT.md) for JSON errors, exit codes,
-prompt behavior, and compatibility policy.
-
-Add global `--verbose` before a command to print safe request diagnostics to
-stderr while leaving result/JSON stdout unchanged:
+Place global flags before or after the subcommand. `--json` emits exactly one
+ANSI-free JSON value on stdout; progress and human diagnostics use stderr.
+`--raw` is a deprecated alias for `--json`.
 
 ```bash
-heyfood --verbose doctor --json
-heyfood --verbose ask "Can I eat pad thai?" --json
+heyfood --json ask "Can I eat pad thai?"
+heyfood item "pad thai" --json
 ```
 
-Diagnostics include a generated request id, method/path, selected context,
-status, timing, and auth refresh/retry event names. They never include request
-bodies, query text, tokens, API keys, dietary profile contents, or phone
-numbers.
+Failures use a stable error envelope and a nonzero exit status. Errors with an
+uncertain server-side outcome include `error.outcome_uncertain: true` so callers
+do not retry a potentially committed operation blindly. See the
+[CLI process contract](docs/CLI_CONTRACT.md).
 
-## Shell completion
+## What is not active yet
 
-Install completions once for the current shell:
+The native Rust binary does not currently provide the legacy Python CLI's
+interactive chat/TUI, onboarding, profile, account-management, restaurant
+search, saved location, recommendation, menu, recipe, household, voice,
+Grocery, Health, context, configuration, or diagnostic workflows. Hidden
+compatibility topology may recognize some old command names, but those paths
+fail closed with `command_not_available`; they are not supported commands.
+
+The bare `heyfood` invocation is informational only. It prints runnable next
+steps and never starts a TUI, browser, registration, onboarding, or network
+request.
+
+## Development
+
+Run the native checks from the repository root:
 
 ```bash
-heyfood --install-completion  # auto-detects zsh, bash, or fish
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+cargo xtask verify-stable-contracts
+cargo xtask verify-grocery-contracts
+cargo xtask verify-assets
 ```
 
-To review or manage the script yourself, use `heyfood --show-completion`.
-Restart the shell after automatic installation. In dotfile-managed setups,
-capture the generated script instead of letting the CLI edit a shell file.
+Hash-pinned contract JSON is checked out with LF line endings on every platform
+through `.gitattributes`; do not rewrite approved contract bytes or update their
+hashes as part of unrelated changes.
 
-## Configuration
-
-Configuration is stored at `~/.config/heyfood/config.json` by default, or under
-`$XDG_CONFIG_HOME/heyfood/config.json` when `XDG_CONFIG_HOME` is set. The client
-keeps the directory owner-only and the file mode at `0600`. Install the optional
-`keyring` extra to keep access tokens, refresh tokens, local API keys, household
-identity, local-only child dietary profiles, and pending profile-sync repairs
-in the operating-system credential vault; the JSON file then contains only
-non-secret state and a `credential_store: "keyring"` marker.
-
-Confirmation previews can contain names, birth dates, and dietary data. They
-are persisted only in the credential vault and are omitted from both the JSON
-file and `heyfood config show`; without a usable vault, heyfood does not persist
-the preview between processes. Local household state is bound to the
-authenticated account and is cleared fail-closed when a different account logs
-in (including legacy unbound state on the first upgraded login).
-
-On headless systems without a usable keyring, credentials and protected
-household state remain in the `0600` file. This protects them from other local
-users under normal permissions, but not from malware or another process running
-as the same OS account. Set
-`HEYFOOD_CREDENTIAL_STORE=file` to choose that fallback explicitly, or
-`HEYFOOD_CREDENTIAL_STORE=keyring` to fail instead of falling back when the
-vault is unavailable. Never copy either credential store between machines.
-
-Authorized development environments can override service endpoints without
-editing the config file:
-
-```bash
-export HEYFOOD_API_URL="https://api.example.test"
-export HEYFOOD_AUTH_URL="https://auth.example.test/authorize"
-export HEYFOOD_API_KEY="..."
-```
-
-Named contexts make production, local, and custom environments explicit:
-
-```bash
-heyfood context list
-heyfood context use local
-heyfood context set staging \
-  --api-url https://api.staging.example \
-  --auth-url https://auth.staging.example/authorize \
-  --use
-heyfood context show
-```
-
-Precedence is command flags, then `HEYFOOD_API_URL`/`HEYFOOD_AUTH_URL`, then
-the selected context. `heyfood login --local` remains a convenient one-command
-override. Inspect configuration without revealing credentials:
-
-```bash
-heyfood config path
-heyfood config show --json
-heyfood config validate
-```
-
-`config show` redacts all token and API-key fields. If validation reports
-malformed JSON, move the named file aside and rerun `heyfood login`; read-only
-configuration and doctor commands do not mint a device id or create config.
-
-## Terminal branding and accessibility
-
-The full hey.food banner is reserved for the interactive bare `heyfood` startup
-journey. It never appears before an ordinary command or conversational response,
-is never written to JSON/result stdout, and never adds a delay. It is suppressed
-for CI, redirected output, `TERM=dumb`, and non-interactive input. Terminals
-narrower than 44 columns or unable to encode the block glyphs use a compact
-`hey.food` welcome instead.
-
-Use either control to disable decorative branding for screen readers or personal
-preference:
-
-```bash
-heyfood --no-banner
-export HEYFOOD_NO_BANNER=1
-```
-
-`NO_COLOR=1` keeps supported banner geometry but removes color.
-
-Never commit the config file, tokens, or API keys. Public issues and fixtures
-must use synthetic dietary and account data.
-
-## Development and support
+Additional project references:
 
 - [Development setup](DEVELOPMENT.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
 - [Release process](RELEASING.md)
-- [CLI process contract](docs/CLI_CONTRACT.md)
-- [Command grammar](docs/COMMAND_GRAMMAR.md)
-- [JSON schemas](docs/JSON_SCHEMAS.md)
-- [Dietary catalog contract](docs/DIETARY_CATALOG.md)
-- [Support](SUPPORT.md)
 - [Security policy](SECURITY.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
-
-## Uninstall
-
-Revoke the local session before removing the package:
-
-```bash
-heyfood logout
-pipx uninstall heyfood-cli
-```
-
-The hosted installer prints the exact `pipx` command that manages its
-installation. When it had to create its own isolated bootstrap, that command
-uses the Python under
-`${XDG_DATA_HOME:-$HOME/.local/share}/heyfood/installer/pipx/`. If logout cannot
-reach the service, local credentials are still removed but server-side sessions
-may persist until expiry. Use `heyfood logout --json` to inspect per-step
-teardown results without exposing token values.
 
 ## License and project boundary
 
