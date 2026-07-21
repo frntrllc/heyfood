@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use heyfood_application::{BoxFuture, CredentialCommit, CredentialPort, PortError};
 use heyfood_core::{CommitId, CredentialVersion, SessionCredentials};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 use crate::persistence::CredentialState;
@@ -88,11 +88,15 @@ async fn run_bounded_child(
     deadline: Duration,
     outcome_uncertain: bool,
 ) -> Result<Vec<u8>, PortError> {
-    let operation = async move {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| PortError::new("credential_broker_pipe", "broker stdin is missing"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| PortError::new("credential_broker_pipe", "broker stdin is missing"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| PortError::new("credential_broker_pipe", "broker stdout is missing"))?;
+    let operation = async {
         stdin
             .write_all(&input)
             .await
@@ -102,46 +106,55 @@ async fn run_bounded_child(
             .await
             .map_err(|error| PortError::new("credential_broker_pipe", error.to_string()))?;
         drop(stdin);
-        child
-            .wait_with_output()
-            .await
-            .map_err(|error| PortError::new("credential_broker_wait", error.to_string()))
+        let mut output = Vec::new();
+        let mut stdout = stdout.take((MAX_BROKER_DOCUMENT_BYTES + 1) as u64);
+        let (status, _) = tokio::try_join!(child.wait(), stdout.read_to_end(&mut output),)
+            .map_err(|error| PortError::new("credential_broker_wait", error.to_string()))?;
+        Ok::<_, PortError>((status, output))
     };
-    let output = match tokio::time::timeout(deadline, operation).await {
+    let (status, output) = match tokio::time::timeout(deadline, operation).await {
         Ok(result) => result?,
-        Err(_) if outcome_uncertain => {
-            return Err(PortError::uncertain(
-                "credential_broker_timeout",
-                "native credential operation exceeded its deadline",
-            ));
-        }
         Err(_) => {
-            return Err(PortError::new(
+            // Dropping a `kill_on_drop` child requests termination but does not
+            // guarantee that the OS process has been reaped before this method
+            // returns. Explicitly kill and await it so a timed-out keyring
+            // prompt cannot survive as a live or zombie broker.
+            child.kill().await.map_err(|_| {
+                broker_error(
+                    outcome_uncertain,
+                    "credential_broker_reap",
+                    "native credential broker could not be terminated",
+                )
+            })?;
+            return Err(broker_error(
+                outcome_uncertain,
                 "credential_broker_timeout",
                 "native credential operation exceeded its deadline",
             ));
         }
     };
-    if !output.status.success() {
-        return Err(if outcome_uncertain {
-            PortError::uncertain(
-                "credential_broker_failed",
-                "native credential operation failed",
-            )
-        } else {
-            PortError::new(
-                "credential_broker_failed",
-                "native credential operation failed",
-            )
-        });
+    if !status.success() {
+        return Err(broker_error(
+            outcome_uncertain,
+            "credential_broker_failed",
+            "native credential operation failed",
+        ));
     }
-    if output.stdout.len() > MAX_BROKER_DOCUMENT_BYTES {
+    if output.len() > MAX_BROKER_DOCUMENT_BYTES {
         return Err(PortError::new(
             "credential_broker_size",
             "credential broker output exceeds its limit",
         ));
     }
-    Ok(output.stdout)
+    Ok(output)
+}
+
+fn broker_error(outcome_uncertain: bool, code: &'static str, message: &'static str) -> PortError {
+    if outcome_uncertain {
+        PortError::uncertain(code, message)
+    } else {
+        PortError::new(code, message)
+    }
 }
 
 impl CredentialPort for CredentialBrokerStore {
