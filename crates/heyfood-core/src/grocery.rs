@@ -271,26 +271,25 @@ pub struct GroceryConfirmation {
 
 impl GroceryConfirmation {
     /// Normalize C3 decision semantics. An absent legacy decision is exactly an
-    /// accept, while edits are accepted only after tool-specific validation
-    /// has produced `GroceryValidatedEdits`.
+    /// accept. The backend remains authoritative for tool-specific edit
+    /// validation.
     pub fn command(
         &self,
         decision: GroceryConfirmationDecision,
     ) -> Result<GroceryConfirmationCommand, GroceryErrorCode> {
-        if self.state != GroceryConfirmationState::Proposed {
-            return Err(match (&self.state, &decision) {
-                (
-                    GroceryConfirmationState::Cancelled,
-                    GroceryConfirmationDecision::Accept { .. },
-                ) => GroceryErrorCode::AlreadyCancelled,
-                (GroceryConfirmationState::Cancelled, GroceryConfirmationDecision::Cancel) => {
-                    GroceryErrorCode::CancelRejected
-                }
-                (GroceryConfirmationState::RejectedStale, _) => {
-                    GroceryErrorCode::PreconditionFailed
-                }
-                _ => GroceryErrorCode::ConfirmationRejected,
-            });
+        match (&self.state, &decision) {
+            (GroceryConfirmationState::Proposed, _)
+            | (GroceryConfirmationState::Accepted, GroceryConfirmationDecision::Accept { .. }) => {}
+            (
+                GroceryConfirmationState::Accepted | GroceryConfirmationState::Cancelled,
+                GroceryConfirmationDecision::Cancel,
+            ) => return Err(GroceryErrorCode::CancelRejected),
+            (GroceryConfirmationState::Cancelled, GroceryConfirmationDecision::Accept { .. }) => {
+                return Err(GroceryErrorCode::AlreadyCancelled);
+            }
+            (GroceryConfirmationState::RejectedStale, _) => {
+                return Err(GroceryErrorCode::PreconditionFailed);
+            }
         }
         Ok(GroceryConfirmationCommand {
             confirmation_id: self.confirmation_id,
@@ -304,16 +303,14 @@ impl GroceryConfirmation {
 /// Explicit C3 decision. `Cancel` cannot carry edits by construction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GroceryConfirmationDecision {
-    Accept {
-        edits: Option<GroceryValidatedEdits>,
-    },
+    Accept { edits: Option<GroceryEditPatch> },
     Cancel,
 }
 
 impl GroceryConfirmationDecision {
     pub fn from_contract_fields(
         value: Option<&str>,
-        edits: Option<GroceryValidatedEdits>,
+        edits: Option<GroceryEditPatch>,
     ) -> Result<Self, GroceryErrorCode> {
         match value {
             None | Some("accept") => Ok(Self::Accept { edits }),
@@ -332,13 +329,14 @@ impl GroceryConfirmationDecision {
     }
 }
 
-/// A bounded object that has already passed the pending tool's edit schema.
-/// Its values redact from diagnostics and are never model-reinterpreted here.
+/// A structurally bounded, redacted edit object. It does not certify the
+/// pending tool's semantic schema: the authoritative backend validates that
+/// schema and returns C3 `edit_invalid` without consuming pending state.
 #[derive(Clone, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
-pub struct GroceryValidatedEdits(Map<String, Value>);
+pub struct GroceryEditPatch(Map<String, Value>);
 
-impl GroceryValidatedEdits {
+impl GroceryEditPatch {
     pub fn new(values: Map<String, Value>) -> Result<Self, GroceryErrorCode> {
         let value = Value::Object(values);
         let mut entries = 0;
@@ -362,13 +360,13 @@ impl GroceryValidatedEdits {
     }
 }
 
-impl fmt::Debug for GroceryValidatedEdits {
+impl fmt::Debug for GroceryEditPatch {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("GroceryValidatedEdits([REDACTED])")
+        formatter.write_str("GroceryEditPatch([REDACTED])")
     }
 }
 
-impl<'de> Deserialize<'de> for GroceryValidatedEdits {
+impl<'de> Deserialize<'de> for GroceryEditPatch {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -439,6 +437,7 @@ pub enum GroceryErrorCode {
     ConsentRevoked,
     ConfirmationExpired,
     ConfirmationRejected,
+    ConfirmationUnsupported,
     AlreadyCancelled,
     CancelRejected,
     EditInvalid,
@@ -447,6 +446,42 @@ pub enum GroceryErrorCode {
     TemporarilyUnavailable,
     WriteFailed,
     OutcomeUncertain,
+}
+
+impl GroceryErrorCode {
+    /// Map the exact frozen C3 confirmation errors. Provider-neutral Grocery
+    /// errors outside C3 intentionally return `None`.
+    #[must_use]
+    pub fn from_c3_contract_value(value: &str) -> Option<Self> {
+        match value {
+            "confirmation_rejected" => Some(Self::ConfirmationRejected),
+            "confirmation_unsupported" => Some(Self::ConfirmationUnsupported),
+            "already_cancelled" => Some(Self::AlreadyCancelled),
+            "cancel_rejected" => Some(Self::CancelRejected),
+            "edit_invalid" => Some(Self::EditInvalid),
+            "precondition_failed" => Some(Self::PreconditionFailed),
+            "unknown_precondition" => Some(Self::UnknownPrecondition),
+            "temporarily_unavailable" => Some(Self::TemporarilyUnavailable),
+            "write_failed" => Some(Self::WriteFailed),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_c3_contract_value(self) -> Option<&'static str> {
+        match self {
+            Self::ConfirmationRejected => Some("confirmation_rejected"),
+            Self::ConfirmationUnsupported => Some("confirmation_unsupported"),
+            Self::AlreadyCancelled => Some("already_cancelled"),
+            Self::CancelRejected => Some("cancel_rejected"),
+            Self::EditInvalid => Some("edit_invalid"),
+            Self::PreconditionFailed => Some("precondition_failed"),
+            Self::UnknownPrecondition => Some("unknown_precondition"),
+            Self::TemporarilyUnavailable => Some("temporarily_unavailable"),
+            Self::WriteFailed => Some("write_failed"),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

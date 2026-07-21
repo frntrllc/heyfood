@@ -1,8 +1,8 @@
 use heyfood_core::{
     AccountId, AgentEvent, BrowserUrl, ClientConfig, ClientError, ContextFingerprint,
     CredentialVersion, FrozenGroceryPreconditions, GroceryCapability, GroceryConfirmation,
-    GroceryConfirmationDecision, GroceryConfirmationId, GroceryConfirmationState, GroceryEntityId,
-    GroceryErrorCode, GroceryIdempotencyKey, GroceryListVersion, GroceryValidatedEdits,
+    GroceryConfirmationDecision, GroceryConfirmationId, GroceryConfirmationState, GroceryEditPatch,
+    GroceryEntityId, GroceryErrorCode, GroceryIdempotencyKey, GroceryListVersion,
     HealthConnectionStatus, HealthFreshness, HealthFreshnessStatus, HealthMetric, HealthProvider,
     HouseholdContextHashVersion, NetworkPolicy, NoticeLevel, PresentationBlock,
     PresentationDocument, PresentationText, ProxyUrl, RefreshRequest, RefreshResult,
@@ -144,6 +144,14 @@ fn frozen_c3_drives_lossless_grocery_confirmation_semantics() {
     assert!(fixture["precondition_descriptors"]["types"]["household_context_hash"]
         ["operands"]["hash_version"]
         .is_object());
+    let c3_errors = fixture["error_codes"]["codes"].as_object().unwrap();
+    assert_eq!(c3_errors.len(), 9);
+    for value in c3_errors.keys() {
+        let code = GroceryErrorCode::from_c3_contract_value(value)
+            .unwrap_or_else(|| panic!("missing frozen C3 error {value}"));
+        assert_eq!(code.as_c3_contract_value(), Some(value.as_str()));
+    }
+    assert!(GroceryErrorCode::from_c3_contract_value("invented_error").is_none());
 
     let confirmation_id =
         GroceryConfirmationId::parse("00000000-0000-4000-8000-000000000010").unwrap();
@@ -167,17 +175,37 @@ fn frozen_c3_drives_lossless_grocery_confirmation_semantics() {
     let legacy = GroceryConfirmationDecision::from_contract_fields(None, None).unwrap();
     assert_eq!(legacy.as_contract_value(), "accept");
     let first_accept = proposed.command(legacy.clone()).unwrap();
-    let duplicate_accept = proposed.command(legacy).unwrap();
+    let accepted = GroceryConfirmation {
+        state: GroceryConfirmationState::Accepted,
+        ..proposed.clone()
+    };
+    let duplicate_accept = accepted.command(legacy).unwrap();
     assert_eq!(first_accept, duplicate_accept);
     assert_eq!(first_accept.confirmation_id, confirmation_id);
     assert_eq!(first_accept.idempotency_key, idempotency_key);
+    let mut executions = 0;
+    let mut server_cache = std::collections::HashMap::new();
+    let results = [&first_accept, &duplicate_accept].map(|command| {
+        *server_cache
+            .entry(command.idempotency_key)
+            .or_insert_with(|| {
+                executions += 1;
+                "cached-list-v8"
+            })
+    });
+    assert_eq!(results, ["cached-list-v8", "cached-list-v8"]);
+    assert_eq!(executions, 1, "duplicate accept must use cached semantics");
 
     let cancel = GroceryConfirmationDecision::from_contract_fields(Some("cancel"), None).unwrap();
     assert_eq!(cancel, GroceryConfirmationDecision::Cancel);
     let cancel_command = proposed.command(cancel).unwrap();
     assert_eq!(cancel_command.decision, GroceryConfirmationDecision::Cancel);
+    assert_eq!(
+        accepted.command(GroceryConfirmationDecision::Cancel),
+        Err(GroceryErrorCode::CancelRejected)
+    );
 
-    let edits = GroceryValidatedEdits::new(
+    let edits = GroceryEditPatch::new(
         serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
             serde_json::json!({"items": [{"name": "oats", "quantity": 2}]}),
         )
@@ -197,7 +225,7 @@ fn frozen_c3_drives_lossless_grocery_confirmation_semantics() {
         GroceryConfirmationDecision::from_contract_fields(
             Some("cancel"),
             Some(
-                GroceryValidatedEdits::new(
+                GroceryEditPatch::new(
                     serde_json::from_value(serde_json::json!({"items": []})).unwrap(),
                 )
                 .unwrap()
@@ -206,7 +234,7 @@ fn frozen_c3_drives_lossless_grocery_confirmation_semantics() {
         Err(GroceryErrorCode::EditInvalid)
     );
     assert_eq!(
-        GroceryValidatedEdits::new(
+        GroceryEditPatch::new(
             serde_json::from_value(serde_json::json!({"name": "unsafe\nedit"})).unwrap()
         ),
         Err(GroceryErrorCode::EditInvalid)
@@ -255,6 +283,10 @@ fn frozen_c3_drives_lossless_grocery_confirmation_semantics() {
     assert_eq!(
         cancelled.command(GroceryConfirmationDecision::from_contract_fields(None, None).unwrap()),
         Err(GroceryErrorCode::AlreadyCancelled)
+    );
+    assert_eq!(
+        cancelled.command(GroceryConfirmationDecision::Cancel),
+        Err(GroceryErrorCode::CancelRejected)
     );
 }
 

@@ -24,9 +24,8 @@ pub use error::{ClientError, ErrorCategory, ErrorCode};
 pub use grocery::{
     ContextFingerprint, FrozenGroceryPreconditions, GroceryCapability, GroceryConfirmation,
     GroceryConfirmationCommand, GroceryConfirmationDecision, GroceryConfirmationId,
-    GroceryConfirmationState, GroceryEntityId, GroceryError, GroceryErrorCode,
-    GroceryIdempotencyKey, GroceryListVersion, GrocerySafetyStatus, GroceryValidatedEdits,
-    HouseholdContextHashVersion,
+    GroceryConfirmationState, GroceryEditPatch, GroceryEntityId, GroceryError, GroceryErrorCode,
+    GroceryIdempotencyKey, GroceryListVersion, GrocerySafetyStatus, HouseholdContextHashVersion,
 };
 pub use health::{
     HealthCapability, HealthConnectionStatus, HealthFreshness, HealthFreshnessStatus, HealthMetric,

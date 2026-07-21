@@ -1270,10 +1270,9 @@ fn make_private_file(_path: &Path) -> std::io::Result<()> {
 #[cfg(windows)]
 fn apply_windows_owner_acl(path: &Path, directory: bool) -> std::io::Result<()> {
     let sid = windows_current_user_sid()?;
-    run_windows_acl_script("install", WINDOWS_SET_OWNER_ONLY_ACL, path, &sid, directory)?;
     run_windows_acl_script(
-        "verify",
-        WINDOWS_VERIFY_OWNER_ONLY_ACL,
+        "install-and-verify",
+        WINDOWS_INSTALL_OWNER_ONLY_ACL,
         path,
         &sid,
         directory,
@@ -1323,19 +1322,21 @@ fn run_windows_acl_script(
 }
 
 #[cfg(windows)]
-const WINDOWS_SET_OWNER_ONLY_ACL: &str = r#"
+const WINDOWS_INSTALL_OWNER_ONLY_ACL: &str = r#"
 $ErrorActionPreference = 'Stop'
 $target = $env:HEYFOOD_ACL_TARGET
 $kind = $env:HEYFOOD_ACL_TARGET_KIND
 $owner = [System.Security.Principal.SecurityIdentifier]::new($env:HEYFOOD_ACL_OWNER_SID)
-$item = Get-Item -LiteralPath $target -Force
-if (($kind -eq 'directory') -ne [bool]$item.PSIsContainer) { throw 'ACL target kind mismatch' }
 if ($kind -eq 'directory') {
+    if (-not [System.IO.Directory]::Exists($target)) { throw 'ACL directory target does not exist' }
     $security = [System.Security.AccessControl.DirectorySecurity]::new()
     $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-} else {
+} elseif ($kind -eq 'file') {
+    if (-not [System.IO.File]::Exists($target)) { throw 'ACL file target does not exist' }
     $security = [System.Security.AccessControl.FileSecurity]::new()
     $inheritance = [System.Security.AccessControl.InheritanceFlags]::None
+} else {
+    throw 'ACL target kind is invalid'
 }
 $security.SetOwner($owner)
 $security.SetAccessRuleProtection($true, $false)
@@ -1347,7 +1348,25 @@ $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
     [System.Security.AccessControl.AccessControlType]::Allow
 )
 $security.SetAccessRule($rule)
-Set-Acl -LiteralPath $target -AclObject $security
+if ($kind -eq 'directory') {
+    [System.IO.Directory]::SetAccessControl($target, $security)
+    $actual = [System.IO.Directory]::GetAccessControl($target)
+} else {
+    [System.IO.File]::SetAccessControl($target, $security)
+    $actual = [System.IO.File]::GetAccessControl($target)
+}
+if (-not $actual.AreAccessRulesProtected) { throw 'DACL is not protected after installation' }
+$ownerSid = $actual.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+if ($ownerSid -ne $owner.Value) { throw 'ACL owner differs from the current user after installation' }
+$rules = @($actual.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+if ($rules.Count -ne 1) { throw 'DACL contains a foreign or duplicate ACE after installation' }
+$actualRule = $rules[0]
+if ($actualRule.IdentityReference.Value -ne $owner.Value) { throw 'DACL contains a foreign principal after installation' }
+if ($actualRule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { throw 'owner ACE is not allow after installation' }
+if ($actualRule.IsInherited) { throw 'owner ACE is inherited after installation' }
+if ($actualRule.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl) { throw 'owner ACE is not full control after installation' }
+if ($actualRule.InheritanceFlags -ne $inheritance) { throw 'owner ACE inheritance flags are invalid after installation' }
+if ($actualRule.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None) { throw 'owner ACE propagation flags are invalid after installation' }
 "#;
 
 #[cfg(windows)]
@@ -1356,7 +1375,15 @@ $ErrorActionPreference = 'Stop'
 $target = $env:HEYFOOD_ACL_TARGET
 $kind = $env:HEYFOOD_ACL_TARGET_KIND
 $expectedSid = $env:HEYFOOD_ACL_OWNER_SID
-$security = Get-Acl -LiteralPath $target
+if ($kind -eq 'directory') {
+    if (-not [System.IO.Directory]::Exists($target)) { throw 'ACL directory target does not exist' }
+    $security = [System.IO.Directory]::GetAccessControl($target)
+} elseif ($kind -eq 'file') {
+    if (-not [System.IO.File]::Exists($target)) { throw 'ACL file target does not exist' }
+    $security = [System.IO.File]::GetAccessControl($target)
+} else {
+    throw 'ACL target kind is invalid'
+}
 if (-not $security.AreAccessRulesProtected) { throw 'DACL is not protected' }
 $ownerSid = $security.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
 if ($ownerSid -ne $expectedSid) { throw 'ACL owner differs from the current user' }
