@@ -23,12 +23,14 @@ pub use config::{CURRENT_CONFIG_SCHEMA, ClientConfig, ConfigRevision, ConfigSche
 pub use error::{ClientError, ErrorCategory, ErrorCode};
 pub use grocery::{
     ContextFingerprint, FrozenGroceryPreconditions, GroceryCapability, GroceryConfirmation,
-    GroceryConfirmationState, GroceryEntityId, GroceryError, GroceryErrorCode, GroceryListVersion,
-    GrocerySafetyStatus,
+    GroceryConfirmationCommand, GroceryConfirmationDecision, GroceryConfirmationId,
+    GroceryConfirmationState, GroceryEntityId, GroceryError, GroceryErrorCode,
+    GroceryIdempotencyKey, GroceryListVersion, GrocerySafetyStatus, GroceryValidatedEdits,
+    HouseholdContextHashVersion,
 };
 pub use health::{
-    HealthCapability, HealthConnectionStatus, HealthFreshness, HealthMetric, HealthProvider,
-    HealthTrend, TrendDirection,
+    HealthCapability, HealthConnectionStatus, HealthFreshness, HealthFreshnessStatus, HealthMetric,
+    HealthProvider, HealthTrend, TrendDirection,
 };
 pub use migration::{
     ImportedPythonState, PythonFieldAction, PythonFieldDisposition, PythonImportOutcome,

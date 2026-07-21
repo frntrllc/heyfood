@@ -1,9 +1,9 @@
 # Rust Phase 1 qualification report
 
-Phase 1 is implemented and independently approved at exact code lineage
-`a3b953ec571099c5f34f1d91aac29c2cc2bfa901`. The full local workspace,
-policy, contract, migration-freeze, native-feature, real macOS Keychain, and
-process-broker qualification passed. Phase 2 is not authorized by this report.
+The prior Phase 1 candidate was measured at code lineage
+`a3b953ec571099c5f34f1d91aac29c2cc2bfa901`, then superseded by a REQUEST
+CHANGES verdict at evidence head `326c50c6`. Remediation and new exact-SHA
+qualification are in progress. Phase 2 is not authorized by this report.
 
 ## Implemented boundary
 
@@ -22,6 +22,24 @@ process-broker qualification passed. Phase 2 is not authorized by this report.
   exact-parent executable attestation.
 - The frozen Python `0.4.0` validation oracle is consumed by Rust tests. Python
   is not invoked by production Rust code.
+
+## REQUEST CHANGES remediation
+
+- Frozen C3 semantics now retain distinct canonical confirmation and
+  idempotency identities, explicit legacy-accept/accept-with-edits/cancel
+  decisions, nullable household context hash version, and the exact
+  cancel/edit/precondition/replay error cases. The provisional port carries the
+  complete semantic command without defining a final REST DTO or endpoint.
+- Grocery edit objects are bounded and redact from diagnostics. Fixture-driven
+  tests cover legacy accept, cancel, edits, duplicate accept, accept after
+  cancel, list replacement/version drift, context-hash drift, and independent
+  hash-version drift.
+- Health context freshness and integration connection status are distinct
+  frozen enums; cross-domain ingress is rejected by fixture-driven tests.
+- Windows persistence constructs a fresh protected DACL with one current-owner
+  full-control ACE, then independently reads and verifies the persisted DACL.
+  The Windows-only regression begins with explicit Everyone and BUILTIN Users
+  grants on both a directory and a file.
 
 ## Durable and privacy evidence
 

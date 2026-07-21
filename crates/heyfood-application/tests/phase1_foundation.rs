@@ -10,8 +10,8 @@ use heyfood_application::{
 use heyfood_core::{
     AccountId, AgentEvent, ClientConfig, CommitId, ConfigRevision, ContextFingerprint,
     CredentialVersion, FrozenGroceryPreconditions, GenerationId, GroceryEntityId,
-    GroceryListVersion, NetworkPolicy, OperationId, SensitiveString, ServiceUrl,
-    SessionCredentials, SessionSnapshot,
+    GroceryListVersion, HouseholdContextHashVersion, NetworkPolicy, OperationId, SensitiveString,
+    ServiceUrl, SessionCredentials, SessionSnapshot,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -329,6 +329,7 @@ fn cache_key(account: &str, version: u64) -> GroceryCacheKey {
         list_id: GroceryEntityId::parse("00000000-0000-4000-8000-000000000001").unwrap(),
         list_version: GroceryListVersion::new(version).unwrap(),
         context_fingerprint: ContextFingerprint::parse("0123456789abcdef").unwrap(),
+        household_context_hash_version: Some(HouseholdContextHashVersion::new(1)),
     };
     GroceryCacheKey::new(
         "https://api.hello.food",
@@ -354,8 +355,14 @@ fn grocery_item_cache_is_exact_account_version_bound_and_expires() {
     assert_eq!(cache.resolve(&cache_key("account-a", 5), 3_001, 1), None);
 
     cache.replace(key.clone(), 4_000, [(1, item)]);
+    let mut different_hash_version = key.clone();
+    different_hash_version.household_context_hash_version =
+        Some(HouseholdContextHashVersion::new(2));
+    assert_eq!(cache.resolve(&different_hash_version, 4_001, 1), None);
+
+    cache.replace(key.clone(), 5_000, [(1, item)]);
     assert_eq!(
-        cache.resolve(&key, 4_000 + GroceryItemReferenceCache::LIFETIME_SECONDS, 1),
+        cache.resolve(&key, 5_000 + GroceryItemReferenceCache::LIFETIME_SECONDS, 1),
         None
     );
 }

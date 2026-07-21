@@ -1,10 +1,13 @@
 use heyfood_core::{
     AccountId, AgentEvent, BrowserUrl, ClientConfig, ClientError, ContextFingerprint,
-    CredentialVersion, GroceryCapability, GroceryEntityId, GroceryListVersion,
-    HealthConnectionStatus, HealthFreshness, HealthMetric, HealthProvider, NetworkPolicy,
-    NoticeLevel, PresentationBlock, PresentationDocument, PresentationText, ProxyUrl,
-    RefreshRequest, RefreshResult, SensitiveString, ServiceUrl, ServiceUrlError,
-    SessionCredentials, choice, coordinates, iso_date, optional_text, required_text,
+    CredentialVersion, FrozenGroceryPreconditions, GroceryCapability, GroceryConfirmation,
+    GroceryConfirmationDecision, GroceryConfirmationId, GroceryConfirmationState, GroceryEntityId,
+    GroceryErrorCode, GroceryIdempotencyKey, GroceryListVersion, GroceryValidatedEdits,
+    HealthConnectionStatus, HealthFreshness, HealthFreshnessStatus, HealthMetric, HealthProvider,
+    HouseholdContextHashVersion, NetworkPolicy, NoticeLevel, PresentationBlock,
+    PresentationDocument, PresentationText, ProxyUrl, RefreshRequest, RefreshResult,
+    SensitiveString, ServiceUrl, ServiceUrlError, SessionCredentials, choice, coordinates,
+    iso_date, optional_text, required_text,
 };
 use time::OffsetDateTime;
 
@@ -46,6 +49,14 @@ fn serde_ingress_cannot_bypass_validated_domain_constructors() {
     assert!(serde_json::from_str::<AccountId>(r#"""#).is_err());
     assert!(serde_json::from_str::<GroceryEntityId>(r#""not-a-uuid""#).is_err());
     assert!(serde_json::from_str::<GroceryListVersion>("0").is_err());
+    assert!(
+        serde_json::from_str::<GroceryConfirmationId>(r#""00000000-0000-4000-8000-00000000000A""#)
+            .is_err()
+    );
+    assert!(
+        serde_json::from_str::<GroceryIdempotencyKey>(r#""00000000-0000-4000-8000-00000000000B""#)
+            .is_err()
+    );
     assert!(serde_json::from_str::<ContextFingerprint>(r#""unsafe/value""#).is_err());
     assert!(serde_json::from_str::<ClientError>(
         r#"{"code":"bad code","category":"usage","public_message":"safe","retryable":false,"outcome_uncertain":false}"#,
@@ -89,12 +100,12 @@ fn generic_grocery_and_health_contracts_fail_closed_and_redact_values() {
     assert!(!GroceryCapability::from_advertised(Some("v2")).is_usable());
 
     let freshness = HealthFreshness {
-        status: HealthConnectionStatus::Stale,
+        status: HealthFreshnessStatus::Stale,
         provider: Some(HealthProvider::Oura),
         data_freshness_hours: Some(48),
         stale_since: Some("2026-07-18T00:00:00Z".into()),
     };
-    assert_eq!(freshness.status, HealthConnectionStatus::Stale);
+    assert_eq!(freshness.status, HealthFreshnessStatus::Stale);
     let metric = HealthMetric {
         key: "sleep_avg".into(),
         value: SensitiveString::new("private-value"),
@@ -103,6 +114,173 @@ fn generic_grocery_and_health_contracts_fail_closed_and_redact_values() {
     let debug = format!("{metric:?}");
     assert!(!debug.contains("private-value"));
     assert!(!debug.contains("private-label"));
+}
+
+#[test]
+fn frozen_c3_drives_lossless_grocery_confirmation_semantics() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/contracts/grocery-backend/c3-confirmation-contract.json"
+    ))
+    .unwrap();
+    let request = &fixture["confirm_request"];
+    assert_eq!(
+        request["required"],
+        serde_json::json!(["confirmation_id", "idempotency_key"])
+    );
+    let decision_field = &request["fields"]["decision"];
+    assert_eq!(decision_field["default_when_absent"], "accept");
+    assert!(
+        decision_field["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("cancel"))
+    );
+    assert!(
+        request["fields"]["edits"]["type"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("object"))
+    );
+    assert!(fixture["precondition_descriptors"]["types"]["household_context_hash"]
+        ["operands"]["hash_version"]
+        .is_object());
+
+    let confirmation_id =
+        GroceryConfirmationId::parse("00000000-0000-4000-8000-000000000010").unwrap();
+    let idempotency_key =
+        GroceryIdempotencyKey::parse("00000000-0000-4000-8000-000000000011").unwrap();
+    let preconditions = FrozenGroceryPreconditions {
+        list_id: GroceryEntityId::parse("00000000-0000-4000-8000-000000000012").unwrap(),
+        list_version: GroceryListVersion::new(7).unwrap(),
+        context_fingerprint: ContextFingerprint::parse("abcdef0123456789").unwrap(),
+        household_context_hash_version: Some(HouseholdContextHashVersion::new(2)),
+    };
+    let proposed = GroceryConfirmation {
+        confirmation_id,
+        idempotency_key,
+        preconditions: preconditions.clone(),
+        state: GroceryConfirmationState::Proposed,
+    };
+
+    // Released legacy clients omit `decision`; frozen C3 normalizes that to an
+    // explicit accept without minting or rewriting either server identity.
+    let legacy = GroceryConfirmationDecision::from_contract_fields(None, None).unwrap();
+    assert_eq!(legacy.as_contract_value(), "accept");
+    let first_accept = proposed.command(legacy.clone()).unwrap();
+    let duplicate_accept = proposed.command(legacy).unwrap();
+    assert_eq!(first_accept, duplicate_accept);
+    assert_eq!(first_accept.confirmation_id, confirmation_id);
+    assert_eq!(first_accept.idempotency_key, idempotency_key);
+
+    let cancel = GroceryConfirmationDecision::from_contract_fields(Some("cancel"), None).unwrap();
+    assert_eq!(cancel, GroceryConfirmationDecision::Cancel);
+    let cancel_command = proposed.command(cancel).unwrap();
+    assert_eq!(cancel_command.decision, GroceryConfirmationDecision::Cancel);
+
+    let edits = GroceryValidatedEdits::new(
+        serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
+            serde_json::json!({"items": [{"name": "oats", "quantity": 2}]}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(!format!("{edits:?}").contains("oats"));
+    let accept_with_edits =
+        GroceryConfirmationDecision::from_contract_fields(Some("accept"), Some(edits.clone()))
+            .unwrap();
+    let edit_command = proposed.command(accept_with_edits).unwrap();
+    assert_eq!(
+        edit_command.decision,
+        GroceryConfirmationDecision::Accept { edits: Some(edits) }
+    );
+    assert_eq!(
+        GroceryConfirmationDecision::from_contract_fields(
+            Some("cancel"),
+            Some(
+                GroceryValidatedEdits::new(
+                    serde_json::from_value(serde_json::json!({"items": []})).unwrap(),
+                )
+                .unwrap()
+            )
+        ),
+        Err(GroceryErrorCode::EditInvalid)
+    );
+    assert_eq!(
+        GroceryValidatedEdits::new(
+            serde_json::from_value(serde_json::json!({"name": "unsafe\nedit"})).unwrap()
+        ),
+        Err(GroceryErrorCode::EditInvalid)
+    );
+    assert!(
+        proposed
+            .command(GroceryConfirmationDecision::from_contract_fields(None, None).unwrap())
+            .is_ok()
+    );
+
+    let mut live = preconditions.clone();
+    live.list_id = GroceryEntityId::parse("00000000-0000-4000-8000-000000000013").unwrap();
+    assert_eq!(
+        preconditions.validate_live(&live),
+        Err(GroceryErrorCode::ListReplaced)
+    );
+    live = preconditions.clone();
+    live.list_version = GroceryListVersion::new(8).unwrap();
+    assert_eq!(
+        preconditions.validate_live(&live),
+        Err(GroceryErrorCode::ListVersionConflict)
+    );
+    live = preconditions.clone();
+    live.context_fingerprint = ContextFingerprint::parse("0123456789abcdef").unwrap();
+    assert_eq!(
+        preconditions.validate_live(&live),
+        Err(GroceryErrorCode::ContextChanged)
+    );
+    live = preconditions.clone();
+    live.household_context_hash_version = Some(HouseholdContextHashVersion::new(3));
+    assert_eq!(
+        preconditions.validate_live(&live),
+        Err(GroceryErrorCode::ContextChanged)
+    );
+    live = preconditions.clone();
+    live.household_context_hash_version = None;
+    assert_eq!(
+        preconditions.validate_live(&live),
+        Err(GroceryErrorCode::ContextChanged)
+    );
+
+    let cancelled = GroceryConfirmation {
+        state: GroceryConfirmationState::Cancelled,
+        ..proposed
+    };
+    assert_eq!(
+        cancelled.command(GroceryConfirmationDecision::from_contract_fields(None, None).unwrap()),
+        Err(GroceryErrorCode::AlreadyCancelled)
+    );
+}
+
+#[test]
+fn frozen_health_fixture_keeps_status_domains_disjoint() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/contracts/health-h1h2.v1.json"
+    ))
+    .unwrap();
+    let freshness = fixture["health_context"]["status_enum"].as_array().unwrap();
+    let connections = fixture["integration"]["status_enum"].as_array().unwrap();
+
+    for value in freshness {
+        serde_json::from_value::<HealthFreshnessStatus>(value.clone()).unwrap();
+        if value != "connected" {
+            assert!(serde_json::from_value::<HealthConnectionStatus>(value.clone()).is_err());
+        }
+    }
+    for value in connections {
+        serde_json::from_value::<HealthConnectionStatus>(value.clone()).unwrap();
+        if value != "connected" {
+            assert!(serde_json::from_value::<HealthFreshnessStatus>(value.clone()).is_err());
+        }
+    }
+    assert!(serde_json::from_str::<HealthFreshnessStatus>(r#""expired""#).is_err());
+    assert!(serde_json::from_str::<HealthConnectionStatus>(r#""stale""#).is_err());
 }
 
 #[test]

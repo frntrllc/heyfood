@@ -1,6 +1,6 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v10 — Rust Phase 0 approved; Grocery 096 is migrated but Production activation remains contained pending exact deploy and canaries
+**Status:** Draft v11 — Rust Phase 1 remediation after REQUEST CHANGES; Grocery 096 activation and final wire integration remain gated on exact deployment and canaries
 **Baseline:** final unpublished Python `0.4.0` candidate at `73494a57468dac83b4904ce6c390e36926f5c6fe`; the last public Python release remains `0.3.2`
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`

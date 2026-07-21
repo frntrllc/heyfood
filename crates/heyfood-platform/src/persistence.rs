@@ -1270,15 +1270,31 @@ fn make_private_file(_path: &Path) -> std::io::Result<()> {
 #[cfg(windows)]
 fn apply_windows_owner_acl(path: &Path, directory: bool) -> std::io::Result<()> {
     let sid = windows_current_user_sid()?;
-    let grant = if directory {
-        format!("*{sid}:(OI)(CI)F")
-    } else {
-        format!("*{sid}:F")
-    };
-    let status = Command::new("icacls")
-        .arg(path)
-        .args(["/inheritance:r", "/grant:r"])
-        .arg(grant)
+    run_windows_acl_script(WINDOWS_SET_OWNER_ONLY_ACL, path, &sid, directory)?;
+    run_windows_acl_script(WINDOWS_VERIFY_OWNER_ONLY_ACL, path, &sid, directory)
+}
+
+#[cfg(windows)]
+fn run_windows_acl_script(
+    script: &str,
+    path: &Path,
+    sid: &str,
+    directory: bool,
+) -> std::io::Result<()> {
+    let status = Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
+        .env("HEYFOOD_ACL_TARGET", path)
+        .env("HEYFOOD_ACL_OWNER_SID", sid)
+        .env(
+            "HEYFOOD_ACL_TARGET_KIND",
+            if directory { "directory" } else { "file" },
+        )
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()?;
@@ -1286,10 +1302,64 @@ fn apply_windows_owner_acl(path: &Path, directory: bool) -> std::io::Result<()> 
         Ok(())
     } else {
         Err(std::io::Error::other(format!(
-            "icacls rejected the private ACL with status {status}"
+            "Windows rejected the owner-only ACL with status {status}"
         )))
     }
 }
+
+#[cfg(windows)]
+const WINDOWS_SET_OWNER_ONLY_ACL: &str = r#"
+$ErrorActionPreference = 'Stop'
+$target = $env:HEYFOOD_ACL_TARGET
+$kind = $env:HEYFOOD_ACL_TARGET_KIND
+$owner = [System.Security.Principal.SecurityIdentifier]::new($env:HEYFOOD_ACL_OWNER_SID)
+$item = Get-Item -LiteralPath $target -Force
+if (($kind -eq 'directory') -ne [bool]$item.PSIsContainer) { throw 'ACL target kind mismatch' }
+if ($kind -eq 'directory') {
+    $security = [System.Security.AccessControl.DirectorySecurity]::new()
+    $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+} else {
+    $security = [System.Security.AccessControl.FileSecurity]::new()
+    $inheritance = [System.Security.AccessControl.InheritanceFlags]::None
+}
+$security.SetOwner($owner)
+$security.SetAccessRuleProtection($true, $false)
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+    $owner,
+    [System.Security.AccessControl.FileSystemRights]::FullControl,
+    $inheritance,
+    [System.Security.AccessControl.PropagationFlags]::None,
+    [System.Security.AccessControl.AccessControlType]::Allow
+)
+$security.SetAccessRule($rule)
+Set-Acl -LiteralPath $target -AclObject $security
+"#;
+
+#[cfg(windows)]
+const WINDOWS_VERIFY_OWNER_ONLY_ACL: &str = r#"
+$ErrorActionPreference = 'Stop'
+$target = $env:HEYFOOD_ACL_TARGET
+$kind = $env:HEYFOOD_ACL_TARGET_KIND
+$expectedSid = $env:HEYFOOD_ACL_OWNER_SID
+$security = Get-Acl -LiteralPath $target
+if (-not $security.AreAccessRulesProtected) { throw 'DACL is not protected' }
+$ownerSid = $security.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+if ($ownerSid -ne $expectedSid) { throw 'ACL owner differs from the current user' }
+$rules = @($security.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+if ($rules.Count -ne 1) { throw 'DACL contains a foreign or duplicate ACE' }
+$rule = $rules[0]
+if ($rule.IdentityReference.Value -ne $expectedSid) { throw 'DACL contains a foreign principal' }
+if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { throw 'owner ACE is not allow' }
+if ($rule.IsInherited) { throw 'owner ACE is inherited' }
+if ($rule.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl) { throw 'owner ACE is not full control' }
+$expectedInheritance = if ($kind -eq 'directory') {
+    [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+} else {
+    [System.Security.AccessControl.InheritanceFlags]::None
+}
+if ($rule.InheritanceFlags -ne $expectedInheritance) { throw 'owner ACE inheritance flags are invalid' }
+if ($rule.PropagationFlags -ne [System.Security.AccessControl.PropagationFlags]::None) { throw 'owner ACE propagation flags are invalid' }
+"#;
 
 #[cfg(windows)]
 fn windows_current_user_sid() -> std::io::Result<String> {
@@ -1339,4 +1409,70 @@ fn sync_directory(path: &Path) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn sync_directory(_path: &Path) -> std::io::Result<()> {
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod windows_acl_tests {
+    use super::*;
+
+    struct Cleanup(PathBuf);
+
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn add_explicit_grant(path: &Path, sid: &str, directory: bool) {
+        let grant = if directory {
+            format!("*{sid}:(OI)(CI)F")
+        } else {
+            format!("*{sid}:F")
+        };
+        let status = Command::new("icacls")
+            .arg(path)
+            .arg("/grant")
+            .arg(grant)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("seed explicit Windows ACE");
+        assert!(status.success(), "icacls must seed the broad ACE");
+    }
+
+    #[test]
+    fn owner_only_acl_replaces_explicit_everyone_and_users_aces() {
+        let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "heyfood-owner-acl-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create ACL fixture directory");
+        let _cleanup = Cleanup(root.clone());
+        let file = root.join("private.state");
+        fs::write(&file, b"fixture").expect("create ACL fixture file");
+
+        for sid in ["S-1-1-0", "S-1-5-32-545"] {
+            add_explicit_grant(&root, sid, true);
+            add_explicit_grant(&file, sid, false);
+        }
+
+        let owner = windows_current_user_sid().expect("resolve current Windows SID");
+        assert!(
+            run_windows_acl_script(WINDOWS_VERIFY_OWNER_ONLY_ACL, &root, &owner, true).is_err(),
+            "broad directory ACEs must violate the owner-only contract"
+        );
+        assert!(
+            run_windows_acl_script(WINDOWS_VERIFY_OWNER_ONLY_ACL, &file, &owner, false).is_err(),
+            "broad file ACEs must violate the owner-only contract"
+        );
+
+        apply_windows_owner_acl(&root, true).expect("replace directory DACL");
+        apply_windows_owner_acl(&file, false).expect("replace file DACL");
+
+        run_windows_acl_script(WINDOWS_VERIFY_OWNER_ONLY_ACL, &root, &owner, true)
+            .expect("directory DACL is protected and owner-only");
+        run_windows_acl_script(WINDOWS_VERIFY_OWNER_ONLY_ACL, &file, &owner, false)
+            .expect("file DACL is protected and owner-only");
+    }
 }

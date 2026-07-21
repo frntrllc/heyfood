@@ -10,15 +10,15 @@
   "requirements": [
     {
       "id": "P1-1-core-contracts",
-      "status": "blocked",
+      "status": "satisfied",
       "evidence": ["crates/heyfood-core/src/error.rs", "crates/heyfood-core/src/validation.rs", "crates/heyfood-core/src/presentation.rs", "crates/heyfood-core/tests/contracts.rs"],
-      "blocker": "A new exact remediation SHA must complete hosted macOS, Linux, and Windows CI, including target-native keyring/Credential Manager and the killable broker jobs."
+      "blocker": null
     },
     {
       "id": "P1-2-native-platform",
       "status": "blocked",
       "evidence": ["crates/heyfood-platform/src/lib.rs", "crates/heyfood-platform/src/persistence.rs", "crates/heyfood-platform/tests/phase1_platform.rs"],
-      "blocker": "Independent review requested changes at evidence head 326c50c6; the specialist must approve the exact remediation SHA."
+      "blocker": "Windows ACL replacement must remove explicit foreign ACEs and pass the broad-ACE regression on the hosted Windows runner."
     },
     {
       "id": "P1-3-supervisor-and-snapshots",
@@ -46,27 +46,27 @@
     },
     {
       "id": "P1-7-provisional-grocery-seams",
-      "status": "satisfied",
+      "status": "blocked",
       "evidence": ["crates/heyfood-core/src/grocery.rs", "crates/heyfood-application/src/grocery.rs", "fixtures/contracts/grocery-backend/provenance.json"],
-      "blocker": null
+      "blocker": "Frozen C3 confirmation identity, decision, edits, and hash-version remediation is in progress and requires exact-SHA qualification."
     },
     {
       "id": "P1-8-provider-neutral-health-seams",
-      "status": "satisfied",
+      "status": "blocked",
       "evidence": ["crates/heyfood-core/src/health.rs", "crates/heyfood-application/src/health.rs", "fixtures/contracts/health-h1h2.v1.json"],
-      "blocker": null
+      "blocker": "Disjoint frozen H1/H2 freshness and integration status domains require exact-SHA qualification."
     },
     {
       "id": "P1-9-dg-r3-three-os-hosted",
-      "status": "satisfied",
+      "status": "blocked",
       "evidence": [".github/workflows/rust-ci.yml", "docs/release-evidence/rust-phase1/qualification-evidence.json"],
-      "blocker": null
+      "blocker": "A new exact remediation SHA must complete hosted macOS, Linux, and Windows CI, including target-native keyring/Credential Manager and the killable broker jobs."
     },
     {
       "id": "P1-10-independent-rust-platform-security-review",
-      "status": "satisfied",
+      "status": "blocked",
       "evidence": ["docs/release-evidence/rust-phase1/qualification-report.md"],
-      "blocker": null
+      "blocker": "Independent review requested changes at evidence head 326c50c6; the specialist must approve the exact remediation SHA."
     }
   ],
   "external_gates": {

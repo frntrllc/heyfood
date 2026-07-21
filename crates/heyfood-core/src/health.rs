@@ -17,10 +17,16 @@ pub enum HealthProvider {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum HealthConnectionStatus {
+pub enum HealthFreshnessStatus {
     Connected,
     Stale,
     NotConnected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthConnectionStatus {
+    Connected,
     Expired,
     Revoked,
     Disconnected,
@@ -51,7 +57,7 @@ pub struct HealthTrend {
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HealthFreshness {
-    pub status: HealthConnectionStatus,
+    pub status: HealthFreshnessStatus,
     pub provider: Option<HealthProvider>,
     pub data_freshness_hours: Option<u32>,
     pub stale_since: Option<String>,

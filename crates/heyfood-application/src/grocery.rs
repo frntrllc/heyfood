@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 
 use heyfood_core::{
     AccountId, ContextFingerprint, FrozenGroceryPreconditions, GroceryCapability,
-    GroceryConfirmation, GroceryEntityId, GroceryListVersion, OperationId, SensitiveString,
-    SessionCredentials,
+    GroceryConfirmation, GroceryConfirmationCommand, GroceryEntityId, GroceryListVersion,
+    HouseholdContextHashVersion, OperationId, SensitiveString, SessionCredentials,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -63,7 +63,7 @@ pub trait GroceryPort: Send + Sync {
         &self,
         credentials: SessionCredentials,
         operation_id: OperationId,
-        confirmation: GroceryConfirmation,
+        command: GroceryConfirmationCommand,
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<GroceryListSnapshot, PortError>>;
 }
@@ -77,6 +77,7 @@ pub struct GroceryCacheKey {
     pub list_id: GroceryEntityId,
     pub list_version: GroceryListVersion,
     pub context_fingerprint: ContextFingerprint,
+    pub household_context_hash_version: Option<HouseholdContextHashVersion>,
 }
 
 impl GroceryCacheKey {
@@ -102,6 +103,7 @@ impl GroceryCacheKey {
             list_id: preconditions.list_id,
             list_version: preconditions.list_version,
             context_fingerprint: preconditions.context_fingerprint.clone(),
+            household_context_hash_version: preconditions.household_context_hash_version,
         })
     }
 }
