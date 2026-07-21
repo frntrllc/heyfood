@@ -1,0 +1,147 @@
+{
+  "description": "Founding scenario: red lentil dahl ingredients added for a household whose member Maya is low-FODMAP. Onion + garlic are flagged 'risky' for Maya with substitutions; lentils are generally_safer. basis='ingredient' throughout.",
+  "member": {
+    "member_id": "maya-uuid",
+    "restriction": "low_fodmap"
+  },
+  "list": {
+    "id": "list-1",
+    "title": "Grocery List",
+    "state": "active",
+    "version": 3,
+    "items": [
+      {
+        "id": "i1",
+        "requested_name": "red lentils",
+        "canonical_name": "red lentils",
+        "quantity": 1.0,
+        "unit": "cup",
+        "package_quantity": null,
+        "note": null,
+        "state": "active",
+        "intended_for": null,
+        "sources": [
+          {
+            "source_type": "recipe",
+            "source_ref": "dahl-001",
+            "source_detail": "Red Lentil Dahl"
+          }
+        ],
+        "safety": {
+          "basis": "ingredient",
+          "status": "generally_safer",
+          "member_flags": [
+            {
+              "member_id": "maya-uuid",
+              "status": "generally_safer",
+              "reason": null,
+              "substitutions": []
+            }
+          ],
+          "model_version": "test-model",
+          "rules_version": "dietary-rules-1",
+          "confidence": 0.9,
+          "context_hash": "abc123",
+          "context_hash_version": 1,
+          "label_hint": "Screened at ingredient level — verify the product label."
+        },
+        "created_at": "2026-07-19T12:00:00+00:00",
+        "updated_at": "2026-07-19T12:00:00+00:00"
+      },
+      {
+        "id": "i2",
+        "requested_name": "onion",
+        "canonical_name": "onion",
+        "quantity": 1.0,
+        "unit": null,
+        "package_quantity": null,
+        "note": null,
+        "state": "active",
+        "intended_for": null,
+        "sources": [
+          {
+            "source_type": "recipe",
+            "source_ref": "dahl-001",
+            "source_detail": "Red Lentil Dahl"
+          }
+        ],
+        "safety": {
+          "basis": "ingredient",
+          "status": "risky",
+          "member_flags": [
+            {
+              "member_id": "maya-uuid",
+              "status": "risky",
+              "reason": "Onion is high-FODMAP.",
+              "substitutions": [
+                "green parts of scallion",
+                "garlic-infused oil"
+              ]
+            }
+          ],
+          "model_version": "test-model",
+          "rules_version": "dietary-rules-1",
+          "confidence": 0.9,
+          "context_hash": "abc123",
+          "context_hash_version": 1,
+          "label_hint": "Screened at ingredient level — verify the product label."
+        },
+        "created_at": "2026-07-19T12:00:00+00:00",
+        "updated_at": "2026-07-19T12:00:00+00:00"
+      },
+      {
+        "id": "i3",
+        "requested_name": "garlic",
+        "canonical_name": "garlic",
+        "quantity": 2.0,
+        "unit": "clove",
+        "package_quantity": null,
+        "note": null,
+        "state": "active",
+        "intended_for": null,
+        "sources": [
+          {
+            "source_type": "recipe",
+            "source_ref": "dahl-001",
+            "source_detail": "Red Lentil Dahl"
+          }
+        ],
+        "safety": {
+          "basis": "ingredient",
+          "status": "risky",
+          "member_flags": [
+            {
+              "member_id": "maya-uuid",
+              "status": "risky",
+              "reason": "Garlic is high-FODMAP.",
+              "substitutions": [
+                "garlic-infused oil"
+              ]
+            }
+          ],
+          "model_version": "test-model",
+          "rules_version": "dietary-rules-1",
+          "confidence": 0.9,
+          "context_hash": "abc123",
+          "context_hash_version": 1,
+          "label_hint": "Screened at ingredient level — verify the product label."
+        },
+        "created_at": "2026-07-19T12:00:00+00:00",
+        "updated_at": "2026-07-19T12:00:00+00:00"
+      }
+    ],
+    "created_at": "2026-07-19T12:00:00+00:00",
+    "updated_at": "2026-07-19T12:00:00+00:00"
+  },
+  "expect": {
+    "flagged_items": [
+      "onion",
+      "garlic"
+    ],
+    "unflagged_items": [
+      "red lentils"
+    ],
+    "basis": "ingredient",
+    "substitutions_present": true
+  }
+}

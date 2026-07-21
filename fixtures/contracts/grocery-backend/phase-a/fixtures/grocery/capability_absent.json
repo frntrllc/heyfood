@@ -1,0 +1,6 @@
+{
+  "description": "An older or development backend does not advertise Grocery Phase A.",
+  "application_capabilities": {},
+  "expected_client_state": "unavailable",
+  "expected_network_behavior": "do_not_call_grocery_endpoints"
+}

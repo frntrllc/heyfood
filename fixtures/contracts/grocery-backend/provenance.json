@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "source_repository": "https://github.com/frntrllc/hellofood.git",
   "import_command": "cargo xtask import-grocery-contracts --source-repo PATH",
   "contracts": [
@@ -59,21 +59,30 @@
     ],
     "grocery_phase_a": {
       "source_pr": 107,
-      "observed_head_sha": "8cd7baf2c683bf5ad286af32c26d96bdb1742f86",
-      "observed_merge_sha": "70d79bf6d859ff7d45738663b52a9a1074e62738",
-      "status": "merged_not_deployed_not_imported",
-      "authoritative_source_sha": null,
-      "aggregate_digest": null,
-      "required_before_import": [
-        "production_095_to_096",
-        "exact_grocery_merge_deployed_and_digest_regenerated",
-        "grocery_v1_capability_and_live_canary"
+      "source_head_sha": "8cd7baf2c683bf5ad286af32c26d96bdb1742f86",
+      "source_merge_sha": "70d79bf6d859ff7d45738663b52a9a1074e62738",
+      "provenance_pr": 115,
+      "provenance_merge_sha": "7871b20ae609a0fffd82b2a35efd39cf3385825d",
+      "deployed_sha": "f7b0eebca879840995226ede9ea715dc8702313a",
+      "status": "deployed_contracts_imported_review_approved",
+      "authoritative_manifest_path": "fixtures/contracts/grocery-backend/phase-a/grocery-contract-provenance.json",
+      "authoritative_manifest_sha256": "3e708d575f6e8ec4c1dfbbc2d6aa6c26c5489ee901906a335c9f142506bc2d5b",
+      "aggregate_digest": "781a14b9d05d70a4da245e2d80c24b0b040aa7ec742f852c65ca3815cc583911",
+      "contract_count": 14,
+      "remaining_before_wire_generation": [
+        "phase_2_authorization"
+      ],
+      "remaining_before_activation": [
+        "least_privilege_grocery_read_write_session",
+        "positive_list_prepare_cancel_canary",
+        "stale_version_conflict_canary",
+        "active_list_non_mutation_canary"
       ]
     }
   },
   "review": {
     "status": "approved",
-    "reviewer": "codex-rust-specialist:/root/rust_phase0_review",
-    "reviewed_commit_sha": "844aa0bcafbcf46de8f62144e2731baf9a20db93"
+    "reviewer": "Huygens (specialized Rust subagent)",
+    "reviewed_commit_sha": "47282aea7047b1f3bb0642fff9d09b106fa1bb0c"
   }
 }

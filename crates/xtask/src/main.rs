@@ -41,7 +41,7 @@ fn main() {
             no_extra_arguments(&mut arguments);
             xtask::verify_grocery_contracts(root).map(|report| {
                 format!(
-                    "grocery contract freeze valid: {} merged C3/C4 contracts; review pending: {}",
+                    "grocery contract freeze valid: {} Platform and Phase-A contracts; import review pending: {}",
                     report.contracts, report.review_pending
                 )
             })
@@ -56,7 +56,7 @@ fn main() {
             no_extra_arguments(&mut arguments);
             xtask::import_grocery_contracts(root, Path::new(&source_repository)).map(|report| {
                 format!(
-                    "imported and verified {} merged C3/C4 grocery contracts",
+                    "imported and verified {} Platform and Phase-A grocery contracts",
                     report.contracts
                 )
             })

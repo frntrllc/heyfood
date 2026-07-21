@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/frntrllc/heyfood/blob/main/contracts/v1/grocery-entities-contract.json",
+  "title": "Grocery entities contract (v1)",
+  "description": "Language-neutral wire shapes for the Grocery Lists domain (Phase A): lists, items, item sources, and safety-evaluation annotations. Bound to the Pydantic source of truth by tests/test_grocery_contract.py. SafetyStatus is the canonical typed vocabulary (never a raw safe|caution|unsafe|unknown string); basis distinguishes ingredient-level screening (Phase A) from product-level (Phase B+).",
+  "x-heyfood-contract-version": 1,
+  "safety_status": {
+    "source_of_truth": "app.schemas.dietary.SafetyStatus",
+    "values": ["generally_safer", "risky", "avoid", "unable_to_evaluate"]
+  },
+  "basis": {
+    "source_of_truth": "app.models.grocery.BASIS_VALUES",
+    "values": ["ingredient", "product"],
+    "phase_a_value": "ingredient",
+    "note": "Phase A screens a bare ingredient name; 'product' is reserved for Phase B+ when a concrete product with allergen data is attached."
+  },
+  "item_state": {
+    "source_of_truth": "app.schemas.grocery.GroceryItemState",
+    "values": ["active", "purchased", "dismissed"],
+    "note": "No 'sent_to_provider' state — provider-handoff truth lives in the Phase B attempt tables."
+  },
+  "entities": {
+    "grocery_list": {
+      "source_of_truth": "app.schemas.grocery.GroceryListView",
+      "fields": ["id", "title", "state", "version", "items", "created_at", "updated_at"],
+      "optimistic_version": "version"
+    },
+    "grocery_item": {
+      "source_of_truth": "app.schemas.grocery.GroceryItemView",
+      "fields": ["id", "requested_name", "canonical_name", "quantity", "unit", "package_quantity", "note", "state", "intended_for", "sources", "safety", "created_at", "updated_at"]
+    },
+    "item_source": {
+      "source_of_truth": "app.schemas.grocery.ItemSourceView",
+      "fields": ["source_type", "source_ref", "source_detail"],
+      "note": "Rendered provenance is '<source_type>:<source_ref>' (D8)."
+    },
+    "safety_annotation": {
+      "source_of_truth": "app.schemas.grocery.SafetyAnnotationView",
+      "fields": ["basis", "status", "member_flags", "model_version", "rules_version", "confidence", "context_hash", "context_hash_version", "label_hint"]
+    },
+    "member_flag": {
+      "source_of_truth": "app.schemas.grocery.MemberFlag",
+      "fields": ["member_id", "status", "reason", "substitutions"]
+    },
+    "proposed_item": {
+      "source_of_truth": "app.schemas.grocery.ProposedItemView",
+      "fields": ["requested_name", "canonical_name", "quantity", "unit", "package_quantity", "note", "intended_for", "sources", "safety"]
+    },
+    "mutation_proposal": {
+      "source_of_truth": "app.schemas.grocery.GroceryMutationProposal",
+      "fields": ["confirmation_id", "idempotency_key", "operation", "expires_at", "structured_preview", "preconditions", "confirmation_token"],
+      "authority": "The server-signed token freezes account, operation payload, exact list UUID/version, and authoritative HouseholdContextSnapshot hash/version."
+    },
+    "mutation_result": {
+      "source_of_truth": "app.schemas.grocery.GroceryMutationResult",
+      "fields": ["status", "operation", "confirmation_id", "list", "exclusions"],
+      "terminal_statuses": ["committed", "cancelled"]
+    }
+  }
+}

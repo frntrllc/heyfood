@@ -1,6 +1,6 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v12 — Rust Phase 1 remediation after REQUEST CHANGES; Grocery 096 is deployed at the exact reviewed backend SHA, while final Rust wire integration remains gated on pinned provenance and scoped mutation canaries
+**Status:** Draft v16 — Rust Phase 1 is closed with GO; the bounded Grocery Phase-A contract import is independently approved at exact SHA `47282aea7047b1f3bb0642fff9d09b106fa1bb0c`, while wire generation, Phase 2 implementation, and later Rust activation remain separately gated
 **Baseline:** final unpublished Python `0.4.0` candidate at `73494a57468dac83b4904ce6c390e36926f5c6fe`; the last public Python release remains `0.3.2`
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`
@@ -134,37 +134,62 @@ usable but receives the intended typed 403 on `GET /v1/grocery/list`:
 `This CLI session is missing required scope(s): grocery:read.` This proves the
 optional-scope boundary without widening the released Python client's grant.
 
-Two Rust-import gates remain. First, the backend Grocery provenance manifest
-and regenerated aggregate fixture digest must be pinned to the deployed merge
-and source hashes rather than the pre-merge/manual placeholder. Second, a
-fresh least-privilege session that explicitly requests both Grocery scopes
-must pass the positive list, prepare/cancel, stale-version conflict, and
-active-list non-mutation canaries. The released Python `0.3.2` client
-deliberately does not request these server-ahead scopes and must not be patched
-into a disposable Grocery client merely to satisfy that gate; the native Rust
-client owns the scoped positive canary and final surface.
+Two sequential Rust Grocery gates remain; they are not both import gates.
+First, the **contract-import gate** must pin the backend Grocery provenance
+manifest and regenerated aggregate fixture digest. The manifest must
+distinguish the Grocery contract merge
+`70d79bf6d859ff7d45738663b52a9a1074e62738` from the exact Production deploy
+`f7b0eebca879840995226ede9ea715dc8702313a`, retain the per-file source hashes,
+and prove that the contract tree is byte-identical across those commits.
+Grocery provenance PR #115 froze that authority and was squash-merged as
+`7871b20ae609a0fffd82b2a35efd39cf3385825d` with aggregate digest
+`781a14b9d05d70a4da245e2d80c24b0b040aa7ec742f852c65ca3815cc583911`.
+Rust now pins and validates that manifest, the source/deploy ancestry, all 14
+byte-identical files, and the deterministic aggregate before copying fixtures.
+The Rust import received independent specialized review with GO at exact SHA
+`47282aea7047b1f3bb0642fff9d09b106fa1bb0c` and tree
+`198850f2f70bc24acedf56c78e320752e778b0dd`. Import approval does not generate
+final wire DTOs or authorize Phase 2 Grocery implementation.
+Second, after separately authorized implementation exists, the **Rust
+activation/qualification gate** requires a fresh
+least-privilege session that explicitly requests both Grocery scopes to pass
+the positive list, prepare/cancel, stale-version conflict, and active-list
+non-mutation canaries. The released Python `0.3.2` client deliberately does not
+request these server-ahead scopes and must not be patched into a disposable
+Grocery client merely to satisfy that gate; the native Rust client owns the
+scoped positive canary and final surface.
 
 The same activation audit exposed a separate net-new-user release dependency.
 Production authorization is restored and publicly advertises both loopback
 PKCE and device code with SMS/email identity methods, after reconciling the
 API-only authorization-transaction key, recovery flag, agreement keyring,
 terms version, self-registration flag, and account-deletion flag. Public
-self-registration nevertheless remains `unavailable` because the immutable
-PITR plaintext-removal T0 has not yet aged through the required seven-day
-window. Required flags, Vault, KMS, database TLS, Redis TLS, conversation-state
-encryption, exact schema, signed evidence, and transport proofs all pass; only
-the T0 age gate fails. No client, deployment, or operator may backdate or waive
+self-registration currently reports the exact public contract state
+`self_registration.status = "disabled"` because the administrative feature
+flag remains off. If that flag were enabled before the immutable PITR
+plaintext-removal T0 ages through the required seven-day window, runtime
+readiness would still report `unavailable`; the flag is not permission to
+bypass readiness. Required flags other than this intentional release hold,
+Vault, KMS, database TLS, Redis TLS, conversation-state encryption, exact
+schema, signed evidence, and transport proofs all pass; the T0 age gate remains
+the release blocker. No client, deployment, or operator may backdate or waive
 that evidence. The scheduled attestation refresher must preserve T0 and keep
 the HMAC fresh until the window matures, after which a real net-new registration
 canary is mandatory before native `0.4.0` release qualification.
 
-This dependency does not stop generic Rust work. Auth, state, terminal
-supervision, cancellation, rendering, generic voice, provisional semantic
-ports, and fixture-import machinery continue in parallel. Final grocery wire
-DTOs, REST/tool calls, and release qualification remain blocked until the
-corrected backend contract is frozen. Retailer-provider work remains ordered
-after Grocery Phase A and Security D2: B1 provider foundation, then B2 Kroger;
-provider OAuth credentials never move into the native client.
+Phase 1 is closed with GO at product SHA
+`09191ca5d3f3254eb6d2deb750e9f65a2c77df7a`, reviewed evidence
+`92bf9bad3e2097cb0cc52416e23c4d24575213b0`, and final closure head
+`adf78438d55ac40e7e12c60fc7d4bd168da94a8e`. The team may execute the bounded
+Grocery contract import and validation authorized by PR #115. That bounded
+import is implemented, qualified, and independently approved at exact SHA
+`47282aea7047b1f3bb0642fff9d09b106fa1bb0c`. The team may prepare Phase 2
+design/backlog material, but it must not generate final Grocery wire DTOs, add
+REST/tool calls, or begin Phase 2 implementation. Grocery release
+qualification remains blocked until the later Rust activation/qualification
+gate passes. Retailer-provider work remains ordered after Grocery Phase A and
+Security D2: B1 provider foundation, then B2 Kroger; provider OAuth credentials
+never move into the native client.
 
 For health, the Rust program owns H1/H2 one-shot and TUI surfaces over the
 server-backed Oura contracts and later consumes provider-neutral Apple Health
@@ -1486,6 +1511,20 @@ it.
 No phase begins until the previous phase's actual commits, tests, artifacts,
 and evidence receive independent review.
 
+**Current authorization checkpoint (2026-07-21):** Phase 1 is closed with an
+independent GO at product SHA `09191ca5d3f3254eb6d2deb750e9f65a2c77df7a`,
+reviewed evidence SHA `92bf9bad3e2097cb0cc52416e23c4d24575213b0`, and
+final closure head `adf78438d55ac40e7e12c60fc7d4bd168da94a8e`.
+Grocery provenance PR #115 is squash-merged as
+`7871b20ae609a0fffd82b2a35efd39cf3385825d`, permitting only the bounded
+contract import and validation. The bounded import received independent
+specialized review with GO at exact SHA
+`47282aea7047b1f3bb0642fff9d09b106fa1bb0c` and tree
+`198850f2f70bc24acedf56c78e320752e778b0dd`. Phase 2 implementation remains on
+hold pending separate owner authorization; approved fixture import does not
+authorize wire DTO generation, REST/tool binding, or implementation of a later
+phase.
+
 ### Phase 0 — Contracts and vertical Rust spike
 
 **Estimated effort:** 2–3 calendar weeks for a focused experienced team.
@@ -1512,11 +1551,17 @@ and evidence receive independent review.
    Phase 0 records the companion directive/PR state and marks current DTOs
    provisional. Generic Phase 1 ports and semantic types may proceed, but final
    wire types and Phase 2 grocery calls require authoritative generated backend
-   fixtures, the corrected Phase A source SHA, and aggregate digest. Record the
-   completed release chain explicitly as Production `094 -> 095`, reviewed
-   Grocery `095 -> 096`, Grocery merge/deploy, `grocery:v1` canary, then Rust
-   fixture import; a stale PR #90 SHA or pre-reconstruction fixture is never
-   pinnable.
+   fixtures plus the PR #115 manifest, squash-merged as
+   `7871b20ae609a0fffd82b2a35efd39cf3385825d`, that separately records Grocery
+   merge SHA
+   `70d79bf6d859ff7d45738663b52a9a1074e62738`, deployed SHA
+   `f7b0eebca879840995226ede9ea715dc8702313a`, and the aggregate digest of the
+   byte-identical deployed contract tree. Record the completed release chain
+   explicitly as Production `094 -> 095`, reviewed Grocery `095 -> 096`,
+   Grocery merge, exact Production deploy, public `grocery:v1` capability and
+   negative-scope canary, Rust fixture import, Phase 2 Grocery implementation,
+   then the scoped Rust positive canary; a stale PR #90 SHA or
+   pre-reconstruction fixture is never pinnable.
 10. Freeze H1/H2 provider-neutral backend fixtures and production-scope/routing
     evidence; record H3 mobile/backend contracts as a separately capability-
     gated dependency rather than inventing Apple Health wire types.
