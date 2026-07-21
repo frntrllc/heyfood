@@ -2418,7 +2418,7 @@ mod tests {
         verify_assets_approved(&root()).expect("specialist-approved assets must validate");
         let phase0 = verify_phase0_evidence(&root()).expect("Phase 0 inventory must validate");
         assert_eq!(phase0.blockers, 0);
-        assert_eq!(phase0.review_status, "pending");
+        assert_eq!(phase0.review_status, "approved");
     }
 
     #[test]

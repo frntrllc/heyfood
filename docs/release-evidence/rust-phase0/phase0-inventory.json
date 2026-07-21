@@ -5,7 +5,7 @@
     "repository": "https://github.com/frntrllc/heyfood.git",
     "branch": "codex/rust-big-bang",
     "code_commit_sha": "08cecb3a00bff6bbd670faf066105205f6e93b0b",
-    "evidence_commit_sha": null
+    "evidence_commit_sha": "0ad16fcc49a6c7771d4a897f4475de643c5c5962"
   },
   "requirements": [
     {
@@ -116,8 +116,8 @@
     }
   },
   "review": {
-    "status": "pending",
-    "reviewer": null,
-    "reviewed_commit_sha": null
+    "status": "approved",
+    "reviewer": "codex-rust-specialist:/root/rust_phase0_review",
+    "reviewed_commit_sha": "0ad16fcc49a6c7771d4a897f4475de643c5c5962"
   }
 }

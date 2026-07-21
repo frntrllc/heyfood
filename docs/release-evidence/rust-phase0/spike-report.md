@@ -4,8 +4,8 @@
 **Exact code lineage measured:** `08cecb3a00bff6bbd670faf066105205f6e93b0b`
 **Status:** local and exact hosted three-OS remediation evidence is green;
 asset, Grok, and deterministic grocery C3/C4 provenance are specialist-approved;
-overall Phase 0 approval is pending the final-delta exact-SHA review.
-Cutover and Phase 1 are not authorized by this report.
+the specialized Rust reviewer issued overall Phase 0 GO at `0ad16fc` with no
+findings. Cutover and Phase 1 remain unauthorized by this report.
 
 ## What the spike now proves
 
@@ -81,7 +81,7 @@ Measured from a detached, clean worktree at the exact code SHA on macOS 26.5
 | First-frame controlled probe | 30 samples; optimized p95 104 µs |
 | Input-to-frame controlled probe | 2,000 samples with 500 semantic entries; optimized p95 470 µs |
 | Workspace format/strict Clippy/tests | passed locally |
-| Dependency DAG/contracts/assets/ledger/inventory validators | passed locally; assets, Grok ledger, and grocery freeze specialist-approved; overall Phase 0 review pending |
+| Dependency DAG/contracts/assets/ledger/inventory validators | passed locally; assets, Grok ledger, grocery freeze, and overall Phase 0 result specialist-approved |
 
 The timing probes use Ratatui's controlled `TestBackend`; they are regression
 checks, not release-process startup, real terminal paint, network latency, idle
@@ -129,13 +129,15 @@ jobs and one expected skipped protected-environment provenance-approval job;
 the companion CI workflow passed all 14 jobs. PR merge SHA `bd26707` and code
 head `08cecb3` have the identical tree `3b99bb0`.
 
-## Remaining Phase 0 gates
+## Phase 0 closure and remaining later-phase gates
 
 The authoritative machine-readable inventory has zero classified requirement
-blockers. The specialized Rust reviewer already approved both first-party
-asset provenance records and the Grok pattern-only ledger at `d738f8c`. The
-remaining Phase 0 gate is an exact-SHA re-review of the deterministic grocery
-C3/C4 import/provenance remediation and the assembled zero-blocker result.
+blockers. The specialized Rust reviewer approved both first-party asset
+provenance records and the Grok pattern-only ledger at `d738f8c`, the
+deterministic grocery C3/C4 import/provenance remediation at `6157e1c`, and the
+assembled final evidence at `0ad16fc`. Exact hosted run `29790409403` passed 35
+Rust jobs with only the intentionally disabled approval job skipped; companion
+run `29790409401` passed all 14 jobs.
 
 The grocery correction/deployment sequence, Kroger B1/B2, Security D2, final
 wire DTOs, signed installers, real-hardware RCs, and all 675 migration-ledger
@@ -143,6 +145,5 @@ mappings remain explicit later-phase or cutover gates. Per the authoritative
 plan, recording those unfinished external dependencies does not serialize the
 Phase 0 spike or generic Phase 1 foundation.
 
-The next decision is mechanical: commit this exact evidence candidate, pass its
-hosted matrix, and send that same SHA to the specialized reviewer. Only a GO
-verdict permits asking the owner to authorize Phase 1.
+Phase 0 is closed. The next decision is owner authorization for Phase 1; this
+report does not grant it.
