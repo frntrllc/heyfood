@@ -125,9 +125,9 @@ cargo xtask verify-grocery-contracts
 cargo xtask verify-assets
 ```
 
-Hash-pinned contract JSON is checked out with LF line endings on every platform
-through `.gitattributes`; do not rewrite approved contract bytes or update their
-hashes as part of unrelated changes.
+Hash-pinned JSON under `fixtures/contracts/` and `schemas/` is checked out with
+LF line endings on every platform through `.gitattributes`; do not rewrite
+approved contract bytes or update their hashes as part of unrelated changes.
 
 Additional project references:
 

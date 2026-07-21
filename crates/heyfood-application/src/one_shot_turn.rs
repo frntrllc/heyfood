@@ -56,17 +56,19 @@ pub async fn execute_one_shot_turn(
         let next = accepted.events.next();
         let event = tokio::select! {
             () = cancellation.cancelled() => {
-                accepted.events.close().await?;
-                return Err(PortError::new(
+                let _ = accepted.events.close().await;
+                return Err(PortError::uncertain(
                     "turn_cancelled_after_acceptance",
                     "turn was cancelled after the service accepted it",
                 ));
             }
-            event = next => event?,
+            event = next => event.map_err(|error| {
+                PortError::uncertain(error.code, terminal_safe_text(&error.message))
+            })?,
         };
         let Some(event) = event else {
-            accepted.events.close().await?;
-            return Err(PortError::new(
+            let _ = accepted.events.close().await;
+            return Err(PortError::uncertain(
                 "stream_incomplete",
                 "agent stream ended without a terminal event",
             ));
@@ -79,8 +81,8 @@ pub async fn execute_one_shot_turn(
             });
         stream_bytes = stream_bytes.saturating_add(event_bytes);
         if event_count > MAX_ONE_SHOT_EVENTS || stream_bytes > MAX_ONE_SHOT_STREAM_BYTES {
-            accepted.events.close().await?;
-            return Err(PortError::new(
+            let _ = accepted.events.close().await;
+            return Err(PortError::uncertain(
                 "stream_limit",
                 "agent stream exceeded its bounded event or content budget",
             ));

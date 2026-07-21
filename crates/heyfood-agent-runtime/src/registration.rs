@@ -261,10 +261,16 @@ impl RegistrationClient {
                     "The channel credential refresh response was not observed. Reconcile account state before retrying.",
                 )
             })?;
+        if response.status().is_server_error() {
+            return Err(RegistrationError::uncertain(
+                "channel_refresh_outcome_uncertain",
+                "The channel refresh may have rotated before the service returned an error. Reconcile account state before retrying.",
+            ));
+        }
         if !response.status().is_success() {
             return Err(RegistrationError::new(
                 "login_required",
-                "The channel authorization expired. Reconnect the hello.food account.",
+                "The channel authorization expired. Contact hello.food support to reset the connection, then register again.",
             ));
         }
         let refreshed: OAuthTokenResponse = response.json().await.map_err(|_| {
@@ -960,6 +966,51 @@ mod tests {
             refreshed.refresh_token.expose_secret(),
             "channel-refresh-new"
         );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn server_error_after_channel_refresh_dispatch_is_outcome_uncertain() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let count = socket.read(&mut buffer).await.unwrap();
+                request.extend_from_slice(&buffer[..count]);
+                if complete_http_request(&request) {
+                    break;
+                }
+            }
+            assert!(
+                String::from_utf8(request)
+                    .unwrap()
+                    .starts_with("POST /v1/channel/oauth/token ")
+            );
+            socket
+                .write_all(
+                    b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        });
+        let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let client = RegistrationClient::new(service_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let current = ChannelCredentials::from_unix_expiry(
+            "hf_cid_heyfood_cli",
+            "heyfood-device",
+            SensitiveString::new("channel-access-old"),
+            SensitiveString::new("channel-refresh-old"),
+            1,
+            "account:link profile:read",
+        )
+        .unwrap();
+        let error = client.refresh_channel(&current).await.unwrap_err();
+        assert_eq!(error.code, "channel_refresh_outcome_uncertain");
+        assert!(error.outcome_uncertain);
+        assert!(!error.retryable);
         server.await.unwrap();
     }
 

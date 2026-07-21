@@ -81,7 +81,19 @@ fn pending_command(machine: bool) -> ExitCode {
 }
 
 async fn one_shot(command: Command, output_mode: OutputMode, machine: bool) -> ExitCode {
-    match one_shot_inner(command, output_mode).await {
+    // Install the signal handler before any consuming auth request. Once a
+    // rotating refresh is dispatched, Ctrl-C is recorded but the bounded
+    // request and durable reconciliation are allowed to finish.
+    let cancellation = CancellationToken::new();
+    let signal_cancellation = cancellation.clone();
+    let signal = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            signal_cancellation.cancel();
+        }
+    });
+    let result = one_shot_inner(command, output_mode, cancellation).await;
+    signal.abort();
+    match result {
         Ok(output) => {
             print!("{output}");
             ExitCode::SUCCESS
@@ -99,6 +111,7 @@ async fn one_shot(command: Command, output_mode: OutputMode, machine: bool) -> E
 async fn one_shot_inner(
     command: Command,
     output_mode: OutputMode,
+    cancellation: CancellationToken,
 ) -> Result<String, heyfood_bin::OneShotError> {
     let paths = NativePaths::discover().map_err(heyfood_bin::OneShotError::from)?;
     let auth_store =
@@ -138,31 +151,42 @@ async fn one_shot_inner(
         } else {
             let client = RegistrationClient::new(service_url.clone(), policy)
                 .map_err(registration_to_one_shot)?;
+            if cancellation.is_cancelled() {
+                return Err(heyfood_bin::OneShotError::new(
+                    "channel_refresh_cancelled_before_dispatch",
+                    "Channel refresh was cancelled before dispatch.",
+                ));
+            }
+            // Write ahead before the consuming POST. A hard process exit or
+            // Ctrl-C after dispatch therefore leaves durable evidence that the
+            // old grant must not be retried.
+            refresh.mark_reconciliation_required().map_err(|_| {
+                uncertain_one_shot(
+                    "channel_refresh_reconciliation_write",
+                    "Channel refresh was not dispatched because its reconciliation marker could not be saved.",
+                )
+            })?;
             auth.channel = match client.refresh_channel(&auth.channel).await {
                 Ok(channel) => channel,
                 Err(error) if error.outcome_uncertain => {
-                    refresh.mark_reconciliation_required().map_err(|_| {
+                    return Err(registration_to_one_shot(error));
+                }
+                Err(error) => {
+                    refresh.clear_reconciliation_required().map_err(|_| {
                         uncertain_one_shot(
-                            "channel_refresh_reconciliation_write",
-                            "The channel credential refresh outcome is uncertain and its reconciliation marker could not be saved. Reconnect the account before retrying.",
+                            "channel_refresh_reconciliation_clear",
+                            "The channel refresh was rejected, but its reconciliation marker could not be cleared.",
                         )
                     })?;
                     return Err(registration_to_one_shot(error));
                 }
-                Err(error) => return Err(registration_to_one_shot(error)),
             };
             // A rotated refresh token is server-accepted state. Persist the whole
             // bundle before allowing session re-exchange to consume it.
             if refresh.replace(&auth).is_err() {
-                refresh.mark_reconciliation_required().map_err(|_| {
-                    uncertain_one_shot(
-                        "channel_refresh_reconciliation_write",
-                        "The rotated channel credential could not be saved and its reconciliation marker also failed. Reconnect the account before retrying.",
-                    )
-                })?;
                 return Err(uncertain_one_shot(
                     "channel_refresh_persistence_outcome_uncertain",
-                    "The channel credential rotated, but it could not be saved. Reconnect the account before retrying.",
+                    "The channel credential rotated, but it could not be saved. Stop and contact hello.food support for manual credential recovery; do not retry.",
                 ));
             }
         }
@@ -208,14 +232,7 @@ async fn one_shot_inner(
     let ensure_session =
         EnsureSession::new(service.clone(), credential_store, Arc::new(NativeClock));
     let stdin = read_command_stdin(&command)?;
-    let cancellation = CancellationToken::new();
-    let signal_cancellation = cancellation.clone();
-    let signal = tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            signal_cancellation.cancel();
-        }
-    });
-    let result = heyfood_bin::execute_qualified_one_shot(
+    heyfood_bin::execute_qualified_one_shot(
         service.as_ref(),
         &ensure_session,
         SessionSnapshot {
@@ -227,9 +244,7 @@ async fn one_shot_inner(
         &stdin,
         cancellation,
     )
-    .await;
-    signal.abort();
-    result
+    .await
 }
 
 fn registration_to_one_shot(error: RegistrationError) -> heyfood_bin::OneShotError {

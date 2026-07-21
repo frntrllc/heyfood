@@ -553,6 +553,12 @@ impl NativeAuthRefreshGuard<'_> {
         )
         .map_err(|error| PortError::uncertain("auth_reconciliation_write", error.to_string()))
     }
+
+    /// Clear a write-ahead marker only after an observed response proves the
+    /// rotating grant was not accepted, or after the replacement is durable.
+    pub fn clear_reconciliation_required(&self) -> Result<(), PortError> {
+        clear_any_reconciliation_marker(&self.store.reconciliation_path)
+    }
 }
 
 impl NativeAuthStore {
@@ -602,7 +608,7 @@ impl NativeAuthStore {
         if self.reconciliation_path.exists() {
             return Err(PortError::uncertain(
                 "auth_reconciliation_required",
-                "channel credentials have an unresolved refresh outcome; reconnect the account before retrying",
+                "channel credentials have an unresolved refresh outcome; stop and contact hello.food support for manual credential recovery before retrying",
             ));
         }
         Ok(())
