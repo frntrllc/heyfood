@@ -102,6 +102,20 @@ async fn respond(socket: &mut TcpStream, body: Value) {
     socket.write_all(&body).await.unwrap();
 }
 
+async fn respond_stream(socket: &mut TcpStream, body: &[u8]) {
+    socket
+        .write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    socket.write_all(body).await.unwrap();
+}
+
 async fn respond_capabilities(socket: &mut TcpStream) {
     respond(
         socket,
@@ -247,6 +261,37 @@ async fn unported_registration_topology_is_fail_closed_without_network() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn one_shot_ask_collects_sse_into_exactly_one_json_value() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/agent/converse "));
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["query"], "what can I eat?");
+        assert_eq!(body["input_mode"], "text");
+        respond_stream(
+            &mut socket,
+            b"event: thinking\ndata: {\"stage\":\"route\"}\n\nevent: partial\ndata: {\"text\":\"Try soup.\"}\n\nevent: result\ndata: {\"conversation_id\":\"conversation-2\",\"message\":\"Try soup.\"}\n\n",
+        )
+        .await;
+    });
+    let parsed =
+        CommandLine::try_parse_from(["heyfood", "--json", "ask", "what", "can", "I", "eat?"])
+            .unwrap();
+    let output = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(output.lines().count(), 1);
+    assert_eq!(
+        serde_json::from_str::<Value>(&output).unwrap()["message"],
+        "Try soup."
+    );
+    server.await.unwrap();
 }
 
 #[derive(Default)]

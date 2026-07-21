@@ -5,10 +5,13 @@
 use std::{fmt, io, time::Duration};
 
 use heyfood_agent_runtime::{GroceryExport, HttpService};
-use heyfood_application::{EnsureSession, EnsureSessionOutcome};
+use heyfood_application::{
+    EnsureSession, EnsureSessionOutcome, RefreshPolicy, TurnContext, TurnRequest,
+    execute_one_shot_turn,
+};
 use heyfood_cli::{
-    Command, GroceryCommand, HealthCommand, OutputMode, render_grocery_list,
-    render_grocery_proposal, render_health_context, render_json,
+    AskArgs, Command, GroceryCommand, HealthCommand, OutputMode, render_agent_result,
+    render_grocery_list, render_grocery_proposal, render_health_context, render_json,
 };
 use heyfood_core::{
     AddItemsRequestWire, GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId,
@@ -122,6 +125,10 @@ impl<'a> OneShotExecutor<'a> {
         cancellation: CancellationToken,
     ) -> Result<String, OneShotError> {
         match command {
+            Command::Ask(arguments)
+            | Command::Reply(arguments)
+            | Command::Log(arguments)
+            | Command::Item(arguments) => self.execute_agent(arguments, stdin, cancellation).await,
             Command::Grocery { command } => {
                 self.execute_grocery(command, stdin, cancellation).await
             }
@@ -136,6 +143,47 @@ impl<'a> OneShotExecutor<'a> {
                 "this command is present for topology parity but its Phase 2 use case is not yet qualified",
             )),
         }
+    }
+
+    async fn execute_agent(
+        &self,
+        arguments: AskArgs,
+        stdin: &[u8],
+        cancellation: CancellationToken,
+    ) -> Result<String, OneShotError> {
+        let prompt = if arguments.text.is_empty() {
+            if stdin.is_empty() || stdin.len() > MAX_CONFIRMATION_STDIN_BYTES {
+                return Err(OneShotError::new(
+                    "invalid_prompt",
+                    "prompt text or at most 1 MiB of UTF-8 stdin is required",
+                ));
+            }
+            std::str::from_utf8(stdin)
+                .map_err(|_| OneShotError::new("invalid_prompt", "prompt stdin is not UTF-8"))?
+                .trim_end_matches(['\r', '\n'])
+                .to_owned()
+        } else {
+            arguments.prompt()
+        };
+        let prompt = bounded_text(prompt, MAX_CONFIRMATION_STDIN_BYTES, "prompt")?;
+        let result = execute_one_shot_turn(
+            self.service,
+            TurnRequest {
+                prompt,
+                conversation_id: arguments.conversation_id,
+                context: TurnContext {
+                    latitude: arguments.latitude,
+                    longitude: arguments.longitude,
+                    ..TurnContext::default()
+                },
+                refresh: RefreshPolicy::Never,
+            },
+            self.credentials.clone(),
+            OperationId::new(),
+            cancellation,
+        )
+        .await?;
+        Ok(render_agent_result(&result.document, self.output_mode))
     }
 
     async fn execute_grocery(

@@ -666,6 +666,18 @@ pub fn render_health_context(context: &HealthContextWire, mode: OutputMode) -> S
     output
 }
 
+#[must_use]
+pub fn render_agent_result(document: &Value, mode: OutputMode) -> String {
+    if mode == OutputMode::Json {
+        return render_json(document).expect("agent result is serializable JSON");
+    }
+    if let Some(message) = document.get("message").and_then(Value::as_str) {
+        return format!("{}\n", terminal_safe_text(message));
+    }
+    let encoded = serde_json::to_string(document).unwrap_or_else(|_| "{}".into());
+    format!("{}\n", terminal_safe_text(&encoded))
+}
+
 pub fn generate_completion(shell: CompletionShell) -> Vec<u8> {
     let mut command = CommandLine::command();
     let mut output = Vec::new();
