@@ -5,7 +5,7 @@
     "repository": "https://github.com/frntrllc/heyfood.git",
     "branch": "codex/rust-big-bang",
     "code_commit_sha": "09191ca5d3f3254eb6d2deb750e9f65a2c77df7a",
-    "evidence_commit_sha": "09191ca5d3f3254eb6d2deb750e9f65a2c77df7a"
+    "evidence_commit_sha": "92bf9bad3e2097cb0cc52416e23c4d24575213b0"
   },
   "requirements": [
     {
@@ -93,6 +93,6 @@
   "review": {
     "status": "approved",
     "reviewer": "independent Rust specialist subagent (Huygens)",
-    "reviewed_commit_sha": "09191ca5d3f3254eb6d2deb750e9f65a2c77df7a"
+    "reviewed_commit_sha": "92bf9bad3e2097cb0cc52416e23c4d24575213b0"
   }
 }
