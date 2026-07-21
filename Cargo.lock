@@ -1159,6 +1159,7 @@ dependencies = [
  "heyfood-application",
  "heyfood-core",
  "insta",
+ "serde",
  "serde_json",
 ]
 

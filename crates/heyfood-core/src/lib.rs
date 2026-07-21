@@ -16,7 +16,9 @@ pub mod validation;
 
 pub use agent::{AgentChoice, AgentEvent, AgentFailure};
 pub use auth::{
-    AccountId, CredentialVersion, RefreshOutcome, RefreshRequest, RefreshResult, SensitiveString,
+    AccountId, AuthCapabilities, AuthCredentialBundle, AuthorizationCapability, ChannelCredentials,
+    CredentialVersion, IdentityMethod, ProfileStatus, RefreshOutcome, RefreshRequest,
+    RefreshResult, RegistrationStatus, SelfRegistrationCapability, SensitiveString,
     SessionCredentials, SessionSnapshot,
 };
 pub use config::{CURRENT_CONFIG_SCHEMA, ClientConfig, ConfigRevision, ConfigSchemaVersion};

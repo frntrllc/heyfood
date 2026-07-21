@@ -13,6 +13,7 @@ clap = { workspace = true, features = ["color", "derive", "error-context", "help
 clap_complete.workspace = true
 heyfood-application = { version = "=0.4.0", path = "../heyfood-application" }
 heyfood-core = { version = "=0.4.0", path = "../heyfood-core" }
+serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 
 [dev-dependencies]

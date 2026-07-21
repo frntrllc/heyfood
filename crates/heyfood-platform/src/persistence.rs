@@ -15,8 +15,8 @@ use heyfood_application::{
     PortError,
 };
 use heyfood_core::{
-    AccountId, ClientConfig, CommitId, ConfigRevision, CredentialVersion, NetworkPolicy,
-    SensitiveString, ServiceUrl, SessionCredentials,
+    AccountId, AuthCredentialBundle, ChannelCredentials, ClientConfig, CommitId, ConfigRevision,
+    CredentialVersion, NetworkPolicy, SensitiveString, ServiceUrl, SessionCredentials,
 };
 
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -511,6 +511,57 @@ pub struct FileCredentialStore {
     state_path: PathBuf,
     lock_path: PathBuf,
     reconciliation_path: PathBuf,
+}
+
+/// Atomic owner-only persistence for the complete native authorization result.
+/// This is separate from the rotating app-session store so a session refresh
+/// cannot accidentally erase the channel grant required for re-exchange.
+#[derive(Clone, Debug)]
+pub struct NativeAuthStore {
+    state_path: PathBuf,
+    lock_path: PathBuf,
+}
+
+impl NativeAuthStore {
+    #[cfg(not(windows))]
+    pub fn open(root: impl AsRef<Path>) -> Result<Self, PortError> {
+        let root = root.as_ref();
+        create_private_dir(root)?;
+        Ok(Self {
+            state_path: root.join("auth.native"),
+            lock_path: root.join("auth.lock"),
+        })
+    }
+
+    #[cfg(windows)]
+    pub fn open(_root: impl AsRef<Path>) -> Result<Self, PortError> {
+        Err(PortError::new(
+            "auth_file_unsupported",
+            "file authorization storage is disabled on Windows",
+        ))
+    }
+
+    pub fn initialize(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
+        bundle
+            .validate()
+            .map_err(|error| PortError::new("auth_validation", error))?;
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.state_path.exists() {
+            return Err(PortError::new(
+                "auth_exists",
+                "an account is already connected; log out before registering another account",
+            ));
+        }
+        AtomicFile::replace(&self.state_path, &encode_auth_bundle(bundle))
+    }
+
+    pub fn load(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, false)?;
+        if !self.state_path.exists() {
+            return Ok(None);
+        }
+        decode_auth_bundle(&read_limited(&self.state_path, 1024 * 1024)?).map(Some)
+    }
 }
 
 impl FileCredentialStore {
@@ -1116,6 +1167,81 @@ impl CredentialState {
         .map_err(|error| PortError::new("credential_expiry", error))?;
         Ok(Self { credentials })
     }
+}
+
+fn encode_auth_bundle(bundle: &AuthCredentialBundle) -> Vec<u8> {
+    format!(
+        concat!(
+            "schema=1\n",
+            "client={}\n",
+            "device={}\n",
+            "channel_access={}\n",
+            "channel_refresh={}\n",
+            "channel_expires={}\n",
+            "channel_scope={}\n",
+            "account={}\n",
+            "session_access={}\n",
+            "session_refresh={}\n",
+            "session_version={}\n",
+            "session_expires={}\n"
+        ),
+        hex_encode(bundle.channel.client_id.as_bytes()),
+        hex_encode(bundle.channel.device_id.as_bytes()),
+        hex_encode(bundle.channel.access_token.expose_secret().as_bytes()),
+        hex_encode(bundle.channel.refresh_token.expose_secret().as_bytes()),
+        bundle.channel.expires_at_unix(),
+        hex_encode(bundle.channel.scope.as_bytes()),
+        hex_encode(bundle.session.account_id.as_str().as_bytes()),
+        hex_encode(bundle.session.access_token.expose_secret().as_bytes()),
+        hex_encode(bundle.session.refresh_token.expose_secret().as_bytes()),
+        bundle.session.version.get(),
+        bundle.session.expires_at_unix(),
+    )
+    .into_bytes()
+}
+
+fn decode_auth_bundle(bytes: &[u8]) -> Result<AuthCredentialBundle, PortError> {
+    let values = fields(bytes)?;
+    if required(&values, "schema")? != "1" {
+        return Err(PortError::new(
+            "auth_schema",
+            "unsupported authorization schema",
+        ));
+    }
+    let channel_expires = required(&values, "channel_expires")?
+        .parse::<i64>()
+        .map_err(|_| PortError::new("auth_expiry", "invalid channel credential expiry"))?;
+    let channel = ChannelCredentials::from_unix_expiry(
+        hex_string(required(&values, "client")?)?,
+        hex_string(required(&values, "device")?)?,
+        SensitiveString::new(hex_string(required(&values, "channel_access")?)?),
+        SensitiveString::new(hex_string(required(&values, "channel_refresh")?)?),
+        channel_expires,
+        hex_string(required(&values, "channel_scope")?)?,
+    )
+    .map_err(|error| PortError::new("auth_channel", error))?;
+    let account = AccountId::parse(hex_string(required(&values, "account")?)?)
+        .map_err(|error| PortError::new("auth_account", error))?;
+    let version = required(&values, "session_version")?
+        .parse::<u64>()
+        .map(CredentialVersion::new)
+        .map_err(|_| PortError::new("auth_version", "invalid session credential version"))?;
+    let session_expires = required(&values, "session_expires")?
+        .parse::<i64>()
+        .map_err(|_| PortError::new("auth_expiry", "invalid session credential expiry"))?;
+    let session = SessionCredentials::from_unix_expiry(
+        account,
+        SensitiveString::new(hex_string(required(&values, "session_access")?)?),
+        SensitiveString::new(hex_string(required(&values, "session_refresh")?)?),
+        version,
+        session_expires,
+    )
+    .map_err(|error| PortError::new("auth_session", error))?;
+    let bundle = AuthCredentialBundle { channel, session };
+    bundle
+        .validate()
+        .map_err(|error| PortError::new("auth_validation", error))?;
+    Ok(bundle)
 }
 
 fn fields(bytes: &[u8]) -> Result<std::collections::BTreeMap<&str, &str>, PortError> {
