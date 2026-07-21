@@ -74,25 +74,28 @@ gate, or let Rust encode a draft server contract.
 
 Grocery Phase A has been reconstructed from the superseded PR #90 onto current
 `main` as PR #107. Its exact pushed final-qualification head is
-`f5bf2656d4f47a40aaeb17ee1f791f3dbe5a566c`: migration `096` descends from
+`8cd7baf2c683bf5ad286af32c26d96bdb1742f86`: migration `096` descends from
 `095`; authoritative household snapshots and exact list/version preconditions
 are frozen into confirmations; Grocery writes require both read and write
 scopes; public provenance is manual-only; active-list reads are non-mutating;
 and existing/future accounts receive one active list at the account-write
-boundary. After PR #109 advanced the strict health/security attestation
-contract on `main`, this head was rebased onto that change and made `096` an
-explicit attestation/action-manifest head. Revision `096` retains every health
-envelope gate required at `095` and adds an exact Grocery catalog proof rather
-than bypassing readiness at the additive head. That proof binds all 51 Grocery
-columns, 16 semantic constraints, 14 indexes, and the exact account-initializer
-function/trigger semantics, with rollback-isolated catalog-tamper tests and
-PostgreSQL 16/18 compatibility. The confirmation contract now
+boundary. After PRs #109 and #110 advanced the strict health/security
+attestation contract on `main`, this head was rebased onto those changes and
+made `096` an explicit attestation/action-manifest head. Revision `096` retains
+every health envelope gate required at `095` and adds an exact Grocery catalog
+proof rather than bypassing readiness at the additive head. That proof binds
+all 51 Grocery columns, 16 semantic constraints, 14 indexes, the exact
+account-initializer function/trigger semantics, and PostgreSQL 18's exact set
+of 34 validated and enforced Grocery NOT NULL constraints. Rollback-isolated
+catalog-tamper tests cover PostgreSQL 16 and 18 without relaxing the shared
+`pg_attribute.attnotnull` contract. The confirmation contract now
 accepts the advertised 25-item/four-member prepared payload while rejecting an
 oversize proposal before emitting an unusable token, and the language-neutral
 scope contract exposes the full `required_scopes`/`missing_scopes` denial
-shape. Local qualification at this exact head is 5,396 hermetic tests passed
-(17 skipped), plus 28 real-PostgreSQL migration tests passed. This head is not
-a Rust import authority until hosted PostgreSQL, hermetic, auth/audit,
+shape. Local qualification includes 5,396 hermetic tests passed (17 skipped),
+87 PostgreSQL 18 data-protection migration tests passed, and 39 PostgreSQL 16
+tests passed with 48 PostgreSQL-18-only cases skipped. This head is not a Rust
+import authority until hosted PostgreSQL, hermetic, auth/audit,
 aggregate CI, and independent review all pass. Only its final reviewed merge
 SHA, regenerated fixture aggregate digest, deployed
 `capabilities.grocery = "v1"`, and live scope/behavior canaries may become Rust
