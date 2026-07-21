@@ -1,0 +1,64 @@
+{
+  "provenance": {
+    "python_refresh": "src/heyfood_cli/client.py:304-356",
+    "python_tests": "tests/test_client.py:505-563",
+    "backend_refresh": "backend/app/api/v1/endpoints/auth.py:37-54,150-170",
+    "backend_reexchange": "backend/app/api/v1/endpoints/channel_oauth.py:489-582"
+  },
+  "refresh": {
+    "method": "POST",
+    "path": "/v1/auth/session/refresh",
+    "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "user-agent": "heyfood-cli/0.4.0",
+      "x-api-key": "fixture-api-key",
+      "x-app-client-id": "heyfood-cli",
+      "x-device-id": "hellofood-cli-fixture-device"
+    },
+    "body": {
+      "refresh_token": "refresh-1"
+    },
+    "response": {
+      "user_id": "account-fixture",
+      "device_id": "hellofood-cli-fixture-device",
+      "session_id": "session-2",
+      "access_token": "access-2",
+      "refresh_token": "refresh-2",
+      "access_expires_at": "2100-01-01T00:00:00Z",
+      "refresh_expires_at": "2100-01-31T00:00:00Z",
+      "scopes": ["app:full_access"],
+      "is_anonymous": false
+    }
+  },
+  "fallback": {
+    "refresh_status": 401,
+    "refresh_response": {
+      "message": "Missing API key. Include X-API-Key header."
+    },
+    "method": "POST",
+    "path": "/v1/channel/oauth/cli/session",
+    "headers": {
+      "accept": "application/json",
+      "authorization": "Bearer channel-access-fixture",
+      "content-type": "application/json",
+      "user-agent": "heyfood-cli/0.4.0",
+      "x-app-client-id": "heyfood-cli",
+      "x-device-id": "hellofood-cli-fixture-device"
+    },
+    "body": {
+      "device_id": "hellofood-cli-fixture-device"
+    },
+    "response": {
+      "user_id": "account-fixture",
+      "device_id": "hellofood-cli-fixture-device",
+      "session_id": "session-fallback",
+      "access_token": "access-fallback",
+      "refresh_token": "refresh-fallback",
+      "access_expires_at": "2100-01-01T00:00:00Z",
+      "refresh_expires_at": "2100-01-31T00:00:00Z",
+      "scopes": ["profile:read", "agent:invoke"],
+      "is_anonymous": false
+    }
+  }
+}

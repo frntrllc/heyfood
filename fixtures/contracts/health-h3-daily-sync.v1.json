@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://api.hello.food/docs/schemas/v1/health-daily-sync-contract.json",
+  "title": "hello.food health daily-rollup sync contract v1",
+  "description": "Single canonical machine-readable contract for the H3 health-sync surface (PUT /v1/health/sync and POST/GET/DELETE /v1/health/consent). SOURCE OF TRUTH: bound to app.schemas.health_sync + app.core.config by tests/test_health_daily_sync_contract.py. Aggregates only, owner-only, bearer-session-only, consent-gated.",
+  "x-heyfood-contract-version": 1,
+  "provider_enum": ["apple_health"],
+  "rollup_fields": [
+    "steps",
+    "active_energy_kcal",
+    "sleep_duration_min",
+    "sleep_in_bed_min"
+  ],
+  "constraints": {
+    "min_days_per_request": 1,
+    "max_days_per_request": 31,
+    "retention_days": 90,
+    "metric_minimum": 0,
+    "one_metric_per_rollup_required": true,
+    "unique_day_per_request": true
+  },
+  "consent": {
+    "endpoints": {
+      "grant": "POST /v1/health/consent",
+      "status": "GET /v1/health/consent",
+      "revoke": "DELETE /v1/health/consent"
+    },
+    "kind": "health",
+    "revoke_purges_rollups": true,
+    "status_response": {
+      "required": ["has_consent"],
+      "fields": {
+        "has_consent": { "type": "boolean" },
+        "granted_at": { "type": ["string", "null"], "format": "date-time" },
+        "consent_version": { "type": ["integer", "null"] }
+      }
+    },
+    "revoke_response": {
+      "required": ["revoked"],
+      "fields": {
+        "revoked": { "type": "boolean" },
+        "rollups_deleted": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "sync": {
+    "endpoint": "PUT /v1/health/sync",
+    "request": {
+      "required": ["provider", "rollups"],
+      "rollup_required": ["day"],
+      "fields": {
+        "provider": { "type": "string", "enum": ["apple_health"] },
+        "rollups": { "type": "array", "minItems": 1, "maxItems": 31 }
+      },
+      "rollup_fields": {
+        "day": { "type": "string", "format": "date" },
+        "steps": { "type": ["integer", "null"], "minimum": 0 },
+        "active_energy_kcal": { "type": ["integer", "null"], "minimum": 0 },
+        "sleep_duration_min": { "type": ["integer", "null"], "minimum": 0 },
+        "sleep_in_bed_min": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "success_response": {
+      "required": ["provider", "days_received", "upserted"],
+      "fields": {
+        "provider": { "type": "string" },
+        "days_received": { "type": "integer", "minimum": 0 },
+        "upserted": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "error_codes": {
+    "codes": {
+      "authentication_required": "401 - no user session (anonymous)",
+      "bearer_session_required": "403 - static-API-key device principal; a bearer session is required",
+      "consent_required": "403 - health-sync consent not granted",
+      "unsupported_provider": "422 - provider is not an accepted v1 provider",
+      "empty_rollups": "422 - at least one daily rollup is required",
+      "too_many_days": "422 - more than max_days_per_request rollups in one request",
+      "duplicate_day": "422 - a day appeared more than once in one request",
+      "invalid_rollup": "422 - a rollup carried no metric values"
+    }
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "evidence_date": "2026-07-20",
+  "code_commit_sha": "09191ca5d3f3254eb6d2deb750e9f65a2c77df7a",
+  "code_tree_sha": "c3ff635dd5c2dd7e344054261b41bfad617fe4da",
+  "source_tree_clean": true,
+  "host": {
+    "os": "macOS 26.5 (25F71)",
+    "architecture": "aarch64",
+    "rustc": "1.94.0 (4a4ef493e 2026-03-02)",
+    "cargo": "1.94.0 (85eff7c80 2026-01-15)"
+  },
+  "local_qualification": {
+    "commands": [
+      "cargo fmt --all -- --check",
+      "cargo check --locked --workspace --all-targets",
+      "cargo clippy --locked --workspace --all-targets -- -D warnings",
+      "cargo test --locked --workspace",
+      "cargo check --locked -p heyfood-platform -p heyfood-bin --all-targets --features native-credentials",
+      "cargo clippy --locked -p heyfood-platform -p heyfood-bin --all-targets --features native-credentials -- -D warnings",
+      "cargo test --locked -p heyfood-platform --features native-credentials",
+      "cargo test --locked -p heyfood-bin --features native-credentials --test credential_broker",
+      "cargo test --release --locked --package heyfood-bin --test phase0_qualification",
+      "cargo test --release --locked --package heyfood-bin --test phase0_qualification qualification_render_and_input_performance_budgets -- --ignored --exact --nocapture",
+      "cargo xtask dependency-dag",
+      "cargo xtask verify-stable-contracts",
+      "cargo xtask verify-grocery-contracts",
+      "cargo xtask verify-assets",
+      "cargo xtask verify-migration-ledger",
+      "cargo xtask verify-phase0-evidence",
+      "cargo xtask verify-phase1-evidence"
+    ],
+    "result": "passed",
+    "failed": 0
+  },
+  "dg_r3": {
+    "native_config_schema": 3,
+    "atomic_replace_and_parent_sync": "passed",
+    "bounded_cross_process_lock": "passed",
+    "owner_only_unix_permissions": "passed",
+    "account_binding_and_isolated_paths": "passed",
+    "interrupted_write_recovery": "passed",
+    "python_non_secret_import": "passed_read_only_idempotent",
+    "unsafe_secret_import": "reauthentication_required",
+    "macos_keychain": "passed_local_real_backend",
+    "linux_secret_service": "passed_hosted_dbus_secret_service",
+    "linux_headless_owner_only_fallback": "passed_local_file_contract",
+    "windows_credential_manager": "passed_hosted_native_backend",
+    "killable_process_broker": "passed_parent_attestation_timeout_termination_no_orphan",
+    "secrets_in_argv_or_environment": false,
+    "token_file_created_by_native_backend": false
+  },
+  "application_safety": {
+    "immutable_operation_snapshots": "passed",
+    "single_flight_supervisor": "passed",
+    "cancel_and_join_before_generation_advance": "passed",
+    "timeout_keeps_replacement_closed": "passed",
+    "refresh_rotation_cancel_after_acceptance": "passed",
+    "durable_replay_after_restart": "passed",
+    "local_first_repair_record": "passed",
+    "presentation_generation_rejection": "passed",
+    "account_bound_proposal_on_unbound_writer": "rejected",
+    "accepted_config_reconciliation": "passed",
+    "cancellation_while_queued": "passed",
+    "cancellation_during_atomic_adapter_commit": "passed",
+    "cancellation_immediately_after_commit": "passed",
+    "bounded_persistent_replay_window": "passed"
+  },
+  "privacy": {
+    "credential_debug_redaction": "passed",
+    "health_value_debug_redaction": "passed",
+    "grocery_item_debug_redaction": "passed",
+    "terminal_control_filtering": "passed",
+    "validated_serde_ingress": "passed",
+    "fixture_driven_python_differential": "passed",
+    "item_cache_contains_sensitive_labels": false,
+    "provider_oauth_token_model_present": false
+  },
+  "hosted": {
+    "status": "passed",
+    "exact_head_sha": "09191ca5d3f3254eb6d2deb750e9f65a2c77df7a",
+    "rust_ci_run_id": 29799184345,
+    "rust_ci_url": "https://github.com/frntrllc/heyfood/actions/runs/29799184345",
+    "jobs_passed": 39,
+    "jobs_failed": 0
+  }
+}

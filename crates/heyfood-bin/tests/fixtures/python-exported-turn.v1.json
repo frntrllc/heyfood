@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "repository": "https://github.com/frntrllc/heyfood.git",
+    "commit_sha": "73494a57468dac83b4904ce6c390e36926f5c6fe",
+    "source_path": "src/heyfood_cli/commands/agent.py; src/heyfood_cli/client.py",
+    "pytest_node_id": "tests/test_client.py::test_stream_agent_emits_lifecycle_without_payload; tests/test_household.py::test_agent_turn_sends_scope_context_and_preserves_choices; tests/test_main.py::test_ask_agent_injects_saved_location_and_can_disable_it",
+    "export": "Frozen representative Python ask request assembled from the exact command payload and client header contracts at the pinned commit. Dynamic X-Request-ID is the Rust operation UUID."
+  },
+  "request": {
+    "method": "POST",
+    "path": "/v1/agent/converse",
+    "headers": {
+      "accept": "application/json",
+      "authorization": "Bearer access-2",
+      "content-type": "application/json",
+      "user-agent": "heyfood-cli/0.4.0",
+      "x-api-key": "fixture-api-key",
+      "x-app-client-id": "heyfood-cli",
+      "x-device-id": "hellofood-cli-fixture-device",
+      "x-request-id": "$operation_id"
+    },
+    "body": {
+      "input_mode": "text",
+      "query": "private dietary request",
+      "conversation_id": "conversation-fixture",
+      "dietary_context": {
+        "name": "Sarah",
+        "preferences": ["vegetarian"]
+      },
+      "device_context": {
+        "household": {
+          "owner_id": "_self",
+          "members": []
+        }
+      },
+      "meal_context": {
+        "active_member_id": "member-sarah"
+      },
+      "lat": 36.7,
+      "lng": -119.8
+    }
+  },
+  "sse_lines": [
+    "event: result",
+    "data: {\"message\":\"done\"}",
+    ""
+  ]
+}

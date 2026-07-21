@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hello.food/schemas/dietary-options.v2.schema.json",
+  "title": "hello.food dietary options v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "sections", "household_diet_extras"],
+  "properties": {
+    "version": { "const": 2 },
+    "sections": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "health_conditions",
+        "diet_style",
+        "allergies",
+        "ingredients_to_avoid",
+        "activity_level",
+        "cuisines"
+      ],
+      "properties": {
+        "health_conditions": { "$ref": "#/$defs/tieredSection" },
+        "diet_style": { "$ref": "#/$defs/tieredSection" },
+        "allergies": { "$ref": "#/$defs/tieredSection" },
+        "ingredients_to_avoid": { "$ref": "#/$defs/customOnlySection" },
+        "activity_level": { "$ref": "#/$defs/optionsSection" },
+        "cuisines": { "$ref": "#/$defs/tieredSection" }
+      }
+    },
+    "household_diet_extras": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/basicOption" },
+      "minItems": 1
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^(?:__[a-z0-9_]+__|[a-z][A-Za-z0-9_]*)$"
+    },
+    "basicOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "id"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "id": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "catalogOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "id"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "id": { "$ref": "#/$defs/identifier" },
+        "constraints": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+          "uniqueItems": true
+        },
+        "enum_key": { "type": ["string", "null"], "minLength": 1 },
+        "deprecated": { "type": "boolean" },
+        "replaced_by": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/identifier" },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "deprecated": { "const": true } },
+            "required": ["deprecated"]
+          },
+          "then": { "required": ["replaced_by"] }
+        }
+      ]
+    },
+    "tieredSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "multi_select",
+        "tier1",
+        "tier2",
+        "custom_placeholder",
+        "custom_max",
+        "custom_char_limit"
+      ],
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "multi_select": { "const": true },
+        "note": { "type": "string", "minLength": 1 },
+        "tier1": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/catalogOption" },
+          "minItems": 1
+        },
+        "tier2": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/catalogOption" }
+        },
+        "custom_placeholder": { "type": "string", "minLength": 1 },
+        "custom_max": { "type": "integer", "minimum": 1 },
+        "custom_char_limit": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "customOnlySection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "multi_select", "type", "placeholder", "max_items", "char_limit"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "multi_select": { "const": true },
+        "type": { "const": "custom_only" },
+        "placeholder": { "type": "string", "minLength": 1 },
+        "max_items": { "type": "integer", "minimum": 1 },
+        "char_limit": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "optionsSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "multi_select", "options"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "multi_select": { "const": false },
+        "options": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/basicOption" },
+          "minItems": 1
+        }
+      }
+    }
+  }
+}

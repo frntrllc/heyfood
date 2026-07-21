@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "source_repository": "https://github.com/frntrllc/hellofood.git",
+  "contracts": [
+    {
+      "name": "health_h1_h2",
+      "source_pr": 79,
+      "source_commit": "7cfadc55c103257b588b237c65fe7b5031a3f745",
+      "source_pr_head": "6fdf2e19e42e7c50af9cc4302c0e55d5574f213d",
+      "sources": [
+        {
+          "path": "backend/app/schemas/health.py",
+          "sha256": "cfd97d2d8eafc60c791edb00232818c3b81e141f1b41796b01fa547f0f6d3d59"
+        },
+        {
+          "path": "backend/app/schemas/integrations.py",
+          "sha256": "02cec5aef81792f3f7f8c893386c7d394dc0959ab6192b566785ac175ba26d1f"
+        },
+        {
+          "path": "backend/app/core/cli_scopes.py",
+          "sha256": "ac4ca5b46c89a6e4e16aa5606743b7a175def0923d715270730fdacaea6ae72a"
+        },
+        {
+          "path": "backend/app/api/v1/endpoints/health.py",
+          "sha256": "1d69c789687f28701316db6e84c1c52b5e472d192dec1d0f5e9e953bcbbf7d4b"
+        },
+        {
+          "path": "backend/app/api/v1/endpoints/integrations.py",
+          "sha256": "1d4f1e4cfa663568833f22cb9dbfe98d36860e6ac47de12c35432cb533f12035"
+        },
+        {
+          "path": "backend/tests/test_health_integrations_h1h2.py",
+          "sha256": "b1a04d37f33b0e288937c71457f236268523580bc5b500e5817828f6c9bb0634"
+        }
+      ],
+      "target": {
+        "path": "fixtures/contracts/health-h1h2.v1.json",
+        "sha256": "3e491d155e75cd386fd3d228cd83a51131104bbd944922cec8d7a39c174cb5cd"
+      },
+      "freeze_kind": "language_neutral_projection"
+    },
+    {
+      "name": "health_h3_daily_sync",
+      "source_pr": 96,
+      "source_commit": "400c5cafb3beb0237e75f85e93d228fbbbd3dadf",
+      "source_pr_head": "8b2508cf31acd160a4aba00babef2b2f7f6629f5",
+      "sources": [
+        {
+          "path": "backend/docs/schemas/v1/health-daily-sync-contract.json",
+          "sha256": "f67e0242f719a865b6d25870053fb30e1b43699ebaa9a35c07b913ede7f30d6d"
+        },
+        {
+          "path": "backend/tests/test_health_daily_sync_contract.py",
+          "sha256": "b4a5695912b0f5c972275d636c7ffa80632deb9af66ea4c5a8e903df190cef75"
+        }
+      ],
+      "target": {
+        "path": "fixtures/contracts/health-h3-daily-sync.v1.json",
+        "sha256": "f67e0242f719a865b6d25870053fb30e1b43699ebaa9a35c07b913ede7f30d6d"
+      },
+      "freeze_kind": "exact_copy"
+    }
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "evidence_date": "2026-07-20",
+  "code_commit_sha": "08cecb3a00bff6bbd670faf066105205f6e93b0b",
+  "source_tree_clean": true,
+  "host": {
+    "os": "macOS 26.5 (25F71)",
+    "architecture": "aarch64",
+    "rustc": "1.94.0 (4a4ef493e 2026-03-02)",
+    "cargo": "1.94.0 (85eff7c80 2026-01-15)"
+  },
+  "hosted": {
+    "code_head_sha": "08cecb3a00bff6bbd670faf066105205f6e93b0b",
+    "pull_request_merge_sha": "bd267070d8550f094fbd1d7c337dfa6ea71077f7",
+    "code_head_tree_sha": "3b99bb05375db8d7f8db09da35ce79ac9d28af0c",
+    "pull_request_merge_tree_sha": "3b99bb05375db8d7f8db09da35ce79ac9d28af0c",
+    "tree_equivalence": "identical",
+    "rust_ci_run_id": 29787747785,
+    "rust_ci_url": "https://github.com/frntrllc/heyfood/actions/runs/29787747785",
+    "rust_ci_jobs_passed": 35,
+    "rust_ci_jobs_skipped": 1,
+    "rust_ci_skipped_job": "Independent provenance approval",
+    "ci_run_id": 29787747649,
+    "ci_url": "https://github.com/frntrllc/heyfood/actions/runs/29787747649",
+    "ci_jobs_passed": 14
+  },
+  "qualification": {
+    "commands": [
+      "cargo test --release --locked --package heyfood-bin --test phase0_qualification -- --test-threads=1",
+      "cargo test --release --locked --package heyfood-bin --test phase0_qualification qualification_render_and_input_performance_budgets -- --ignored --exact --nocapture"
+    ],
+    "passed": 5,
+    "failed": 0,
+    "ignored_helper": 2,
+    "wall_seconds": 4.87,
+    "unix_signals": ["SIGINT", "SIGTERM", "SIGHUP"],
+    "terminal_restoration": [
+      "alternate_screen_left",
+      "bracketed_paste_disabled",
+      "canonical_mode_restored"
+    ],
+    "cancellation_join_deadline_seconds": 3,
+    "supervised_tui_http_sse_cancel_socket_close_and_join": "passed",
+    "release_profile_panic_restoration": "passed",
+    "windows_console_control_event": "real_console_ctrl_break_passed_hosted_08cecb3"
+  },
+  "python_state_import": {
+    "tests_passed": 5,
+    "source_mutation": false,
+    "credential_transfer": "reauthentication_required",
+    "file_backed_local_state": "implemented",
+    "python_keyring_local_state": "manual_reconciliation_required",
+    "windows_private_acl": "owner_only_dacl_passed_hosted_08cecb3",
+    "windows_native_credential_manager": "bounded_version_monotonic_rotation_passed_hosted_08cecb3",
+    "windows_target_compile": "platform_default_and_native_feature_clippy_passed"
+  },
+  "performance": {
+    "backend": "ratatui_test_backend",
+    "first_frame_samples": 30,
+    "first_frame_p95_microseconds": 104,
+    "input_frame_samples": 2000,
+    "input_frame_p95_microseconds": 470,
+    "semantic_scrollback_entries": 500,
+    "release_process_or_real_terminal_measurement": false
+  },
+  "artifacts": [
+    {
+      "name": "debug_heyfood_fail_closed",
+      "path": "target/debug/heyfood",
+      "shipped": false,
+      "bytes": 444344,
+      "sha256": "b3439a86c557be5bcdb854fde0230536720a635e6d86559f6d0971022d5ed879",
+      "build_command": "cargo build --locked --package heyfood-bin"
+    },
+    {
+      "name": "release_heyfood_fail_closed",
+      "path": "target/release/heyfood",
+      "shipped": false,
+      "bytes": 333760,
+      "sha256": "da520e525e69ef412310b667922968c031ea075a0d18b64ecf8c7f8505ceb4ac",
+      "build_command": "cargo build --locked --release --package heyfood-bin"
+    },
+    {
+      "name": "release_internal_qualification_test",
+      "path": "target/release/deps/phase0_qualification-97f03654c4bcc2f8",
+      "shipped": false,
+      "bytes": 4237056,
+      "sha256": "8a1f0b0ccd17415203951bd25f47cf2cbaf414c3ddd6bed5c55ff059e820199c",
+      "build_command": "cargo test --locked --release --package heyfood-bin --test phase0_qualification --no-run"
+    }
+  ],
+  "security": {
+    "cargo_audit_version": "0.22.2",
+    "cargo_audit_command": "cargo audit --deny warnings",
+    "cargo_audit_result": "passed_hosted_08cecb3_run_29787747785",
+    "cargo_deny_version": "0.20.2",
+    "cargo_deny_command": "cargo deny check",
+    "cargo_deny_result": "passed_hosted_08cecb3_run_29787747785"
+  }
+}

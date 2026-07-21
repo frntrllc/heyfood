@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "oracle": {
+    "implementation": "python",
+    "version": "0.4.0-unpublished",
+    "commit_sha": "73494a57468dac83b4904ce6c390e36926f5c6fe",
+    "source_tests": [
+      "tests/test_validation.py",
+      "tests/test_config.py"
+    ]
+  },
+  "validation": {
+    "required_text": [
+      {"input": "  thai  ", "maximum": 20, "result": "thai"},
+      {"input": " ", "maximum": 20, "error": "empty"}
+    ],
+    "optional_text": [
+      {"input": "   ", "maximum": 20, "result": null},
+      {"input": " dinner ", "maximum": 20, "result": "dinner"}
+    ],
+    "coordinates": [
+      {"latitude": -90.0, "longitude": -180.0, "valid": true},
+      {"latitude": 90.0, "longitude": 180.0, "valid": true},
+      {"latitude": 91.0, "longitude": 0.0, "valid": false},
+      {"latitude": 0.0, "longitude": 181.0, "valid": false}
+    ],
+    "iso_dates": [
+      {"input": "2026-07-10", "valid": true},
+      {"input": "2026-02-30", "valid": false},
+      {"input": "07/10/2026", "valid": false}
+    ],
+    "choices": [
+      {"input": "Dinner", "allowed": ["breakfast", "dinner"], "result": "dinner"},
+      {"input": "brunch", "allowed": ["breakfast", "dinner"], "error": "invalid_format"}
+    ]
+  },
+  "account_binding": {
+    "same_account_preserves_state": true,
+    "different_or_unbound_account_cannot_reuse_account_scoped_state": true
+  },
+  "redaction": {
+    "credentials_are_separate_from_config": true,
+    "secret_debug_marker": "[REDACTED]",
+    "diagnostics_must_omit_query_dietary_health_and_token_values": true
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "../../schemas/banner-frames.v1.schema.json",
+  "schema_version": 1,
+  "source": {
+    "banner_sha256": "8f97c59f5eba7075891cb1aa31c300ea776a0ac57117ef290a7f7c6a07e4c50e",
+    "palette_sha256": "22978be9dd03ca5a194617940d0b78a495bdf7f3ecc40729af2f1322cca0d73e"
+  },
+  "geometry": {
+    "width": 44,
+    "height": 5,
+    "encoding": "utf-8"
+  },
+  "frames": [
+    {
+      "index": 0,
+      "duration_ms": 0,
+      "visible_lines": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "accent_spans": [
+        {
+          "line": 3,
+          "start": 18,
+          "length": 2
+        }
+      ],
+      "plain_text_sha256": "8f97c59f5eba7075891cb1aa31c300ea776a0ac57117ef290a7f7c6a07e4c50e"
+    }
+  ]
+}

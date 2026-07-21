@@ -1,0 +1,9 @@
+{
+  "credential_store": "keyring",
+  "session": {
+    "user_id": "user-keyring-fixture"
+  },
+  "location": {
+    "label": "Keyring Fixture City"
+  }
+}

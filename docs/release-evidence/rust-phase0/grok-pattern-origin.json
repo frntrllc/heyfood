@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "source_repository": "https://github.com/xai-org/grok-build.git",
+  "source_commit": "b189869b7755d2b482969acf6c92da3ecfeffd36",
+  "source_license": "Apache-2.0",
+  "license_path": "LICENSE",
+  "license_sha256": "116f7778b9802e569b7fa3a532b17bd80eb13c67837def01eed093d4ea472f28",
+  "copy_policy": "pattern_only_no_source_bytes",
+  "origins": [
+    {
+      "pattern": "thin_binary_and_explicit_composition_root",
+      "source_paths": [
+        {
+          "path": "crates/codegen/xai-grok-pager-bin/src/main.rs",
+          "sha256": "ac76acbc93e79ab19e4dd6d65b7c965a1902a1222225fa2edacdbb1ddaab17ab"
+        }
+      ],
+      "heyfood_paths": [
+        "crates/heyfood-bin/src/main.rs",
+        "crates/heyfood-bin/src/lib.rs"
+      ],
+      "disposition": "concept_reimplemented_for_heyfood_ports_and_fail_closed_phase0_bootstrap",
+      "copied_bytes": false
+    },
+    {
+      "pattern": "single_terminal_owner_with_restoration_on_every_exit",
+      "source_paths": [
+        {
+          "path": "crates/codegen/xai-crash-handler/src/terminal.rs",
+          "sha256": "43c6cd9964912b47d4f66629edf62661a3275ea5c4b3f2e5bf4e39dab2315da7"
+        }
+      ],
+      "heyfood_paths": [
+        "crates/heyfood-tui/src/terminal.rs",
+        "crates/heyfood-tui/src/loop_driver.rs"
+      ],
+      "disposition": "concept_reimplemented_with_safe_crossterm_control_and_catch_unwind",
+      "copied_bytes": false
+    },
+    {
+      "pattern": "bounded_black_box_pty_qualification",
+      "source_paths": [
+        {
+          "path": "crates/codegen/xai-grok-pager-pty-harness/src/lib.rs",
+          "sha256": "748f2ae19d67d546fc80fdeaa8da7138eace21f2e9321a21b111dc55362302df"
+        },
+        {
+          "path": "crates/codegen/xai-grok-pager-pty-harness/src/pty.rs",
+          "sha256": "cc50bfc9a7878ce410aa99ac39e62cc3712e821e66b7501e33e66ccacf62e240"
+        }
+      ],
+      "heyfood_paths": [
+        "crates/heyfood-bin/tests/phase0_qualification.rs"
+      ],
+      "disposition": "concept_reimplemented_with_portable_pty_and_heyfood_contract_fixtures",
+      "copied_bytes": false
+    },
+    {
+      "pattern": "cancellation_token_with_bounded_background_completion",
+      "source_paths": [
+        {
+          "path": "crates/codegen/xai-grok-pager/src/headless.rs",
+          "sha256": "e71ce2dab0d4d929cf06cc1ffb0534c11dea9cbf065e6b754f13f9547fe02ab9"
+        }
+      ],
+      "heyfood_paths": [
+        "crates/heyfood-application/src/run_turn.rs",
+        "crates/heyfood-bin/src/lib.rs"
+      ],
+      "disposition": "concept_reimplemented_for_single_flight_http_sse_and_explicit_supervisor_join",
+      "copied_bytes": false
+    }
+  ],
+  "review": {
+    "status": "approved",
+    "reviewer": "codex-rust-specialist:/root/rust_phase0_review",
+    "reviewed_commit_sha": "d738f8c0a2f02f677e7cdd5cb764bff11941db56"
+  }
+}

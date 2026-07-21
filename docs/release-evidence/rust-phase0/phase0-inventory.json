@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "evidence_date": "2026-07-20",
+  "rust_lineage": {
+    "repository": "https://github.com/frntrllc/heyfood.git",
+    "branch": "codex/rust-big-bang",
+    "code_commit_sha": "08cecb3a00bff6bbd670faf066105205f6e93b0b",
+    "evidence_commit_sha": "844aa0bcafbcf46de8f62144e2731baf9a20db93"
+  },
+  "requirements": [
+    {
+      "id": "P0-1-language-neutral-contracts",
+      "status": "satisfied",
+      "evidence": ["fixtures/contracts/called-endpoints.json"],
+      "blocker": null
+    },
+    {
+      "id": "P0-2-python-migration-freeze",
+      "status": "satisfied",
+      "evidence": ["tests/migration/python-test-ledger.json"],
+      "blocker": null
+    },
+    {
+      "id": "P0-3-runtime-assets",
+      "status": "satisfied",
+      "evidence": ["assets/dietary/provenance.json", "assets/brand/provenance.json"],
+      "blocker": null
+    },
+    {
+      "id": "P0-4-workspace-policy",
+      "status": "satisfied",
+      "evidence": ["Cargo.toml", "deny.toml", ".github/workflows/rust-ci.yml"],
+      "blocker": null
+    },
+    {
+      "id": "P0-5-dg-r1-vertical",
+      "status": "satisfied",
+      "evidence": ["crates/heyfood-bin/tests/phase0_qualification.rs", "crates/heyfood-bin/src/lib.rs"],
+      "blocker": null
+    },
+    {
+      "id": "P0-6-three-os-ci",
+      "status": "satisfied",
+      "evidence": [".github/workflows/rust-ci.yml", "docs/release-evidence/rust-phase0/qualification-evidence.json"],
+      "blocker": null
+    },
+    {
+      "id": "P0-7-native-state-and-importer",
+      "status": "satisfied",
+      "evidence": ["crates/heyfood-platform/tests/python_state_import.rs", "fixtures/config/python-0.3.2-file-state.json", "docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md"],
+      "blocker": null
+    },
+    {
+      "id": "P0-8-backend-idempotency-and-metrics",
+      "status": "satisfied",
+      "evidence": ["docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md"],
+      "blocker": null
+    },
+    {
+      "id": "P0-9-grocery-companion-contract",
+      "status": "satisfied",
+      "evidence": ["fixtures/contracts/grocery-backend/provenance.json", "fixtures/contracts/grocery-backend/c3-confirmation-contract.json", "fixtures/contracts/grocery-backend/c4-application-capabilities-contract.json", "fixtures/contracts/grocery-backend/c4-scopes-contract.json", "docs/release-evidence/rust-phase0/external-contract-status.md"],
+      "blocker": null
+    },
+    {
+      "id": "P0-10-grok-provenance",
+      "status": "satisfied",
+      "evidence": ["docs/release-evidence/rust-phase0/reference-provenance-inventory.md", "docs/release-evidence/rust-phase0/grok-pattern-origin.json"],
+      "blocker": null
+    },
+    {
+      "id": "P0-11-platform-and-trust-prerequisites",
+      "status": "satisfied",
+      "evidence": ["docs/release-evidence/rust-phase0/dependency-platform-trust-inventory.md"],
+      "blocker": null
+    },
+    {
+      "id": "P0-12-measured-spike-report",
+      "status": "satisfied",
+      "evidence": ["docs/release-evidence/rust-phase0/spike-report.md", "docs/release-evidence/rust-phase0/qualification-evidence.json"],
+      "blocker": null
+    }
+  ],
+  "external_contracts": {
+    "hellofood_repository": "/Users/justinhambleton/Dev/hellofood",
+    "grocery": {
+      "observed_branch": "codex/grocery-phase-a-096",
+      "observed_head_sha": "8cd7baf2c683bf5ad286af32c26d96bdb1742f86",
+      "observed_main_sha": "70d79bf6d859ff7d45738663b52a9a1074e62738",
+      "merged_prerequisite_shas": [
+        "4b7bcdfaf80053c087f5aa68fea8bd5f78732160",
+        "fa23437c324b4e5d3d1c433b9c933b9f2dc2cbca",
+        "9e0a9f220751270da56996ba7004ae25e67b06d0",
+        "9e1011d75be9b919452c82cc7dd849bc3f5823a2"
+      ],
+      "phase_a_status": "pr_107_merged_production_095_activation_gated",
+      "authoritative_contract_sha": null,
+      "authoritative_contract_digest": null,
+      "blocker": "PR #107 merged as 70d79bf6 from reviewed source head 8cd7baf2, but Production remains at 095 with no Grocery tables or runtime attestation. Phase A cannot become authoritative Rust provenance until signed attestation, Production 095 to 096, exact-merge deployment and regenerated digest, and live grocery:v1 capability/scope/behavior canaries succeed."
+    },
+    "kroger": {
+      "provider_foundation_pr": null,
+      "provider_binding_pr": null,
+      "security_d2_status": "required_before_provider_token_storage",
+      "status": "blocked_on_phase_a_and_security_d2"
+    },
+    "health": {
+      "h1_h2_implementation_pr": 79,
+      "h1_h2_source_sha": "7cfadc55c103257b588b237c65fe7b5031a3f745",
+      "h3_backend_implementation_pr": 96,
+      "h3_backend_source_sha": "400c5cafb3beb0237e75f85e93d228fbbbd3dadf",
+      "h3_mobile_implementation_pr": 95,
+      "h3_mobile_source_sha": "dbea9c3cc8af4610b7b6bf3f3e64ad44e7fe428a",
+      "provenance_path": "fixtures/contracts/health-contract-provenance.json",
+      "status": "merged_contracts_frozen_provider_neutral_seams_permitted_h3_capability_gated"
+    }
+  },
+  "review": {
+    "status": "approved",
+    "reviewer": "codex-rust-specialist:/root/rust_phase0_review",
+    "reviewed_commit_sha": "844aa0bcafbcf46de8f62144e2731baf9a20db93"
+  }
+}

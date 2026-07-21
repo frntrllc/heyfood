@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "source_repository": "https://github.com/frntrllc/hellofood.git",
+  "import_command": "cargo xtask import-grocery-contracts --source-repo PATH",
+  "contracts": [
+    {
+      "name": "c3_confirmation_contract",
+      "platform_contract": "C3",
+      "source_commit": "9e0a9f220751270da56996ba7004ae25e67b06d0",
+      "source_path": "backend/docs/schemas/v1/confirmation-contract.json",
+      "source_sha256": "1dfb2be6befbb53068dfa16d063c2551602b04c977f5cb1e073339d316b24430",
+      "target_path": "fixtures/contracts/grocery-backend/c3-confirmation-contract.json",
+      "target_sha256": "1dfb2be6befbb53068dfa16d063c2551602b04c977f5cb1e073339d316b24430",
+      "freeze_kind": "exact_copy"
+    },
+    {
+      "name": "c4_application_capabilities_contract",
+      "platform_contract": "C4",
+      "source_commit": "9e1011d75be9b919452c82cc7dd849bc3f5823a2",
+      "source_path": "backend/docs/schemas/v1/application-capabilities-contract.json",
+      "source_sha256": "346460ef7e0eadbd292c9ccc0eee2ec0b1595893cf2ef83f0d7e97b91f3c5dac",
+      "target_path": "fixtures/contracts/grocery-backend/c4-application-capabilities-contract.json",
+      "target_sha256": "346460ef7e0eadbd292c9ccc0eee2ec0b1595893cf2ef83f0d7e97b91f3c5dac",
+      "freeze_kind": "exact_copy"
+    },
+    {
+      "name": "c4_scopes_contract",
+      "platform_contract": "C4",
+      "source_commit": "9e1011d75be9b919452c82cc7dd849bc3f5823a2",
+      "source_path": "backend/docs/schemas/v1/scopes-contract.json",
+      "source_sha256": "6ad0e04f48729148731a1a432a1c8abca1187070d7bcd9e0899f3bbef961808e",
+      "target_path": "fixtures/contracts/grocery-backend/c4-scopes-contract.json",
+      "target_sha256": "6ad0e04f48729148731a1a432a1c8abca1187070d7bcd9e0899f3bbef961808e",
+      "freeze_kind": "exact_copy"
+    }
+  ],
+  "external_dependencies": {
+    "platform_p0": [
+      {
+        "id": "C1",
+        "commit": "4b7bcdfaf80053c087f5aa68fea8bd5f78732160",
+        "status": "merged_external_dependency"
+      },
+      {
+        "id": "C2",
+        "commit": "fa23437c324b4e5d3d1c433b9c933b9f2dc2cbca",
+        "status": "merged_external_dependency"
+      },
+      {
+        "id": "C3",
+        "commit": "9e0a9f220751270da56996ba7004ae25e67b06d0",
+        "status": "merged_and_frozen"
+      },
+      {
+        "id": "C4",
+        "commit": "9e1011d75be9b919452c82cc7dd849bc3f5823a2",
+        "status": "merged_and_frozen"
+      }
+    ],
+    "grocery_phase_a": {
+      "source_pr": 107,
+      "observed_head_sha": "8cd7baf2c683bf5ad286af32c26d96bdb1742f86",
+      "observed_merge_sha": "70d79bf6d859ff7d45738663b52a9a1074e62738",
+      "status": "merged_not_deployed_not_imported",
+      "authoritative_source_sha": null,
+      "aggregate_digest": null,
+      "required_before_import": [
+        "production_095_to_096",
+        "exact_grocery_merge_deployed_and_digest_regenerated",
+        "grocery_v1_capability_and_live_canary"
+      ]
+    }
+  },
+  "review": {
+    "status": "approved",
+    "reviewer": "codex-rust-specialist:/root/rust_phase0_review",
+    "reviewed_commit_sha": "844aa0bcafbcf46de8f62144e2731baf9a20db93"
+  }
+}

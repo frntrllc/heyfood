@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "asset_contract_version": 2,
+  "source_repository": "https://github.com/frntrllc/hellofood.git",
+  "source_commit": "27cab29dd3d17bb844462c8ec5340585b859b0ae",
+  "source_commit_clean": true,
+  "source_path": "shared/dietary_options.json",
+  "source_sha256": "40a26e22d7e729289ef5bf4052af841adc76029711d89c89f046eba87d533556",
+  "target_path": "assets/dietary/dietary_options.v2.json",
+  "target_sha256": "40a26e22d7e729289ef5bf4052af841adc76029711d89c89f046eba87d533556",
+  "export_tool": "scripts/phase0/export_contract_freeze.py",
+  "export_tool_version": 2,
+  "review": {
+    "status": "approved",
+    "reviewer": "codex-rust-specialist:/root/rust_phase0_review",
+    "reviewed_commit_sha": "d738f8c0a2f02f677e7cdd5cb764bff11941db56"
+  }
+}

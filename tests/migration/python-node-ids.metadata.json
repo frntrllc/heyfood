@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "baseline_sha": "73494a57468dac83b4904ce6c390e36926f5c6fe",
+  "baseline_tree": "4c265cd9ae0623442dd8eba1f6f4388c4ebf5adf",
+  "baseline_version": "0.4.0",
+  "capture_command": "python -m pytest --collect-only -q",
+  "normalization": "Keep stdout lines beginning with tests/, preserve collection order, UTF-8, LF, final LF.",
+  "node_count": 643,
+  "normalized_sha256": "49e6fe5429174a9ad8f6cf47d209365ca852ebed5b6f6fa7f86b824dfa4b0cd3",
+  "reviewed_environment": {
+    "python": "3.11.15",
+    "pytest": "9.1.1",
+    "click": "8.1.8",
+    "httpx": "0.28.1",
+    "rich": "14.3.4",
+    "typer": "0.23.1"
+  },
+  "capture_tool": "scripts/phase0/export_contract_freeze.py",
+  "capture_tool_version": 2
+}

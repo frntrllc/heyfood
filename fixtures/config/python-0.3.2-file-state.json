@@ -1,0 +1,45 @@
+{
+  "account_user_id": "user-fixture-1",
+  "active_context": "production",
+  "api_key": "hf_api_fixture_secret",
+  "api_url": "https://api.hello.food",
+  "auth_url": "https://auth.hello.food/authorize",
+  "contexts": {
+    "staging": {
+      "api_url": "https://staging-api.hello.food",
+      "auth_url": "https://staging-auth.hello.food/authorize"
+    }
+  },
+  "credential_store": "file",
+  "device_id": "heyfood-cli-fixture-device",
+  "first_name": "Fixture",
+  "household": {
+    "version": 4,
+    "active_scope": "child-fixture",
+    "members": [{"id": "child-fixture", "name": "Child Fixture"}]
+  },
+  "household_local_profiles": {
+    "child-fixture": {"restrictions": ["fixture-peanut"]}
+  },
+  "household_profile_outbox": {
+    "mutation-fixture": {"member_id": "child-fixture", "repair": true}
+  },
+  "last_conversation": {
+    "conversation_id": "conversation-fixture",
+    "pending_confirmation": {
+      "confirmation_id": "confirmation-fixture",
+      "action": "update_household_member"
+    }
+  },
+  "location": {"label": "Fixture City", "latitude": 1.25, "longitude": -2.5},
+  "oauth": {
+    "access_token": "hf_oauth_fixture_access",
+    "refresh_token": "hf_oauth_fixture_refresh"
+  },
+  "session": {
+    "user_id": "user-fixture-1",
+    "access_token": "hf_session_fixture_access",
+    "refresh_token": "hf_session_fixture_refresh"
+  },
+  "voice": {"device": "fixture-microphone"}
+}

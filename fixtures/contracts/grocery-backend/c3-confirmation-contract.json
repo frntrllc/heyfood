@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/frntrllc/heyfood/blob/main/schemas/v1/confirmation-contract.json",
+  "title": "hello.food write-action confirmation contract v1",
+  "description": "Single canonical machine-readable contract for the write-action confirmation flow of POST /v1/agent/converse, shared between the private backend (frntrllc/hellofood) and language-neutral clients (the Rust heyfood rewrite; released Python CLI v0.3.2 until cutover). SOURCE OF TRUTH for: the ConfirmAction request shape (including the additive decision + edits fields and the legacy-absent = accept rule), the pending/confirmation SSE envelope (meal card AND generic item-list card, additively versioned), the precondition DESCRIPTOR shapes frozen at proposal and evaluated at commit, and the typed error-code table. The backend parity test (tests/test_confirmation_contract.py) verifies the Pydantic ConfirmAction fields, the ConfirmationErrorCode enum, the agent-loop error-code call sites, and the recorded wire fixtures against THIS file; nothing is hand-duplicated. WIRE COMPATIBILITY IS A HARD CONSTRAINT: a released v0.3.2 confirm payload (confirmation_id + idempotency_key only) MUST commit byte-identically as an accept.",
+  "x-heyfood-contract-version": 1,
+  "envelope_version": 1,
+  "confirm_request": {
+    "description": "The ConfirmAction the client echoes back to confirm/cancel a proposed write. Sent as the `confirm` field of the /v1/agent/converse request body (XOR with `query`). device_id comes from the verified auth dependency, not the body.",
+    "required": ["confirmation_id", "idempotency_key"],
+    "fields": {
+      "confirmation_id": {
+        "type": "string",
+        "required": true,
+        "pattern": "^[a-f0-9-]{36}$",
+        "description": "Server-minted at proposal time. Echoed verbatim."
+      },
+      "idempotency_key": {
+        "type": "string",
+        "required": true,
+        "pattern": "^[a-f0-9-]{36}$",
+        "description": "Server-minted at proposal time. Echoed verbatim. Duplicate accept returns the cached result envelope without re-executing."
+      },
+      "decision": {
+        "type": ["string", "null"],
+        "required": false,
+        "enum": ["accept", "cancel", null],
+        "default_when_absent": "accept",
+        "description": "Additive (C3). ABSENT MEANS ACCEPT — byte-identical to released CLI v0.3.2, whose deterministic phrase->confirm conversion emits only {confirmation_id, idempotency_key}. `cancel` clears the pending confirmation."
+      },
+      "edits": {
+        "type": ["object", "null"],
+        "required": false,
+        "description": "Optional tool-specific edit payload, only valid on an accept. Validated against the pending tool's edit schema (never model-reinterpreted); the frozen tool arguments are the base and validated edits merge over them. An invalid edit is a typed `edit_invalid` error with the pending state left intact. Meal logging accepts edits to: food_item (non-empty string), meal_type (breakfast|lunch|dinner|snack), restaurant_name (non-empty string)."
+      }
+    }
+  },
+  "confirmation_envelope": {
+    "description": "The SSE `result` event `structured` payload that proposes a write and requests confirmation. type is always 'action_confirmation'. envelope_version is additive: an old client ignores unknown keys and keeps rendering the existing meal card. card_form selects the card shape.",
+    "type": "action_confirmation",
+    "required": ["type", "confirmation_id", "idempotency_key", "action", "preview"],
+    "fields": {
+      "type": { "const": "action_confirmation" },
+      "envelope_version": {
+        "type": "integer",
+        "description": "Additive envelope version. Currently 1. Bumped ONLY on an additive shape change."
+      },
+      "confirmation_id": { "type": "string", "pattern": "^[a-f0-9-]{36}$" },
+      "idempotency_key": { "type": "string", "pattern": "^[a-f0-9-]{36}$" },
+      "action": { "type": "string", "description": "The pending write tool name (e.g. 'log_meal')." },
+      "preview": { "type": "string", "description": "Human-readable one-line summary of the pending write." },
+      "expires_at": { "type": "string", "description": "ISO-8601 expiry; the pending confirmation is rejected after this instant." },
+      "card_form": {
+        "type": "string",
+        "enum": ["meal", "item_list"],
+        "description": "Which card the structured_preview renders. 'meal' is the existing meal card (default / untagged for legacy). 'item_list' is the generic item-list card (grocery)."
+      },
+      "structured_preview": {
+        "type": "object",
+        "description": "Card data. For card_form=meal: {meal_name, restaurant, member_name, member_id, meal_type, logged_at}. For card_form=item_list: the item_list_card shape below.",
+        "oneOf": ["meal_card", "item_list_card"]
+      }
+    },
+    "meal_card": {
+      "description": "Existing meal confirmation card (card_form=meal). Unchanged this release.",
+      "fields": {
+        "meal_name": { "type": "string" },
+        "restaurant": { "type": ["string", "null"] },
+        "member_name": { "type": ["string", "null"] },
+        "member_id": { "type": ["string", "null"] },
+        "meal_type": { "type": ["string", "null"] },
+        "logged_at": { "type": "string" }
+      }
+    },
+    "item_list_card": {
+      "description": "Generic item-list confirmation card (card_form=item_list). Additive new form. Detected server-side when structured_preview carries an `items` array.",
+      "required": ["items"],
+      "fields": {
+        "items": {
+          "type": "array",
+          "items": {
+            "fields": {
+              "name": { "type": "string", "required": true },
+              "quantity": { "type": ["number", "string", "null"], "description": "Positive quantity when numeric." },
+              "provenance": { "type": ["string", "null"], "description": "Where the item came from (e.g. 'menu', 'user', 'reorder')." },
+              "safety_flags": {
+                "type": ["array", "null"],
+                "description": "Per-member safety flags for this item (e.g. allergen conflicts).",
+                "items": { "fields": { "member_id": { "type": "string" }, "status": { "type": "string" }, "reason": { "type": ["string", "null"] } } }
+              }
+            }
+          }
+        },
+        "list_id": { "type": ["string", "null"] },
+        "title": { "type": ["string", "null"] }
+      }
+    }
+  },
+  "precondition_descriptors": {
+    "description": "Declarative, process-boundary-safe descriptors frozen with the pending confirmation and evaluated at commit inside the execution transaction (no TOCTOU gap). A stored callable is FORBIDDEN — the store holds JSON, the code holds the handler registry keyed by `type`. Unknown type at commit => typed abort (fail closed). Failure of an `authoritative` descriptor => typed abort + pending cleared; `advisory` => logged, commit proceeds. Grocery Phase A registers `list_version` as a pure addition.",
+    "common_fields": {
+      "type": { "type": "string", "required": true, "description": "Descriptor type key; must resolve to a registered handler." },
+      "mode": { "type": "string", "enum": ["advisory", "authoritative"], "default": "advisory" }
+    },
+    "types": {
+      "noop": {
+        "description": "Generic test descriptor. Passes unless the frozen operand `should_pass` is false (so the abort path is testable).",
+        "operands": { "should_pass": { "type": "boolean", "default": true } }
+      },
+      "profile_hash": {
+        "description": "Meal logging's profile-hash check, migrated to a registered ADVISORY descriptor (log-and-continue preserved exactly). Live value: the conversation-scoped profile confirmation fingerprint at commit.",
+        "operands": { "expected_hash": { "type": "string", "required": true } }
+      },
+      "household_context_hash": {
+        "description": "Compares C1's HouseholdContextSnapshot.context_hash (+ hash_version) against the value frozen at proposal. A version mismatch or a missing live hash fails closed. Grocery registers this in authoritative mode in Phase A.",
+        "operands": {
+          "expected_hash": { "type": "string", "required": true },
+          "hash_version": { "type": ["integer", "null"] }
+        }
+      },
+      "list_version": {
+        "description": "RESERVED for grocery Phase A (registered as a pure addition). Freezes a list id + expected version; authoritative.",
+        "phase": "A",
+        "operands": {
+          "list_id": { "type": "string" },
+          "expected_version": { "type": "integer" }
+        }
+      }
+    }
+  },
+  "error_codes": {
+    "description": "SSE `error` event bodies use {\"code\": \"<code>\", \"message\": \"<human text>\"}. Every code here is a member of app.services.conversation.schemas.ConfirmationErrorCode and is the exact wire code emitted by the agent-loop confirmation flow.",
+    "codes": {
+      "confirmation_rejected": "The confirmation could not be validated (expired, id/idempotency mismatch, ownership mismatch, member-attribution changed, or no pending confirmation). Re-ask.",
+      "confirmation_unsupported": "This conversation mode does not support confirmations.",
+      "already_cancelled": "A previously cancelled confirmation id was replayed as an accept.",
+      "cancel_rejected": "A cancel could not be applied (no pending, id mismatch, or already completed).",
+      "edit_invalid": "The edits payload failed structural/semantic validation or the tool accepts no edits; pending state left intact.",
+      "precondition_failed": "A registered authoritative precondition failed at commit; the pending confirmation was cleared. Re-ask.",
+      "unknown_precondition": "A frozen precondition descriptor had a type with no registered handler at commit; failed closed.",
+      "temporarily_unavailable": "The confirmation store was unavailable during validate/accept/cancel/edit/precondition; failed closed with no state loss.",
+      "write_failed": "The write tool raised during execution."
+    }
+  }
+}

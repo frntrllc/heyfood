@@ -1,0 +1,264 @@
+{
+  "$schema": "../../schemas/migration-ledger.v1.schema.json#/$defs/invariantInventoryDocument",
+  "schema_version": 1,
+  "baseline_sha": "73494a57468dac83b4904ce6c390e36926f5c6fe",
+  "inventory_count": 32,
+  "invariants": [
+    {
+      "invariant_id": "ci::.github/workflows/ci.yml#installer-tests",
+      "category": "ci",
+      "source_path": ".github/workflows/ci.yml",
+      "source_locator": "jobs.installer-tests",
+      "source_sha256": "651a6230c50ecd8c052f852f441f994b2097e14ff78d50c420e8c2cefd4a9a12",
+      "contract": "Hosted installer behavior passes on macOS and Linux."
+    },
+    {
+      "invariant_id": "ci::.github/workflows/ci.yml#unit-tests",
+      "category": "ci",
+      "source_path": ".github/workflows/ci.yml",
+      "source_locator": "jobs.unit-tests",
+      "source_sha256": "651a6230c50ecd8c052f852f441f994b2097e14ff78d50c420e8c2cefd4a9a12",
+      "contract": "The complete Python suite passes on Python 3.11, 3.12, and 3.13."
+    },
+    {
+      "invariant_id": "ci::.github/workflows/ci.yml#build-distribution",
+      "category": "ci",
+      "source_path": ".github/workflows/ci.yml",
+      "source_locator": "jobs.build-distribution",
+      "source_sha256": "651a6230c50ecd8c052f852f441f994b2097e14ff78d50c420e8c2cefd4a9a12",
+      "contract": "One wheel and one sdist build and pass metadata/content verification."
+    },
+    {
+      "invariant_id": "ci::.github/workflows/ci.yml#install-smoke",
+      "category": "ci",
+      "source_path": ".github/workflows/ci.yml",
+      "source_locator": "jobs.install-smoke",
+      "source_sha256": "651a6230c50ecd8c052f852f441f994b2097e14ff78d50c420e8c2cefd4a9a12",
+      "contract": "The built wheel installs through pipx and passes a clean-user smoke on the supported matrix."
+    },
+    {
+      "invariant_id": "ci::.github/workflows/ci.yml#voice-wheel-smoke",
+      "category": "ci",
+      "source_path": ".github/workflows/ci.yml",
+      "source_locator": "jobs.voice-wheel-smoke",
+      "source_sha256": "651a6230c50ecd8c052f852f441f994b2097e14ff78d50c420e8c2cefd4a9a12",
+      "contract": "The voice extra imports and reports status on macOS and Linux without microphone access."
+    },
+    {
+      "invariant_id": "ci::.github/workflows/release.yml#build",
+      "category": "ci",
+      "source_path": ".github/workflows/release.yml",
+      "source_locator": "jobs.build",
+      "source_sha256": "66a23ac5d50bb203fe8dd116665fb65a0863caf5237740183882328a545b4ecc",
+      "contract": "An annotated main-line version tag is tested, built once, verified, and clean-installed."
+    },
+    {
+      "invariant_id": "ci::.github/workflows/release.yml#publish",
+      "category": "ci",
+      "source_path": ".github/workflows/release.yml",
+      "source_locator": "jobs.publish",
+      "source_sha256": "66a23ac5d50bb203fe8dd116665fb65a0863caf5237740183882328a545b4ecc",
+      "contract": "The exact verified artifacts publish through the protected PyPI environment."
+    },
+    {
+      "invariant_id": "ci::.github/workflows/release.yml#github-release",
+      "category": "ci",
+      "source_path": ".github/workflows/release.yml",
+      "source_locator": "jobs.github-release",
+      "source_sha256": "66a23ac5d50bb203fe8dd116665fb65a0863caf5237740183882328a545b4ecc",
+      "contract": "The published artifacts attach to the matching verified GitHub tag."
+    },
+    {
+      "invariant_id": "ci::.github/workflows/post-release-smoke.yml#public-pypi",
+      "category": "ci",
+      "source_path": ".github/workflows/post-release-smoke.yml",
+      "source_locator": "jobs.public-pypi",
+      "source_sha256": "be00eddbd0de2bfcfb5d703cfe7edf2bf2eb84a29c6655d306dc4aa09bf83e77",
+      "contract": "The exact public PyPI version installs, runs, emits valid JSON, and uninstalls on the supported matrix."
+    },
+    {
+      "invariant_id": "release-script::scripts/verify_artifacts.py#verify_wheel",
+      "category": "release_script",
+      "source_path": "scripts/verify_artifacts.py",
+      "source_locator": "verify_wheel",
+      "source_sha256": "d1e0e644bda2b893792a5372f8471c001570f5ee6eea9489efe465a1e3f9096e",
+      "contract": "Wheel metadata, entry point, licenses, safe paths, and runtime data bytes match the source contract."
+    },
+    {
+      "invariant_id": "release-script::scripts/verify_artifacts.py#verify_sdist",
+      "category": "release_script",
+      "source_path": "scripts/verify_artifacts.py",
+      "source_locator": "verify_sdist",
+      "source_sha256": "d1e0e644bda2b893792a5372f8471c001570f5ee6eea9489efe465a1e3f9096e",
+      "contract": "The sdist has safe rooted paths and contains every required release file."
+    },
+    {
+      "invariant_id": "release-script::scripts/regenerate_compat_fixtures.py#help-export",
+      "category": "release_script",
+      "source_path": "scripts/regenerate_compat_fixtures.py",
+      "source_locator": "main_cli",
+      "source_sha256": "b04b5ed9f4204cd703e178c1a871459627995b5c92cb16884b1110f06a37b136",
+      "contract": "Command help fixtures are normalized deterministically from the pinned command map."
+    },
+    {
+      "invariant_id": "schema::schemas/v1/heyfood-output.schema.json",
+      "category": "schema",
+      "source_path": "schemas/v1/heyfood-output.schema.json",
+      "source_locator": "$",
+      "source_sha256": "f36b47fb3a2bb4cc0ae30c89bd90b50901cc2368d1fb253710cdd35edffe8d33",
+      "contract": "Stable v1 machine output shapes and conservative safety vocabulary remain valid."
+    },
+    {
+      "invariant_id": "schema::schemas/v1/transcription.schema.json",
+      "category": "schema",
+      "source_path": "schemas/v1/transcription.schema.json",
+      "source_locator": "$",
+      "source_sha256": "b32ebbc5860c6b11e6fb6bfd29c3296449f6583ce7900d461764c91b6eab093f",
+      "contract": "Stable v1 transcription request/result shapes remain valid."
+    },
+    {
+      "invariant_id": "documentation::CHANGELOG.md",
+      "category": "documentation",
+      "source_path": "CHANGELOG.md",
+      "source_locator": "$",
+      "source_sha256": "8c5d3c762b5a4b190e68dadf2158c11cff1bd5a76f03b2edeaef387e53f9ba41",
+      "contract": "Published release history and compatibility notes remain available through the cutover."
+    },
+    {
+      "invariant_id": "documentation::CODE_OF_CONDUCT.md",
+      "category": "documentation",
+      "source_path": "CODE_OF_CONDUCT.md",
+      "source_locator": "$",
+      "source_sha256": "7fca314f540e23b100298297e38ecfe099bb61f4863272dc92e0a93966725192",
+      "contract": "The project code of conduct remains part of the public repository contract."
+    },
+    {
+      "invariant_id": "documentation::CONTRIBUTING.md",
+      "category": "documentation",
+      "source_path": "CONTRIBUTING.md",
+      "source_locator": "$",
+      "source_sha256": "3dce2cb1598408c1830850591d522b6c7dc6fc57a9c97e955dba8c0fcb6be42e",
+      "contract": "Public contribution, testing, and review guidance remains represented."
+    },
+    {
+      "invariant_id": "documentation::DEVELOPMENT.md",
+      "category": "documentation",
+      "source_path": "DEVELOPMENT.md",
+      "source_locator": "$",
+      "source_sha256": "89d3282e5ecbc9f2fdbaffa1650084560bb490280f95c60ecc833ec7c5fea679",
+      "contract": "Supported local development, test, schema, and fixture workflows remain represented."
+    },
+    {
+      "invariant_id": "documentation::README.md",
+      "category": "documentation",
+      "source_path": "README.md",
+      "source_locator": "$",
+      "source_sha256": "68bb52c629b893f070ed689e2454591959f1c578a2589105ef1e6026fb23b4e9",
+      "contract": "Public installation, command, configuration, privacy, and compatibility guidance remains represented."
+    },
+    {
+      "invariant_id": "documentation::RELEASING.md",
+      "category": "documentation",
+      "source_path": "RELEASING.md",
+      "source_locator": "$",
+      "source_sha256": "bad9ca09b92b69aa075539d3512c8d442afaa8163b28e03cba4165c575c2afc7",
+      "contract": "The release checklist, exact-artifact discipline, and rollback guidance remain represented."
+    },
+    {
+      "invariant_id": "documentation::SECURITY.md",
+      "category": "documentation",
+      "source_path": "SECURITY.md",
+      "source_locator": "$",
+      "source_sha256": "c13f9c331e7ca29b74577e37af92e9ae13f0fe973d17a15c1b1f66c0a11694d7",
+      "contract": "Security support, disclosure, credential, and transport guidance remains represented."
+    },
+    {
+      "invariant_id": "documentation::SUPPORT.md",
+      "category": "documentation",
+      "source_path": "SUPPORT.md",
+      "source_locator": "$",
+      "source_sha256": "594bc6f6068209bf8ca0596a25e97889180373b049dfc0789ad72cbd173a5ce4",
+      "contract": "Public support boundaries and escalation guidance remain represented."
+    },
+    {
+      "invariant_id": "documentation::docs/CLI_CONTRACT.md",
+      "category": "documentation",
+      "source_path": "docs/CLI_CONTRACT.md",
+      "source_locator": "$",
+      "source_sha256": "abb51468561129c55a5c2233eaf893acfa4e8e6921904309702f6c6bc9e6c4d9",
+      "contract": "Streams, JSON mode, exits, prompts, automation, and compatibility semantics remain represented."
+    },
+    {
+      "invariant_id": "documentation::docs/COMMAND_GRAMMAR.md",
+      "category": "documentation",
+      "source_path": "docs/COMMAND_GRAMMAR.md",
+      "source_locator": "$",
+      "source_sha256": "c5f9ed0cf6a1a11e3bdcbbdb47f7dc28bf718f942e64dde0c386d93e65a5c553",
+      "contract": "The public command grammar and compatibility aliases remain represented."
+    },
+    {
+      "invariant_id": "documentation::docs/DIETARY_CATALOG.md",
+      "category": "documentation",
+      "source_path": "docs/DIETARY_CATALOG.md",
+      "source_locator": "$",
+      "source_sha256": "0a2ef1466d65e7959efcf65917289aa010c9a6a38f9b04754c29a99534107a86",
+      "contract": "Dietary catalog ownership, synchronization, versioning, and profile provenance remain represented."
+    },
+    {
+      "invariant_id": "documentation::docs/JSON_SCHEMAS.md",
+      "category": "documentation",
+      "source_path": "docs/JSON_SCHEMAS.md",
+      "source_locator": "$",
+      "source_sha256": "5d6e7c8336a8bf671e246baf62d09444447898d09337cbc65b9f48a9ee3d6c8f",
+      "contract": "Published schema families, compatibility policy, and safety vocabulary remain represented."
+    },
+    {
+      "invariant_id": "installed-artifact::pyproject.toml#project-and-build-metadata",
+      "category": "installed_artifact",
+      "source_path": "pyproject.toml",
+      "source_locator": "project-and-build-metadata",
+      "source_sha256": "6f3db74c5c1cf25b551770e335861ec17d69a62c50d543edf9c457a5c1be32d3",
+      "contract": "Package identity, supported Python versions, dependencies, entry point, version source, and distribution inclusions remain accounted for."
+    },
+    {
+      "invariant_id": "installed-artifact::LICENSE#$",
+      "category": "installed_artifact",
+      "source_path": "LICENSE",
+      "source_locator": "$",
+      "source_sha256": "2cc2f6a65bca71921e785ad62a949f6752887ae142efed4e07d633d8e992d928",
+      "contract": "The Apache-2.0 license remains present in source and release artifacts."
+    },
+    {
+      "invariant_id": "installed-artifact::COPYRIGHT#$",
+      "category": "installed_artifact",
+      "source_path": "COPYRIGHT",
+      "source_locator": "$",
+      "source_sha256": "2fb85858ed1afef4d2599809ef7664e896e3c9a253ccc9cc6a36501e50fe82f8",
+      "contract": "The copyright notice remains present in source and release artifacts."
+    },
+    {
+      "invariant_id": "installed-artifact::scripts/smoke_installed_cli.py#main",
+      "category": "installed_artifact",
+      "source_path": "scripts/smoke_installed_cli.py",
+      "source_locator": "main",
+      "source_sha256": "f78c685ae71b8ba50ea8448f3aaa18f23f5552362dd953f9d3fc6dc2c76f89c3",
+      "contract": "A clean pipx install exposes version/help/completions, emits valid unauthenticated diagnostics, and does not create config."
+    },
+    {
+      "invariant_id": "installed-artifact::install.sh#$",
+      "category": "installed_artifact",
+      "source_path": "install.sh",
+      "source_locator": "$",
+      "source_sha256": "9a505fa7380cfe5b81f639d66c24a33677875804225dc7bb8848e5370f798e01",
+      "contract": "The public installer validates platform/tool versions, isolates pipx, pins the public index, verifies the executable, and avoids root."
+    },
+    {
+      "invariant_id": "installed-artifact::install.sh.sha256#$",
+      "category": "installed_artifact",
+      "source_path": "install.sh.sha256",
+      "source_locator": "$",
+      "source_sha256": "3840a06ea786558e7e270c153d9f38db5ad7e4f4cf7aa5cb6f88354ec1535f4d",
+      "contract": "The published installer checksum names the exact install.sh bytes."
+    }
+  ]
+}

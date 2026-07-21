@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hello.food/schemas/migration-ledger.v1.schema.json",
+  "title": "heyfood migration ledger v1",
+  "oneOf": [
+    { "$ref": "#/$defs/ledgerDocument" }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "gitSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "category": {
+      "enum": [
+        "pytest",
+        "ci",
+        "release_script",
+        "schema",
+        "documentation",
+        "installed_artifact"
+      ]
+    },
+    "disposition": {
+      "enum": [
+        "rust_test",
+        "fixture",
+        "installed_artifact_qualification",
+        "platform_qualification",
+        "retired"
+      ]
+    },
+    "ledgerEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseline_sha",
+        "invariant_id",
+        "original",
+        "category",
+        "migration_status",
+        "disposition",
+        "replacements",
+        "rationale",
+        "owner",
+        "reviewer",
+        "reviewed_commit_sha"
+      ],
+      "properties": {
+        "baseline_sha": { "$ref": "#/$defs/gitSha" },
+        "invariant_id": { "type": "string", "minLength": 1 },
+        "original": { "type": "string", "minLength": 1 },
+        "category": { "$ref": "#/$defs/category" },
+        "migration_status": { "enum": ["unmapped", "mapped"] },
+        "disposition": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/disposition" }
+          ]
+        },
+        "replacements": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "rationale": { "type": ["string", "null"], "minLength": 1 },
+        "owner": { "type": ["string", "null"], "minLength": 1 },
+        "reviewer": { "type": ["string", "null"], "minLength": 1 },
+        "reviewed_commit_sha": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/gitSha" }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "migration_status": { "const": "unmapped" } },
+            "required": ["migration_status"]
+          },
+          "then": {
+            "properties": {
+              "disposition": { "type": "null" },
+              "replacements": { "maxItems": 0 },
+              "rationale": { "type": "null" },
+              "owner": { "type": "null" },
+              "reviewer": { "type": "null" },
+              "reviewed_commit_sha": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "migration_status": { "const": "mapped" } },
+            "required": ["migration_status"]
+          },
+          "then": {
+            "properties": {
+              "disposition": { "$ref": "#/$defs/disposition" },
+              "replacements": { "minItems": 1 },
+              "rationale": { "type": "string", "minLength": 1 },
+              "owner": { "type": "string", "minLength": 1 },
+              "reviewer": { "type": "string", "minLength": 1 },
+              "reviewed_commit_sha": { "$ref": "#/$defs/gitSha" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "disposition": { "const": "retired" } },
+            "required": ["disposition"]
+          },
+          "then": {
+            "properties": {
+              "replacements": { "minItems": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "ledgerDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["$schema", "schema_version", "baseline", "summary", "entries"],
+      "properties": {
+        "$schema": { "type": "string" },
+        "schema_version": { "const": 1 },
+        "baseline": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "commit_sha",
+            "tree_sha",
+            "python_version",
+            "pytest_node_ids_path",
+            "pytest_node_count",
+            "pytest_node_ids_sha256",
+            "non_pytest_inventory_path",
+            "non_pytest_invariant_count"
+          ],
+          "properties": {
+            "commit_sha": { "$ref": "#/$defs/gitSha" },
+            "tree_sha": { "$ref": "#/$defs/gitSha" },
+            "python_version": { "type": "string", "minLength": 1 },
+            "pytest_node_ids_path": { "type": "string", "minLength": 1 },
+            "pytest_node_count": { "type": "integer", "minimum": 1 },
+            "pytest_node_ids_sha256": { "$ref": "#/$defs/sha256" },
+            "non_pytest_inventory_path": { "type": "string", "minLength": 1 },
+            "non_pytest_invariant_count": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["entry_count", "mapped_count", "unmapped_count"],
+          "properties": {
+            "entry_count": { "type": "integer", "minimum": 1 },
+            "mapped_count": { "type": "integer", "minimum": 0 },
+            "unmapped_count": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ledgerEntry" },
+          "minItems": 1
+        }
+      }
+    },
+    "invariantInventoryItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "invariant_id",
+        "category",
+        "source_path",
+        "source_locator",
+        "source_sha256",
+        "contract"
+      ],
+      "properties": {
+        "invariant_id": { "type": "string", "minLength": 1 },
+        "category": {
+          "allOf": [
+            { "$ref": "#/$defs/category" },
+            { "not": { "const": "pytest" } }
+          ]
+        },
+        "source_path": { "type": "string", "minLength": 1 },
+        "source_locator": { "type": "string", "minLength": 1 },
+        "source_sha256": { "$ref": "#/$defs/sha256" },
+        "contract": { "type": "string", "minLength": 1 }
+      }
+    },
+    "invariantInventoryDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["$schema", "schema_version", "baseline_sha", "inventory_count", "invariants"],
+      "properties": {
+        "$schema": { "type": "string" },
+        "schema_version": { "const": 1 },
+        "baseline_sha": { "$ref": "#/$defs/gitSha" },
+        "inventory_count": { "type": "integer", "minimum": 1 },
+        "invariants": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/invariantInventoryItem" },
+          "minItems": 1
+        }
+      }
+    }
+  }
+}

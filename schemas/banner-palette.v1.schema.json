@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hello.food/schemas/banner-palette.v1.schema.json",
+  "title": "hey.food banner palette v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "foreground", "accent", "accent_spans"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "foreground": { "$ref": "#/$defs/color" },
+    "accent": { "$ref": "#/$defs/color" },
+    "accent_spans": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/span" },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "color": {
+      "type": "string",
+      "pattern": "^#[0-9A-Fa-f]{6}$"
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "start", "length"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 0 },
+        "start": { "type": "integer", "minimum": 0 },
+        "length": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

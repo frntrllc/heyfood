@@ -1,0 +1,25 @@
+[package]
+name = "heyfood-core"
+description = "Dependency-light domain and wire contracts for heyfood."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+secrecy = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["alloc", "derive"] }
+serde_json = { workspace = true, features = ["std"] }
+time = { workspace = true, features = ["formatting", "parsing", "serde", "std"] }
+url = { workspace = true, features = ["serde", "std"] }
+uuid = { workspace = true, features = ["serde", "std", "v4"] }
+zeroize = { workspace = true, features = ["alloc"] }
+
+[dev-dependencies]
+insta = { workspace = true, features = ["json"] }
+proptest = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

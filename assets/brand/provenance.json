@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "source_repository": "https://github.com/frntrllc/hellofood.git",
+  "source_commit": "27cab29dd3d17bb844462c8ec5340585b859b0ae",
+  "source_commit_clean": true,
+  "sources": [
+    {
+      "path": "docs/references/banner.txt",
+      "sha256": "8f97c59f5eba7075891cb1aa31c300ea776a0ac57117ef290a7f7c6a07e4c50e"
+    },
+    {
+      "path": "docs/references/banner.palette.json",
+      "sha256": "22978be9dd03ca5a194617940d0b78a495bdf7f3ecc40729af2f1322cca0d73e"
+    },
+    {
+      "path": "docs/references/banner.ts",
+      "sha256": "49fe8509eeb0b3b4511b97cf81b383140ccae1d29b93bc7ca68ac07dd1d9da84"
+    }
+  ],
+  "targets": [
+    {
+      "path": "assets/brand/banner.txt",
+      "sha256": "8f97c59f5eba7075891cb1aa31c300ea776a0ac57117ef290a7f7c6a07e4c50e"
+    },
+    {
+      "path": "assets/brand/banner.palette.json",
+      "sha256": "22978be9dd03ca5a194617940d0b78a495bdf7f3ecc40729af2f1322cca0d73e"
+    },
+    {
+      "path": "assets/brand/banner.frames.json",
+      "sha256": "7f156ac4d517cef1ea077b4e3dd42743a0f23cad9e72ddd5e82da1b8a7d2fbaa"
+    }
+  ],
+  "export_tool": "scripts/phase0/export_contract_freeze.py",
+  "export_tool_version": 2,
+  "review": {
+    "status": "approved",
+    "reviewer": "codex-rust-specialist:/root/rust_phase0_review",
+    "reviewed_commit_sha": "d738f8c0a2f02f677e7cdd5cb764bff11941db56"
+  }
+}

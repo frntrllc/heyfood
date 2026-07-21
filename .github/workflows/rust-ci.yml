@@ -1,0 +1,230 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      require_provenance_approval:
+        description: Fail unless asset provenance has independent exact-SHA approval
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: Compile / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Compile the portable default feature set
+        run: cargo check --locked --workspace --all-targets
+
+  format:
+    name: rustfmt / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Lint the portable default feature set
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+  test:
+    name: Test / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Test the portable default feature set
+        run: cargo test --locked --workspace
+
+  dependency-dag:
+    name: Dependency DAG / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - run: cargo xtask dependency-dag
+
+  stable-contracts:
+    name: Stable contracts / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Verify stable and grocery contract freezes
+        run: |
+          cargo xtask verify-stable-contracts
+          cargo xtask verify-grocery-contracts
+
+  assets-provenance:
+    name: Asset schemas, hashes, and provenance / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - run: cargo xtask verify-assets
+
+  migration-ledger:
+    name: Migration ledger freeze / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - run: cargo xtask verify-migration-ledger
+
+  phase0-evidence:
+    name: Phase 0 inventory / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - run: cargo xtask verify-phase0-evidence
+
+  phase1-evidence:
+    name: Phase 1 inventory / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - run: cargo xtask verify-phase1-evidence
+
+  phase0-qualification:
+    name: Internal PTY, signal, restoration vertical / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Qualify the portable Unix credential vertical
+        if: runner.os != 'Windows'
+        run: cargo test --release --locked --package heyfood-bin --test phase0_qualification
+      - name: Qualify the Windows Credential Manager vertical
+        if: runner.os == 'Windows'
+        run: cargo test --release --locked --package heyfood-bin --test phase0_qualification --features native-credentials
+      - name: Enforce the optimized input and render budgets
+        if: runner.os != 'Windows'
+        run: cargo test --release --locked --package heyfood-bin --test phase0_qualification qualification_render_and_input_performance_budgets -- --ignored --exact --nocapture
+      - name: Enforce the optimized Windows input and render budgets
+        if: runner.os == 'Windows'
+        run: cargo test --release --locked --package heyfood-bin --test phase0_qualification --features native-credentials qualification_render_and_input_performance_budgets -- --ignored --exact --nocapture
+      - name: Prove release-profile panic restoration remains catchable
+        run: cargo test --release --locked --package heyfood-tui restores_before_returning_catchable_panic
+
+  dependency-security:
+    name: Cargo Audit and Cargo Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install the exact Cargo Audit policy tool
+        run: cargo install cargo-audit --locked --version 0.22.2
+      - name: Reject RustSec advisories and warnings
+        run: cargo audit --deny warnings
+      - name: Enforce dependency bans, licenses, and sources
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+
+  provenance-approval:
+    name: Independent provenance approval
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.require_provenance_approval }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - run: cargo xtask verify-assets-approved
+
+  native-credentials:
+    name: Native credentials / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install the Linux Secret Service fixture
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dbus-x11 gnome-keyring libdbus-1-dev pkg-config
+      - name: Lint the target-native credential backend
+        run: cargo clippy --locked --package heyfood-platform --all-targets --features native-credentials -- -D warnings
+      - name: Test the macOS and Windows native credential backend
+        if: runner.os != 'Linux'
+        run: cargo test --locked --package heyfood-platform --features native-credentials
+      - name: Test Linux Secret Service and the explicit headless fallback
+        if: runner.os == 'Linux'
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "\n" | gnome-keyring-daemon --unlock
+            cargo test --locked --package heyfood-platform --features native-credentials
+          '
+      - name: Test the killable credential broker boundary
+        run: cargo test --locked --package heyfood-bin --features native-credentials --test credential_broker
+
+  native-audio:
+    name: Native audio / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux native audio requires ALSA development packages not present on
+        # every supported runner image; qualify it only in an explicit job once
+        # that system dependency and real-device evidence are defined.
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Lint the target-native audio backend
+        run: cargo clippy --locked --package heyfood-voice --all-targets --features native-audio -- -D warnings
+      - name: Test the target-native audio backend
+        run: cargo test --locked --package heyfood-voice --features native-audio
