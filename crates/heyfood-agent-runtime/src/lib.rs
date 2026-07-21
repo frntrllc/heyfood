@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod registration;
 mod sse;
 
 use std::time::Duration;
@@ -15,6 +16,9 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
+pub use registration::{
+    DeviceAuthorization, RegistrationClient, RegistrationError, RegistrationOutcome,
+};
 pub use sse::SseEventStream;
 
 /// The package version shared by the native workspace.

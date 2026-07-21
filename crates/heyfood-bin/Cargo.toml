@@ -25,6 +25,7 @@ heyfood-platform = { version = "=0.4.0", path = "../heyfood-platform" }
 heyfood-tui = { version = "=0.4.0", path = "../heyfood-tui" }
 heyfood-voice = { version = "=0.4.0", path = "../heyfood-voice" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+tokio-util = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
 portable-pty.workspace = true

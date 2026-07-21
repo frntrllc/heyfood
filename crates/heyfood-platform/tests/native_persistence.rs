@@ -13,11 +13,15 @@ use heyfood_application::{ConfigCommit, ConfigMutation, ConfigPort};
 use heyfood_application::{CredentialCommit, CredentialPort};
 #[cfg(any(not(windows), feature = "native-credentials"))]
 use heyfood_core::{AccountId, CredentialVersion, SensitiveString, SessionCredentials};
+#[cfg(not(windows))]
+use heyfood_core::{AuthCredentialBundle, ChannelCredentials};
 use heyfood_core::{ClientConfig, CommitId, ConfigRevision, NetworkPolicy, ServiceUrl};
 #[cfg(not(windows))]
 use heyfood_core::{GenerationId, OperationId, SessionSnapshot};
 #[cfg(all(not(windows), feature = "native-credentials"))]
 use heyfood_platform::KeyringCredentialStore;
+#[cfg(not(windows))]
+use heyfood_platform::NativeAuthStore;
 #[cfg(all(windows, feature = "native-credentials"))]
 use heyfood_platform::WindowsCredentialStore;
 use heyfood_platform::{AtomicFile, FileCredentialStore, NativeConfigStore};
@@ -72,6 +76,49 @@ fn credentials(version: u64) -> SessionCredentials {
         4_102_444_800,
     )
     .unwrap()
+}
+
+#[cfg(not(windows))]
+fn auth_bundle() -> AuthCredentialBundle {
+    AuthCredentialBundle {
+        channel: ChannelCredentials::from_unix_expiry(
+            "hf_cid_heyfood_cli",
+            "heyfood-device-fixture",
+            SensitiveString::new("channel-access"),
+            SensitiveString::new("channel-refresh"),
+            4_102_444_800,
+            "account:link profile:read",
+        )
+        .unwrap(),
+        session: credentials(1),
+    }
+}
+
+#[test]
+#[cfg(not(windows))]
+fn complete_auth_bundle_is_atomic_owner_only_and_refuses_overwrite() {
+    let root = TempRoot::new("auth-bundle");
+    let store = NativeAuthStore::open(&root.0).unwrap();
+    let expected = auth_bundle();
+    store.initialize(&expected).unwrap();
+    assert_eq!(store.load().unwrap(), Some(expected));
+    assert_eq!(
+        store.initialize(&auth_bundle()).unwrap_err().code,
+        "auth_exists"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(root.0.join("auth.native"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
 }
 
 #[test]

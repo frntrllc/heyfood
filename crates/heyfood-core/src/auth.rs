@@ -7,6 +7,94 @@ use serde::{Deserialize, Deserializer, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+/// The identity methods the hosted authorization page may offer. Authentication
+/// remains browser-owned; the native client only validates advertised launch
+/// capability and never handles verification codes itself.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IdentityMethod {
+    Sms,
+    Email,
+    Apple,
+    Google,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistrationStatus {
+    Available,
+    Disabled,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileStatus {
+    Ready,
+    Missing,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SelfRegistrationCapability {
+    pub status: RegistrationStatus,
+    pub regions: Vec<String>,
+    pub identity_methods: Vec<IdentityMethod>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AuthorizationCapability {
+    pub loopback_pkce: bool,
+    pub device_code: bool,
+    pub identity_methods: Vec<IdentityMethod>,
+}
+
+/// Versioned public response from `GET /v1/auth/capabilities`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AuthCapabilities {
+    pub schema_version: u16,
+    pub self_registration: SelfRegistrationCapability,
+    pub authorization: AuthorizationCapability,
+    pub profile_readiness: bool,
+    #[serde(default)]
+    pub application_capabilities: std::collections::BTreeMap<String, String>,
+}
+
+impl AuthCapabilities {
+    /// Registration launch requires the production US surface, the device flow,
+    /// profile readiness, and both promised launch identity methods.
+    pub fn validate_native_registration_launch(&self) -> Result<(), &'static str> {
+        if self.schema_version != 1 {
+            return Err("unsupported authentication capability schema");
+        }
+        if self.self_registration.status != RegistrationStatus::Available {
+            return Err("self registration is not available");
+        }
+        if self.self_registration.regions.as_slice() != ["US"] {
+            return Err("self registration must advertise the US launch region");
+        }
+        if !self.authorization.device_code || !self.profile_readiness {
+            return Err("native registration dependencies are unavailable");
+        }
+        for method in [IdentityMethod::Sms, IdentityMethod::Email] {
+            if !self.self_registration.identity_methods.contains(&method)
+                || !self.authorization.identity_methods.contains(&method)
+            {
+                return Err("native registration requires both SMS and email identity methods");
+            }
+        }
+        if self
+            .self_registration
+            .identity_methods
+            .iter()
+            .any(|method| !self.authorization.identity_methods.contains(method))
+        {
+            return Err("registration identity methods exceed authorization capability");
+        }
+        Ok(())
+    }
+}
+
 /// A secret string that redacts both `Debug` and `Display` output.
 #[derive(Clone)]
 pub struct SensitiveString(SecretString);
@@ -111,6 +199,82 @@ pub struct SessionCredentials {
     pub refresh_token: SensitiveString,
     pub version: CredentialVersion,
     pub expires_at: OffsetDateTime,
+}
+
+/// Channel OAuth grant retained alongside the app session. The channel access
+/// token is required for profile readiness and session re-exchange; keeping the
+/// pair together prevents a successful registration from degrading after the
+/// first app-session access token expires.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChannelCredentials {
+    pub client_id: String,
+    pub device_id: String,
+    pub access_token: SensitiveString,
+    pub refresh_token: SensitiveString,
+    pub expires_at: OffsetDateTime,
+    pub scope: String,
+}
+
+impl ChannelCredentials {
+    pub fn from_unix_expiry(
+        client_id: impl Into<String>,
+        device_id: impl Into<String>,
+        access_token: SensitiveString,
+        refresh_token: SensitiveString,
+        expires_at_unix: i64,
+        scope: impl Into<String>,
+    ) -> Result<Self, &'static str> {
+        let client_id = client_id.into();
+        let device_id = device_id.into();
+        let scope = scope.into();
+        if client_id.is_empty() || client_id.len() > 128 || client_id.chars().any(char::is_control)
+        {
+            return Err("OAuth client ID is invalid");
+        }
+        if device_id.len() < 3
+            || device_id.len() > 255
+            || device_id.trim() != device_id
+            || device_id.chars().any(char::is_control)
+        {
+            return Err("device ID is invalid");
+        }
+        if access_token.expose_secret().is_empty() || refresh_token.expose_secret().is_empty() {
+            return Err("channel credentials are incomplete");
+        }
+        if scope.is_empty() || scope.len() > 4_096 || scope.chars().any(char::is_control) {
+            return Err("OAuth scope is invalid");
+        }
+        let expires_at = OffsetDateTime::from_unix_timestamp(expires_at_unix)
+            .map_err(|_| "channel credential expiry is outside the supported range")?;
+        Ok(Self {
+            client_id,
+            device_id,
+            access_token,
+            refresh_token,
+            expires_at,
+            scope,
+        })
+    }
+
+    #[must_use]
+    pub fn expires_at_unix(&self) -> i64 {
+        self.expires_at.unix_timestamp()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthCredentialBundle {
+    pub channel: ChannelCredentials,
+    pub session: SessionCredentials,
+}
+
+impl AuthCredentialBundle {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.channel.device_id.is_empty() {
+            return Err("authentication bundle device ID is missing");
+        }
+        Ok(())
+    }
 }
 
 impl SessionCredentials {

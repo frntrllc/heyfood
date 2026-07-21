@@ -7,7 +7,7 @@ use std::{fmt, io, time::Duration};
 use heyfood_tui::{Effect, ExitReason, RuntimeEvent, TuiError};
 use tokio::sync::mpsc;
 
-pub const QUALIFICATION_MESSAGE: &str = "The native interactive client is a Phase 0 qualification build and cannot start without validated native credentials and bootstrap state. Continue using the released Python client until cutover.";
+pub const QUALIFICATION_MESSAGE: &str = "The native interactive session cannot start in this build. Use a native one-shot command such as `heyfood register`; run `heyfood -h` for available commands.";
 pub const QUALIFIED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Runtime supervisor boundary used only after bootstrap has validated every
@@ -180,7 +180,8 @@ mod tests {
     #[test]
     fn qualification_message_is_fail_closed_and_does_not_advertise_a_spike_flag() {
         assert!(QUALIFICATION_MESSAGE.contains("cannot start"));
-        assert!(QUALIFICATION_MESSAGE.contains("released Python client"));
+        assert!(QUALIFICATION_MESSAGE.contains("heyfood register"));
+        assert!(!QUALIFICATION_MESSAGE.contains("Python"));
         assert!(!QUALIFICATION_MESSAGE.contains("--"));
     }
 
