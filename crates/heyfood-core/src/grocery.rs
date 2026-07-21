@@ -1,5 +1,5 @@
-//! Provider-neutral grocery semantics. Final backend wire DTOs remain gated on
-//! the deployed Grocery Phase-A contract freeze.
+//! Provider-neutral grocery semantics shared by the approved Phase 2 wire and
+//! application layers.
 
 use std::fmt;
 

@@ -1,6 +1,6 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v16 — Rust Phase 1 is closed with GO; the bounded Grocery Phase-A contract import is independently approved at exact SHA `47282aea7047b1f3bb0642fff9d09b106fa1bb0c`, while wire generation, Phase 2 implementation, and later Rust activation remain separately gated
+**Status:** Draft v17 — Rust Phase 1 and the bounded Grocery Phase-A import are closed with GO; PR #19 merged as `e8a143a9877f008b76a58e54f478a7acd83d4d00`, and Phase 2 wire/runtime/one-shot implementation is authorized while Phase 3, activation, publication, and product cutover remain gated
 **Baseline:** final unpublished Python `0.4.0` candidate at `73494a57468dac83b4904ce6c390e36926f5c6fe`; the last public Python release remains `0.3.2`
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`
@@ -32,12 +32,15 @@ hello.food. “Agent runtime” in this plan means the native client runtime aro
 the existing authenticated `/v1/agent/converse` SSE service. It does not mean
 embedding a local model, shell executor, coding agent, or plugin/tool runtime.
 
-This is an owner-directed big-bang replacement. The Python source remains in
-the development branch only long enough to export contracts and act as a test
-oracle. The completed cutover removes the Python implementation, packaging,
-and release workflows in the same reviewed change that installs the Rust
-workspace as the sole heyfood product. There is no supported split runtime,
-parallel public channel, or gradual command-by-command migration.
+This is an owner-directed big-bang **supported-product cutover**. Independently
+reviewed Rust phases may integrate into the repository before cutover, as
+Phase 1 did through PR #18 and the Grocery import did through PR #19. Those
+repository merges do not activate Rust, replace Python, publish an artifact, or
+change a public installation path. The completed cutover removes the Python
+implementation, packaging, and release workflows in the same reviewed change
+that installs the Rust workspace as the sole supported heyfood product. There
+is no supported split runtime, parallel public channel, or gradual public
+command-by-command migration.
 
 The Rust artifact is not released until it passes every parity, security,
 platform, installation, and end-to-end gate. Internal build artifacts may be
@@ -183,9 +186,10 @@ Phase 1 is closed with GO at product SHA
 `adf78438d55ac40e7e12c60fc7d4bd168da94a8e`. The team may execute the bounded
 Grocery contract import and validation authorized by PR #115. That bounded
 import is implemented, qualified, and independently approved at exact SHA
-`47282aea7047b1f3bb0642fff9d09b106fa1bb0c`. The team may prepare Phase 2
-design/backlog material, but it must not generate final Grocery wire DTOs, add
-REST/tool calls, or begin Phase 2 implementation. Grocery release
+`47282aea7047b1f3bb0642fff9d09b106fa1bb0c`. PR #19 merged the reviewed import
+as `e8a143a9877f008b76a58e54f478a7acd83d4d00`. Phase 2 is authorized to generate
+the final wire DTOs exclusively from that authority and implement the bounded
+runtime/one-shot scope below. Grocery release
 qualification remains blocked until the later Rust activation/qualification
 gate passes. Retailer-provider work remains ordered after Grocery Phase A and
 Security D2: B1 provider foundation, then B2 Kroger; provider OAuth credentials
@@ -1520,10 +1524,15 @@ Grocery provenance PR #115 is squash-merged as
 contract import and validation. The bounded import received independent
 specialized review with GO at exact SHA
 `47282aea7047b1f3bb0642fff9d09b106fa1bb0c` and tree
-`198850f2f70bc24acedf56c78e320752e778b0dd`. Phase 2 implementation remains on
-hold pending separate owner authorization; approved fixture import does not
-authorize wire DTO generation, REST/tool binding, or implementation of a later
-phase.
+`198850f2f70bc24acedf56c78e320752e778b0dd` and merged through PR #19 as
+`e8a143a9877f008b76a58e54f478a7acd83d4d00`. Phase 2 is now authorized for
+contract-derived wire DTOs, authenticated Reqwest/Rustls transport,
+capability-gated Grocery and H1/H2 surfaces, one-shot parity, least-privilege
+Grocery authorization, and non-destructive canaries. Phase 3 TUI work,
+Kroger/provider token types or storage, Grocery activation before canaries,
+net-new registration enablement, publication, and supported-product cutover
+remain prohibited. The Phase 2 PR remains draft until exact-product/evidence
+SHAs and independent review are complete.
 
 ### Phase 0 — Contracts and vertical Rust spike
 
