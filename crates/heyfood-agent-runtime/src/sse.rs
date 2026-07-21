@@ -20,6 +20,8 @@ pub struct SseEventStream {
     inactivity: Duration,
     parser: RawSseParser,
     normalized: VecDeque<AgentEvent>,
+    pending_terminal: Option<AgentEvent>,
+    done_received: bool,
 }
 
 impl SseEventStream {
@@ -34,6 +36,8 @@ impl SseEventStream {
             inactivity,
             parser: RawSseParser::default(),
             normalized: VecDeque::new(),
+            pending_terminal: None,
+            done_received: false,
         }
     }
 }
@@ -74,6 +78,10 @@ impl EventStream for SseEventStream {
                 };
                 let Some(chunk) = chunk else {
                     self.response.take();
+                    self.parser.finish()?;
+                    if let Some(event) = self.pending_terminal.take() {
+                        return Ok(Some(event));
+                    }
                     return Ok(None);
                 };
                 let raw_events = match self.parser.push(&chunk) {
@@ -84,10 +92,38 @@ impl EventStream for SseEventStream {
                     }
                 };
                 for raw in raw_events {
+                    if self.done_received {
+                        self.response.take();
+                        return Err(PortError::new(
+                            "sse_event_after_done",
+                            "event stream continued after its done marker",
+                        ));
+                    }
                     if consume_done_marker(&raw)? {
+                        let Some(event) = self.pending_terminal.take() else {
+                            self.response.take();
+                            return Err(PortError::new(
+                                "sse_done_without_terminal",
+                                "done marker arrived without a terminal result or error",
+                            ));
+                        };
+                        self.normalized.push_back(event);
+                        self.done_received = true;
                         continue;
                     }
-                    self.normalized.push_back(normalize(raw)?);
+                    let event = normalize(raw)?;
+                    if self.pending_terminal.is_some() {
+                        self.response.take();
+                        return Err(PortError::new(
+                            "sse_event_after_terminal",
+                            "event arrived after a terminal result or error",
+                        ));
+                    }
+                    if event.is_terminal() {
+                        self.pending_terminal = Some(event);
+                    } else {
+                        self.normalized.push_back(event);
+                    }
                 }
             }
         })
@@ -208,6 +244,21 @@ impl RawSseParser {
             ));
         }
         Ok(events)
+    }
+
+    fn finish(&self) -> Result<(), PortError> {
+        if self.bytes.is_empty()
+            && self.event_type.is_empty()
+            && self.data.is_empty()
+            && self.data_lines == 0
+        {
+            Ok(())
+        } else {
+            Err(PortError::new(
+                "sse_truncated",
+                "event stream ended with an incomplete event",
+            ))
+        }
     }
 }
 
@@ -511,6 +562,20 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!(error.code, "sse_event");
+    }
+
+    #[test]
+    fn clean_eof_is_distinct_from_a_truncated_trailer() {
+        let mut clean = RawSseParser::default();
+        let events = clean
+            .push(b"event: result\ndata: {\"message\":\"complete\"}\n\n")
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        clean.finish().unwrap();
+
+        let mut truncated = RawSseParser::default();
+        truncated.push(b"event: done\ndata: {").unwrap();
+        assert_eq!(truncated.finish().unwrap_err().code, "sse_truncated");
     }
 
     #[test]
