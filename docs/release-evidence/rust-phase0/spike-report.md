@@ -4,7 +4,7 @@
 **Exact code lineage measured:** `08cecb3a00bff6bbd670faf066105205f6e93b0b`
 **Status:** local and exact hosted three-OS remediation evidence is green;
 asset, Grok, and deterministic grocery C3/C4 provenance are specialist-approved;
-the specialized Rust reviewer issued overall Phase 0 GO at `0ad16fc` with no
+the specialized Rust reviewer issued overall Phase 0 GO at `844aa0b` with no
 findings. Cutover and Phase 1 remain unauthorized by this report.
 
 ## What the spike now proves
@@ -134,9 +134,10 @@ The authoritative machine-readable inventory has zero classified requirement
 blockers. The specialized Rust reviewer approved both first-party asset
 provenance records and the Grok pattern-only ledger at `d738f8c`, the
 deterministic grocery C3/C4 import/provenance remediation at `6157e1c`, and the
-assembled final evidence at `0ad16fc`. Exact hosted run `29790409403` passed 35
+assembled merged-but-not-deployed evidence at `844aa0b`. Exact hosted run
+`29791058417` passed 35
 Rust jobs with only the intentionally disabled approval job skipped; companion
-run `29790409401` passed all 14 jobs.
+run `29791058481` passed all 14 jobs.
 
 The grocery correction/deployment sequence, Kroger B1/B2, Security D2, final
 wire DTOs, signed installers, real-hardware RCs, and all 675 migration-ledger
