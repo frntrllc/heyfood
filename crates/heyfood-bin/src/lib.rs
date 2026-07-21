@@ -5,6 +5,7 @@
 use std::{fmt, io, time::Duration};
 
 use heyfood_agent_runtime::{GroceryExport, HttpService};
+use heyfood_application::{EnsureSession, EnsureSessionOutcome};
 use heyfood_cli::{
     Command, GroceryCommand, HealthCommand, OutputMode, render_grocery_list,
     render_grocery_proposal, render_health_context, render_json,
@@ -65,6 +66,39 @@ pub struct OneShotExecutor<'a> {
     service: &'a HttpService,
     credentials: &'a SessionCredentials,
     output_mode: OutputMode,
+}
+
+/// Refresh and durably reconcile the session before entering any authenticated
+/// one-shot command. A refresh cancellation observed before dispatch never
+/// reaches the command; accepted rotations are committed by `EnsureSession`
+/// before this function constructs the executor.
+pub async fn execute_qualified_one_shot(
+    service: &HttpService,
+    ensure_session: &EnsureSession,
+    snapshot: heyfood_core::SessionSnapshot,
+    output_mode: OutputMode,
+    command: Command,
+    stdin: &[u8],
+    cancellation: CancellationToken,
+) -> Result<String, OneShotError> {
+    let credentials = match ensure_session
+        .execute(snapshot, cancellation.child_token())
+        .await
+        .map_err(|error| {
+            OneShotError::new("session_refresh", terminal_safe_text(&error.to_string()))
+        })? {
+        EnsureSessionOutcome::Current(credentials)
+        | EnsureSessionOutcome::Refreshed(credentials) => credentials,
+        EnsureSessionOutcome::CancelledBeforeDispatch => {
+            return Err(OneShotError::new(
+                "session_cancelled_before_dispatch",
+                "session refresh was cancelled before dispatch",
+            ));
+        }
+    };
+    OneShotExecutor::new(service, &credentials, output_mode)
+        .execute(command, stdin, cancellation)
+        .await
 }
 
 impl<'a> OneShotExecutor<'a> {

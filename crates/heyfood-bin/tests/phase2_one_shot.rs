@@ -1,11 +1,16 @@
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use clap::Parser;
 use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
-use heyfood_bin::OneShotExecutor;
+use heyfood_application::{
+    BoxFuture, ClockPort, CredentialCommit, CredentialPort, EnsureSession, PortError,
+};
+use heyfood_bin::{OneShotExecutor, execute_qualified_one_shot};
 use heyfood_cli::{CommandLine, OutputMode};
 use heyfood_core::{
     AccountId, CredentialVersion, NetworkPolicy, SensitiveString, ServiceUrl, SessionCredentials,
+    SessionSnapshot,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -242,4 +247,121 @@ async fn unported_registration_topology_is_fail_closed_without_network() {
             .await
             .is_err()
     );
+}
+
+#[derive(Default)]
+struct MemoryCredentials {
+    commits: Mutex<Vec<CredentialCommit>>,
+}
+
+impl CredentialPort for MemoryCredentials {
+    fn load(&self) -> BoxFuture<'_, Result<Option<SessionCredentials>, PortError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn commit(&self, commit: CredentialCommit) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async move {
+            self.commits.lock().unwrap().push(commit);
+            Ok(())
+        })
+    }
+
+    fn mark_reconciliation_required(
+        &self,
+        _commit_id: heyfood_core::CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn clear_reconciliation_required(
+        &self,
+        _commit_id: heyfood_core::CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+struct FixedClock;
+
+impl ClockPort for FixedClock {
+    fn unix_timestamp(&self) -> i64 {
+        4_102_444_800
+    }
+}
+
+#[tokio::test]
+async fn qualified_one_shot_commits_rotation_before_using_the_new_access_token() {
+    let (listener, service) = fixture_service().await;
+    let service = Arc::new(service);
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let refresh = read_request(&mut socket).await;
+        assert!(refresh.starts_with("POST /v1/auth/session/refresh "));
+        respond(
+            &mut socket,
+            json!({
+                "user_id": "one-shot-account",
+                "access_token": "access-2",
+                "refresh_token": "refresh-2",
+                "access_expires_at": "2099-01-01T00:00:00Z"
+            }),
+        )
+        .await;
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _ = read_request(&mut socket).await;
+        respond_capabilities(&mut socket).await;
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let list = read_request(&mut socket).await;
+        assert!(list.starts_with("GET /v1/grocery/list "));
+        assert!(
+            list.to_ascii_lowercase()
+                .contains("authorization: bearer access-2")
+        );
+        respond(
+            &mut socket,
+            json!({
+                "id": "00000000-0000-4000-8000-000000000123",
+                "title": "Grocery List",
+                "state": "active",
+                "version": 4,
+                "items": [],
+                "created_at": "2026-07-21T12:00:00Z",
+                "updated_at": "2026-07-21T12:00:00Z"
+            }),
+        )
+        .await;
+    });
+
+    let store = Arc::new(MemoryCredentials::default());
+    let ensure = EnsureSession::new(service.clone(), store.clone(), Arc::new(FixedClock));
+    let parsed = CommandLine::try_parse_from(["heyfood", "--json", "grocery", "list"]).unwrap();
+    let output = execute_qualified_one_shot(
+        service.as_ref(),
+        &ensure,
+        SessionSnapshot {
+            credentials: credentials(),
+            reconciliation_required: false,
+        },
+        OutputMode::Json,
+        parsed.command.unwrap(),
+        &[],
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&output).unwrap()["version"],
+        4
+    );
+    assert_eq!(store.commits.lock().unwrap().len(), 1);
+    assert_eq!(
+        store.commits.lock().unwrap()[0]
+            .credentials
+            .access_token
+            .expose_secret(),
+        "access-2"
+    );
+    server.await.unwrap();
 }
