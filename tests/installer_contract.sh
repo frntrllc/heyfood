@@ -180,6 +180,8 @@ test_exact_native_install() {
   [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.4.0" ]] ||
     fail "installed executable did not report the exact release version"
   assert_contains "$STDOUT_LOG" "Installed heyfood 0.4.0 at $BIN_DIR/heyfood"
+  assert_contains "$STDOUT_LOG" "Connect an account: heyfood register"
+  assert_not_contains "$STDOUT_LOG" "heyfood login"
   assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.4.0/SHA256SUMS"
   assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.4.0/heyfood-v0.4.0-$(host_target).tar.gz"
 }
