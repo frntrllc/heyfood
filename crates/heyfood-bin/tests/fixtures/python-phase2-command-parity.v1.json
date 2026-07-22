@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "client_version": "0.3.2",
+    "repository_commit": "73494a57468dac83b4904ce6c390e36926f5c6fe",
+    "sources": [
+      "src/heyfood_cli/commands/agent.py",
+      "src/heyfood_cli/validation.py",
+      "src/heyfood_cli/render.py"
+    ]
+  },
+  "log": {
+    "meal_input": "  oatmeal and berries  ",
+    "meal_type": "breakfast",
+    "query": "Log this meal: oatmeal and berries. Meal type: breakfast."
+  },
+  "item": {
+    "item_input": "  veggie burger  ",
+    "restaurant_input": "  Cafe One  ",
+    "request": {
+      "item_name": "veggie burger",
+      "restaurant_name": "Cafe One"
+    },
+    "human_lines": [
+      "veggie burger  compatible",
+      "This item fits the profile.",
+      "Confidence: 0.95",
+      "Applies to: Sarah"
+    ]
+  },
+  "stream": {
+    "partial_text": "Try soup.",
+    "choices": ["First", "Second"],
+    "allow_multiple": false,
+    "human_lines": ["Try soup.", "Choose one:", "1. First", "2. Second"]
+  },
+  "limits": {
+    "query_characters": 500,
+    "item_characters": 200,
+    "restaurant_characters": 200
+  }
+}

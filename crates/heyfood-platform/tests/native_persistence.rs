@@ -209,12 +209,36 @@ fn account_bound_load_blocks_cross_account_state_with_a_durable_marker() {
 
 #[test]
 #[cfg(not(windows))]
-fn account_bound_load_recovers_a_legacy_missing_session_before_use() {
+fn account_bound_load_never_restores_a_missing_session_from_the_stale_auth_mirror() {
     let root = TempRoot::new("account-bound-legacy");
     let auth_store = NativeAuthStore::open(&root.0).unwrap();
     let session_store = FileCredentialStore::open(&root.0).unwrap();
     let expected = auth_bundle();
     auth_store.initialize(&expected).unwrap();
+
+    let error = auth_store.load_account_bound(&session_store).unwrap_err();
+    assert_eq!(error.code, "credentials_missing");
+    assert!(error.outcome_uncertain);
+    assert!(block_on(session_store.load()).unwrap().is_none());
+    assert_eq!(
+        std::fs::read(root.0.join("auth.reconciliation")).unwrap(),
+        b"account_binding_missing_session\n"
+    );
+}
+
+#[test]
+#[cfg(not(windows))]
+fn account_bound_load_completes_only_a_marked_initialization_transaction() {
+    let root = TempRoot::new("account-bound-interrupted-initialize");
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let expected = auth_bundle();
+    auth_store.initialize(&expected).unwrap();
+    std::fs::write(
+        root.0.join("auth.reconciliation"),
+        b"account_binding_pending\n",
+    )
+    .unwrap();
 
     assert_eq!(
         auth_store.load_account_bound(&session_store).unwrap(),
@@ -225,6 +249,44 @@ fn account_bound_load_recovers_a_legacy_missing_session_before_use() {
         Some(expected.session)
     );
     assert!(!root.0.join("auth.reconciliation").exists());
+}
+
+#[test]
+#[cfg(not(windows))]
+fn account_bound_load_keeps_a_marker_when_interrupted_before_the_first_store_write() {
+    let root = TempRoot::new("account-bound-before-auth-write");
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    std::fs::write(
+        root.0.join("auth.reconciliation"),
+        b"account_binding_pending\n",
+    )
+    .unwrap();
+
+    let error = auth_store.load_account_bound(&session_store).unwrap_err();
+    assert_eq!(error.code, "auth_initialization_incomplete");
+    assert!(error.outcome_uncertain);
+    assert_eq!(
+        std::fs::read(root.0.join("auth.reconciliation")).unwrap(),
+        b"account_binding_pending\n"
+    );
+}
+
+#[test]
+#[cfg(not(windows))]
+fn account_bound_load_never_promotes_an_unjournaled_session_without_authorization() {
+    let root = TempRoot::new("account-bound-session-only");
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    session_store.initialize(&auth_bundle().session).unwrap();
+
+    let error = auth_store.load_account_bound(&session_store).unwrap_err();
+    assert_eq!(error.code, "authorization_account_conflict");
+    assert!(error.outcome_uncertain);
+    assert_eq!(
+        std::fs::read(root.0.join("auth.reconciliation")).unwrap(),
+        b"account_binding_conflict\n"
+    );
 }
 
 #[test]

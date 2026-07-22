@@ -140,7 +140,12 @@ fn merge_stream_content(
         let mut choice_document = Map::new();
         choice_document.insert(
             "choices".into(),
-            serde_json::to_value(choices).unwrap_or_else(|_| Value::Array(Vec::new())),
+            Value::Array(
+                choices
+                    .into_iter()
+                    .map(|choice| Value::String(choice.label))
+                    .collect(),
+            ),
         );
         choice_document.insert("allow_multiple".into(), Value::Bool(allow_multiple));
         fields.insert("choices".into(), Value::Object(choice_document));

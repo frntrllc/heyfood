@@ -810,11 +810,141 @@ pub fn render_agent_result(document: &Value, mode: OutputMode) -> String {
     if mode == OutputMode::Json {
         return render_json(document).expect("agent result is serializable JSON");
     }
-    if let Some(message) = document.get("message").and_then(Value::as_str) {
-        return format!("{}\n", terminal_safe_text(message));
+    let mut output = String::new();
+    if let Some(message) = ["message", "text", "response"]
+        .into_iter()
+        .find_map(|key| document.get(key).and_then(Value::as_str))
+    {
+        let _ = writeln!(output, "{}", terminal_safe_text(message));
     }
-    let encoded = serde_json::to_string(document).unwrap_or_else(|_| "{}".into());
-    format!("{}\n", terminal_safe_text(&encoded))
+    if let Some(choice_document) = document.get("choices").and_then(Value::as_object)
+        && let Some(choices) = choice_document.get("choices").and_then(Value::as_array)
+        && !choices.is_empty()
+    {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        let allow_multiple = choice_document
+            .get("allow_multiple")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let _ = writeln!(
+            output,
+            "{}",
+            if allow_multiple {
+                "Choose one or more:"
+            } else {
+                "Choose one:"
+            }
+        );
+        for (index, choice) in choices.iter().filter_map(Value::as_str).enumerate() {
+            let _ = writeln!(output, "{}. {}", index + 1, terminal_safe_text(choice));
+        }
+    }
+    if output.is_empty() {
+        let encoded = serde_json::to_string(document).unwrap_or_else(|_| "{}".into());
+        let _ = writeln!(output, "{}", terminal_safe_text(&encoded));
+    }
+    output
+}
+
+#[must_use]
+pub fn render_item_result(document: &Value, mode: OutputMode) -> String {
+    if mode == OutputMode::Json {
+        return render_json(document).expect("item result is serializable JSON");
+    }
+    let item = document
+        .get("item_name")
+        .and_then(Value::as_str)
+        .unwrap_or("Item");
+    let status = document
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .replace('_', " ");
+    let summary = document
+        .get("summary")
+        .and_then(Value::as_str)
+        .unwrap_or("No summary returned.");
+    let mut output = format!(
+        "{}  {}\n{}\n",
+        terminal_safe_text(item),
+        terminal_safe_text(&status),
+        terminal_safe_text(summary)
+    );
+    if let Some(confidence) = document.get("confidence").and_then(Value::as_f64) {
+        let _ = writeln!(output, "Confidence: {confidence:.2}");
+    }
+    if let Some(member) = [
+        "member_name",
+        "member_label",
+        "member_id",
+        "affected_member",
+    ]
+    .into_iter()
+    .find_map(|key| document.get(key).and_then(Value::as_str))
+    {
+        let _ = writeln!(output, "Applies to: {}", terminal_safe_text(member));
+    }
+    append_item_conflicts(&mut output, document);
+    for (heading, keys) in [
+        ("Ask staff", &["questions_to_ask"][..]),
+        ("Uncertainties", &["uncertainties", "uncertainty"][..]),
+        (
+            "Possible modifications",
+            &["modifications", "suggested_modifications"][..],
+        ),
+        ("Alternatives", &["alternatives"][..]),
+    ] {
+        if let Some(values) = keys.iter().find_map(|key| {
+            document
+                .get(*key)
+                .and_then(Value::as_array)
+                .filter(|values| !values.is_empty())
+        }) {
+            let _ = writeln!(output, "\n{heading}");
+            for value in values.iter().filter_map(Value::as_str) {
+                let _ = writeln!(output, "- {}", terminal_safe_text(value));
+            }
+        }
+    }
+    if let Some(provenance) = ["provenance", "source"]
+        .into_iter()
+        .find_map(|key| document.get(key).and_then(Value::as_str))
+    {
+        let _ = writeln!(output, "Source: {}", terminal_safe_text(provenance));
+    }
+    if let Some(freshness) = ["menu_freshness", "freshness"]
+        .into_iter()
+        .find_map(|key| document.get(key).and_then(Value::as_str))
+    {
+        let _ = writeln!(output, "Freshness: {}", terminal_safe_text(freshness));
+    }
+    output
+}
+
+fn append_item_conflicts(output: &mut String, document: &Value) {
+    let Some(conflicts) = document
+        .get("conflicts")
+        .and_then(Value::as_array)
+        .filter(|values| !values.is_empty())
+    else {
+        return;
+    };
+    let _ = writeln!(output, "\nConflicts");
+    for conflict in conflicts.iter().filter_map(Value::as_object) {
+        let ingredient = conflict
+            .get("ingredient")
+            .and_then(Value::as_str)
+            .unwrap_or("Unknown ingredient");
+        let reason = conflict.get("reason").and_then(Value::as_str).unwrap_or("");
+        let _ = writeln!(
+            output,
+            "{}: {}",
+            terminal_safe_text(ingredient),
+            terminal_safe_text(reason)
+        );
+    }
 }
 
 pub fn generate_completion(shell: CompletionShell) -> Vec<u8> {
@@ -930,5 +1060,44 @@ mod registration_tests {
         .unwrap();
         let value: Value = serde_json::from_str(&rendered).unwrap();
         assert_eq!(value["error"]["outcome_uncertain"], true);
+    }
+
+    #[test]
+    fn agent_human_output_preserves_partial_text_and_choices() {
+        let rendered = render_agent_result(
+            &json!({
+                "text": "Try soup.",
+                "choices": {
+                    "choices": ["First", "Second"],
+                    "allow_multiple": false
+                }
+            }),
+            OutputMode::HumanPlain,
+        );
+        for line in ["Try soup.", "Choose one:", "1. First", "2. Second"] {
+            assert!(rendered.lines().any(|rendered| rendered == line));
+        }
+    }
+
+    #[test]
+    fn item_human_output_uses_the_dedicated_python_compatible_shape() {
+        let rendered = render_item_result(
+            &json!({
+                "item_name": "veggie burger",
+                "status": "compatible",
+                "summary": "This item fits the profile.",
+                "confidence": 0.95,
+                "member_name": "Sarah"
+            }),
+            OutputMode::HumanPlain,
+        );
+        for line in [
+            "veggie burger  compatible",
+            "This item fits the profile.",
+            "Confidence: 0.95",
+            "Applies to: Sarah",
+        ] {
+            assert!(rendered.lines().any(|rendered| rendered == line));
+        }
     }
 }

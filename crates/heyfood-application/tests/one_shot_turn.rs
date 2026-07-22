@@ -190,7 +190,7 @@ async fn partials_and_choices_are_merged_into_the_terminal_document() {
 
     assert_eq!(result.document["text"], "hello world");
     assert_eq!(result.document["choices"]["allow_multiple"], true);
-    assert_eq!(result.document["choices"]["choices"][0]["label"], "One");
+    assert_eq!(result.document["choices"]["choices"][0], "One");
 }
 
 #[tokio::test]
@@ -212,5 +212,5 @@ async fn terminal_text_wins_but_streamed_choices_are_preserved() {
 
     assert_eq!(result.document["message"], "final");
     assert!(result.document.get("text").is_none());
-    assert_eq!(result.document["choices"]["choices"][0]["value"], "1");
+    assert_eq!(result.document["choices"]["choices"][0], "First");
 }

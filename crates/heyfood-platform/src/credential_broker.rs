@@ -5,14 +5,15 @@ use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use heyfood_application::{BoxFuture, CredentialCommit, CredentialPort, PortError};
 use heyfood_core::{CommitId, CredentialVersion, SessionCredentials};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
-use crate::persistence::CredentialState;
+use crate::AuthorizationSessionStore;
+use crate::persistence::{AuthorizationSessionStage, CredentialState};
 
 const BROKER_MODE: &str = "__heyfood_credential_broker";
 const MAX_BROKER_DOCUMENT_BYTES: usize = 16 * 1024;
@@ -79,6 +80,103 @@ impl CredentialBrokerStore {
             .spawn()
             .map_err(|error| PortError::new("credential_broker_spawn", error.to_string()))?;
         run_bounded_child(child, input, self.deadline, outcome_uncertain).await
+    }
+
+    /// Synchronous bounded request used by the cross-store authorization
+    /// transaction. The native keyring call still happens only in the broker
+    /// child; this process waits for at most the configured deadline and then
+    /// kills and reaps the child.
+    fn request_blocking(
+        &self,
+        action: &'static str,
+        input: Vec<u8>,
+        outcome_uncertain: bool,
+    ) -> Result<Vec<u8>, PortError> {
+        if input.len() > MAX_BROKER_DOCUMENT_BYTES {
+            return Err(PortError::new(
+                "credential_broker_size",
+                "credential broker input exceeds its limit",
+            ));
+        }
+        let mut child = std::process::Command::new(&self.executable)
+            .arg(BROKER_MODE)
+            .arg(action)
+            .arg(&self.root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| PortError::new("credential_broker_spawn", error.to_string()))?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| PortError::new("credential_broker_pipe", "broker stdin is missing"))?;
+        stdin
+            .write_all(&input)
+            .map_err(|error| PortError::new("credential_broker_pipe", error.to_string()))?;
+        drop(stdin);
+
+        let started = Instant::now();
+        let status = loop {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|error| PortError::new("credential_broker_wait", error.to_string()))?
+            {
+                break status;
+            }
+            if started.elapsed() >= self.deadline {
+                let _ = child.kill();
+                child.wait().map_err(|_| {
+                    broker_error(
+                        outcome_uncertain,
+                        "credential_broker_reap",
+                        "native credential broker could not be terminated",
+                    )
+                })?;
+                return Err(broker_error(
+                    outcome_uncertain,
+                    "credential_broker_timeout",
+                    "native credential operation exceeded its deadline",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let mut output = Vec::new();
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| PortError::new("credential_broker_pipe", "broker stdout is missing"))?
+            .take((MAX_BROKER_DOCUMENT_BYTES + 1) as u64)
+            .read_to_end(&mut output)
+            .map_err(|error| PortError::new("credential_broker_pipe", error.to_string()))?;
+        if !status.success() {
+            return Err(broker_error(
+                outcome_uncertain,
+                "credential_broker_failed",
+                "native credential operation failed",
+            ));
+        }
+        if output.len() > MAX_BROKER_DOCUMENT_BYTES {
+            return Err(PortError::new(
+                "credential_broker_size",
+                "credential broker output exceeds its limit",
+            ));
+        }
+        Ok(output)
+    }
+
+    pub fn reconciliation_required(&self) -> Result<bool, PortError> {
+        match self
+            .request_blocking("reconciliation", Vec::new(), false)?
+            .as_slice()
+        {
+            b"0\n" => Ok(false),
+            b"1\n" => Ok(true),
+            _ => Err(PortError::new(
+                "credential_broker_response",
+                "native credential broker returned an invalid reconciliation status",
+            )),
+        }
     }
 }
 
@@ -220,6 +318,90 @@ impl CredentialPort for CredentialBrokerStore {
     }
 }
 
+impl AuthorizationSessionStore for CredentialBrokerStore {
+    fn initialize_authorized_session(
+        &self,
+        credentials: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        self.request_blocking(
+            "initialize",
+            CredentialState::new(credentials.clone()).encode(),
+            true,
+        )
+        .map(|_| ())
+    }
+
+    fn load_authorized_session(&self) -> Result<Option<SessionCredentials>, PortError> {
+        let output = self.request_blocking("load", Vec::new(), false)?;
+        if output.is_empty() {
+            Ok(None)
+        } else {
+            CredentialState::decode(&output).map(|state| Some(state.credentials))
+        }
+    }
+
+    fn replace_authorized_session(
+        &self,
+        credentials: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        self.request_blocking(
+            "replace",
+            CredentialState::new(credentials.clone()).encode(),
+            true,
+        )
+        .map(|_| ())
+    }
+
+    fn stage_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        self.request_blocking(
+            "stage",
+            AuthorizationSessionStage {
+                client_transaction_id: client_transaction_id.to_owned(),
+                previous: previous.clone(),
+                replacement: replacement.clone(),
+            }
+            .encode(),
+            true,
+        )
+        .map(|_| ())
+    }
+
+    fn verify_staged_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        self.request_blocking(
+            "verify-stage",
+            AuthorizationSessionStage {
+                client_transaction_id: client_transaction_id.to_owned(),
+                previous: previous.clone(),
+                replacement: replacement.clone(),
+            }
+            .encode(),
+            false,
+        )
+        .map(|_| ())
+    }
+
+    fn clear_staged_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        expected_replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        let mut input = format!("client_transaction={client_transaction_id}\n").into_bytes();
+        input.extend_from_slice(&CredentialState::new(expected_replacement.clone()).encode());
+        self.request_blocking("clear-stage", input, true)
+            .map(|_| ())
+    }
+}
+
 /// Handle the broker mode before any terminal/tracing initialization. Returns
 /// `None` for every ordinary invocation.
 pub fn run_credential_broker_if_requested() -> Option<ExitCode> {
@@ -320,6 +502,40 @@ fn run_broker_action(action: &str, root: &Path) -> Result<Vec<u8>, PortError> {
             store.initialize(&CredentialState::decode(&input)?.credentials)?;
             Ok(Vec::new())
         }
+        "replace" => {
+            store.replace_authorized_session(&CredentialState::decode(&input)?.credentials)?;
+            Ok(Vec::new())
+        }
+        "stage" => {
+            let stage = AuthorizationSessionStage::decode(&input)?;
+            store.stage_authorized_session(
+                &stage.client_transaction_id,
+                &stage.previous,
+                &stage.replacement,
+            )?;
+            Ok(Vec::new())
+        }
+        "verify-stage" => {
+            let stage = AuthorizationSessionStage::decode(&input)?;
+            store.verify_staged_authorized_session(
+                &stage.client_transaction_id,
+                &stage.previous,
+                &stage.replacement,
+            )?;
+            Ok(Vec::new())
+        }
+        "clear-stage" => {
+            store.clear_staged_authorized_session(
+                required_field(&input, "client_transaction")?,
+                &CredentialState::decode(&input)?.credentials,
+            )?;
+            Ok(Vec::new())
+        }
+        "reconciliation" if input.is_empty() => Ok(if store.reconciliation_required()? {
+            b"1\n".to_vec()
+        } else {
+            b"0\n".to_vec()
+        }),
         "commit" => {
             let expected = required_field(&input, "expected")?
                 .parse::<u64>()

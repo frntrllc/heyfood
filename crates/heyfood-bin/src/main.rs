@@ -5,6 +5,8 @@
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
+#[cfg(all(not(windows), feature = "native-credentials"))]
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use heyfood_agent_runtime::{
@@ -30,15 +32,15 @@ use heyfood_platform::FileCredentialStore as NativeSessionStore;
 use heyfood_platform::WindowsCredentialStore as NativeSessionStore;
 use heyfood_platform::{
     AuthorizationReplacementJournal, AuthorizationReplacementPhase, NativeAuthStore, NativeBrowser,
-    NativeClock, NativePaths,
+    NativeClock, NativePaths, PythonStateImporter,
 };
 #[cfg(all(not(windows), feature = "native-credentials"))]
-use heyfood_platform::{FileCredentialStore, KeyringCredentialStore};
+use heyfood_platform::{CredentialBrokerStore, FileCredentialStore};
 use tokio_util::sync::CancellationToken;
 
 #[cfg(all(not(windows), feature = "native-credentials"))]
 enum NativeSessionStore {
-    Platform(KeyringCredentialStore),
+    Platform(CredentialBrokerStore),
     OwnerOnlyFile(FileCredentialStore),
 }
 
@@ -53,7 +55,9 @@ impl NativeSessionStore {
                 );
                 FileCredentialStore::open(root).map(Self::OwnerOnlyFile)
             }
-            Ok("native") => KeyringCredentialStore::open(root).map(Self::Platform),
+            Ok("native") => {
+                CredentialBrokerStore::open(root, Duration::from_secs(15)).map(Self::Platform)
+            }
             Err(std::env::VarError::NotPresent) => {
                 let legacy = FileCredentialStore::open(root)?;
                 let legacy_state_exists = match legacy.load_authorized_session() {
@@ -66,7 +70,7 @@ impl NativeSessionStore {
                     );
                     Ok(Self::OwnerOnlyFile(legacy))
                 } else {
-                    KeyringCredentialStore::open(root).map(Self::Platform)
+                    CredentialBrokerStore::open(root, Duration::from_secs(15)).map(Self::Platform)
                 }
             }
             Ok(_) | Err(std::env::VarError::NotUnicode(_)) => Err(PortError::new(
@@ -203,6 +207,18 @@ async fn main() -> ExitCode {
     #[cfg(feature = "native-credentials")]
     if let Some(outcome) = heyfood_platform::run_credential_broker_if_requested() {
         return outcome;
+    }
+    #[cfg(all(debug_assertions, not(windows), feature = "native-credentials"))]
+    if std::env::var_os("HEYFOOD_TEST_DELETE_NATIVE_CREDENTIALS").as_deref()
+        == Some(std::ffi::OsStr::new("1"))
+    {
+        let result = NativePaths::discover().and_then(|paths| {
+            CredentialBrokerStore::open(paths.config_dir(), Duration::from_secs(15))
+        });
+        return match result {
+            Ok(store) if store.delete().await.is_ok() => ExitCode::SUCCESS,
+            Ok(_) | Err(_) => ExitCode::FAILURE,
+        };
     }
 
     let cli = Cli::parse_env();
@@ -411,6 +427,7 @@ async fn one_shot_inner(
             )
         })?;
     let credentials = auth.session.clone();
+    let imported_state = load_selector_state(&paths, &command)?;
     let reconciliation_required = credential_store
         .reconciliation_required()
         .map_err(heyfood_bin::OneShotError::from)?;
@@ -433,7 +450,7 @@ async fn one_shot_inner(
     let ensure_session =
         EnsureSession::new(service.clone(), credential_store, Arc::new(NativeClock));
     let stdin = read_command_stdin(&command)?;
-    heyfood_bin::execute_qualified_one_shot(
+    heyfood_bin::execute_qualified_one_shot_with_state(
         service.as_ref(),
         &ensure_session,
         SessionSnapshot {
@@ -444,8 +461,30 @@ async fn one_shot_inner(
         command,
         &stdin,
         cancellation,
+        imported_state.as_ref(),
     )
     .await
+}
+
+fn load_selector_state(
+    paths: &NativePaths,
+    command: &Command,
+) -> Result<Option<heyfood_core::ImportedPythonState>, heyfood_bin::OneShotError> {
+    let required = matches!(
+        command,
+        Command::Log(heyfood_cli::LogArgs {
+            checking_for: Some(_),
+            ..
+        }) | Command::Item(heyfood_cli::ItemArgs { at: Some(_), .. })
+    );
+    if !required {
+        return Ok(None);
+    }
+    let importer = PythonStateImporter::discover(paths).map_err(heyfood_bin::OneShotError::from)?;
+    importer.import().map_err(heyfood_bin::OneShotError::from)?;
+    importer
+        .load_state()
+        .map_err(heyfood_bin::OneShotError::from)
 }
 
 fn registration_to_one_shot(error: RegistrationError) -> heyfood_bin::OneShotError {

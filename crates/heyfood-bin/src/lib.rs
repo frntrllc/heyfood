@@ -12,14 +12,16 @@ use heyfood_application::{
 use heyfood_cli::{
     AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, OutputMode,
     render_agent_result, render_grocery_list, render_grocery_proposal, render_health_context,
-    render_json,
+    render_item_result, render_json,
 };
 use heyfood_core::{
     AddItemsRequestWire, GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId,
-    GroceryItemInputWire, GroceryListVersion, GroceryMutationConfirmRequestWire, OperationId,
-    RemoveItemsRequestWire, SessionCredentials, UpdateItemStateRequestWire, terminal_safe_text,
+    GroceryItemInputWire, GroceryListVersion, GroceryMutationConfirmRequestWire,
+    ImportedPythonState, OperationId, RemoveItemsRequestWire, SessionCredentials,
+    UpdateItemStateRequestWire, terminal_safe_text,
 };
 use heyfood_tui::{Effect, ExitReason, RuntimeEvent, TuiError};
+use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -91,6 +93,7 @@ pub struct OneShotExecutor<'a> {
     service: &'a HttpService,
     credentials: &'a SessionCredentials,
     output_mode: OutputMode,
+    imported_state: Option<&'a ImportedPythonState>,
 }
 
 /// Refresh and durably reconcile the session before entering any authenticated
@@ -105,6 +108,30 @@ pub async fn execute_qualified_one_shot(
     command: Command,
     stdin: &[u8],
     cancellation: CancellationToken,
+) -> Result<String, OneShotError> {
+    execute_qualified_one_shot_with_state(
+        service,
+        ensure_session,
+        snapshot,
+        output_mode,
+        command,
+        stdin,
+        cancellation,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_qualified_one_shot_with_state(
+    service: &HttpService,
+    ensure_session: &EnsureSession,
+    snapshot: heyfood_core::SessionSnapshot,
+    output_mode: OutputMode,
+    command: Command,
+    stdin: &[u8],
+    cancellation: CancellationToken,
+    imported_state: Option<&ImportedPythonState>,
 ) -> Result<String, OneShotError> {
     let credentials = match ensure_session
         .execute(snapshot, cancellation.child_token())
@@ -121,6 +148,7 @@ pub async fn execute_qualified_one_shot(
         }
     };
     OneShotExecutor::new(service, &credentials, output_mode)
+        .with_imported_state(imported_state)
         .execute(command, stdin, cancellation)
         .await
 }
@@ -136,7 +164,17 @@ impl<'a> OneShotExecutor<'a> {
             service,
             credentials,
             output_mode,
+            imported_state: None,
         }
+    }
+
+    #[must_use]
+    pub const fn with_imported_state(
+        mut self,
+        imported_state: Option<&'a ImportedPythonState>,
+    ) -> Self {
+        self.imported_state = imported_state;
+        self
     }
 
     pub async fn execute(
@@ -194,7 +232,7 @@ impl<'a> OneShotExecutor<'a> {
         } else {
             arguments.prompt()
         };
-        let prompt = bounded_text(prompt, MAX_CONFIRMATION_STDIN_BYTES, "prompt")?;
+        let prompt = required_text(prompt, 500, "prompt")?;
         self.execute_prompt(
             prompt,
             arguments.conversation_id,
@@ -214,12 +252,6 @@ impl<'a> OneShotExecutor<'a> {
         stdin: &[u8],
         cancellation: CancellationToken,
     ) -> Result<String, OneShotError> {
-        if arguments.checking_for.is_some() {
-            return Err(OneShotError::new(
-                "household_context_unavailable",
-                "Native household targeting is not yet qualified; omit --for or use the supported Python client.",
-            ));
-        }
         let meal = if arguments.meal.is_empty() {
             if stdin.is_empty() || stdin.len() > MAX_CONFIRMATION_STDIN_BYTES {
                 return Err(OneShotError::new(
@@ -234,14 +266,22 @@ impl<'a> OneShotExecutor<'a> {
         } else {
             arguments.meal_text()
         };
-        let meal = bounded_text(meal, MAX_CONFIRMATION_STDIN_BYTES, "meal")?;
+        let meal = required_text(meal, 500, "meal")?;
         let mut prompt = format!("Log this meal: {meal}");
         if let Some(meal_type) = arguments.meal_type {
             prompt.push_str(". Meal type: ");
             prompt.push_str(meal_type.as_str());
             prompt.push('.');
         }
-        self.execute_prompt(prompt, None, TurnContext::default(), cancellation)
+        let prompt = required_text(prompt, 500, "query")?;
+        let context = match arguments.checking_for.as_deref() {
+            Some(selector) => {
+                self.household_turn_context(selector, cancellation.child_token())
+                    .await?
+            }
+            None => TurnContext::default(),
+        };
+        self.execute_prompt(prompt, None, context, cancellation)
             .await
     }
 
@@ -250,17 +290,15 @@ impl<'a> OneShotExecutor<'a> {
         arguments: ItemArgs,
         cancellation: CancellationToken,
     ) -> Result<String, OneShotError> {
-        if arguments.at.is_some() {
-            return Err(OneShotError::new(
-                "restaurant_selector_unavailable",
-                "Native last-search selection is not yet qualified; pass --restaurant explicitly.",
-            ));
-        }
-        let item_name = bounded_text(arguments.item_name(), 200, "item name")?;
-        let restaurant = arguments
+        let item_name = required_text(arguments.item_name(), 200, "item name")?;
+        let mut restaurant = arguments
             .restaurant
-            .map(|value| bounded_text(value, 200, "restaurant name"))
-            .transpose()?;
+            .map(|value| optional_text(Some(value), 200, "restaurant name"))
+            .transpose()?
+            .flatten();
+        if let Some(selector) = arguments.at.as_deref() {
+            restaurant = Some(self.restaurant_from_selector(selector)?);
+        }
         let document = self
             .service
             .explain_item(
@@ -270,7 +308,226 @@ impl<'a> OneShotExecutor<'a> {
                 cancellation,
             )
             .await?;
-        Ok(render_agent_result(&document, self.output_mode))
+        Ok(render_item_result(&document, self.output_mode))
+    }
+
+    fn restaurant_from_selector(&self, selector: &str) -> Result<String, OneShotError> {
+        let normalized = selector.trim();
+        if normalized.is_empty() || !normalized.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(OneShotError::new(
+                "restaurant_selector",
+                "restaurant selection must be a one-based number from the last search",
+            ));
+        }
+        let index = normalized
+            .parse::<usize>()
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| {
+                OneShotError::new(
+                    "restaurant_selector",
+                    "restaurant selection is out of range",
+                )
+            })?;
+        let state = self.bound_imported_state()?;
+        let restaurants = state
+            .account_scoped
+            .get("last_restaurant_search")
+            .and_then(|value| value.get("restaurants"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                OneShotError::new(
+                    "restaurant_search_missing",
+                    "no previous restaurant search was imported; run search before using --at",
+                )
+            })?;
+        let restaurant = restaurants
+            .get(index - 1)
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                OneShotError::new(
+                    "restaurant_selector",
+                    format!("restaurant selection {index} is out of range for the last search"),
+                )
+            })?;
+        let name = restaurant
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                OneShotError::new(
+                    "restaurant_selector",
+                    "the selected restaurant does not contain a name",
+                )
+            })?;
+        required_text(name.to_owned(), 200, "restaurant name")
+    }
+
+    fn bound_imported_state(&self) -> Result<&ImportedPythonState, OneShotError> {
+        let state = self.imported_state.ok_or_else(|| {
+            OneShotError::new(
+                "python_state_required",
+                "this selector requires account-bound state imported from the Python client",
+            )
+        })?;
+        if state.account_user_id.as_deref() != Some(self.credentials.account_id.as_str()) {
+            return Err(OneShotError::new(
+                "python_state_account_mismatch",
+                "imported Python state does not belong to the authenticated account",
+            ));
+        }
+        Ok(state)
+    }
+
+    async fn household_turn_context(
+        &self,
+        selector: &str,
+        cancellation: CancellationToken,
+    ) -> Result<TurnContext, OneShotError> {
+        let state = self.bound_imported_state()?;
+        if state
+            .account_scoped
+            .get("household_profile_outbox")
+            .and_then(Value::as_object)
+            .is_some_and(|outbox| !outbox.is_empty())
+        {
+            return Err(OneShotError::new(
+                "household_profile_reconciliation_required",
+                "pending Python household profile changes must be reconciled before native household targeting",
+            ));
+        }
+        let household = normalized_household(state)?;
+        let selected = resolve_household_scope(&household, selector)?;
+        let consent = self
+            .service
+            .profile_consent_status(
+                self.credentials,
+                OperationId::new(),
+                cancellation.child_token(),
+            )
+            .await?;
+        let has_consent = consent
+            .get("has_consent")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let active = active_household_members(&household);
+        let owner = member_by_id(&active, "_self")
+            .or_else(|| active.first().copied())
+            .ok_or_else(|| OneShotError::new("household_state", "household has no active owner"))?;
+        let local_profiles = state
+            .account_scoped
+            .get("household_local_profiles")
+            .and_then(Value::as_object);
+
+        let dietary = if selected == "__everyone__" {
+            let mut members = Vec::with_capacity(active.len());
+            for member in &active {
+                let profile = self
+                    .profile_for_household_member(
+                        member,
+                        local_profiles,
+                        has_consent,
+                        cancellation.child_token(),
+                    )
+                    .await?;
+                let mut context = member_dietary_context(member, &profile, owner)?;
+                context.insert(
+                    "member_id".into(),
+                    Value::String(member_id(member)?.to_owned()),
+                );
+                context.insert(
+                    "label".into(),
+                    Value::String(member_name(member)?.to_owned()),
+                );
+                members.push(Value::Object(context));
+            }
+            json!({"mode": "household", "members": members})
+        } else {
+            let member = member_by_id(&active, &selected).ok_or_else(|| {
+                OneShotError::new(
+                    "household_scope",
+                    "selected household member is unavailable",
+                )
+            })?;
+            let profile = self
+                .profile_for_household_member(
+                    member,
+                    local_profiles,
+                    has_consent,
+                    cancellation.child_token(),
+                )
+                .await?;
+            Value::Object(member_dietary_context(member, &profile, owner)?)
+        };
+        let selected_member = member_by_id(&active, &selected);
+        let scope_label = if selected == "__everyone__" {
+            "Everyone".to_owned()
+        } else {
+            member_name(selected_member.ok_or_else(|| {
+                OneShotError::new(
+                    "household_scope",
+                    "selected household member is unavailable",
+                )
+            })?)?
+            .to_owned()
+        };
+        let device = has_consent.then(|| {
+            json!({
+                "household": {
+                    "owner_id": "_self",
+                    "members": active.iter().filter_map(|member| {
+                        Some(json!({
+                            "id": member.get("id")?.as_str()?,
+                            "name": member.get("name")?.as_str()?,
+                            "relationship": member.get("relationship").and_then(Value::as_str).unwrap_or("other"),
+                            "is_owner": member.get("id").and_then(Value::as_str) == Some("_self")
+                        }))
+                    }).collect::<Vec<_>>()
+                }
+            })
+        });
+        let meal = if selected == "__everyone__" {
+            json!({"is_cook_mode": true})
+        } else {
+            json!({
+                "active_member_id": selected,
+                "active_member_name": scope_label,
+                "is_cook_mode": false
+            })
+        };
+        Ok(TurnContext {
+            dietary: Some(dietary),
+            device,
+            meal: Some(meal),
+            ..TurnContext::default()
+        })
+    }
+
+    async fn profile_for_household_member(
+        &self,
+        member: &Map<String, Value>,
+        local_profiles: Option<&Map<String, Value>>,
+        has_consent: bool,
+        cancellation: CancellationToken,
+    ) -> Result<Value, OneShotError> {
+        let id = member_id(member)?;
+        if member.get("relationship").and_then(Value::as_str) == Some("child") {
+            return Ok(local_profiles
+                .and_then(|profiles| profiles.get(id))
+                .cloned()
+                .unwrap_or_else(|| json!({})));
+        }
+        if !has_consent {
+            return Ok(json!({}));
+        }
+        let downloaded = self
+            .service
+            .download_profile(self.credentials, id, OperationId::new(), cancellation)
+            .await?;
+        Ok(downloaded
+            .get("profile_data")
+            .filter(|value| value.is_object())
+            .cloned()
+            .unwrap_or_else(|| json!({})))
     }
 
     async fn execute_prompt(
@@ -663,6 +920,259 @@ fn bounded_text(
         ));
     }
     Ok(value)
+}
+
+fn required_text(
+    value: String,
+    maximum_characters: usize,
+    label: &'static str,
+) -> Result<String, OneShotError> {
+    heyfood_core::required_text(&value, maximum_characters).map_err(|_| {
+        OneShotError::new(
+            "invalid_argument",
+            format!("{label} must contain 1 to {maximum_characters} characters"),
+        )
+    })
+}
+
+fn optional_text(
+    value: Option<String>,
+    maximum_characters: usize,
+    label: &'static str,
+) -> Result<Option<String>, OneShotError> {
+    heyfood_core::optional_text(value.as_deref(), maximum_characters).map_err(|_| {
+        OneShotError::new(
+            "invalid_argument",
+            format!("{label} must contain at most {maximum_characters} characters"),
+        )
+    })
+}
+
+fn normalized_household(state: &ImportedPythonState) -> Result<Map<String, Value>, OneShotError> {
+    let owner_name = state
+        .account_scoped
+        .get("first_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Me");
+    let mut household = state
+        .account_scoped
+        .get("household")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_else(Map::new);
+    let raw_members = household
+        .remove("members")
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
+    let mut members = Vec::new();
+    let mut identifiers = std::collections::BTreeSet::new();
+    for raw in raw_members {
+        let Some(mut member) = raw.as_object().cloned() else {
+            continue;
+        };
+        let Some(id) = member
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && *value != "__everyone__")
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        if !identifiers.insert(id.clone()) {
+            continue;
+        }
+        let name = member
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(if id == "_self" { owner_name } else { &id })
+            .to_owned();
+        let relationship = member
+            .get("relationship")
+            .and_then(Value::as_str)
+            .unwrap_or(if id == "_self" { "self" } else { "other" })
+            .to_owned();
+        member.insert("id".into(), Value::String(id.clone()));
+        member.insert("name".into(), Value::String(name));
+        member.insert(
+            "relationship".into(),
+            Value::String(if id == "_self" {
+                "self".to_owned()
+            } else {
+                relationship
+            }),
+        );
+        member.insert("is_owner".into(), Value::Bool(id == "_self"));
+        members.push(Value::Object(member));
+    }
+    if !identifiers.contains("_self") {
+        members.insert(
+            0,
+            json!({
+                "id": "_self",
+                "name": owner_name,
+                "relationship": "self",
+                "is_owner": true,
+                "archived": false
+            }),
+        );
+    }
+    household.insert("owner_id".into(), Value::String("_self".into()));
+    household.insert("members".into(), Value::Array(members));
+    Ok(household)
+}
+
+fn active_household_members(household: &Map<String, Value>) -> Vec<&Map<String, Value>> {
+    household
+        .get("members")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+        .filter(|member| {
+            !member
+                .get("archived")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+fn member_by_id<'a>(
+    members: &'a [&Map<String, Value>],
+    identifier: &str,
+) -> Option<&'a Map<String, Value>> {
+    members
+        .iter()
+        .copied()
+        .find(|member| member.get("id").and_then(Value::as_str) == Some(identifier))
+}
+
+fn member_id(member: &Map<String, Value>) -> Result<&str, OneShotError> {
+    member
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| OneShotError::new("household_state", "household member ID is missing"))
+}
+
+fn member_name(member: &Map<String, Value>) -> Result<&str, OneShotError> {
+    member
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| OneShotError::new("household_state", "household member name is missing"))
+}
+
+fn resolve_household_scope(
+    household: &Map<String, Value>,
+    selector: &str,
+) -> Result<String, OneShotError> {
+    let selector = selector.trim();
+    if selector.is_empty() {
+        return Err(OneShotError::new(
+            "household_scope",
+            "household scope must not be empty",
+        ));
+    }
+    let members = active_household_members(household);
+    let folded = selector.to_lowercase();
+    if matches!(folded.as_str(), "me" | "myself" | "self" | "_self") {
+        return Ok("_self".into());
+    }
+    if matches!(
+        folded.as_str(),
+        "all" | "everyone" | "household" | "family" | "__everyone__"
+    ) {
+        if members.len() < 2 {
+            return Err(OneShotError::new(
+                "household_scope",
+                "add or import another household member before selecting everyone",
+            ));
+        }
+        return Ok("__everyone__".into());
+    }
+    if member_by_id(&members, selector).is_some() {
+        return Ok(selector.to_owned());
+    }
+    let matches = members
+        .iter()
+        .filter(|member| {
+            member
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.to_lowercase() == folded)
+        })
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [member] => Ok(member_id(member)?.to_owned()),
+        [] => Err(OneShotError::new(
+            "household_scope",
+            format!("unknown household scope '{selector}'"),
+        )),
+        _ => Err(OneShotError::new(
+            "household_scope",
+            format!("more than one household member is named '{selector}'; use a member ID"),
+        )),
+    }
+}
+
+fn member_dietary_context(
+    member: &Map<String, Value>,
+    profile: &Value,
+    owner: &Map<String, Value>,
+) -> Result<Map<String, Value>, OneShotError> {
+    const PROFILE_KEYS: &[&str] = &[
+        "preferences",
+        "preference_strictness",
+        "restrictions",
+        "restriction_handling",
+        "avoid_ingredients",
+        "medical_constraints",
+        "severity_level",
+        "notes",
+        "activity_level",
+        "cuisine_preferences",
+    ];
+    let mut context = Map::new();
+    if let Some(profile) = profile.as_object() {
+        for key in PROFILE_KEYS {
+            if let Some(value) = profile.get(*key).filter(|value| !value.is_null()) {
+                context.insert((*key).to_owned(), value.clone());
+            }
+        }
+        if let Some(value) = profile.get("medical_condition_id") {
+            context.insert("medical_condition".into(), value.clone());
+        }
+    }
+    context.insert(
+        "name".into(),
+        Value::String(member_name(member)?.to_owned()),
+    );
+    context.insert(
+        "relationship".into(),
+        Value::String(
+            member
+                .get("relationship")
+                .and_then(Value::as_str)
+                .unwrap_or("other")
+                .to_owned(),
+        ),
+    );
+    if member_id(member)? != "_self" {
+        context.insert(
+            "owner_name".into(),
+            Value::String(member_name(owner)?.to_owned()),
+        );
+    }
+    if let Some(birth_date) = member.get("date_of_birth").and_then(Value::as_str) {
+        context.insert("date_of_birth".into(), Value::String(birth_date.to_owned()));
+    }
+    Ok(context)
 }
 
 fn ensure_oura(provider: heyfood_cli::HealthProviderArgument) -> Result<(), OneShotError> {

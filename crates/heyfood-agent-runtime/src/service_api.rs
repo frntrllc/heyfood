@@ -54,6 +54,40 @@ impl DispatchKind {
 }
 
 impl HttpService {
+    /// Read profile consent for household-context construction. This is a
+    /// safe, authenticated GET and never changes consent state.
+    pub async fn profile_consent_status(
+        &self,
+        credentials: &SessionCredentials,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> Result<Value, PortError> {
+        let builder = self
+            .request(Method::GET, "/v1/profile/consent", None, operation_id)?
+            .header(header::ACCEPT, "application/json")
+            .bearer_auth(credentials.access_token.expose_secret());
+        self.dispatch_json(builder, cancellation, DispatchKind::Safe)
+            .await
+    }
+
+    /// Read one member's synchronized dietary profile. Household metadata
+    /// remains local and this request is made only after positive consent.
+    pub async fn download_profile(
+        &self,
+        credentials: &SessionCredentials,
+        member_id: &str,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> Result<Value, PortError> {
+        let builder = self
+            .request(Method::GET, "/v1/profile/sync", None, operation_id)?
+            .header(header::ACCEPT, "application/json")
+            .bearer_auth(credentials.access_token.expose_secret())
+            .query(&[("member_id", member_id)]);
+        self.dispatch_json(builder, cancellation, DispatchKind::Safe)
+            .await
+    }
+
     /// Evaluate an item through the released provider-neutral channel-tool
     /// contract. This deliberately uses channel authority, matching the
     /// Python CLI, rather than converting the request into an agent prompt.

@@ -808,12 +808,25 @@ impl NativeAuthStore {
         match (auth, session) {
             (None, None) => {
                 if initialization_pending {
-                    clear_any_reconciliation_marker(&self.reconciliation_path)?;
+                    return Err(PortError::uncertain(
+                        "auth_initialization_incomplete",
+                        "account initialization was interrupted before authorization became durable",
+                    ));
                 }
                 Ok(None)
             }
             (Some(auth), Some(session)) if auth.session.account_id == session.account_id => {
                 if initialization_pending {
+                    if auth.session != session {
+                        AtomicFile::replace(
+                            &self.reconciliation_path,
+                            b"account_binding_conflict\n",
+                        )?;
+                        return Err(PortError::uncertain(
+                            "authorization_session_version_conflict",
+                            "account initialization observed a different active session",
+                        ));
+                    }
                     clear_any_reconciliation_marker(&self.reconciliation_path)?;
                 }
                 Ok(Some(AuthCredentialBundle {
@@ -821,11 +834,7 @@ impl NativeAuthStore {
                     session,
                 }))
             }
-            (Some(auth), None) => {
-                AtomicFile::replace(&self.reconciliation_path, b"account_binding_pending\n")
-                    .map_err(|error| {
-                        PortError::uncertain("auth_reconciliation_write", error.to_string())
-                    })?;
+            (Some(auth), None) if initialization_pending => {
                 session_store.initialize_authorized_session(&auth.session)?;
                 let session = session_store.load_authorized_session()?.ok_or_else(|| {
                     PortError::uncertain(
@@ -833,11 +842,11 @@ impl NativeAuthStore {
                         "session initialization was not durably observable",
                     )
                 })?;
-                if session.account_id != auth.session.account_id {
+                if session != auth.session {
                     AtomicFile::replace(&self.reconciliation_path, b"account_binding_conflict\n")?;
                     return Err(PortError::uncertain(
-                        "authorization_account_conflict",
-                        "authorization and active session belong to different accounts",
+                        "authorization_session_version_conflict",
+                        "initialized session did not match the pending authorization transaction",
                     ));
                 }
                 clear_any_reconciliation_marker(&self.reconciliation_path)?;
@@ -845,6 +854,19 @@ impl NativeAuthStore {
                     channel: auth.channel,
                     session,
                 }))
+            }
+            (Some(_), None) => {
+                AtomicFile::replace(
+                    &self.reconciliation_path,
+                    b"account_binding_missing_session\n",
+                )
+                .map_err(|error| {
+                    PortError::uncertain("auth_reconciliation_write", error.to_string())
+                })?;
+                Err(PortError::uncertain(
+                    "credentials_missing",
+                    "the authoritative rotating session is missing; reauthorization is required and the stale auth-bundle mirror was not restored",
+                ))
             }
             _ => {
                 AtomicFile::replace(&self.reconciliation_path, b"account_binding_conflict\n")
@@ -882,6 +904,10 @@ impl NativeAuthStore {
         AtomicFile::replace(&self.reconciliation_path, b"account_binding_pending\n").map_err(
             |error| PortError::uncertain("auth_reconciliation_write", error.to_string()),
         )?;
+        // Authorization is written first. While the marker exists it is not
+        // visible to ordinary loads, but it is exact recovery authority for a
+        // session-store write interrupted during this one initialization.
+        self.write_initial_unlocked(bundle)?;
         session_store.initialize_authorized_session(&bundle.session)?;
         let verified_session = session_store.load_authorized_session()?.ok_or_else(|| {
             PortError::uncertain(
@@ -895,7 +921,6 @@ impl NativeAuthStore {
                 "initialized session did not match the authorized session",
             ));
         }
-        self.write_initial_unlocked(bundle)?;
         if self.load_unlocked()?.as_ref() != Some(bundle) {
             return Err(PortError::uncertain(
                 "auth_account_binding_verify",
@@ -2859,14 +2884,14 @@ fn keyring_secret_exists(entry: &keyring::Entry) -> Result<bool, PortError> {
     }
 }
 
-struct AuthorizationSessionStage {
-    client_transaction_id: String,
-    previous: SessionCredentials,
-    replacement: SessionCredentials,
+pub(crate) struct AuthorizationSessionStage {
+    pub(crate) client_transaction_id: String,
+    pub(crate) previous: SessionCredentials,
+    pub(crate) replacement: SessionCredentials,
 }
 
 impl AuthorizationSessionStage {
-    fn encode(&self) -> Vec<u8> {
+    pub(crate) fn encode(&self) -> Vec<u8> {
         format!(
             "schema=1\nclient_transaction={}\nprevious={}\nreplacement={}\n",
             hex_encode(self.client_transaction_id.as_bytes()),
@@ -2876,7 +2901,7 @@ impl AuthorizationSessionStage {
         .into_bytes()
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, PortError> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, PortError> {
         let values = fields(bytes)?;
         if required(&values, "schema")? != "1" {
             return Err(PortError::new(

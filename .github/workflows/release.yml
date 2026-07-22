@@ -43,7 +43,17 @@ jobs:
             exit 1
           fi
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-      - name: Test the exact native workspace
+      - name: Install the Linux Secret Service fixture
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dbus-x11 gnome-keyring libdbus-1-dev pkg-config
+      - name: Test the exact default native workspace and broker composition
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "\n" | gnome-keyring-daemon --unlock
+            cargo test --workspace --locked --all-targets
+          '
+      - name: Test the secondary portable workspace
         run: cargo test --workspace --locked --all-targets --no-default-features
 
   build:

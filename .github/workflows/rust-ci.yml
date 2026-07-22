@@ -29,7 +29,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Compile the portable default feature set
+      - name: Compile the default product feature set
+        run: cargo check --locked --workspace --all-targets
+      - name: Compile the secondary portable feature set
         run: cargo check --locked --workspace --all-targets --no-default-features
 
   format:
@@ -53,7 +55,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Lint the portable default feature set
+      - name: Lint the default product feature set
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Lint the secondary portable feature set
         run: cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings
 
   test:
@@ -65,8 +69,23 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Test the portable default feature set
-        run: cargo test --locked --workspace --no-default-features
+      - name: Install the Linux Secret Service fixture
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dbus-x11 gnome-keyring libdbus-1-dev pkg-config
+      - name: Test the default product feature set on macOS and Windows
+        if: runner.os != 'Linux'
+        run: cargo test --locked --workspace --all-targets
+      - name: Test the default product feature set on Linux
+        if: runner.os == 'Linux'
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "\n" | gnome-keyring-daemon --unlock
+            cargo test --locked --workspace --all-targets
+          '
+      - name: Test the secondary portable feature set
+        run: cargo test --locked --workspace --all-targets --no-default-features
 
   dependency-dag:
     name: Dependency DAG / ${{ matrix.os }}
@@ -210,7 +229,15 @@ jobs:
             cargo test --locked --package heyfood-platform --features native-credentials
           '
       - name: Test the killable credential broker boundary
-        run: cargo test --locked --package heyfood-bin --features native-credentials --test credential_broker
+        if: runner.os != 'Linux'
+        run: cargo test --locked --package heyfood-bin --features native-credentials --test credential_broker --test native_composition
+      - name: Test the Linux executable's default broker composition
+        if: runner.os == 'Linux'
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "\n" | gnome-keyring-daemon --unlock
+            cargo test --locked --package heyfood-bin --features native-credentials --test credential_broker --test native_composition
+          '
 
   native-audio:
     name: Native audio / ${{ matrix.os }}
