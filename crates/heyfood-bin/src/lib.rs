@@ -1842,45 +1842,11 @@ async fn run_interactive_onboarding(
             ));
         }
     };
-    if cancellation.is_cancelled() {
-        return Err(OnboardingOperationError::Cancelled(
-            RunTurnOutcome::CancelledBeforeServerAcceptance,
-        ));
-    }
-
-    let consent = service
-        .profile_consent_status(&credentials, OperationId::new(), cancellation.child_token())
-        .await
-        .map_err(|error| onboarding_service_error(error, &cancellation))?;
-    let has_consent = consent
-        .get("has_consent")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| {
-            OnboardingOperationError::Failed(
-                "The profile-sync consent response was incomplete; no profile was uploaded.".into(),
-            )
-        })?;
-    if !has_consent {
-        if cancellation.is_cancelled() {
-            return Err(OnboardingOperationError::Cancelled(
-                RunTurnOutcome::CancelledBeforeServerAcceptance,
-            ));
-        }
-        let granted = service
-            .grant_profile_consent(&credentials, OperationId::new(), cancellation.child_token())
-            .await
-            .map_err(|error| onboarding_service_error(error, &cancellation))?;
-        if granted.get("has_consent").and_then(Value::as_bool) != Some(true) {
-            return Err(OnboardingOperationError::Failed(
-                "Profile-sync consent was not confirmed; no profile was uploaded.".into(),
-            ));
-        }
-    }
-    if cancellation.is_cancelled() {
-        return Err(OnboardingOperationError::Cancelled(
-            RunTurnOutcome::CancelledBeforeServerAcceptance,
-        ));
-    }
+    onboarding_cancellation_checkpoint(&cancellation)?;
+    ensure_profile_sync_consent(&service, &credentials, &cancellation).await?;
+    // Consent is a separate mutation. Once its response is observed, a stop at
+    // this boundary still proves that the profile upload was not dispatched.
+    onboarding_cancellation_checkpoint(&cancellation)?;
 
     let expected_version =
         match service
@@ -1901,13 +1867,9 @@ async fn run_interactive_onboarding(
                 },
             )?),
             Err(error) if error.code == "resource_not_found" => None,
-            Err(error) => return Err(onboarding_service_error(error, &cancellation)),
+            Err(error) => return Err(onboarding_service_error(error)),
         };
-    if cancellation.is_cancelled() {
-        return Err(OnboardingOperationError::Cancelled(
-            RunTurnOutcome::CancelledBeforeServerAcceptance,
-        ));
-    }
+    onboarding_cancellation_checkpoint(&cancellation)?;
     let uploaded = service
         .upload_profile(
             &credentials,
@@ -1918,7 +1880,7 @@ async fn run_interactive_onboarding(
             cancellation.child_token(),
         )
         .await
-        .map_err(|error| onboarding_service_error(error, &cancellation))?;
+        .map_err(onboarding_service_error)?;
     if uploaded.get("version").and_then(Value::as_u64).is_none() {
         return Err(OnboardingOperationError::Cancelled(
             RunTurnOutcome::CancelledAfterDispatchOutcomeUnknown,
@@ -1927,13 +1889,60 @@ async fn run_interactive_onboarding(
     Ok(())
 }
 
-fn onboarding_service_error(
-    error: heyfood_application::PortError,
+async fn ensure_profile_sync_consent(
+    service: &HttpService,
+    credentials: &SessionCredentials,
     cancellation: &CancellationToken,
-) -> OnboardingOperationError {
+) -> Result<(), OnboardingOperationError> {
+    let consent = service
+        .profile_consent_status(credentials, OperationId::new(), cancellation.child_token())
+        .await
+        .map_err(onboarding_service_error)?;
+    let has_consent = consent
+        .get("has_consent")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            OnboardingOperationError::Failed(
+                "The profile-sync consent response was incomplete; no profile was uploaded.".into(),
+            )
+        })?;
+    if has_consent {
+        return Ok(());
+    }
+    onboarding_cancellation_checkpoint(cancellation)?;
+    let granted = service
+        .grant_profile_consent(credentials, OperationId::new(), cancellation.child_token())
+        .await
+        .map_err(onboarding_service_error)?;
+    if granted.get("has_consent").and_then(Value::as_bool) != Some(true) {
+        return Err(OnboardingOperationError::Failed(
+            "Profile-sync consent was not confirmed; no profile was uploaded.".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn onboarding_cancellation_checkpoint(
+    cancellation: &CancellationToken,
+) -> Result<(), OnboardingOperationError> {
+    if cancellation.is_cancelled() {
+        Err(OnboardingOperationError::Cancelled(
+            RunTurnOutcome::CancelledBeforeServerAcceptance,
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn onboarding_service_error(error: heyfood_application::PortError) -> OnboardingOperationError {
     if error.outcome_uncertain {
         OnboardingOperationError::Cancelled(RunTurnOutcome::CancelledAfterDispatchOutcomeUnknown)
-    } else if cancellation.is_cancelled() {
+    } else if matches!(
+        error.code,
+        "request_cancelled_before_dispatch"
+            | "request_cancelled_after_dispatch"
+            | "response_cancelled"
+    ) {
         OnboardingOperationError::Cancelled(RunTurnOutcome::CancelledBeforeServerAcceptance)
     } else {
         OnboardingOperationError::Failed(format!(
@@ -2593,6 +2602,20 @@ mod tests {
         String::from_utf8(request).unwrap()
     }
 
+    async fn write_json_response(socket: &mut TcpStream, status: &str, body: Value) {
+        let body = body.to_string();
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    }
+
     #[derive(Default)]
     struct ControlledDriver {
         started: Vec<(u64, String)>,
@@ -2994,6 +3017,182 @@ mod tests {
         .await;
         assert!(result.is_ok());
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn interactive_onboarding_pre_dispatch_cancellation_opens_no_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let service_url =
+            ServiceUrl::parse(&format!("http://{address}"), NetworkPolicy::DEVELOPMENT).unwrap();
+        let service = Arc::new(
+            HttpService::new(service_url, NetworkPolicy::DEVELOPMENT, Default::default()).unwrap(),
+        );
+        let service_port: Arc<dyn ServicePort> = service.clone();
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let result = run_interactive_onboarding(
+            OnboardingProfileInput::default(),
+            service,
+            Arc::new(EnsureSession::new(
+                service_port,
+                Arc::new(MemoryCredentialPort),
+                Arc::new(FixedClock),
+            )),
+            Arc::new(Mutex::new(SessionSnapshot {
+                credentials: fixture_credentials(),
+                reconciliation_required: false,
+            })),
+            "profile:read profile:write",
+            cancellation,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(OnboardingOperationError::Cancelled(
+                RunTurnOutcome::CancelledBeforeServerAcceptance
+            ))
+        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), listener.accept())
+                .await
+                .is_err(),
+            "pre-dispatch cancellation must not open a connection"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_consent_proves_profile_upload_was_not_dispatched() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut status, _) = listener.accept().await.unwrap();
+            assert!(
+                read_complete_http_request(&mut status)
+                    .await
+                    .starts_with("GET /v1/profile/consent ")
+            );
+            write_json_response(&mut status, "200 OK", json!({"has_consent": false})).await;
+
+            let (mut grant, _) = listener.accept().await.unwrap();
+            assert!(
+                read_complete_http_request(&mut grant)
+                    .await
+                    .starts_with("POST /v1/profile/consent ")
+            );
+            write_json_response(
+                &mut grant,
+                "200 OK",
+                json!({"has_consent": true, "consent_version": 1}),
+            )
+            .await;
+            listener
+        });
+        let service_url =
+            ServiceUrl::parse(&format!("http://{address}"), NetworkPolicy::DEVELOPMENT).unwrap();
+        let service =
+            HttpService::new(service_url, NetworkPolicy::DEVELOPMENT, Default::default()).unwrap();
+        let cancellation = CancellationToken::new();
+
+        let consent_result =
+            ensure_profile_sync_consent(&service, &fixture_credentials(), &cancellation).await;
+        assert!(consent_result.is_ok());
+        let listener = server.await.unwrap();
+        cancellation.cancel();
+
+        assert!(matches!(
+            onboarding_cancellation_checkpoint(&cancellation),
+            Err(OnboardingOperationError::Cancelled(
+                RunTurnOutcome::CancelledBeforeServerAcceptance
+            ))
+        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), listener.accept())
+                .await
+                .is_err(),
+            "the profile upload must not be dispatched after the consent boundary cancellation"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_profile_upload_dispatch_is_outcome_unknown() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let cancellation = CancellationToken::new();
+        let server_cancellation = cancellation.clone();
+        let server = tokio::spawn(async move {
+            let (mut consent, _) = listener.accept().await.unwrap();
+            assert!(
+                read_complete_http_request(&mut consent)
+                    .await
+                    .starts_with("GET /v1/profile/consent ")
+            );
+            write_json_response(&mut consent, "200 OK", json!({"has_consent": true})).await;
+
+            let (mut profile, _) = listener.accept().await.unwrap();
+            assert!(
+                read_complete_http_request(&mut profile)
+                    .await
+                    .starts_with("GET /v1/profile/sync?member_id=_self ")
+            );
+            write_json_response(&mut profile, "404 Not Found", json!({})).await;
+
+            let (mut upload, _) = listener.accept().await.unwrap();
+            assert!(
+                read_complete_http_request(&mut upload)
+                    .await
+                    .starts_with("PUT /v1/profile/sync ")
+            );
+            server_cancellation.cancel();
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        });
+        let service_url =
+            ServiceUrl::parse(&format!("http://{address}"), NetworkPolicy::DEVELOPMENT).unwrap();
+        let service = Arc::new(
+            HttpService::new(service_url, NetworkPolicy::DEVELOPMENT, Default::default()).unwrap(),
+        );
+        let service_port: Arc<dyn ServicePort> = service.clone();
+
+        let result = run_interactive_onboarding(
+            OnboardingProfileInput::default(),
+            service,
+            Arc::new(EnsureSession::new(
+                service_port,
+                Arc::new(MemoryCredentialPort),
+                Arc::new(FixedClock),
+            )),
+            Arc::new(Mutex::new(SessionSnapshot {
+                credentials: fixture_credentials(),
+                reconciliation_required: false,
+            })),
+            "profile:read profile:write",
+            cancellation,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(OnboardingOperationError::Cancelled(
+                RunTurnOutcome::CancelledAfterDispatchOutcomeUnknown
+            ))
+        ));
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn determinate_onboarding_response_is_not_reclassified_by_a_later_cancel() {
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let result = onboarding_service_error(PortError::new(
+            "version_conflict",
+            "the resource version changed",
+        ));
+        assert!(matches!(
+            result,
+            OnboardingOperationError::Failed(message) if message.starts_with("version_conflict:")
+        ));
     }
 
     #[tokio::test]

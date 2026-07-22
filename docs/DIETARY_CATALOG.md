@@ -1,9 +1,9 @@
 # Dietary option catalog
 
 This repository retains a generated hello.food dietary-option snapshot at
-`assets/dietary/dietary_options.v2.json` for contract validation and history.
-The current Rust command surface does not expose profile onboarding or profile
-editing and does not read this catalog as an active runtime feature.
+`assets/dietary/dietary_options.v2.json`. The Rust TUI embeds and reads the
+exact reviewed v2 bytes to drive first-run dietary onboarding and the explicit
+`heyfood onboard` workflow.
 
 The catalog contains public client contract data: display labels, canonical
 selection identifiers, compatibility enum keys, and coarse constraint tags. It
@@ -13,14 +13,21 @@ guidance.
 
 ## Current boundary
 
-- `ask`, `item`, Grocery, and other hosted workflows can use the dietary profile
-  already associated with the authenticated hello.food account.
-- The draft TUI can read synchronized profile and consent state, but it does not
-  provide onboarding, profile editing, or catalog-selection commands.
-- Hidden legacy profile/onboarding commands return `command_not_available` and
-  are not a supported interface.
-- The generated snapshot must not be presented as evidence that the current
-  native client can edit a profile.
+- `ask`, `item`, Grocery, and other hosted workflows use the dietary profile
+  associated with the authenticated hello.food account.
+- The draft Rust TUI provides a local, eight-step catalog-selection flow for
+  diets, allergies, health conditions, severity, avoided ingredients, activity,
+  cuisines, notes, and final review.
+- The client sends no dietary selection while the flow is in progress. Literal
+  `save` first grants versioned profile-sync consent when required, reads the
+  current profile version, and performs one optimistic profile upload.
+- Cancellation before profile-upload dispatch is reported as non-mutating for
+  the profile (consent may already have been granted). An unobserved response
+  after upload dispatch is reported as outcome-unknown and directs the user to
+  inspect `/profile` before retrying.
+- `heyfood onboard` and the TUI `/onboard` action replace the synchronized
+  `_self` profile. Broader profile editing and household-member writes are not
+  claimed by this workflow.
 
 ## Source and synchronization
 
@@ -41,5 +48,6 @@ allergies, health conditions, and additional restrictions; provenance metadata
 distinguishes authoritative empty selections from older payloads that require a
 deterministic migration.
 
-Those profile contracts are hosted hello.food behavior. They do not make the
-current Rust CLI a profile-management client.
+The Rust onboarding mapper preserves those source selections and provenance
+while deriving the compatibility fields expected by the frozen Python
+baseline. Exhaustive tests cover every retained v2 catalog option.

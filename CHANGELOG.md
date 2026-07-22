@@ -31,6 +31,14 @@ authentication contracts are stabilized.
   v2 dietary catalog. All answers remain local through review; explicit save
   grants versioned profile-sync consent and performs one optimistic profile
   upload without blind mutation retries.
+- Continues an explicit interactive `heyfood register` into the TUI by default;
+  `--no-onboard`, JSON mode, and redirected environments remain explicit
+  non-TUI handoffs.
+- Classifies onboarding cancellation from the adapter's observed dispatch stage
+  so a late Ctrl-C cannot relabel a determinate service response, while an
+  unobserved profile-upload response remains outcome-unknown.
+- Verifies Rust onboarding payload parity against the frozen Python derivation
+  tables for every v2 diet, allergy, condition, activity, and cuisine option.
 - Archives the final Python parity baseline under the non-release tag
   `archive/python-cli-73494a57` and verifies retained source bytes from Rust.
 

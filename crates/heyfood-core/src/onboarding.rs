@@ -495,4 +495,200 @@ mod tests {
         assert_eq!(activity_options().len(), 5);
         assert_eq!(cuisine_options().len(), 28);
     }
+
+    #[test]
+    fn frozen_python_payload_oracle_covers_every_v2_catalog_option() {
+        // This is an independent transcription of the derivation tables in
+        // archive/python-cli-73494a57:src/heyfood_cli/onboarding.py. Iterating
+        // every retained catalog entry prevents representative-only parity.
+        let python_preferences = [
+            "keto",
+            "vegan",
+            "vegetarian",
+            "paleo",
+            "mediterranean",
+            "lowCarb",
+            "whole30",
+            "pescatarian",
+            "low_fodmap",
+            "high_protein",
+            "none",
+        ];
+        let python_restrictions = [
+            "glutenFree",
+            "dairyFree",
+            "nutFree",
+            "peanutFree",
+            "treeNutFree",
+            "shellfishFree",
+            "fishFree",
+            "soyFree",
+            "eggFree",
+            "sesameFree",
+            "lactoseIntolerant",
+            "halal",
+            "kosher",
+        ];
+
+        for option in diet_options() {
+            let profile = OnboardingProfileInput {
+                diet_style_ids: vec![option.id.clone()],
+                ..OnboardingProfileInput::default()
+            }
+            .profile_data()
+            .unwrap();
+            let python_restriction = match option.id.as_str() {
+                "gluten_free" => Some("glutenFree"),
+                "dairy_free" => Some("dairyFree"),
+                "halal" => Some("halal"),
+                "kosher" => Some("kosher"),
+                _ => None,
+            };
+            let candidate = option.enum_key.as_deref().unwrap_or(&option.id);
+            let python_preference = python_preferences.contains(&candidate).then_some(candidate);
+            let python_constraints: &[&str] = match option.id.as_str() {
+                "low_fodmap" => &["high_fodmap"],
+                "low_sodium" | "dash" => &["high_sodium"],
+                "low_fat" => &["high_fat"],
+                _ => &[],
+            };
+
+            assert_eq!(profile["diet_style_ids"], json!([option.id]));
+            assert_eq!(
+                profile["preferences"],
+                python_preference.map_or_else(|| json!([]), |value| json!([value])),
+                "Python preference mismatch for diet {}",
+                option.id
+            );
+            assert_eq!(
+                profile["restrictions"],
+                python_restriction.map_or_else(|| json!([]), |value| json!([value])),
+                "Python restriction mismatch for diet {}",
+                option.id
+            );
+            assert_eq!(
+                profile["medical_constraints"],
+                json!(python_constraints),
+                "Python constraint mismatch for diet {}",
+                option.id
+            );
+            assert_eq!(
+                profile["custom_diet_styles"],
+                if option.enum_key.is_none() {
+                    json!([option.label])
+                } else {
+                    json!([])
+                },
+                "Python compatibility label mismatch for diet {}",
+                option.id
+            );
+            let expected_strictness = python_preference.map_or_else(
+                || json!({}),
+                |value| {
+                    json!({
+                        value: if matches!(value, "keto" | "low_fodmap") {
+                            "strict"
+                        } else {
+                            "moderate"
+                        }
+                    })
+                },
+            );
+            assert_eq!(profile["preference_strictness"], expected_strictness);
+            let expected_handling = python_restriction.map_or_else(
+                || json!({}),
+                |value| json!({value: python_restriction_handling(value)}),
+            );
+            assert_eq!(profile["restriction_handling"], expected_handling);
+        }
+
+        for option in allergy_options() {
+            let profile = OnboardingProfileInput {
+                allergy_ids: vec![option.id.clone()],
+                ..OnboardingProfileInput::default()
+            }
+            .profile_data()
+            .unwrap();
+            let python_restriction = option
+                .enum_key
+                .as_deref()
+                .filter(|value| python_restrictions.contains(value));
+            assert_eq!(profile["allergy_ids"], json!([option.id]));
+            assert_eq!(
+                profile["restrictions"],
+                python_restriction.map_or_else(|| json!([]), |value| json!([value])),
+                "Python restriction mismatch for allergy {}",
+                option.id
+            );
+            assert_eq!(
+                profile["custom_restrictions"],
+                if option.enum_key.is_none() {
+                    json!([option.label])
+                } else {
+                    json!([])
+                },
+                "Python compatibility label mismatch for allergy {}",
+                option.id
+            );
+            let expected_handling = python_restriction.map_or_else(
+                || json!({}),
+                |value| json!({value: python_restriction_handling(value)}),
+            );
+            assert_eq!(profile["restriction_handling"], expected_handling);
+        }
+
+        for option in condition_options() {
+            let profile = OnboardingProfileInput {
+                health_condition_ids: vec![option.id.clone()],
+                ..OnboardingProfileInput::default()
+            }
+            .profile_data()
+            .unwrap();
+            assert_eq!(profile["health_condition_ids"], json!([option.id]));
+            assert_eq!(profile["medical_condition_id"], option.id);
+            assert_eq!(profile["medical_constraints"], json!(option.constraints));
+            assert_eq!(profile["severity_level"], 3);
+            assert_eq!(profile["condition_severity_levels"][&option.id], 3);
+            assert_eq!(
+                profile["restrictions"],
+                if option.id == "celiac" {
+                    json!(["glutenFree"])
+                } else {
+                    json!([])
+                },
+                "Python restriction mismatch for condition {}",
+                option.id
+            );
+        }
+
+        for option in activity_options() {
+            let profile = OnboardingProfileInput {
+                activity_level: Some(option.id.clone()),
+                ..OnboardingProfileInput::default()
+            }
+            .profile_data()
+            .unwrap();
+            assert_eq!(profile["activity_level"], option.id);
+        }
+
+        for option in cuisine_options() {
+            let profile = OnboardingProfileInput {
+                cuisine_preferences: vec![option.id.clone()],
+                ..OnboardingProfileInput::default()
+            }
+            .profile_data()
+            .unwrap();
+            assert_eq!(profile["cuisine_preferences"], json!([option.id]));
+        }
+    }
+
+    fn python_restriction_handling(restriction: &str) -> &'static str {
+        match restriction {
+            "nutFree" | "peanutFree" | "treeNutFree" | "shellfishFree" | "fishFree" | "eggFree"
+            | "sesameFree" => "strictAvoid",
+            "lactoseIntolerant" => "doseDependent",
+            "halal" | "kosher" => "verificationRequired",
+            _ => "ingredientsOnly",
+        }
+    }
 }

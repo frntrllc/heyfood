@@ -1310,12 +1310,23 @@ fn reconciliation_error() -> RegistrationError {
 }
 
 async fn register(arguments: heyfood_cli::RegisterArgs, machine: bool) -> ExitCode {
+    let continue_to_tui = registration_continues_to_tui(
+        &arguments,
+        machine,
+        io::stdin().is_terminal(),
+        io::stdout().is_terminal(),
+    );
     let result = register_inner(arguments, machine).await;
     match result {
         Ok(document) => match heyfood_cli::render_registration_success(&document, machine) {
             Ok(output) => {
                 print!("{output}");
-                ExitCode::SUCCESS
+                if continue_to_tui {
+                    io::stdout().flush().ok();
+                    interactive(false, document.profile_status == ProfileStatus::Missing).await
+                } else {
+                    ExitCode::SUCCESS
+                }
             }
             Err(_) => failure(
                 "internal_error",
@@ -1333,6 +1344,15 @@ async fn register(arguments: heyfood_cli::RegisterArgs, machine: bool) -> ExitCo
             error.outcome_uncertain,
         ),
     }
+}
+
+const fn registration_continues_to_tui(
+    arguments: &heyfood_cli::RegisterArgs,
+    machine: bool,
+    stdin_is_terminal: bool,
+    stdout_is_terminal: bool,
+) -> bool {
+    !arguments.no_onboard && !machine && stdin_is_terminal && stdout_is_terminal
 }
 
 async fn register_inner(
@@ -1486,4 +1506,50 @@ fn failure(
         eprint!("{output}");
     }
     ExitCode::FAILURE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn registration_arguments(no_onboard: bool) -> heyfood_cli::RegisterArgs {
+        heyfood_cli::RegisterArgs {
+            device: true,
+            no_browser: true,
+            timeout: 600,
+            no_onboard,
+        }
+    }
+
+    #[test]
+    fn explicit_interactive_registration_continues_into_the_tui_by_default() {
+        assert!(registration_continues_to_tui(
+            &registration_arguments(false),
+            false,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn no_onboard_is_the_explicit_registration_handoff_opt_out() {
+        assert!(!registration_continues_to_tui(
+            &registration_arguments(true),
+            false,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn registration_never_starts_a_tui_for_json_or_redirected_output() {
+        let arguments = registration_arguments(false);
+        assert!(!registration_continues_to_tui(&arguments, true, true, true));
+        assert!(!registration_continues_to_tui(
+            &arguments, false, false, true
+        ));
+        assert!(!registration_continues_to_tui(
+            &arguments, false, true, false
+        ));
+    }
 }
