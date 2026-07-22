@@ -1,107 +1,130 @@
 # heyfood command grammar
 
-heyfood keeps command input predictable while preserving the existing 0.1.0
-surface for scripts. New aliases are additive; established commands are not
-renamed solely for aesthetic consistency.
+This document describes the current Rust command surface. It does not document
+legacy Python behavior or hidden compatibility topology.
 
-## Input rules
+## Active top-level commands
 
-| Input | Grammar | Examples |
-|---|---|---|
-| A required free-form request | Positional words | `heyfood ask can I eat pad thai?`, `heyfood recipes search quick Thai dinner` |
-| An optional filter | Named option | `heyfood search --query thai`, `heyfood recommend 1 --query vegan` |
-| A resource selector | Positional id/ref/index | `heyfood menu 2`, `heyfood recipes save spoonacular:123` |
-| Location or output controls | Named options | `--near`, `--lat/--lng`, `--json`, `--no-location` |
-| A repeated structured value | Repeatable named option | `--allergy peanuts --allergy shellfish` |
+```text
+register      create and connect a hello.food account
+login         authenticate again or approve expanded scopes
+ask           ask the hosted agent a one-shot question
+reply         continue an explicit conversation id
+log           log a meal through the hosted agent
+item          assess a food or menu item
+grocery       read, prepare, export, and confirm Grocery operations
+health        read health context and manage the Oura integration
+completion    print shell completion syntax
+```
 
-Restaurant `search` deliberately keeps `--query` optional because a location-
-only search is valid. Recipe search requires text, so its query remains
-positional. `profile` and `daily` remain top-level compatibility commands;
-moving them under new noun groups would add ceremony and break scripts without
-improving discovery.
+## Text input
 
-## Compatibility aliases
+`ask`, `reply`, `log`, and `item` accept positional UTF-8 text:
 
-- `--raw` is the deprecated machine-output alias for `--json`.
-- `register` creates or connects an account through the same OAuth application
-  service as `login`; registration adds `--no-onboard` and canonical `--json`.
-  `register --json` suppresses browser launch and all prompts. Use `--device
-  --no-browser --json` for headless automation with one human approval.
-- `login` performs an explicit sign-in for an already connected native account.
-  It is also the only scope-upgrade path: refresh and session re-exchange never
-  add authority. The replacement preserves every existing canonical scope and
-  commits only after both channel and app-session grants are complete.
-- `account delete` requires explicit destructive acknowledgement and browser
-  identity confirmation. `--json` additionally requires `--yes`, never opens a
-  browser, and emits a receipt only after the backend commit. Local credentials
-  remain intact for denial, expiry, interruption, timeout, or malformed output.
-- `get-menu` is the compatibility alias for `menu`.
-- `reply TEXT` and `conversation resume TEXT` both continue the last locally
-  remembered agent conversation.
-- `chat --new` starts without the local conversation pointer; `conversation
-  clear --yes` forgets that pointer without deleting server data.
-- `--for NAME_OR_ID`, `--for me`, and `--for everyone` override household
-  scope for an agent command. `household use` changes the persisted default;
-  `/for` changes it inside chat and starts a fresh conversation.
-- Onboarding preserves `--no-interactive` as the compatibility alias described
-  in the public process contract; new automation should use `--no-input`.
-- `--voice` on `onboard`, `ask`, and `log` speaks the request instead of typing
-  it; the positional request text is optional when `--voice` is used, and
-  positional text and `--voice` are mutually exclusive. Every mode shows the
-  transcript for a review menu (accept / edit / record again / type instead /
-  cancel) before submitting.
-- `--voice` is interactive-only: combined with `--json`, `--raw`, `--no-input`,
-  a non-TTY stdin/stderr, `CI`, or `TERM=dumb` it produces one stable
-  noninteractive error and never opens a microphone or browser. Voice-only
-  controls (`--voice-capture`, `--audio-device`) fail locally when given without
-  `--voice`.
-- `auto` never crosses from native transcription to browser speech recognition
-  (a different, browser-vendor processor) without an explicit, default-no
-  consent; an explicit `--voice-capture native` never opens a browser.
-- `--voice-capture auto|native|browser|typed` (default `auto`) selects the
-  capture mechanism; `--audio-device <id-or-name>` picks a microphone for native
-  capture. Both are additive named options.
-- `--voice-timeout` and `--no-browser` are browser-rung controls only: they tune
-  the localhost browser capture and do not affect native or typed capture.
+```bash
+heyfood ask "What can I eat?"
+heyfood item "pad thai at Pismo's"
+heyfood log "I had the tofu bowl for lunch"
+heyfood reply --conversation-id CONVERSATION_ID "The second option"
+```
 
-## Voice device discovery and preferences
+When positional text is omitted and stdin is redirected, the command reads at
+most 1 MiB of UTF-8 input:
 
-`heyfood voice devices` lists input devices for native capture (index, name,
-default marker). Pass the index or a name substring to `--audio-device`. Without
-the `voice` extra installed, it prints an enable hint instead of a device list.
+```bash
+printf '%s\n' "What can I eat?" | heyfood ask --json
+```
 
-`heyfood voice status`, `heyfood voice set` (`--mode`, `--device`), and
-`heyfood voice reset` inspect and manage persisted, reversible capture
-preferences. An omitted mode stays distinct from an explicit `auto`, so a stored
-preference can never silently cross processors or open a browser.
+An optional location requires a complete coordinate pair. Half-specified pairs
+fail during argument parsing:
 
-## Discovering opaque ids
+```bash
+heyfood ask --lat 35.28 --lng -120.66 "What can I order nearby?"
+```
 
-Inside the Rust TUI, `/grocery` opens the live capability-gated active list and
-`/health` opens the live provider-neutral integration/context view. `/profile`
-reads consent and the synchronized dietary profile, while `/household` and
-`/location` render account-bound local context without a network request. These
-panels are read-only and cancellable. `/for MEMBER|everyone` changes the
-process-local household target after resolving the exact active member, and
-subsequent turns receive the same consent-aware dietary, device, and meal
-context used by qualified one-shot household requests. Voice remains absent
-from discovery until its complete capture/transcription/review workflow is
-connected.
+## Registration and login
 
-On a clean machine, running bare `heyfood` in a TTY begins device registration
-and, after account connection, enters the interactive TUI without asking the
-user to restart the command. The startup notice reports profile readiness
-truthfully. Dietary onboarding is not yet implemented in Rust and remains a
-release blocker when the service reports a missing or unknown profile.
+```bash
+heyfood register
+heyfood register --device --no-browser
+heyfood register --device --no-browser --json --timeout 600
+heyfood login
+```
 
-Use `heyfood members list` before passing `--member-id`. It lists synced member
-profile ids returned by the service. Use `heyfood conversation list` to inspect
-the one conversation id remembered in local CLI state, then `conversation
-resume` or `conversation clear --yes`. The service does not currently expose a
-conversation-history listing API, so the CLI does not imply that local state is
-a complete history.
+`--json` suppresses browser launch and interactive prompts. Device authorization
+still requires one human approval on `auth.hello.food`. Refresh never widens
+scopes; `login` is the explicit scope-upgrade path.
 
-`heyfood household list` reconciles synced ids into the local roster. Use
-`household label MEMBER_ID --name NAME --relationship RELATIONSHIP` when a
-profile created on another device has no local display name, then use a unique
-name or exact member id as the scope selector.
+## Grocery
+
+```bash
+heyfood grocery list
+heyfood grocery add --list-id UUID --version VERSION "red lentils" "onion"
+heyfood grocery remove --list-id UUID --version VERSION ITEM_OR_INDEX
+heyfood grocery state --list-id UUID --version VERSION ITEM purchased
+heyfood grocery export UUID --format markdown
+heyfood grocery confirm --decision accept --proposal-stdin < proposal.json
+```
+
+Mutation commands prepare a proposal and do not commit it. Confirmation reads
+the proposal from stdin so authorization material does not enter shell history
+or process arguments.
+
+## Health
+
+```bash
+heyfood health status
+heyfood health show
+heyfood health connect oura
+heyfood health sync oura
+heyfood health disconnect oura --yes
+```
+
+Oura is the current direct CLI provider. Apple Health summaries are acquired by
+the hello.food app and exposed only as provider-labeled hosted context; the CLI
+does not access HealthKit.
+
+## Global process controls
+
+```text
+--json       one ANSI-free JSON value on stdout
+--no-color   disable ANSI styling
+--no-banner  disable decorative branding
+--verbose    privacy-safe diagnostics on stderr
+--no-input   never prompt for missing local input
+```
+
+`--raw` is a deprecated alias for `--json`.
+
+## Interactive TUI preview
+
+The draft Rust branch launches the TUI from an authenticated bare `heyfood`.
+On a clean machine it can complete device registration and continue into the
+same TUI process. This surface is not published or supported while the hosted
+installer remains suspended.
+
+```text
+/grocery             open the capability-gated active Grocery list
+/health              open provider-neutral integration and health context
+/profile             read consent and synchronized dietary profile state
+/household           show account-bound local household context
+/for MEMBER|everyone change household scope and reset conversation continuity
+/location            show account-bound local location context
+/status              check service, profile, optional scopes, and voice readiness
+/new                 reset conversation continuity
+/clear               clear visible scrollback
+/help                show the active slash-command registry
+/exit                leave the TUI
+```
+
+The panels are read-only and cancellable. Voice stays out of discovery until
+capture, transcription, review, and cancellation are connected. Dietary
+onboarding, interactive Grocery confirmation, Menu Watch, and installed-artifact
+showcase qualification remain release gates.
+
+## Unavailable compatibility topology
+
+Onboarding, profile editing, restaurant search, recommendation, menu, recipe,
+household management, voice, configuration, diagnostics, logout, and account
+management are not active Rust commands. Some names remain hidden for migration
+topology only and return `command_not_available`.

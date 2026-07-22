@@ -1,5 +1,11 @@
 # heyfood
 
+> [!CAUTION]
+> **Native installation is suspended. Do not install or use v0.4.0 or v0.4.1.**
+> Both releases were published before release authorization and are unsupported.
+> The hosted installer intentionally exits without installing anything until a
+> supported release is available.
+
 Native command-line access to personalized food and dietary guidance from
 [hello.food](https://hello.food).
 
@@ -9,29 +15,24 @@ installed-artifact journeys, native distribution, and exact-SHA release gates
 are completed. The immutable `v0.4.0` and `v0.4.1` releases are unsupported and
 must not be installed.
 
-## Installation
+See the [current capability and distribution status](docs/CAPABILITY_STATUS.md)
+before evaluating the client.
 
-The hosted native installer intentionally fails closed until the reviewed
-`v0.5.0` artifact is published and passes its public smoke tests. There is no
-supported binary installation command during qualification.
+## Installation status
 
-To inspect immutable installer bytes before running them, replace `REVISION`
-with a reviewed full commit SHA and verify the separately reviewed checksum:
+There is no supported public native binary today. The hosted command currently
+prints the release status without installing anything:
 
 ```bash
-REVISION="<full-reviewed-commit-sha>"
-curl -fsSLO "https://raw.githubusercontent.com/frntrllc/heyfood/${REVISION}/install.sh"
-curl -fsSLO "https://raw.githubusercontent.com/frntrllc/heyfood/${REVISION}/install.sh.sha256"
-if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum -c install.sh.sha256
-else
-  shasum -a 256 -c install.sh.sha256
-fi
-less install.sh
-bash install.sh
+curl -fsSL https://hey.food/install.sh | bash
 ```
 
-## Build from source
+It prints the release-incident notice to stderr and exits `1`. Do not pin
+v0.4.0 or v0.4.1 to bypass the suspension. A successful install command will
+return here only after a replacement release passes testing and receives
+explicit release approval.
+
+## Inspect or build from source
 
 The native workspace requires the Rust toolchain declared in `Cargo.toml`.
 
@@ -43,9 +44,9 @@ cargo build --release --locked --package heyfood-bin
 ./target/release/heyfood --help
 ```
 
-After qualification, GitHub Releases and the hosted installer will be the
-supported public binary distribution path. Building a reviewed source revision
-remains supported for contributors.
+GitHub Releases and the hosted installer are the only supported public binary
+distribution path. Building a reviewed source revision is available for
+contributors, but it is not a supported substitute for the suspended release.
 
 ## Register
 
@@ -78,7 +79,7 @@ exchange, and response-contract validation all succeed. If it reports an
 uncertain session-exchange or persistence outcome, do not start another
 registration attempt until account state is reconciled.
 
-Native `0.4.0` credentials predate the Grocery and Health scopes. If a command
+Older native credentials may predate the Grocery and Health scopes. If a command
 reports `authorization_scope_upgrade_required`, approve the explicit upgrade:
 
 ```bash
@@ -89,7 +90,7 @@ OAuth refresh cannot add authority. Login preserves the existing credentials
 through device approval and session exchange, verifies the complete expanded
 grant, and only then replaces both native credential stores.
 
-## Active commands
+## Current Rust command surface
 
 ```bash
 heyfood ask "What can I eat?"
@@ -107,7 +108,7 @@ conversation persistence is not active. `ask`, `log`, and `item` may also use
 an optional coordinate pair:
 
 ```bash
-heyfood ask --latitude 35.28 --longitude -120.66 "What can I order nearby?"
+heyfood ask --lat 35.28 --lng -120.66 "What can I order nearby?"
 ```
 
 If command text is omitted and stdin is not a terminal, the client reads the
@@ -138,10 +139,12 @@ do not retry a potentially committed operation blindly. See the
 
 ## Interactive terminal
 
-After registration, run `heyfood` without a subcommand to enter the native Rust
-TUI. The composer remains editable while responses stream, keeps bounded
-process-local prompt history, and preserves conversation continuity only for
-the lifetime of the process.
+On this draft branch, registration continues into the native Rust TUI and an
+authenticated bare `heyfood` launches it directly. This is source-level preview
+work, not a supported release; the hosted installer remains suspended. The
+composer remains editable while responses stream, keeps bounded process-local
+prompt history, and preserves conversation continuity only for the lifetime of
+the process.
 
 Interactive controls include Enter to send, Shift+Enter or Ctrl+J for a
 newline, Up/Down for prompt history, PageUp/PageDown for scrollback, Ctrl+C to
@@ -149,9 +152,11 @@ stop an active turn, and Ctrl+D or `/exit` to leave. Use `/help` for the current
 command registry, `/new` for a fresh conversation, `/clear` to clear visible
 scrollback, and `/status` to inspect session readiness.
 
-Profile, household, location, and voice panels remain in active Rust
-implementation. Their existing one-shot compatibility routes continue to fail
-closed where the native workflow is not complete.
+Read-only Grocery, Health, profile, household, location, and status panels are
+connected on the draft branch. Onboarding, interactive Grocery confirmation,
+Menu Watch, and native voice capture remain incomplete release gates. Hidden
+compatibility routes continue to fail closed where a native workflow is not
+complete.
 
 ## Development
 
@@ -172,6 +177,7 @@ approved contract bytes or update their hashes as part of unrelated changes.
 
 Additional project references:
 
+- [Capability and distribution status](docs/CAPABILITY_STATUS.md)
 - [Development setup](DEVELOPMENT.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
