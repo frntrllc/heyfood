@@ -32,6 +32,8 @@ use heyfood_platform::CredentialBrokerStore;
 use heyfood_platform::FileCredentialStore as NativeSessionStore;
 #[cfg(all(not(windows), feature = "native-credentials"))]
 use heyfood_platform::FileCredentialStore;
+#[cfg(all(windows, not(feature = "native-credentials")))]
+use heyfood_platform::WindowsCredentialStore as NativeSessionStore;
 use heyfood_platform::{
     AuthorizationReplacementJournal, AuthorizationReplacementPhase, NativeAuthStore, NativeBrowser,
     NativeClock, NativePaths, PythonStateImporter,
