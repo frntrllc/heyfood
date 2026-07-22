@@ -385,153 +385,14 @@ impl<'a> OneShotExecutor<'a> {
         cancellation: CancellationToken,
     ) -> Result<TurnContext, OneShotError> {
         let state = self.bound_imported_state()?;
-        let household = normalized_household(state)?;
-        let selected = resolve_household_scope(&household, selector)?;
-        let consent = self
-            .service
-            .profile_consent_status(
-                self.credentials,
-                OperationId::new(),
-                cancellation.child_token(),
-            )
-            .await?;
-        let has_consent = consent
-            .get("has_consent")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let active = active_household_members(&household);
-        let owner = member_by_id(&active, "_self")
-            .or_else(|| active.first().copied())
-            .ok_or_else(|| OneShotError::new("household_state", "household has no active owner"))?;
-        let local_profiles = state
-            .account_scoped
-            .get("household_local_profiles")
-            .and_then(Value::as_object);
-        let profile_outbox = state
-            .account_scoped
-            .get("household_profile_outbox")
-            .and_then(Value::as_object);
-
-        let dietary = if selected == "__everyone__" {
-            let mut members = Vec::with_capacity(active.len());
-            for member in &active {
-                let profile = self
-                    .profile_for_household_member(
-                        member,
-                        local_profiles,
-                        profile_outbox,
-                        has_consent,
-                        cancellation.child_token(),
-                    )
-                    .await?;
-                let mut context = member_dietary_context(member, &profile, owner)?;
-                context.insert(
-                    "member_id".into(),
-                    Value::String(member_id(member)?.to_owned()),
-                );
-                context.insert(
-                    "label".into(),
-                    Value::String(member_name(member)?.to_owned()),
-                );
-                members.push(Value::Object(context));
-            }
-            json!({"mode": "household", "members": members})
-        } else {
-            let member = member_by_id(&active, &selected).ok_or_else(|| {
-                OneShotError::new(
-                    "household_scope",
-                    "selected household member is unavailable",
-                )
-            })?;
-            let profile = self
-                .profile_for_household_member(
-                    member,
-                    local_profiles,
-                    profile_outbox,
-                    has_consent,
-                    cancellation.child_token(),
-                )
-                .await?;
-            Value::Object(member_dietary_context(member, &profile, owner)?)
-        };
-        let selected_member = member_by_id(&active, &selected);
-        let scope_label = if selected == "__everyone__" {
-            "Everyone".to_owned()
-        } else {
-            member_name(selected_member.ok_or_else(|| {
-                OneShotError::new(
-                    "household_scope",
-                    "selected household member is unavailable",
-                )
-            })?)?
-            .to_owned()
-        };
-        let device = has_consent.then(|| {
-            json!({
-                "household": {
-                    "owner_id": "_self",
-                    "members": active.iter().filter_map(|member| {
-                        Some(json!({
-                            "id": member.get("id")?.as_str()?,
-                            "name": member.get("name")?.as_str()?,
-                            "relationship": member.get("relationship").and_then(Value::as_str).unwrap_or("other"),
-                            "is_owner": member.get("id").and_then(Value::as_str) == Some("_self")
-                        }))
-                    }).collect::<Vec<_>>()
-                }
-            })
-        });
-        let meal = if selected == "__everyone__" {
-            json!({"is_cook_mode": true})
-        } else {
-            json!({
-                "active_member_id": selected,
-                "active_member_name": scope_label,
-                "is_cook_mode": false
-            })
-        };
-        Ok(TurnContext {
-            dietary: Some(dietary),
-            device,
-            meal: Some(meal),
-            ..TurnContext::default()
-        })
-    }
-
-    async fn profile_for_household_member(
-        &self,
-        member: &Map<String, Value>,
-        local_profiles: Option<&Map<String, Value>>,
-        profile_outbox: Option<&Map<String, Value>>,
-        has_consent: bool,
-        cancellation: CancellationToken,
-    ) -> Result<Value, OneShotError> {
-        let id = member_id(member)?;
-        if member.get("relationship").and_then(Value::as_str) == Some("child") {
-            return Ok(local_profiles
-                .and_then(|profiles| profiles.get(id))
-                .cloned()
-                .unwrap_or_else(|| json!({})));
-        }
-        if let Some(pending) = profile_outbox.and_then(|outbox| outbox.get(id)) {
-            return Ok(pending
-                .get("local_context")
-                .filter(|value| value.is_object())
-                .cloned()
-                .unwrap_or_else(|| json!({})));
-        }
-        if !has_consent {
-            return Ok(json!({}));
-        }
-        let downloaded = self
-            .service
-            .download_profile(self.credentials, id, OperationId::new(), cancellation)
-            .await?;
-        Ok(downloaded
-            .get("profile_data")
-            .filter(|value| value.is_object())
-            .cloned()
-            .unwrap_or_else(|| json!({})))
+        build_household_turn_context(
+            self.service,
+            self.credentials,
+            state,
+            selector,
+            cancellation,
+        )
+        .await
     }
 
     async fn execute_prompt(
@@ -1143,6 +1004,185 @@ fn resolve_household_scope(
     }
 }
 
+fn resolve_household_scope_with_label(
+    state: &ImportedPythonState,
+    selector: &str,
+) -> Result<(String, String), String> {
+    let household = normalized_household(state).map_err(|error| error.message)?;
+    let identifier =
+        resolve_household_scope(&household, Some(selector)).map_err(|error| error.message)?;
+    if identifier == "__everyone__" {
+        return Ok((identifier, "Everyone".into()));
+    }
+    let members = active_household_members(&household);
+    let label = member_by_id(&members, &identifier)
+        .and_then(|member| member.get("name"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Selected household member is unavailable.".to_owned())?
+        .to_owned();
+    Ok((identifier, label))
+}
+
+async fn build_household_turn_context(
+    service: &HttpService,
+    credentials: &SessionCredentials,
+    state: &ImportedPythonState,
+    selector: Option<&str>,
+    cancellation: CancellationToken,
+) -> Result<TurnContext, OneShotError> {
+    if state.account_user_id.as_deref() != Some(credentials.account_id.as_str()) {
+        return Err(OneShotError::new(
+            "python_state_account_mismatch",
+            "imported Python state does not belong to the authenticated account",
+        ));
+    }
+    let household = normalized_household(state)?;
+    let selected = resolve_household_scope(&household, selector)?;
+    let consent = service
+        .profile_consent_status(credentials, OperationId::new(), cancellation.child_token())
+        .await?;
+    let has_consent = consent
+        .get("has_consent")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let active = active_household_members(&household);
+    let owner = member_by_id(&active, "_self")
+        .or_else(|| active.first().copied())
+        .ok_or_else(|| OneShotError::new("household_state", "household has no active owner"))?;
+    let local_profiles = state
+        .account_scoped
+        .get("household_local_profiles")
+        .and_then(Value::as_object);
+    let profile_outbox = state
+        .account_scoped
+        .get("household_profile_outbox")
+        .and_then(Value::as_object);
+
+    let dietary = if selected == "__everyone__" {
+        let mut members = Vec::with_capacity(active.len());
+        for member in &active {
+            let profile = profile_for_household_member(
+                service,
+                credentials,
+                member,
+                local_profiles,
+                profile_outbox,
+                has_consent,
+                cancellation.child_token(),
+            )
+            .await?;
+            let mut context = member_dietary_context(member, &profile, owner)?;
+            context.insert(
+                "member_id".into(),
+                Value::String(member_id(member)?.to_owned()),
+            );
+            context.insert(
+                "label".into(),
+                Value::String(member_name(member)?.to_owned()),
+            );
+            members.push(Value::Object(context));
+        }
+        json!({"mode": "household", "members": members})
+    } else {
+        let member = member_by_id(&active, &selected).ok_or_else(|| {
+            OneShotError::new(
+                "household_scope",
+                "selected household member is unavailable",
+            )
+        })?;
+        let profile = profile_for_household_member(
+            service,
+            credentials,
+            member,
+            local_profiles,
+            profile_outbox,
+            has_consent,
+            cancellation.child_token(),
+        )
+        .await?;
+        Value::Object(member_dietary_context(member, &profile, owner)?)
+    };
+    let selected_member = member_by_id(&active, &selected);
+    let scope_label = if selected == "__everyone__" {
+        "Everyone".to_owned()
+    } else {
+        member_name(selected_member.ok_or_else(|| {
+            OneShotError::new(
+                "household_scope",
+                "selected household member is unavailable",
+            )
+        })?)?
+        .to_owned()
+    };
+    let device = has_consent.then(|| {
+        json!({
+            "household": {
+                "owner_id": "_self",
+                "members": active.iter().filter_map(|member| {
+                    Some(json!({
+                        "id": member.get("id")?.as_str()?,
+                        "name": member.get("name")?.as_str()?,
+                        "relationship": member.get("relationship").and_then(Value::as_str).unwrap_or("other"),
+                        "is_owner": member.get("id").and_then(Value::as_str) == Some("_self")
+                    }))
+                }).collect::<Vec<_>>()
+            }
+        })
+    });
+    let meal = if selected == "__everyone__" {
+        json!({"is_cook_mode": true})
+    } else {
+        json!({
+            "active_member_id": selected,
+            "active_member_name": scope_label,
+            "is_cook_mode": false
+        })
+    };
+    Ok(TurnContext {
+        dietary: Some(dietary),
+        device,
+        meal: Some(meal),
+        ..TurnContext::default()
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn profile_for_household_member(
+    service: &HttpService,
+    credentials: &SessionCredentials,
+    member: &Map<String, Value>,
+    local_profiles: Option<&Map<String, Value>>,
+    profile_outbox: Option<&Map<String, Value>>,
+    has_consent: bool,
+    cancellation: CancellationToken,
+) -> Result<Value, OneShotError> {
+    let id = member_id(member)?;
+    if member.get("relationship").and_then(Value::as_str) == Some("child") {
+        return Ok(local_profiles
+            .and_then(|profiles| profiles.get(id))
+            .cloned()
+            .unwrap_or_else(|| json!({})));
+    }
+    if let Some(pending) = profile_outbox.and_then(|outbox| outbox.get(id)) {
+        return Ok(pending
+            .get("local_context")
+            .filter(|value| value.is_object())
+            .cloned()
+            .unwrap_or_else(|| json!({})));
+    }
+    if !has_consent {
+        return Ok(json!({}));
+    }
+    let downloaded = service
+        .download_profile(credentials, id, OperationId::new(), cancellation)
+        .await?;
+    Ok(downloaded
+        .get("profile_data")
+        .filter(|value| value.is_object())
+        .cloned()
+        .unwrap_or_else(|| json!({})))
+}
+
 fn member_dietary_context(
     member: &Map<String, Value>,
     profile: &Value,
@@ -1235,6 +1275,7 @@ pub struct InteractiveTurnDriver {
     ensure_session: Arc<EnsureSession>,
     session: Arc<Mutex<SessionSnapshot>>,
     conversation_id: Arc<Mutex<Option<String>>>,
+    active_household_scope: Arc<Mutex<Option<String>>>,
     turns: Vec<OwnedInteractiveTurn>,
     signals: Option<OwnedSignalForwarder>,
 }
@@ -1259,6 +1300,7 @@ impl InteractiveTurnDriver {
             ensure_session,
             session: Arc::new(Mutex::new(session)),
             conversation_id: Arc::new(Mutex::new(None)),
+            active_household_scope: Arc::new(Mutex::new(None)),
             turns: Vec::new(),
             signals: None,
         })
@@ -1357,6 +1399,9 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         let ensure_session = self.ensure_session.clone();
         let session = self.session.clone();
         let conversation_id = self.conversation_id.clone();
+        let context_service = self.interactive_service.clone();
+        let local_state = self.local_state.clone();
+        let active_household_scope = self.active_household_scope.clone();
         let task = self.runtime.spawn(async move {
             let outcome = run_interactive_turn(
                 operation_id,
@@ -1365,6 +1410,9 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 ensure_session,
                 session,
                 conversation_id,
+                context_service,
+                local_state,
+                active_household_scope,
                 task_cancellation,
                 runtime_events.clone(),
             )
@@ -1380,6 +1428,61 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 },
             };
             let _ = runtime_events.send(terminal_event).await;
+        });
+        self.turns.push(OwnedInteractiveTurn {
+            operation_id,
+            cancellation,
+            task,
+        });
+        Ok(())
+    }
+
+    fn start_household_scope(
+        &mut self,
+        operation_id: u64,
+        selector: String,
+        runtime_events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        self.reap_finished();
+        if !self.turns.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "interactive work is already active",
+            ));
+        }
+        let local_state = self.local_state.clone();
+        let active_household_scope = self.active_household_scope.clone();
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+        let task = self.runtime.spawn(async move {
+            let result = local_state
+                .as_deref()
+                .ok_or_else(|| {
+                    "No household context is saved yet. Complete dietary onboarding first."
+                        .to_owned()
+                })
+                .and_then(|state| resolve_household_scope_with_label(state, &selector));
+            let event = match result {
+                Ok((identifier, label)) => {
+                    if task_cancellation.is_cancelled() {
+                        RuntimeEvent::HouseholdScopeFailed {
+                            operation_id,
+                            message: "Household target change was cancelled.".into(),
+                        }
+                    } else {
+                        *active_household_scope.lock().await = Some(identifier);
+                        RuntimeEvent::HouseholdScopeReady {
+                            operation_id,
+                            label,
+                        }
+                    }
+                }
+                Err(message) => RuntimeEvent::HouseholdScopeFailed {
+                    operation_id,
+                    message,
+                },
+            };
+            let _ = runtime_events.send(event).await;
         });
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
@@ -1510,6 +1613,9 @@ async fn run_interactive_turn(
     ensure_session: Arc<EnsureSession>,
     session: Arc<Mutex<SessionSnapshot>>,
     conversation_id: Arc<Mutex<Option<String>>>,
+    context_service: Option<Arc<HttpService>>,
+    local_state: Option<Arc<ImportedPythonState>>,
+    active_household_scope: Arc<Mutex<Option<String>>>,
     cancellation: CancellationToken,
     runtime_events: mpsc::Sender<RuntimeEvent>,
 ) -> Result<RunTurnOutcome, String> {
@@ -1534,10 +1640,25 @@ async fn run_interactive_turn(
     if cancellation.is_cancelled() {
         return Ok(RunTurnOutcome::CancelledBeforeServerAcceptance);
     }
+    let context = match (context_service, local_state) {
+        (Some(service), Some(state)) => {
+            let selector = active_household_scope.lock().await.clone();
+            build_household_turn_context(
+                &service,
+                &credentials,
+                &state,
+                selector.as_deref(),
+                cancellation.child_token(),
+            )
+            .await
+            .map_err(|error| terminal_safe_text(&error.message))?
+        }
+        _ => TurnContext::default(),
+    };
     let request = TurnRequest {
         prompt,
         conversation_id: conversation_id.lock().await.clone(),
-        context: TurnContext::default(),
+        context,
         refresh: RefreshPolicy::Never,
     };
     let accepted = service
@@ -1900,6 +2021,18 @@ pub trait QualifiedTurnDriver {
         ))
     }
 
+    fn start_household_scope(
+        &mut self,
+        _operation_id: u64,
+        _selector: String,
+        _events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "household targeting is unavailable in this driver",
+        ))
+    }
+
     fn cancel_turn(&mut self, operation_id: u64) -> io::Result<()>;
 
     /// Forget process-local conversation continuity without touching persisted
@@ -1997,6 +2130,12 @@ fn route_effect(
         } => driver
             .start_panel(operation_id, panel, runtime_sender.clone())
             .map_err(CompositionError::Driver),
+        Effect::SelectHousehold {
+            operation_id,
+            selector,
+        } => driver
+            .start_household_scope(operation_id, selector, runtime_sender.clone())
+            .map_err(CompositionError::Driver),
         Effect::CancelTurn { operation_id } => driver
             .cancel_turn(operation_id)
             .map_err(CompositionError::Driver),
@@ -2016,6 +2155,7 @@ mod tests {
         thread,
     };
 
+    use heyfood_agent_runtime::CliAuthContext;
     use heyfood_application::{
         AcceptedTurn, BoxFuture, ClockPort, CredentialCommit, CredentialPort, EventStream,
         PortError,
@@ -2025,7 +2165,7 @@ mod tests {
         RefreshRequest, SensitiveString, ServiceUrl,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use tokio::net::{TcpListener, TcpStream};
 
     struct FixedClock;
 
@@ -2129,6 +2269,35 @@ mod tests {
             4_102_444_800,
         )
         .unwrap()
+    }
+
+    async fn read_complete_http_request(socket: &mut TcpStream) -> String {
+        let mut request = Vec::new();
+        let header_end = loop {
+            let mut buffer = [0_u8; 1024];
+            let read = socket.read(&mut buffer).await.unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+            if let Some(index) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                break index + 4;
+            }
+        };
+        let headers = String::from_utf8(request[..header_end].to_vec()).unwrap();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+            .unwrap_or(0);
+        while request.len() < header_end + content_length {
+            let mut buffer = [0_u8; 1024];
+            let read = socket.read(&mut buffer).await.unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+        }
+        String::from_utf8(request).unwrap()
     }
 
     #[derive(Default)]
@@ -2245,6 +2414,184 @@ mod tests {
             requests[1].conversation_id.as_deref(),
             Some("conversation-1")
         );
+    }
+
+    #[test]
+    fn interactive_household_target_resolves_to_a_process_local_member_id() {
+        let service = Arc::new(FixtureService::default());
+        let service_port: Arc<dyn ServicePort> = service.clone();
+        let ensure_session = Arc::new(EnsureSession::new(
+            service_port.clone(),
+            Arc::new(MemoryCredentialPort),
+            Arc::new(FixedClock),
+        ));
+        let state = ImportedPythonState {
+            account_user_id: Some("account-1".into()),
+            global: BTreeMap::new(),
+            account_scoped: BTreeMap::from([(
+                "household".into(),
+                serde_json::json!({
+                    "members": [{
+                        "id": "member-sarah",
+                        "name": "Sarah",
+                        "relationship": "partner"
+                    }]
+                }),
+            )]),
+        };
+        let mut driver = InteractiveTurnDriver::new(
+            service_port,
+            ensure_session,
+            SessionSnapshot {
+                credentials: fixture_credentials(),
+                reconciliation_required: false,
+            },
+        )
+        .unwrap()
+        .with_local_state(Some(state));
+        let (sender, mut receiver) = mpsc::channel(4);
+        driver
+            .start_household_scope(1, "Sarah".into(), sender)
+            .unwrap();
+        assert!(matches!(
+            receiver.blocking_recv(),
+            Some(RuntimeEvent::HouseholdScopeReady {
+                operation_id: 1,
+                label
+            }) if label == "Sarah"
+        ));
+        assert_eq!(
+            driver
+                .runtime
+                .block_on(async { driver.active_household_scope.lock().await.clone() })
+                .as_deref(),
+            Some("member-sarah")
+        );
+        driver.shutdown_and_join(Duration::from_secs(1)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn interactive_turn_sends_the_selected_household_context() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut consent, _) = listener.accept().await.unwrap();
+            let request = read_complete_http_request(&mut consent).await;
+            assert!(request.starts_with("GET /v1/profile/consent HTTP/1.1\r\n"));
+            let body = r#"{"has_consent":true,"consent_version":1}"#;
+            consent
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+
+            let (mut profile, _) = listener.accept().await.unwrap();
+            let request = read_complete_http_request(&mut profile).await;
+            assert!(
+                request.starts_with("GET /v1/profile/sync?member_id=member-sarah HTTP/1.1\r\n")
+            );
+            let body = serde_json::json!({
+                "member_id": "member-sarah",
+                "version": 3,
+                "updated_at": "2026-07-22T00:00:00Z",
+                "profile_data": {
+                    "preferences": ["vegetarian"],
+                    "avoid_ingredients": ["peanuts"]
+                }
+            })
+            .to_string();
+            profile
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+
+            let (mut converse, _) = listener.accept().await.unwrap();
+            let request = read_complete_http_request(&mut converse).await;
+            assert!(request.starts_with("POST /v1/agent/converse HTTP/1.1\r\n"));
+            let body = request.split_once("\r\n\r\n").unwrap().1;
+            let body: Value = serde_json::from_str(body).unwrap();
+            assert_eq!(body["dietary_context"]["name"], "Sarah");
+            assert_eq!(body["dietary_context"]["preferences"][0], "vegetarian");
+            assert_eq!(body["meal_context"]["active_member_id"], "member-sarah");
+            assert_eq!(body["meal_context"]["active_member_name"], "Sarah");
+            assert_eq!(
+                body["device_context"]["household"]["members"][1]["id"],
+                "member-sarah"
+            );
+            converse
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\nevent: result\ndata: {\"message\":\"done\"}\n\n",
+                )
+                .await
+                .unwrap();
+        });
+
+        let service_url =
+            ServiceUrl::parse(&format!("http://{address}"), NetworkPolicy::DEVELOPMENT).unwrap();
+        let service = Arc::new(
+            HttpService::new(service_url, NetworkPolicy::DEVELOPMENT, Default::default())
+                .unwrap()
+                .with_cli_auth(
+                    CliAuthContext::new(
+                        "interactive-device",
+                        SensitiveString::new("channel-access"),
+                        None,
+                    )
+                    .unwrap(),
+                ),
+        );
+        let service_port: Arc<dyn ServicePort> = service.clone();
+        let ensure_session = Arc::new(EnsureSession::new(
+            service_port.clone(),
+            Arc::new(MemoryCredentialPort),
+            Arc::new(FixedClock),
+        ));
+        let state = Arc::new(ImportedPythonState {
+            account_user_id: Some("account-1".into()),
+            global: BTreeMap::new(),
+            account_scoped: BTreeMap::from([(
+                "household".into(),
+                serde_json::json!({
+                    "members": [{
+                        "id": "member-sarah",
+                        "name": "Sarah",
+                        "relationship": "partner"
+                    }]
+                }),
+            )]),
+        });
+        let (events, _receiver) = mpsc::channel(8);
+        let outcome = run_interactive_turn(
+            1,
+            "What should Sarah eat?".into(),
+            service_port,
+            ensure_session,
+            Arc::new(Mutex::new(SessionSnapshot {
+                credentials: fixture_credentials(),
+                reconciliation_required: false,
+            })),
+            Arc::new(Mutex::new(None)),
+            Some(service),
+            Some(state),
+            Arc::new(Mutex::new(Some("member-sarah".into()))),
+            CancellationToken::new(),
+            events,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, RunTurnOutcome::Completed);
+        server.await.unwrap();
     }
 
     #[test]

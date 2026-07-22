@@ -16,6 +16,7 @@ enum SlashCommandKind {
     Grocery,
     Health,
     Household,
+    For,
     Profile,
     Location,
     Status,
@@ -89,6 +90,13 @@ pub const SLASH_COMMAND_REGISTRY: &[SlashCommandSpec] = &[
         usage: "/household",
         description: "Open household targeting",
         kind: SlashCommandKind::Household,
+    },
+    SlashCommandSpec {
+        name: "/for",
+        aliases: &[],
+        usage: "/for MEMBER|everyone",
+        description: "Target future turns to a household scope",
+        kind: SlashCommandKind::For,
     },
     SlashCommandSpec {
         name: "/profile",
@@ -418,6 +426,14 @@ pub enum RuntimeEvent {
         panel: PanelRequest,
         message: String,
     },
+    HouseholdScopeReady {
+        operation_id: u64,
+        label: String,
+    },
+    HouseholdScopeFailed {
+        operation_id: u64,
+        message: String,
+    },
     Notice {
         message: String,
     },
@@ -456,6 +472,10 @@ pub enum Effect {
     OpenPanel {
         operation_id: u64,
         panel: PanelRequest,
+    },
+    SelectHousehold {
+        operation_id: u64,
+        selector: String,
     },
     CancelTurn {
         operation_id: u64,
@@ -618,11 +638,45 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
         SlashCommandKind::Grocery => return open_panel(model, PanelRequest::Grocery),
         SlashCommandKind::Health => return open_panel(model, PanelRequest::Health),
         SlashCommandKind::Household => return open_panel(model, PanelRequest::Household),
+        SlashCommandKind::For if arguments.is_empty() => {
+            push_notice(model, &format!("Usage: {}", spec.usage));
+        }
+        SlashCommandKind::For => return select_household(model, arguments),
         SlashCommandKind::Profile => return open_panel(model, PanelRequest::Profile),
         SlashCommandKind::Location => return open_panel(model, PanelRequest::Location),
         SlashCommandKind::Exit => return begin_exit(model, ExitReason::Requested),
     }
     Vec::new()
+}
+
+fn select_household(model: &mut AppModel, selector: &str) -> Vec<Effect> {
+    if model.operation.is_active() {
+        push_notice(
+            model,
+            "Finish or stop the active work before changing the household target.",
+        );
+        return Vec::new();
+    }
+    let operation_id = model.next_operation_id;
+    model.next_operation_id = model.next_operation_id.saturating_add(1);
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::User,
+        text: format!("/for {selector}"),
+        streaming: false,
+    });
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::Assistant,
+        text: String::new(),
+        streaming: true,
+    });
+    model.operation = OperationState::Running(operation_id);
+    model.activity = Some("Changing household target…".into());
+    model.idle_exit_armed = false;
+    follow_tail(model);
+    vec![Effect::SelectHousehold {
+        operation_id,
+        selector: selector.to_owned(),
+    }]
 }
 
 fn open_panel(model: &mut AppModel, panel: PanelRequest) -> Vec<Effect> {
@@ -812,13 +866,48 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
         } if model.operation.operation_id() == Some(operation_id) => {
             finish_panel(model, panel, Err(message));
         }
+        RuntimeEvent::HouseholdScopeReady {
+            operation_id,
+            label,
+        } if model.operation.operation_id() == Some(operation_id) => {
+            finish_household_scope(model, Ok(label));
+        }
+        RuntimeEvent::HouseholdScopeFailed {
+            operation_id,
+            message,
+        } if model.operation.operation_id() == Some(operation_id) => {
+            finish_household_scope(model, Err(message));
+        }
         RuntimeEvent::TurnEvent { .. }
         | RuntimeEvent::TurnFinished { .. }
         | RuntimeEvent::TurnFailed { .. }
         | RuntimeEvent::PanelReady { .. }
-        | RuntimeEvent::PanelFailed { .. } => {}
+        | RuntimeEvent::PanelFailed { .. }
+        | RuntimeEvent::HouseholdScopeReady { .. }
+        | RuntimeEvent::HouseholdScopeFailed { .. } => {}
     }
     Vec::new()
+}
+
+fn finish_household_scope(model: &mut AppModel, result: Result<String, String>) {
+    let old_lines = model.scrollback.rendered_lines();
+    model.scrollback.mutate_last_assistant(|entry| {
+        entry.text = match result {
+            Ok(label) => format!(
+                "Household target\n\nFuture turns will consider {}.",
+                terminal_safe_text(&label)
+            ),
+            Err(message) => format!(
+                "Unable to change the household target: {}",
+                terminal_safe_text(&message)
+            ),
+        };
+        entry.streaming = false;
+    });
+    model.operation = OperationState::Idle;
+    model.activity = None;
+    model.idle_exit_armed = false;
+    account_for_new_lines(model, old_lines);
 }
 
 fn finish_panel(model: &mut AppModel, panel: PanelRequest, result: Result<String, String>) {
@@ -1404,10 +1493,36 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_panels_are_not_advertised_as_available_commands() {
-        for command in ["/voice", "/for"] {
-            assert!(resolve_slash_command(command).is_none(), "{command}");
-        }
+    fn incomplete_voice_command_is_not_advertised() {
+        assert!(resolve_slash_command("/voice").is_none());
+    }
+
+    #[test]
+    fn household_target_dispatches_and_reports_the_resolved_scope() {
+        let mut model = AppModel {
+            draft: "/for Sarah".into(),
+            cursor: 10,
+            ..AppModel::default()
+        };
+        assert_eq!(
+            dispatch(&mut model, Action::Submit),
+            vec![Effect::SelectHousehold {
+                operation_id: 1,
+                selector: "Sarah".into(),
+            }]
+        );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::HouseholdScopeReady {
+                operation_id: 1,
+                label: "Sarah".into(),
+            }),
+        );
+        assert_eq!(model.operation, OperationState::Idle);
+        assert_eq!(
+            model.scrollback.entries().back().unwrap().text,
+            "Household target\n\nFuture turns will consider Sarah."
+        );
     }
 
     #[test]

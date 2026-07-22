@@ -16,6 +16,8 @@ authentication contracts are stabilized.
   live capability/list and provider-neutral integration/context reads.
 - Adds a live `/profile` consent/profile view plus account-bound local
   `/household` and `/location` panels; mismatched local state fails closed.
+- Adds a functional `/for MEMBER|everyone` context switch and threads the
+  resolved consent-aware household context through subsequent TUI turns.
 - Lets an unauthenticated bare `heyfood` session complete device registration
   and continue into the TUI in the same process; incomplete dietary onboarding
   remains explicit.

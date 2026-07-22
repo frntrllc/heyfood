@@ -81,9 +81,12 @@ Inside the Rust TUI, `/grocery` opens the live capability-gated active list and
 `/health` opens the live provider-neutral integration/context view. `/profile`
 reads consent and the synchronized dietary profile, while `/household` and
 `/location` render account-bound local context without a network request. These
-panels are read-only and cancellable. Voice and the mutating `/for` household
-target switch remain absent from discovery until their complete typed workflows
-are connected.
+panels are read-only and cancellable. `/for MEMBER|everyone` changes the
+process-local household target after resolving the exact active member, and
+subsequent turns receive the same consent-aware dietary, device, and meal
+context used by qualified one-shot household requests. Voice remains absent
+from discovery until its complete capture/transcription/review workflow is
+connected.
 
 On a clean machine, running bare `heyfood` in a TTY begins device registration
 and, after account connection, enters the interactive TUI without asking the
