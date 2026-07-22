@@ -10,7 +10,7 @@ fn contract() -> Value {
 }
 
 #[test]
-fn every_landing_showcase_stage_is_a_release_blocking_test_case() {
+fn landing_page_inventory_declares_all_twelve_required_stages() {
     let contract = contract();
     assert_eq!(contract["schema_version"], 1);
     let journeys = contract["journeys"].as_array().unwrap();
@@ -50,7 +50,7 @@ fn every_landing_showcase_stage_is_a_release_blocking_test_case() {
 }
 
 #[test]
-fn presentation_contract_covers_retained_terminal_behavior() {
+fn landing_page_inventory_declares_the_presentation_requirements() {
     let presentation = &contract()["presentation"];
     assert_eq!(
         presentation["composer"],

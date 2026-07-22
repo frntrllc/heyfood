@@ -10,6 +10,10 @@ The machine-readable inventory is
 observed on 2026-07-21 and the matching website source at
 `847615429b5d423bc32e49ebbe1819ae6cf248a4`.
 
+The inventory and its Rust integrity test are requirements bookkeeping only.
+They do not execute a journey and are not release evidence. Only the
+installed-artifact E2E suite described below can satisfy the showcase gate.
+
 ## Required journeys
 
 | Journey | Installed-user stages | Release proof |

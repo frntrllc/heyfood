@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, fmt::Write as _};
 
-use heyfood_application::RunTurnOutcome;
+use heyfood_application::{RunTurnOutcome, agent_result_text};
 use heyfood_core::{AgentEvent, terminal_safe_text};
 
 pub const MAX_SCROLLBACK_ENTRIES: usize = 1_000;
@@ -13,11 +13,6 @@ const MAX_PROMPT_HISTORY: usize = 100;
 enum SlashCommandKind {
     Help,
     New,
-    Voice,
-    Target,
-    Household,
-    Profile,
-    Location,
     Status,
     Clear,
     Exit,
@@ -46,41 +41,6 @@ pub const SLASH_COMMAND_REGISTRY: &[SlashCommandSpec] = &[
         usage: "/new",
         description: "Start a fresh conversation",
         kind: SlashCommandKind::New,
-    },
-    SlashCommandSpec {
-        name: "/voice",
-        aliases: &[],
-        usage: "/voice",
-        description: "Start voice or show availability",
-        kind: SlashCommandKind::Voice,
-    },
-    SlashCommandSpec {
-        name: "/for",
-        aliases: &[],
-        usage: "/for NAME",
-        description: "Target a household member",
-        kind: SlashCommandKind::Target,
-    },
-    SlashCommandSpec {
-        name: "/household",
-        aliases: &[],
-        usage: "/household",
-        description: "View household targeting",
-        kind: SlashCommandKind::Household,
-    },
-    SlashCommandSpec {
-        name: "/profile",
-        aliases: &[],
-        usage: "/profile",
-        description: "View dietary profile readiness",
-        kind: SlashCommandKind::Profile,
-    },
-    SlashCommandSpec {
-        name: "/location",
-        aliases: &[],
-        usage: "/location",
-        description: "View active location context",
-        kind: SlashCommandKind::Location,
     },
     SlashCommandSpec {
         name: "/status",
@@ -563,23 +523,6 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
             return vec![Effect::ResetConversation];
         }
         SlashCommandKind::Exit => return begin_exit(model, ExitReason::Requested),
-        SlashCommandKind::Voice => push_notice(
-            model,
-            "Voice is not connected to the composer yet. Typed conversation remains available.",
-        ),
-        SlashCommandKind::Target if arguments.is_empty() => {
-            push_notice(model, &format!("Usage: {}", spec.usage));
-        }
-        SlashCommandKind::Target => push_notice(
-            model,
-            "Household targeting is being connected. The current conversation remains targeted to you.",
-        ),
-        SlashCommandKind::Household | SlashCommandKind::Profile | SlashCommandKind::Location => {
-            push_notice(
-                model,
-                "This interactive panel is being connected. Use the corresponding one-shot command for now.",
-            )
-        }
     }
     Vec::new()
 }
@@ -774,14 +717,15 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             model.activity = Some("Choose an option".into());
         }
         AgentEvent::Result { document, .. } => {
-            let result = document
-                .as_str()
-                .or_else(|| document.get("text").and_then(|value| value.as_str()))
-                .map(str::to_owned)
-                .unwrap_or_else(|| document.to_string());
-            let result = terminal_safe_text(&result);
+            let result = agent_result_text(&document).map(terminal_safe_text);
             model.scrollback.mutate_last_assistant(|entry| {
-                entry.text = result;
+                if let Some(result) = result {
+                    if !result.is_empty() {
+                        entry.text = result;
+                    }
+                } else if entry.text.is_empty() {
+                    entry.text = terminal_safe_text(&document.to_string());
+                }
                 entry.streaming = false;
             });
             mark_finishing(model);
@@ -1210,6 +1154,89 @@ mod tests {
             dispatch(&mut model, Action::Submit),
             vec![Effect::Exit(ExitReason::Requested)]
         );
+    }
+
+    #[test]
+    fn terminal_message_and_response_fields_use_normalized_result_text() {
+        for (document, expected) in [
+            (
+                serde_json::json!({"message": "final message"}),
+                "final message",
+            ),
+            (
+                serde_json::json!({"response": "final response"}),
+                "final response",
+            ),
+        ] {
+            let mut model = AppModel {
+                draft: "question".into(),
+                cursor: 8,
+                ..AppModel::default()
+            };
+            let _ = dispatch(&mut model, Action::Submit);
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Partial {
+                        text: "streamed draft".into(),
+                    },
+                }),
+            );
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Result {
+                        document,
+                        conversation_id: None,
+                    },
+                }),
+            );
+            let entry = model.scrollback.entries().back().unwrap();
+            assert_eq!(entry.text, expected);
+            assert!(!entry.text.contains('{'));
+            assert!(!entry.streaming);
+        }
+    }
+
+    #[test]
+    fn partial_only_terminal_document_preserves_the_streamed_answer() {
+        let mut model = AppModel {
+            draft: "question".into(),
+            cursor: 8,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Partial {
+                    text: "complete streamed answer".into(),
+                },
+            }),
+        );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({"conversation_id": "conversation-1"}),
+                    conversation_id: Some("conversation-1".into()),
+                },
+            }),
+        );
+        let entry = model.scrollback.entries().back().unwrap();
+        assert_eq!(entry.text, "complete streamed answer");
+        assert!(!entry.streaming);
+    }
+
+    #[test]
+    fn incomplete_panels_are_not_advertised_as_available_commands() {
+        for command in ["/voice", "/for", "/household", "/profile", "/location"] {
+            assert!(resolve_slash_command(command).is_none(), "{command}");
+        }
     }
 
     #[test]

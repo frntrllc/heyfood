@@ -119,20 +119,30 @@ pub async fn execute_one_shot_turn(
     }
 }
 
+#[must_use]
+pub fn agent_result_text(document: &Value) -> Option<&str> {
+    document
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            ["message", "text", "response"].into_iter().find_map(|key| {
+                document
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+            })
+        })
+}
+
 fn merge_stream_content(
     document: &mut Value,
     partial_text: &str,
     choices: Option<(Vec<AgentChoice>, bool)>,
 ) {
+    let has_final_text = agent_result_text(document).is_some();
     let Some(fields) = document.as_object_mut() else {
         return;
     };
-    let has_final_text = ["message", "text", "response"].iter().any(|key| {
-        fields
-            .get(*key)
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty())
-    });
     if !partial_text.is_empty() && !has_final_text {
         fields.insert("text".into(), Value::String(partial_text.to_owned()));
     }
