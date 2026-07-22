@@ -22,8 +22,9 @@ authentication contracts are stabilized.
 - Preserves streamed choices when a final SSE result supplies replacement text,
   and adds a typed `/status` panel backed by live service, consent, scope, and
   capability checks without overstating native voice readiness.
-- Verifies Windows Credential Manager journal deletion before subsequent reads
-  and uses a bounded process-table observation after broker kill-and-reap.
+- Serializes Windows Credential Manager calls within the process, verifies
+  journal deletion before subsequent reads, and uses a bounded process-table
+  observation after broker kill-and-reap.
 - Lets an unauthenticated bare `heyfood` session complete device registration
   and continue into the TUI in the same process; incomplete dietary onboarding
   remains explicit.

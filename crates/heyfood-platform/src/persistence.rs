@@ -22,6 +22,8 @@ use heyfood_core::{
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[cfg(windows)]
 static WINDOWS_CURRENT_USER_SID: OnceLock<String> = OnceLock::new();
+#[cfg(all(windows, feature = "native-credentials"))]
+static WINDOWS_CREDENTIAL_MANAGER_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(windows)]
 static WINDOWS_HARDENED_PATHS: OnceLock<Mutex<std::collections::HashSet<(PathBuf, bool)>>> =
     OnceLock::new();
@@ -956,8 +958,7 @@ impl NativeAuthStore {
                 "authorization document exceeds the Windows Credential Manager limit",
             ));
         }
-        self.windows_entry()?
-            .set_secret(&document)
+        windows_set_keyring_secret(&self.windows_entry()?, &document)
             .map_err(|error| keyring_error("credential_manager_write", error))
     }
 
@@ -1541,8 +1542,7 @@ impl NativeAuthStore {
                 "authorization document exceeds the Windows Credential Manager limit",
             ));
         }
-        self.windows_entry()?
-            .set_secret(&document)
+        windows_set_keyring_secret(&self.windows_entry()?, &document)
             .map_err(|error| keyring_error("credential_manager_write", error))?;
         clear_any_reconciliation_marker(&self.reconciliation_path)
     }
@@ -1587,8 +1587,7 @@ impl NativeAuthStore {
                 "authorization document exceeds the Windows Credential Manager limit",
             ));
         }
-        self.windows_entry()?
-            .set_secret(&document)
+        windows_set_keyring_secret(&self.windows_entry()?, &document)
             .map_err(|error| keyring_error("credential_manager_write", error))
     }
 
@@ -1596,12 +1595,8 @@ impl NativeAuthStore {
     pub fn delete(&self) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
         self.ensure_reconciled_unlocked()?;
-        match self.windows_entry()?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => {
-                clear_any_reconciliation_marker(&self.reconciliation_path)
-            }
-            Err(error) => Err(keyring_error("credential_manager_delete", error)),
-        }
+        delete_keyring_entry(&self.windows_entry()?, "credential_manager_delete")?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
     #[cfg(all(windows, feature = "native-credentials"))]
@@ -1648,34 +1643,39 @@ impl NativeAuthStore {
                 "pending authorization bundle exceeds the Windows Credential Manager limit",
             ));
         }
-        self.replacement_entry(
-            &self.replacement_previous_target,
-            "authorization-replacement-previous",
-        )?
-        .set_secret(&previous)
+        windows_set_keyring_secret(
+            &self.replacement_entry(
+                &self.replacement_previous_target,
+                "authorization-replacement-previous",
+            )?,
+            &previous,
+        )
         .map_err(|error| keyring_error("authorization_journal_previous_write", error))?;
         if let Some(pending) = pending {
-            self.replacement_entry(
-                &self.replacement_pending_target,
-                "authorization-replacement-pending",
-            )?
-            .set_secret(&pending)
+            windows_set_keyring_secret(
+                &self.replacement_entry(
+                    &self.replacement_pending_target,
+                    "authorization-replacement-pending",
+                )?,
+                &pending,
+            )
             .map_err(|error| keyring_error("authorization_journal_pending_write", error))?;
         }
         // Metadata is the commit record and is written last.
-        self.replacement_entry(&self.replacement_target, "authorization-replacement")?
-            .set_secret(&metadata)
-            .map_err(|error| keyring_error("authorization_journal_write", error))
+        windows_set_keyring_secret(
+            &self.replacement_entry(&self.replacement_target, "authorization-replacement")?,
+            &metadata,
+        )
+        .map_err(|error| keyring_error("authorization_journal_write", error))
     }
 
     #[cfg(all(windows, feature = "native-credentials"))]
     fn load_authorization_journal_unlocked(
         &self,
     ) -> Result<Option<AuthorizationReplacementJournal>, PortError> {
-        let metadata = match self
-            .replacement_entry(&self.replacement_target, "authorization-replacement")?
-            .get_secret()
-        {
+        let metadata_entry =
+            self.replacement_entry(&self.replacement_target, "authorization-replacement")?;
+        let metadata = match windows_get_keyring_secret(&metadata_entry) {
             Ok(document) => decode_authorization_journal_metadata(&document)?,
             Err(keyring::Error::NoEntry) => {
                 let previous_exists = keyring_secret_exists(&self.replacement_entry(
@@ -1696,12 +1696,11 @@ impl NativeAuthStore {
             }
             Err(error) => return Err(keyring_error("authorization_journal_read", error)),
         };
-        let (previous_transaction_id, previous) = self
-            .replacement_entry(
-                &self.replacement_previous_target,
-                "authorization-replacement-previous",
-            )?
-            .get_secret()
+        let previous_entry = self.replacement_entry(
+            &self.replacement_previous_target,
+            "authorization-replacement-previous",
+        )?;
+        let (previous_transaction_id, previous) = windows_get_keyring_secret(&previous_entry)
             .map_err(|error| keyring_error("authorization_journal_previous_read", error))
             .and_then(|document| decode_bound_auth_bundle(&document))?;
         if previous_transaction_id != metadata.client_transaction_id {
@@ -1715,13 +1714,11 @@ impl NativeAuthStore {
             // crashed Prepared metadata update is intentionally invisible.
             None
         } else {
-            match self
-                .replacement_entry(
-                    &self.replacement_pending_target,
-                    "authorization-replacement-pending",
-                )?
-                .get_secret()
-            {
+            let pending_entry = self.replacement_entry(
+                &self.replacement_pending_target,
+                "authorization-replacement-pending",
+            )?;
+            match windows_get_keyring_secret(&pending_entry) {
                 Ok(document) => {
                     let (transaction_id, bundle) = decode_bound_auth_bundle(&document)?;
                     if transaction_id != metadata.client_transaction_id {
@@ -1790,7 +1787,8 @@ impl NativeAuthStore {
 
     #[cfg(all(windows, feature = "native-credentials"))]
     fn read_windows_unlocked(&self) -> Result<Option<AuthCredentialBundle>, PortError> {
-        match self.windows_entry()?.get_secret() {
+        let entry = self.windows_entry()?;
+        match windows_get_keyring_secret(&entry) {
             Ok(document) => decode_auth_bundle(&document).map(Some),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(error) => Err(keyring_error("credential_manager_read", error)),
@@ -2160,7 +2158,8 @@ impl WindowsCredentialStore {
     fn read_authorization_stage_unlocked(
         &self,
     ) -> Result<Option<AuthorizationSessionStage>, PortError> {
-        match self.authorization_stage_entry()?.get_secret() {
+        let entry = self.authorization_stage_entry()?;
+        match windows_get_keyring_secret(&entry) {
             Ok(document) => AuthorizationSessionStage::decode(&document).map(Some),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(error) => Err(keyring_error("credential_manager_stage_read", error)),
@@ -2178,13 +2177,13 @@ impl WindowsCredentialStore {
                 "staged session exceeds the Windows Credential Manager limit",
             ));
         }
-        self.authorization_stage_entry()?
-            .set_secret(&document)
+        windows_set_keyring_secret(&self.authorization_stage_entry()?, &document)
             .map_err(|error| keyring_error("credential_manager_stage_write", error))
     }
 
     fn read_unlocked(&self) -> Result<Option<CredentialState>, PortError> {
-        match self.entry()?.get_secret() {
+        let entry = self.entry()?;
+        match windows_get_keyring_secret(&entry) {
             Ok(document) => CredentialState::decode(&document).map(Some),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(error) => Err(keyring_error("credential_manager_read", error)),
@@ -2199,8 +2198,7 @@ impl WindowsCredentialStore {
                 "credential document exceeds the Windows Credential Manager limit",
             ));
         }
-        self.entry()?
-            .set_secret(&document)
+        windows_set_keyring_secret(&self.entry()?, &document)
             .map_err(|error| keyring_error("credential_manager_write", error))?;
         verify_credential_write_visibility(
             state,
@@ -2876,9 +2874,37 @@ fn keyring_error(code: &'static str, error: keyring::Error) -> PortError {
     PortError::new(code, error.to_string())
 }
 
+/// Windows Credential Manager does not order concurrent operations reliably.
+/// Keep every native call in this process on one lane; the existing file locks
+/// still provide the stronger transaction boundary for each credential store.
+#[cfg(all(windows, feature = "native-credentials"))]
+fn windows_keyring_operation<T>(
+    operation: impl FnOnce() -> Result<T, keyring::Error>,
+) -> Result<T, keyring::Error> {
+    let _guard = WINDOWS_CREDENTIAL_MANAGER_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    operation()
+}
+
+#[cfg(all(windows, feature = "native-credentials"))]
+fn windows_get_keyring_secret(entry: &keyring::Entry) -> Result<Vec<u8>, keyring::Error> {
+    windows_keyring_operation(|| entry.get_secret())
+}
+
+#[cfg(all(windows, feature = "native-credentials"))]
+fn windows_set_keyring_secret(entry: &keyring::Entry, secret: &[u8]) -> Result<(), keyring::Error> {
+    windows_keyring_operation(|| entry.set_secret(secret))
+}
+
 #[cfg(feature = "native-credentials")]
 fn delete_keyring_entry(entry: &keyring::Entry, code: &'static str) -> Result<(), PortError> {
-    match entry.delete_credential() {
+    #[cfg(windows)]
+    let deleted = windows_keyring_operation(|| entry.delete_credential());
+    #[cfg(not(windows))]
+    let deleted = entry.delete_credential();
+    match deleted {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(keyring_error(code, error)),
     }
@@ -2886,7 +2912,7 @@ fn delete_keyring_entry(entry: &keyring::Entry, code: &'static str) -> Result<()
 
 #[cfg(all(windows, feature = "native-credentials"))]
 fn keyring_secret_exists(entry: &keyring::Entry) -> Result<bool, PortError> {
-    match entry.get_secret() {
+    match windows_get_keyring_secret(entry) {
         Ok(_) => Ok(true),
         Err(keyring::Error::NoEntry) => Ok(false),
         Err(error) => Err(keyring_error("credential_manager_read", error)),
@@ -4022,6 +4048,44 @@ mod windows_acl_tests {
     }
 
     #[test]
+    #[cfg(feature = "native-credentials")]
+    fn windows_credential_manager_operations_are_process_serialized() {
+        use std::sync::Arc;
+        use std::sync::Barrier;
+        use std::sync::atomic::AtomicBool;
+
+        let worker_count = 8;
+        let start = Arc::new(Barrier::new(worker_count));
+        let active = Arc::new(AtomicU64::new(0));
+        let overlapped = Arc::new(AtomicBool::new(false));
+        let workers = (0..worker_count)
+            .map(|_| {
+                let start = Arc::clone(&start);
+                let active = Arc::clone(&active);
+                let overlapped = Arc::clone(&overlapped);
+                thread::spawn(move || {
+                    start.wait();
+                    windows_keyring_operation(|| {
+                        if active.fetch_add(1, Ordering::SeqCst) != 0 {
+                            overlapped.store(true, Ordering::SeqCst);
+                        }
+                        thread::sleep(Duration::from_millis(5));
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        Ok::<(), keyring::Error>(())
+                    })
+                    .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert!(!overlapped.load(Ordering::SeqCst));
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
     fn owner_only_acl_replaces_explicit_everyone_and_users_aces() {
         let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
@@ -4135,15 +4199,15 @@ mod windows_acl_tests {
             .begin_authorization_replacement(client_transaction_id.clone(), &session)
             .unwrap();
 
-        auth.replacement_entry(
-            &auth.replacement_pending_target,
-            "authorization-replacement-pending",
+        windows_set_keyring_secret(
+            &auth
+                .replacement_entry(
+                    &auth.replacement_pending_target,
+                    "authorization-replacement-pending",
+                )
+                .unwrap(),
+            &encode_bound_auth_bundle("different-client-transaction-generation", &pending),
         )
-        .unwrap()
-        .set_secret(&encode_bound_auth_bundle(
-            "different-client-transaction-generation",
-            &pending,
-        ))
         .unwrap();
         assert_eq!(
             auth.pending_authorization_replacement().unwrap(),
@@ -4159,10 +4223,13 @@ mod windows_acl_tests {
         prepared.recovery_token = Some(SensitiveString::new("windows-recovery-token-generation"));
         prepared.bundle_digest = Some("e".repeat(64));
         prepared.replacement = Some(pending);
-        auth.replacement_entry(&auth.replacement_target, "authorization-replacement")
-            .unwrap()
-            .set_secret(&encode_authorization_journal_metadata(&prepared))
-            .unwrap();
+        windows_set_keyring_secret(
+            &auth
+                .replacement_entry(&auth.replacement_target, "authorization-replacement")
+                .unwrap(),
+            &encode_authorization_journal_metadata(&prepared),
+        )
+        .unwrap();
         assert_eq!(
             auth.pending_authorization_replacement().unwrap_err().code,
             "authorization_journal_generation"
