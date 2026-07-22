@@ -1,9 +1,8 @@
 # Dietary option catalog
 
 heyfood packages a versioned snapshot of the public hello.food dietary option
-contract at `src/heyfood_cli/data/dietary_options.json`. The CLI reads this
-resource at runtime, so an installed wheel does not depend on a hello.food
-monorepo checkout.
+contract at `assets/dietary/dietary_options.v2.json`. Native builds consume the
+reviewed asset without depending on a hello.food monorepo checkout.
 
 The catalog is public client contract data. It contains display labels,
 canonical selection identifiers, compatibility enum keys, and coarse
@@ -14,17 +13,10 @@ models, or service data that turn a profile and food into guidance.
 ## Source and synchronization
 
 Inside the private hello.food monorepo, `shared/dietary_options.json` is the
-canonical source. Run:
-
-```bash
-python scripts/sync_dietary_options.py
-python scripts/sync_dietary_options.py --check
-```
-
-The first command updates the mobile and CLI snapshots byte-for-byte. The
-second is the CI drift check and never writes files. Changes to identifiers,
-enum mappings, or constraint tags must update the canonical source first and
-must remain additive unless a reviewed compatibility migration exists.
+canonical source. The contract import workflow updates mobile and native-client
+snapshots byte-for-byte and its check mode must remain non-writing. Changes to
+identifiers, enum mappings, or constraint tags must update the canonical source
+first and remain additive unless a reviewed compatibility migration exists.
 
 The standalone public repository contains the generated snapshot but not its
 private monorepo source or synchronization script. Public contributions should
@@ -36,7 +28,7 @@ change.
 
 The top-level integer `version` identifies the catalog contract revision. A
 release must include the snapshot expected by its runtime code and tests. A
-catalog version change does not by itself change the Python package version,
+catalog version change does not by itself change the native client version,
 but it must be described in release notes whenever it affects accepted input or
 emitted profile data.
 

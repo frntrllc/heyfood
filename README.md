@@ -154,18 +154,22 @@ uncertain server-side outcome include `error.outcome_uncertain: true` so callers
 do not retry a potentially committed operation blindly. See the
 [CLI process contract](docs/CLI_CONTRACT.md).
 
-## What is not active yet
+## Interactive terminal
 
-The native Rust binary does not currently provide the legacy Python CLI's
-interactive chat/TUI, onboarding, profile, account-management, restaurant
-search, saved location, recommendation, menu, recipe, household, voice,
-context, configuration, or diagnostic workflows. Hidden
-compatibility topology may recognize some old command names, but those paths
-fail closed with `command_not_available`; they are not supported commands.
+After registration, run `heyfood` without a subcommand to enter the native Rust
+TUI. The composer remains editable while responses stream, keeps bounded
+process-local prompt history, and preserves conversation continuity only for
+the lifetime of the process.
 
-The bare `heyfood` invocation is informational only. It prints runnable next
-steps and never starts a TUI, browser, registration, onboarding, or network
-request.
+Interactive controls include Enter to send, Shift+Enter or Ctrl+J for a
+newline, Up/Down for prompt history, PageUp/PageDown for scrollback, Ctrl+C to
+stop an active turn, and Ctrl+D or `/exit` to leave. Use `/help` for the current
+command registry, `/new` for a fresh conversation, `/clear` to clear visible
+scrollback, and `/status` to inspect session readiness.
+
+Profile, household, location, and voice panels remain in active Rust
+implementation. Their existing one-shot compatibility routes continue to fail
+closed where the native workflow is not complete.
 
 ## Development
 

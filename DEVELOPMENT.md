@@ -1,12 +1,12 @@
 # Developing heyfood
 
-The public heyfood repository is a standalone Python project. The proprietary
-hello.food backend is not required to install the package, inspect help, develop
-rendering, or run the unit and compatibility suites.
+The public heyfood repository is a native Rust workspace. The proprietary
+hello.food backend is not required to build the executable, inspect help,
+develop the TUI, or run the unit and contract suites.
 
 ## Requirements
 
-- Python 3.11, 3.12, or 3.13
+- The Rust toolchain declared by `rust-toolchain.toml`
 - Git
 
 ## Set up a development environment
@@ -14,17 +14,12 @@ rendering, or run the unit and compatibility suites.
 ```bash
 git clone https://github.com/frntrllc/heyfood.git
 cd heyfood
-python3.11 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
-python -m pytest -q
-heyfood --help
+cargo build --release --locked --package heyfood-bin
+cargo test --locked --workspace --all-targets
+./target/release/heyfood --help
 ```
 
-When working from the private hello.food monorepo, run the same commands from
-its `cli/` directory. Do not copy backend configuration or data into the public
-repository.
+Do not copy backend configuration or data into the public repository.
 
 ## Source-of-truth and synchronization policy
 
@@ -44,20 +39,22 @@ the public repository.
 ## Project layout
 
 ```text
-src/heyfood_cli/   CLI implementation
-  data/             Generated public dietary option contract
-tests/             Unit and compatibility tests
-pyproject.toml     Package metadata and build configuration
+crates/heyfood-bin/             Native executable and composition root
+crates/heyfood-cli/             Command grammar and output contracts
+crates/heyfood-tui/             Interactive Ratatui application
+crates/heyfood-agent-runtime/   Authenticated service transport and SSE
+crates/heyfood-application/     Use cases and ports
+crates/heyfood-core/            Validated domain types
+crates/heyfood-platform/        Native persistence and OS integration
+assets/                         Public, versioned runtime assets
 ```
 
-The committed compatibility fixtures under
-`tests/fixtures/compat/0.1.0/` record the current help surface and representative
-machine-output shapes. Intentional interface changes must update the relevant
-fixtures and explain compatibility or migration behavior in the pull request.
+The committed fixtures and schemas record reviewed wire, command, and migration
+contracts. Intentional interface changes must update the relevant fixtures and
+explain compatibility or migration behavior in the pull request.
 
-The dietary option JSON is generated and must not be edited directly in the
-standalone repository. See [the dietary catalog contract](docs/DIETARY_CATALOG.md)
-for its public boundary, versioning, and private-monorepo synchronization flow.
+See [the dietary catalog contract](docs/DIETARY_CATALOG.md) for the public asset
+boundary, versioning, and private-monorepo synchronization flow.
 
 ## Service-backed development
 
@@ -82,8 +79,8 @@ dietary data.
   migration is included.
 - Test stdout, stderr, exit codes, TTY/non-TTY behavior, and non-interactive
   paths for command changes.
-- Use `--no-input` in automation tests and pair mutation approval with `--yes`;
-  never rely on piped stdin satisfying an interactive prompt.
+- Keep interactive terminal tests isolated behind a PTY and verify restoration
+  after normal exit, cancellation, signals, and panics.
 - Do not let banners, spinners, hints, warnings, or ANSI escapes enter JSON
   stdout.
 - Keep safety conclusions conservative and explain uncertainty.

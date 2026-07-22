@@ -15,7 +15,6 @@ use heyfood_core::{
     SessionCredentials, SessionSnapshot,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
@@ -38,47 +37,20 @@ fn python_oracle() -> Value {
     .unwrap()
 }
 
-fn repository_text_sha256(bytes: &[u8]) -> String {
-    let mut normalized = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
-            normalized.push(b'\n');
-            index += 2;
-        } else {
-            normalized.push(bytes[index]);
-            index += 1;
-        }
-    }
-    format!("{:x}", Sha256::digest(normalized))
-}
-
 #[test]
-fn python_oracle_provenance_matches_the_pinned_source_bytes() {
+fn legacy_oracle_keeps_its_reviewed_provenance_manifest() {
     let oracle = python_oracle();
-    let expected = oracle["provenance"]["sources"].as_object().unwrap();
-    let sources: [(&str, &[u8]); 4] = [
-        (
-            "src/heyfood_cli/commands/agent.py",
-            include_bytes!("../../../src/heyfood_cli/commands/agent.py"),
-        ),
-        (
-            "src/heyfood_cli/client.py",
-            include_bytes!("../../../src/heyfood_cli/client.py"),
-        ),
-        (
-            "src/heyfood_cli/validation.py",
-            include_bytes!("../../../src/heyfood_cli/validation.py"),
-        ),
-        (
-            "src/heyfood_cli/render.py",
-            include_bytes!("../../../src/heyfood_cli/render.py"),
-        ),
-    ];
+    let commit = oracle["provenance"]["repository_commit"].as_str().unwrap();
+    assert_eq!(commit.len(), 40);
+    assert!(commit.bytes().all(|byte| byte.is_ascii_hexdigit()));
 
-    for (path, bytes) in sources {
-        let digest = repository_text_sha256(bytes);
-        assert_eq!(expected[path], digest, "oracle source drifted: {path}");
+    let expected = oracle["provenance"]["sources"].as_object().unwrap();
+    assert_eq!(expected.len(), 4);
+    for (path, digest) in expected {
+        let digest = digest.as_str().unwrap();
+        assert!(!path.is_empty());
+        assert_eq!(digest.len(), 64);
+        assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
 }
 
