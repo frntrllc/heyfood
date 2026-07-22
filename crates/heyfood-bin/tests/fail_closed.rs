@@ -43,13 +43,16 @@ fn bare_binary_prints_only_runnable_native_next_steps() {
 #[test]
 fn authenticated_one_shot_route_fails_with_registration_guidance_when_disconnected() {
     let root = TempHome::new();
-    let output = Command::new(env!("CARGO_BIN_EXE_heyfood"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_heyfood"));
+    command
         .args(["ask", "What can I eat?"])
         .env("HOME", &root.0)
-        .env("XDG_CONFIG_HOME", &root.0)
-        .env("HEYFOOD_CREDENTIAL_STORE", "file")
-        .output()
-        .expect("native binary should run");
+        .env("XDG_CONFIG_HOME", &root.0);
+    #[cfg(not(windows))]
+    command.env("HEYFOOD_CREDENTIAL_STORE", "file");
+    #[cfg(windows)]
+    command.env("HEYFOOD_CREDENTIAL_STORE", "native");
+    let output = command.output().expect("native binary should run");
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
