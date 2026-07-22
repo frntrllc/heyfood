@@ -333,7 +333,7 @@ async fn bare(machine: bool) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let prepared = match prepare_native_session(None, CancellationToken::new()).await {
+    let (prepared, startup_notice) = match prepare_bare_session().await {
         Ok(prepared) => prepared,
         Err(error) => {
             return failure(
@@ -367,7 +367,8 @@ async fn bare(machine: bool) -> ExitCode {
             prepared.snapshot,
             prepared.authorization_scope,
         )?
-        .with_local_state(local_state);
+        .with_local_state(local_state)
+        .with_startup_notice(startup_notice);
         heyfood_bin::run_qualified_session(&mut driver)
             .map_err(|error| io::Error::other(error.to_string()))
     });
@@ -380,6 +381,43 @@ async fn bare(machine: bool) -> ExitCode {
             false,
             false,
         ),
+    }
+}
+
+async fn prepare_bare_session()
+-> Result<(PreparedNativeSession, Option<String>), heyfood_bin::OneShotError> {
+    match prepare_native_session(None, CancellationToken::new()).await {
+        Ok(prepared) => Ok((prepared, None)),
+        Err(error) if error.code == "login_required" => {
+            eprintln!("Welcome to heyfood. Connect your hello.food account to continue.");
+            let registration = register_inner(
+                heyfood_cli::RegisterArgs {
+                    device: true,
+                    no_browser: false,
+                    timeout: 600,
+                    no_onboard: true,
+                },
+                false,
+            )
+            .await
+            .map_err(registration_to_one_shot)?;
+            let prepared = prepare_native_session(None, CancellationToken::new()).await?;
+            Ok((
+                prepared,
+                Some(registration_startup_notice(registration.profile_status)),
+            ))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn registration_startup_notice(status: ProfileStatus) -> String {
+    match status {
+        ProfileStatus::Ready => {
+            "Account connected. Your dietary profile is ready; ask your first question.".into()
+        }
+        ProfileStatus::Missing => "Account connected. Your dietary profile still needs setup; personalized guidance may be limited until onboarding is completed.".into(),
+        ProfileStatus::Unknown => "Account connected. Dietary profile readiness could not be confirmed; personalized guidance may be limited.".into(),
     }
 }
 

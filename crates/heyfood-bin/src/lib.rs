@@ -1231,6 +1231,7 @@ pub struct InteractiveTurnDriver {
     interactive_service: Option<Arc<HttpService>>,
     authorization_scope: Arc<str>,
     local_state: Option<Arc<ImportedPythonState>>,
+    startup_notice: Option<String>,
     ensure_session: Arc<EnsureSession>,
     session: Arc<Mutex<SessionSnapshot>>,
     conversation_id: Arc<Mutex<Option<String>>>,
@@ -1254,6 +1255,7 @@ impl InteractiveTurnDriver {
             interactive_service: None,
             authorization_scope: Arc::from(""),
             local_state: None,
+            startup_notice: None,
             ensure_session,
             session: Arc::new(Mutex::new(session)),
             conversation_id: Arc::new(Mutex::new(None)),
@@ -1281,6 +1283,12 @@ impl InteractiveTurnDriver {
         self
     }
 
+    #[must_use]
+    pub fn with_startup_notice(mut self, notice: Option<String>) -> Self {
+        self.startup_notice = notice;
+        self
+    }
+
     fn reap_finished(&mut self) {
         self.turns.retain(|turn| !turn.task.is_finished());
     }
@@ -1298,6 +1306,11 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
             .runtime
             .block_on(async { NativeSignalSource::install() })
             .map_err(|error| io::Error::other(error.to_string()))?;
+        if let Some(message) = self.startup_notice.take() {
+            runtime_events
+                .try_send(RuntimeEvent::Notice { message })
+                .map_err(io::Error::other)?;
+        }
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
         let task = self.runtime.spawn(async move {

@@ -85,6 +85,12 @@ panels are read-only and cancellable. Voice and the mutating `/for` household
 target switch remain absent from discovery until their complete typed workflows
 are connected.
 
+On a clean machine, running bare `heyfood` in a TTY begins device registration
+and, after account connection, enters the interactive TUI without asking the
+user to restart the command. The startup notice reports profile readiness
+truthfully. Dietary onboarding is not yet implemented in Rust and remains a
+release blocker when the service reports a missing or unknown profile.
+
 Use `heyfood members list` before passing `--member-id`. It lists synced member
 profile ids returned by the service. Use `heyfood conversation list` to inspect
 the one conversation id remembered in local CLI state, then `conversation

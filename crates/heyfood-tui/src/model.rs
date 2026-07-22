@@ -418,6 +418,9 @@ pub enum RuntimeEvent {
         panel: PanelRequest,
         message: String,
     },
+    Notice {
+        message: String,
+    },
     ExternalSignal(ExitReason),
 }
 
@@ -767,6 +770,7 @@ fn begin_exit(model: &mut AppModel, reason: ExitReason) -> Vec<Effect> {
 fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
     match runtime {
         RuntimeEvent::ExternalSignal(reason) => return begin_exit(model, reason),
+        RuntimeEvent::Notice { message } => push_notice(model, &terminal_safe_text(&message)),
         RuntimeEvent::TurnEvent {
             operation_id,
             event,
@@ -1404,6 +1408,23 @@ mod tests {
         for command in ["/voice", "/for"] {
             assert!(resolve_slash_command(command).is_none(), "{command}");
         }
+    }
+
+    #[test]
+    fn runtime_notices_are_visible_and_terminal_safe() {
+        let mut model = AppModel::default();
+        assert!(
+            dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::Notice {
+                    message: "Account connected.\u{1b}[31m hidden".into(),
+                }),
+            )
+            .is_empty()
+        );
+        let entry = model.scrollback.entries().back().unwrap();
+        assert_eq!(entry.speaker, Speaker::Notice);
+        assert_eq!(entry.text, "Account connected.[31m hidden");
     }
 
     #[test]

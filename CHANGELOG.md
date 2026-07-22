@@ -16,6 +16,9 @@ authentication contracts are stabilized.
   live capability/list and provider-neutral integration/context reads.
 - Adds a live `/profile` consent/profile view plus account-bound local
   `/household` and `/location` panels; mismatched local state fails closed.
+- Lets an unauthenticated bare `heyfood` session complete device registration
+  and continue into the TUI in the same process; incomplete dietary onboarding
+  remains explicit.
 - Archives the final Python parity baseline under the non-release tag
   `archive/python-cli-73494a57` and verifies retained source bytes from Rust.
 
