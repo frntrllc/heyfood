@@ -66,6 +66,11 @@ The Rust specialist returned GO for the six-finding remediation at the exact
 product commit and tree above. That verdict is not Phase 2 exit or merge
 approval.
 
+The same specialist returned GO for evidence commit
+`b13c81fe5fb0f62677c8aa83f0bf40d034e12e8c` (tree
+`15cd1f89ac0456d10ca88b593c146bbdbd3abf46`). That verdict approves the
+evidence content only and is also not Phase 2 exit or merge approval.
+
 ## Remaining Phase 2 blockers
 
 - Twenty-one root command variants remain explicit placeholders and classic chat is
@@ -76,7 +81,6 @@ approval.
   secure file export, DG-R2 evidence, and the authorized non-destructive canaries
   remain incomplete.
 - Health authorization completion polling and canaries remain incomplete.
-- The refreshed evidence commit still requires separate exact-SHA review.
 
 ## Release-boundary incident
 

@@ -7,7 +7,8 @@
     "reviewed_base_sha": "38ad4a68b59cb4dd55a7ae133fa19cf1cc39e466",
     "product_commit_sha": "d1b2b92cfd47e9a1e2d60a206e477ca376d008e7",
     "product_tree_sha": "c3e72e1a8156bed8a781b02c1de381b3e2ebd195",
-    "evidence_commit_sha": null
+    "evidence_commit_sha": "b13c81fe5fb0f62677c8aa83f0bf40d034e12e8c",
+    "evidence_tree_sha": "15cd1f89ac0456d10ca88b593c146bbdbd3abf46"
   },
   "review_findings": [
     {
@@ -127,6 +128,8 @@
     },
     "independent_rust_review": "approved_six_finding_remediation",
     "independent_review_scope": "not Phase 2 exit or merge approval",
+    "independent_evidence_review": "approved",
+    "independent_evidence_review_scope": "evidence content only; not Phase 2 exit or merge approval",
     "dg_r2": "incomplete",
     "production_canaries": "not_run"
   },
