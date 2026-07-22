@@ -80,7 +80,7 @@
       {
         "id": "P2-2-complete-command-use-cases",
         "status": "blocked",
-        "blocker": "24 root command families remain explicit fail-closed placeholders"
+        "blocker": "21 root command variants remain explicit fail-closed placeholders"
       },
       {
         "id": "P2-3-ansi-json-renderers",

@@ -14,12 +14,13 @@ activation, publication, or cutover claim.
   stores as one recoverable transaction. Cross-account, missing-half, and
   interrupted states block use before network dispatch.
 - The normal macOS/Linux/Windows build enables native credentials by default and
-  reaches Keychain, Secret Service, or Credential Manager only through the
-  deadline-bounded credential broker. Blocking stdin/stdout run concurrently;
-  timeout and early-error paths kill and reap the broker. The owner-only file
-  store is available only on non-Windows through an explicit environment choice
-  or disclosed legacy-state compatibility path. Native staged reauthorization
-  state crosses the same broker boundary.
+  routes the rotating-session store through the deadline-bounded credential
+  broker. Blocking stdin/stdout run concurrently; timeout and early-error paths
+  kill and reap the broker. The owner-only session-file store is available only
+  on non-Windows through an explicit environment choice or disclosed
+  legacy-state compatibility path. `NativeAuthStore` remains the separate
+  authority for authorization state and its replacement journal; the staged
+  session half crosses the broker while the authorization/journal half does not.
 - `log` restores the frozen `Log this meal:` prompt and optional meal-type
   grammar. `item` calls `/v1/channel/tools/explain_item` with channel authority
   and preserves restaurant context. `log --for` builds consent-aware household
@@ -67,7 +68,7 @@ approval.
 
 ## Remaining Phase 2 blockers
 
-- Twenty-four command families remain explicit placeholders and classic chat is
+- Twenty-one root command variants remain explicit placeholders and classic chat is
   absent.
 - Full household/location/conversation parity and leaf renderers remain
   incomplete.
