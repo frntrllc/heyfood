@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io::{Cursor, Read};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,6 +16,7 @@ use heyfood_core::{
     SessionCredentials, SessionSnapshot,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
@@ -41,16 +43,38 @@ fn python_oracle() -> Value {
 fn legacy_oracle_keeps_its_reviewed_provenance_manifest() {
     let oracle = python_oracle();
     let commit = oracle["provenance"]["repository_commit"].as_str().unwrap();
-    assert_eq!(commit.len(), 40);
-    assert!(commit.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert_eq!(commit, "73494a57468dac83b4904ce6c390e36926f5c6fe");
+    assert_eq!(
+        oracle["provenance"]["archive_tag"],
+        "archive/python-cli-73494a57"
+    );
+
+    let archive_bytes = include_bytes!("../../../tests/fixtures/python-cli-73494a57.tar");
+    let archive_digest = format!("{:x}", Sha256::digest(archive_bytes));
+    assert_eq!(
+        archive_digest,
+        oracle["provenance"]["source_archive"]["sha256"]
+    );
 
     let expected = oracle["provenance"]["sources"].as_object().unwrap();
     assert_eq!(expected.len(), 4);
-    for (path, digest) in expected {
-        let digest = digest.as_str().unwrap();
-        assert!(!path.is_empty());
-        assert_eq!(digest.len(), 64);
-        assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+
+    let mut archive = tar::Archive::new(Cursor::new(archive_bytes));
+    let mut actual = BTreeMap::new();
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let path = entry.path().unwrap().to_string_lossy().into_owned();
+        if expected.contains_key(&path) {
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            let previous = actual.insert(path, format!("{:x}", Sha256::digest(bytes)));
+            assert!(previous.is_none(), "duplicate archived source path");
+        }
+    }
+
+    assert_eq!(actual.len(), expected.len());
+    for (path, expected_digest) in expected {
+        assert_eq!(actual.get(path).unwrap(), expected_digest.as_str().unwrap());
     }
 }
 

@@ -3,6 +3,11 @@
   "provenance": {
     "client_version": "0.4.0",
     "repository_commit": "73494a57468dac83b4904ce6c390e36926f5c6fe",
+    "archive_tag": "archive/python-cli-73494a57",
+    "source_archive": {
+      "path": "tests/fixtures/python-cli-73494a57.tar",
+      "sha256": "1005ffb723bde29df409cfb016365c1f61bb04462590fa6758f57001b8b7bf7a"
+    },
     "sources": {
       "src/heyfood_cli/commands/agent.py": "737ace81bd270087eaf961d4da483911098a1d5452add185f5c0e7180b93b25b",
       "src/heyfood_cli/client.py": "4f8bbc831924c272b8a44e4bf6195cc4856a254be88bb780d0186ae13620ead7",

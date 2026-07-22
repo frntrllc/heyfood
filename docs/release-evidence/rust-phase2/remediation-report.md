@@ -33,8 +33,11 @@ activation, publication, or cutover claim.
   string-list wire shape. Detailed choices retain compatible labels and add a
   structured `choice_details` extension. Human output renders partial-only
   answers, choices, and item-specific fields.
-- The parity oracle identifies Python `0.4.0`, pins the exact four source blobs,
-  and verifies their canonical repository-text hashes on CRLF and LF checkouts.
+- The parity oracle identifies Python `0.4.0` at exact commit
+  `73494a57468dac83b4904ce6c390e36926f5c6fe`, archived by the non-release tag
+  `archive/python-cli-73494a57`. An inert tar fixture retains the four reviewed
+  sources outside the runtime, and Rust verifies the archive digest and every
+  source entry's exact bytes against the frozen manifest.
 - `--lat` and `--lng` are canonical again; the long spellings remain aliases.
   Non-finite and out-of-range coordinates fail locally before dispatch.
 - `--json completion` returns one typed JSON error instead of shell source.
