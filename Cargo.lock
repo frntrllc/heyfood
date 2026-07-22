@@ -1219,6 +1219,7 @@ dependencies = [
  "portable-pty",
  "proptest",
  "ratatui",
+ "serde_json",
  "tokio",
 ]
 

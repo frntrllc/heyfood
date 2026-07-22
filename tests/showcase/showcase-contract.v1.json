@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "source": {
+    "deployed_url": "https://hey.food/",
+    "observed_on": "2026-07-21",
+    "matching_website_commit": "847615429b5d423bc32e49ebbe1819ae6cf248a4",
+    "component": "website/src/components/heyfood/HeyfoodNativeShowcase.tsx"
+  },
+  "presentation": {
+    "header": ["hey.food", "Ask about food, meals, restaurants, or recipes", "activity"],
+    "speakers": ["You", "hey.food"],
+    "composer": "bottom_anchored_multiline_editable_while_streaming",
+    "footer_controls": ["Enter", "Shift+Enter", "PageUp", "PageDown", "Ctrl+C", "Ctrl+D"],
+    "semantic_tones": ["accent", "bright", "muted", "warning"],
+    "structured_response": ["intro", "label_value_details", "evidence_note"],
+    "responsive_widths": [40, 80, 120]
+  },
+  "journeys": [
+    {
+      "id": "menu-watch",
+      "label": "Menu watch",
+      "stages": [
+        {
+          "id": "locate",
+          "requires": ["restaurant_resolution", "cross_domain_menu_acquisition", "source_identity_evidence", "structured_menu_summary"],
+          "asserts": ["restaurant_identity_visible", "source_visible", "item_and_section_counts_visible", "freshness_visible"]
+        },
+        {
+          "id": "verify",
+          "requires": ["menu_watch_proposal", "source_confidence", "hard_identity_floor", "local_schedule_preview"],
+          "asserts": ["low_confidence_requires_confirmation", "known_mismatch_cannot_be_overridden", "no_watch_created_before_accept"]
+        },
+        {
+          "id": "watch",
+          "requires": ["menu_watch_confirmation", "iana_timezone", "baseline_snapshot", "notification_policy"],
+          "asserts": ["watch_created_once", "timezone_frozen", "first_run_is_baseline", "first_run_does_not_notify"]
+        },
+        {
+          "id": "diff",
+          "requires": ["canonical_snapshot_diff", "durable_change_event"],
+          "asserts": ["added_removed_modified_and_price_changes_render", "unchanged_snapshot_is_silent", "authoritative_diff_is_retrievable"]
+        }
+      ]
+    },
+    {
+      "id": "dinner-planner",
+      "label": "Dinner planner",
+      "stages": [
+        {
+          "id": "plan",
+          "requires": ["authoritative_household_context", "consented_oura_context", "consented_apple_health_context", "restaurant_evidence", "recipe_search"],
+          "asserts": ["household_members_and_constraints_visible", "health_provenance_visible", "cook_and_eat_out_options_visible", "health_is_not_presented_as_diagnosis"]
+        },
+        {
+          "id": "compare",
+          "requires": ["member_specific_screening", "menu_evidence", "uncertainty_preservation"],
+          "asserts": ["concerns_are_attributed_to_members", "missing_evidence_increases_caution", "restaurant_match_is_separate_from_dietary_safety", "staff_questions_visible"]
+        },
+        {
+          "id": "shop",
+          "requires": ["recipe_to_grocery_proposal", "ingredient_substitution", "household_context_hash", "list_id_and_version", "structured_confirmation"],
+          "asserts": ["proposal_is_reviewable", "nothing_mutates_before_accept", "cancel_is_non_mutating", "stale_list_or_context_is_rejected", "confirmation_token_is_not_exposed"]
+        },
+        {
+          "id": "remember",
+          "requires": ["accepted_grocery_commit", "separate_meal_log_commit", "nutrition_estimate", "meal_memory_provenance"],
+          "asserts": ["grocery_version_advances_once", "meal_is_logged_once", "two_actions_have_distinct_authority", "future_turn_can_use_committed_memory"]
+        }
+      ]
+    },
+    {
+      "id": "voice-meal-log",
+      "label": "Voice meal log",
+      "stages": [
+        {
+          "id": "record",
+          "requires": ["native_microphone", "audio_transcribe_scope_preflight", "memory_only_audio", "typed_fallback"],
+          "asserts": ["ctrl_space_and_f8_supported", "elapsed_recording_status_visible", "scope_is_verified_before_microphone_open", "cancel_closes_microphone"]
+        },
+        {
+          "id": "transcribe",
+          "requires": ["bounded_pcm_wav", "authenticated_transcription", "no_blind_retry", "privacy_safe_observability"],
+          "asserts": ["audio_is_not_written_or_logged", "upload_limits_enforced", "uncertain_outcome_is_explicit", "composer_remains_responsive"]
+        },
+        {
+          "id": "review",
+          "requires": ["editable_transcript", "accept_edit_retry_cancel"],
+          "asserts": ["nothing_submitted_before_accept", "cancel_is_non_mutating", "truncated_capture_cannot_be_accepted_unchanged", "typed_input_remains_available"]
+        },
+        {
+          "id": "log",
+          "requires": ["reviewed_text_to_normal_log_pipeline", "meal_memory_provenance"],
+          "asserts": ["voice_bypasses_no_business_rule", "meal_is_logged_once", "nutrition_result_uses_standard_renderer", "future_turn_can_use_committed_memory"]
+        }
+      ]
+    }
+  ],
+  "installed_artifact_gate": {
+    "required_platforms": ["macos-aarch64", "macos-x86_64", "linux-aarch64", "linux-x86_64", "windows-x86_64"],
+    "required_terminal_classes": ["local_tty", "ssh", "narrow_40", "standard_80", "wide_120", "reduced_motion", "no_color"],
+    "journey_pass_rate": 1.0,
+    "source_checkout_binary_forbidden": true,
+    "exact_archive_digest_required": true,
+    "privacy_safe_evidence_required": true,
+    "placeholder_or_simulated_success_forbidden": true
+  }
+}
