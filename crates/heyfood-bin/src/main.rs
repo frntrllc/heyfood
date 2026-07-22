@@ -346,10 +346,11 @@ async fn bare(machine: bool) -> ExitCode {
         }
     };
     let result = tokio::task::block_in_place(move || {
-        let mut driver = heyfood_bin::InteractiveTurnDriver::new(
+        let mut driver = heyfood_bin::InteractiveTurnDriver::new_http(
             prepared.service,
             prepared.ensure_session,
             prepared.snapshot,
+            prepared.authorization_scope,
         )?;
         heyfood_bin::run_qualified_session(&mut driver)
             .map_err(|error| io::Error::other(error.to_string()))
@@ -409,6 +410,7 @@ struct PreparedNativeSession {
     service: Arc<HttpService>,
     ensure_session: Arc<EnsureSession>,
     snapshot: SessionSnapshot,
+    authorization_scope: String,
 }
 
 async fn prepare_native_session(
@@ -515,6 +517,7 @@ async fn prepare_native_session(
             )
         })?;
     let credentials = auth.session.clone();
+    let authorization_scope = auth.channel.scope.clone();
     let reconciliation_required = credential_store
         .reconciliation_required()
         .map_err(heyfood_bin::OneShotError::from)?;
@@ -546,6 +549,7 @@ async fn prepare_native_session(
             credentials,
             reconciliation_required,
         },
+        authorization_scope,
     })
 }
 

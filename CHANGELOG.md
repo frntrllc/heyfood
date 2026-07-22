@@ -12,6 +12,8 @@ authentication contracts are stabilized.
   text and recognizes the frozen `message`, `text`, and `response` result forms.
 - Keeps unfinished interactive commands out of slash-command discovery until
   their typed effects and functional panels are complete.
+- Adds cancellable, authenticated `/grocery` and `/health` TUI panels backed by
+  live capability/list and provider-neutral integration/context reads.
 - Archives the final Python parity baseline under the non-release tag
   `archive/python-cli-73494a57` and verifies retained source bytes from Rust.
 

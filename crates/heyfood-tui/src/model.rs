@@ -13,9 +13,27 @@ const MAX_PROMPT_HISTORY: usize = 100;
 enum SlashCommandKind {
     Help,
     New,
+    Grocery,
+    Health,
     Status,
     Clear,
     Exit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PanelRequest {
+    Grocery,
+    Health,
+}
+
+impl PanelRequest {
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Grocery => "Grocery",
+            Self::Health => "Health",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +59,20 @@ pub const SLASH_COMMAND_REGISTRY: &[SlashCommandSpec] = &[
         usage: "/new",
         description: "Start a fresh conversation",
         kind: SlashCommandKind::New,
+    },
+    SlashCommandSpec {
+        name: "/grocery",
+        aliases: &[],
+        usage: "/grocery",
+        description: "Open the screened active Grocery list",
+        kind: SlashCommandKind::Grocery,
+    },
+    SlashCommandSpec {
+        name: "/health",
+        aliases: &[],
+        usage: "/health",
+        description: "Open connected health context",
+        kind: SlashCommandKind::Health,
     },
     SlashCommandSpec {
         name: "/status",
@@ -346,6 +378,16 @@ pub enum RuntimeEvent {
         operation_id: u64,
         message: String,
     },
+    PanelReady {
+        operation_id: u64,
+        panel: PanelRequest,
+        body: String,
+    },
+    PanelFailed {
+        operation_id: u64,
+        panel: PanelRequest,
+        message: String,
+    },
     ExternalSignal(ExitReason),
 }
 
@@ -374,8 +416,17 @@ pub enum Action {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Effect {
-    SubmitTurn { operation_id: u64, prompt: String },
-    CancelTurn { operation_id: u64 },
+    SubmitTurn {
+        operation_id: u64,
+        prompt: String,
+    },
+    OpenPanel {
+        operation_id: u64,
+        panel: PanelRequest,
+    },
+    CancelTurn {
+        operation_id: u64,
+    },
     ResetConversation,
     Exit(ExitReason),
 }
@@ -522,9 +573,44 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
             push_notice(model, "Started a fresh conversation.");
             return vec![Effect::ResetConversation];
         }
+        SlashCommandKind::Grocery | SlashCommandKind::Health if !arguments.is_empty() => {
+            push_notice(model, &format!("Usage: {}", spec.usage));
+        }
+        SlashCommandKind::Grocery => return open_panel(model, PanelRequest::Grocery),
+        SlashCommandKind::Health => return open_panel(model, PanelRequest::Health),
         SlashCommandKind::Exit => return begin_exit(model, ExitReason::Requested),
     }
     Vec::new()
+}
+
+fn open_panel(model: &mut AppModel, panel: PanelRequest) -> Vec<Effect> {
+    if model.operation.is_active() {
+        push_notice(
+            model,
+            "Finish or stop the active work before opening another panel.",
+        );
+        return Vec::new();
+    }
+    let operation_id = model.next_operation_id;
+    model.next_operation_id = model.next_operation_id.saturating_add(1);
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::User,
+        text: format!("/{}", panel.title().to_ascii_lowercase()),
+        streaming: false,
+    });
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::Assistant,
+        text: String::new(),
+        streaming: true,
+    });
+    model.operation = OperationState::Running(operation_id);
+    model.activity = Some(format!("Loading {}…", panel.title()));
+    model.idle_exit_armed = false;
+    follow_tail(model);
+    vec![Effect::OpenPanel {
+        operation_id,
+        panel,
+    }]
 }
 
 fn show_help(model: &mut AppModel) {
@@ -669,11 +755,53 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
             });
             finish_stream(model, RunTurnOutcome::Completed);
         }
+        RuntimeEvent::PanelReady {
+            operation_id,
+            panel,
+            body,
+        } if model.operation.operation_id() == Some(operation_id) => {
+            finish_panel(model, panel, Ok(body));
+        }
+        RuntimeEvent::PanelFailed {
+            operation_id,
+            panel,
+            message,
+        } if model.operation.operation_id() == Some(operation_id) => {
+            finish_panel(model, panel, Err(message));
+        }
         RuntimeEvent::TurnEvent { .. }
         | RuntimeEvent::TurnFinished { .. }
-        | RuntimeEvent::TurnFailed { .. } => {}
+        | RuntimeEvent::TurnFailed { .. }
+        | RuntimeEvent::PanelReady { .. }
+        | RuntimeEvent::PanelFailed { .. } => {}
     }
     Vec::new()
+}
+
+fn finish_panel(model: &mut AppModel, panel: PanelRequest, result: Result<String, String>) {
+    let old_lines = model.scrollback.rendered_lines();
+    model.scrollback.mutate_last_assistant(|entry| {
+        entry.text = match result {
+            Ok(body) => {
+                let body = terminal_safe_text(&body);
+                if body.trim().is_empty() {
+                    format!("{}\n\nNo information is available.", panel.title())
+                } else {
+                    format!("{}\n\n{}", panel.title(), body.trim_end())
+                }
+            }
+            Err(message) => format!(
+                "Unable to open {}: {}",
+                panel.title(),
+                terminal_safe_text(&message)
+            ),
+        };
+        entry.streaming = false;
+    });
+    model.operation = OperationState::Idle;
+    model.activity = None;
+    model.idle_exit_armed = false;
+    account_for_new_lines(model, old_lines);
 }
 
 fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
@@ -1236,6 +1364,46 @@ mod tests {
     fn incomplete_panels_are_not_advertised_as_available_commands() {
         for command in ["/voice", "/for", "/household", "/profile", "/location"] {
             assert!(resolve_slash_command(command).is_none(), "{command}");
+        }
+    }
+
+    #[test]
+    fn grocery_and_health_commands_dispatch_typed_panel_effects() {
+        for (command, panel) in [
+            ("/grocery", PanelRequest::Grocery),
+            ("/health", PanelRequest::Health),
+        ] {
+            let mut model = AppModel {
+                draft: command.into(),
+                cursor: command.len(),
+                ..AppModel::default()
+            };
+            assert_eq!(
+                dispatch(&mut model, Action::Submit),
+                vec![Effect::OpenPanel {
+                    operation_id: 1,
+                    panel,
+                }]
+            );
+            assert_eq!(model.operation, OperationState::Running(1));
+            assert_eq!(
+                model.scrollback.entries().back().unwrap().speaker,
+                Speaker::Assistant
+            );
+
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::PanelReady {
+                    operation_id: 1,
+                    panel,
+                    body: "Live service result".into(),
+                }),
+            );
+            let result = model.scrollback.entries().back().unwrap();
+            assert!(result.text.starts_with(panel.title()));
+            assert!(result.text.contains("Live service result"));
+            assert!(!result.streaming);
+            assert_eq!(model.operation, OperationState::Idle);
         }
     }
 

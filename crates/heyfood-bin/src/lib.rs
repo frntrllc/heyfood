@@ -21,7 +21,7 @@ use heyfood_core::{
     UpdateItemStateRequestWire, terminal_safe_text,
 };
 use heyfood_platform::{NativeSignalSource, SignalEvent};
-use heyfood_tui::{Effect, ExitReason, RuntimeEvent, TuiError};
+use heyfood_tui::{Effect, ExitReason, PanelRequest, RuntimeEvent, TuiError};
 use serde_json::{Map, Value, json};
 use tokio::{
     runtime::Runtime,
@@ -1228,6 +1228,8 @@ struct OwnedSignalForwarder {
 pub struct InteractiveTurnDriver {
     runtime: Runtime,
     service: Arc<dyn ServicePort>,
+    interactive_service: Option<Arc<HttpService>>,
+    authorization_scope: Arc<str>,
     ensure_session: Arc<EnsureSession>,
     session: Arc<Mutex<SessionSnapshot>>,
     conversation_id: Arc<Mutex<Option<String>>>,
@@ -1248,12 +1250,27 @@ impl InteractiveTurnDriver {
         Ok(Self {
             runtime,
             service,
+            interactive_service: None,
+            authorization_scope: Arc::from(""),
             ensure_session,
             session: Arc::new(Mutex::new(session)),
             conversation_id: Arc::new(Mutex::new(None)),
             turns: Vec::new(),
             signals: None,
         })
+    }
+
+    pub fn new_http(
+        service: Arc<HttpService>,
+        ensure_session: Arc<EnsureSession>,
+        session: SessionSnapshot,
+        authorization_scope: impl Into<Arc<str>>,
+    ) -> io::Result<Self> {
+        let conversational_service: Arc<dyn ServicePort> = service.clone();
+        let mut driver = Self::new(conversational_service, ensure_session, session)?;
+        driver.interactive_service = Some(service);
+        driver.authorization_scope = authorization_scope.into();
+        Ok(driver)
     }
 
     fn reap_finished(&mut self) {
@@ -1342,6 +1359,66 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 },
             };
             let _ = runtime_events.send(terminal_event).await;
+        });
+        self.turns.push(OwnedInteractiveTurn {
+            operation_id,
+            cancellation,
+            task,
+        });
+        Ok(())
+    }
+
+    fn start_panel(
+        &mut self,
+        operation_id: u64,
+        panel: PanelRequest,
+        runtime_events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        self.reap_finished();
+        if !self.turns.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "interactive work is already active",
+            ));
+        }
+        let service = self.interactive_service.clone().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "interactive panels require the authenticated HTTP adapter",
+            )
+        })?;
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+        let ensure_session = self.ensure_session.clone();
+        let session = self.session.clone();
+        let authorization_scope = self.authorization_scope.clone();
+        let task = self.runtime.spawn(async move {
+            let result = run_interactive_panel(
+                panel,
+                service,
+                ensure_session,
+                session,
+                &authorization_scope,
+                task_cancellation.clone(),
+            )
+            .await;
+            let event = match result {
+                Ok(body) => RuntimeEvent::PanelReady {
+                    operation_id,
+                    panel,
+                    body,
+                },
+                Err(_) if task_cancellation.is_cancelled() => RuntimeEvent::TurnFinished {
+                    operation_id,
+                    outcome: RunTurnOutcome::CancelledBeforeServerAcceptance,
+                },
+                Err(message) => RuntimeEvent::PanelFailed {
+                    operation_id,
+                    panel,
+                    message,
+                },
+            };
+            let _ = runtime_events.send(event).await;
         });
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
@@ -1503,6 +1580,106 @@ async fn run_interactive_turn(
     }
 }
 
+async fn run_interactive_panel(
+    panel: PanelRequest,
+    service: Arc<HttpService>,
+    ensure_session: Arc<EnsureSession>,
+    session: Arc<Mutex<SessionSnapshot>>,
+    authorization_scope: &str,
+    cancellation: CancellationToken,
+) -> Result<String, String> {
+    let required_scope = match panel {
+        PanelRequest::Grocery => "grocery:read",
+        PanelRequest::Health => "health:read",
+    };
+    if !authorization_scope
+        .split_whitespace()
+        .any(|scope| scope == required_scope)
+    {
+        return Err(format!(
+            "Additional authorization ({required_scope}) is required. Exit the TUI and run `heyfood login`, then reopen this panel."
+        ));
+    }
+
+    let snapshot = session.lock().await.clone();
+    let credentials = match ensure_session
+        .execute(snapshot, cancellation.child_token())
+        .await
+        .map_err(|error| terminal_safe_text(&error.to_string()))?
+    {
+        EnsureSessionOutcome::Current(credentials) => credentials,
+        EnsureSessionOutcome::Refreshed(credentials) => {
+            let mut current = session.lock().await;
+            current.credentials = credentials.clone();
+            current.reconciliation_required = false;
+            credentials
+        }
+        EnsureSessionOutcome::CancelledBeforeDispatch => {
+            return Err("Panel loading was cancelled before dispatch.".into());
+        }
+    };
+    if cancellation.is_cancelled() {
+        return Err("Panel loading was cancelled before dispatch.".into());
+    }
+
+    match panel {
+        PanelRequest::Grocery => {
+            let capabilities = service
+                .discover_capabilities(cancellation.child_token())
+                .await
+                .map_err(panel_error)?;
+            let list = service
+                .grocery_list(
+                    &capabilities,
+                    &credentials,
+                    OperationId::new(),
+                    cancellation,
+                )
+                .await
+                .map_err(panel_error)?;
+            Ok(render_grocery_list(&list, OutputMode::HumanPlain))
+        }
+        PanelRequest::Health => {
+            let integrations = service
+                .health_integrations(&credentials, OperationId::new(), cancellation.child_token())
+                .await
+                .map_err(panel_error)?;
+            let context = service
+                .health_context(&credentials, OperationId::new(), cancellation)
+                .await
+                .map_err(panel_error)?;
+            let mut output = String::from("Connections\n");
+            if integrations.integrations.is_empty() {
+                output.push_str("No health integrations connected.\n");
+            } else {
+                for integration in integrations.integrations {
+                    let provider = serde_json::to_value(integration.provider)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| "provider".into());
+                    let status = serde_json::to_value(integration.status)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| "unknown".into());
+                    output.push_str(&format!("• {provider}: {status}\n"));
+                }
+            }
+            output.push('\n');
+            output.push_str(&render_health_context(&context, OutputMode::HumanPlain));
+            output.push_str("\nHealth context is informational and is not a diagnosis.\n");
+            Ok(output)
+        }
+    }
+}
+
+fn panel_error(error: heyfood_application::PortError) -> String {
+    format!(
+        "{}: {}",
+        terminal_safe_text(error.code),
+        terminal_safe_text(&error.message)
+    )
+}
+
 /// Runtime supervisor boundary used only after bootstrap has validated every
 /// required input. Implementations must enqueue work and return promptly; the
 /// retained terminal thread must never perform network IO.
@@ -1519,6 +1696,18 @@ pub trait QualifiedTurnDriver {
         prompt: String,
         events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()>;
+
+    fn start_panel(
+        &mut self,
+        _operation_id: u64,
+        _panel: PanelRequest,
+        _events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "interactive panels are unavailable in this driver",
+        ))
+    }
 
     fn cancel_turn(&mut self, operation_id: u64) -> io::Result<()>;
 
@@ -1611,6 +1800,12 @@ fn route_effect(
         } => driver
             .start_turn(operation_id, prompt, runtime_sender.clone())
             .map_err(CompositionError::Driver),
+        Effect::OpenPanel {
+            operation_id,
+            panel,
+        } => driver
+            .start_panel(operation_id, panel, runtime_sender.clone())
+            .map_err(CompositionError::Driver),
         Effect::CancelTurn { operation_id } => driver
             .cancel_turn(operation_id)
             .map_err(CompositionError::Driver),
@@ -1631,9 +1826,11 @@ mod tests {
         PortError,
     };
     use heyfood_core::{
-        AccountId, AgentEvent, CommitId, CredentialVersion, RefreshOutcome, RefreshRequest,
-        SensitiveString,
+        AccountId, AgentEvent, CommitId, CredentialVersion, NetworkPolicy, RefreshOutcome,
+        RefreshRequest, SensitiveString, ServiceUrl,
     };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     struct FixedClock;
 
@@ -1879,6 +2076,166 @@ mod tests {
 
         route_effect(&mut driver, &sender, Effect::CancelTurn { operation_id: 7 }).unwrap();
         assert_eq!(driver.cancelled, [7]);
+    }
+
+    #[tokio::test]
+    async fn grocery_and_health_panels_render_authenticated_service_results() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let responses = [
+            (
+                "/v1/auth/capabilities",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "self_registration": {
+                        "status": "available",
+                        "regions": ["US"],
+                        "identity_methods": ["sms", "email"]
+                    },
+                    "authorization": {
+                        "loopback_pkce": true,
+                        "device_code": true,
+                        "identity_methods": ["sms", "email"]
+                    },
+                    "profile_readiness": true,
+                    "application_capabilities": {"grocery": "v1"}
+                }),
+            ),
+            (
+                "/v1/grocery/list",
+                serde_json::json!({
+                    "id": "11111111-1111-4111-8111-111111111111",
+                    "title": "Weekly groceries",
+                    "state": "active",
+                    "version": 3,
+                    "items": [],
+                    "created_at": "2026-07-22T00:00:00Z",
+                    "updated_at": "2026-07-22T00:00:00Z"
+                }),
+            ),
+            (
+                "/v1/integrations",
+                serde_json::json!({
+                    "integrations": [{
+                        "provider": "oura",
+                        "status": "connected",
+                        "connected_at": "2026-07-21T00:00:00Z",
+                        "last_sync_at": "2026-07-22T00:00:00Z",
+                        "scopes": []
+                    }]
+                }),
+            ),
+            (
+                "/v1/health/context",
+                serde_json::json!({
+                    "status": "connected",
+                    "provider": "oura",
+                    "stale_since": null,
+                    "data_freshness_hours": 2,
+                    "sleep_avg": 82,
+                    "readiness_avg": 78,
+                    "activity_avg": 75,
+                    "sleep_label": "good",
+                    "readiness_label": "good",
+                    "activity_label": "good",
+                    "steps_avg": 8100,
+                    "active_calories_avg": 540,
+                    "stress_label": null,
+                    "deep_sleep_label": null,
+                    "goals": []
+                }),
+            ),
+        ];
+        let server = tokio::spawn(async move {
+            for (expected_path, body) in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut buffer = [0_u8; 1024];
+                    let read = socket.read(&mut buffer).await.unwrap();
+                    assert!(read > 0);
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8(request).unwrap();
+                assert!(request.starts_with(&format!("GET {expected_path} HTTP/1.1\r\n")));
+                if expected_path != "/v1/auth/capabilities" {
+                    assert!(
+                        request
+                            .to_ascii_lowercase()
+                            .contains("authorization: bearer access")
+                    );
+                }
+                let body = body.to_string();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+
+        let service_url =
+            ServiceUrl::parse(&format!("http://{address}"), NetworkPolicy::DEVELOPMENT).unwrap();
+        let service = Arc::new(
+            HttpService::new(service_url, NetworkPolicy::DEVELOPMENT, Default::default()).unwrap(),
+        );
+        let service_port: Arc<dyn ServicePort> = service.clone();
+        let ensure_session = Arc::new(EnsureSession::new(
+            service_port,
+            Arc::new(MemoryCredentialPort),
+            Arc::new(FixedClock),
+        ));
+        let session = Arc::new(Mutex::new(SessionSnapshot {
+            credentials: fixture_credentials(),
+            reconciliation_required: false,
+        }));
+        let missing_scope = run_interactive_panel(
+            PanelRequest::Grocery,
+            service.clone(),
+            ensure_session.clone(),
+            session.clone(),
+            "health:read",
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+        assert!(missing_scope.contains("grocery:read"));
+
+        let grocery = run_interactive_panel(
+            PanelRequest::Grocery,
+            service.clone(),
+            ensure_session.clone(),
+            session.clone(),
+            "grocery:read health:read",
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(grocery.contains("Weekly groceries  version 3"));
+        assert!(grocery.contains("No grocery items."));
+
+        let health = run_interactive_panel(
+            PanelRequest::Health,
+            service,
+            ensure_session,
+            session,
+            "grocery:read health:read",
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(health.contains("• oura: connected"));
+        assert!(health.contains("Health context: connected"));
+        assert!(health.contains("Health context is informational and is not a diagnosis."));
+        server.await.unwrap();
     }
 
     #[test]
