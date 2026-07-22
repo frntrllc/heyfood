@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, fmt::Write as _};
 
 use heyfood_application::RunTurnOutcome;
 use heyfood_core::{AgentEvent, terminal_safe_text};
@@ -8,17 +8,124 @@ pub const MAX_RENDERED_LINES: usize = 20_000;
 pub const MAX_SCROLLBACK_BYTES: usize = 4 * 1024 * 1024;
 const TRUNCATION_NOTICE: &str = "[… earlier content truncated …]\n";
 const MAX_PROMPT_HISTORY: usize = 100;
-const SLASH_COMMANDS: &[&str] = &[
-    "/clear",
-    "/exit",
-    "/help",
-    "/household",
-    "/location",
-    "/new",
-    "/profile",
-    "/status",
-    "/voice",
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SlashCommandKind {
+    Help,
+    New,
+    Voice,
+    Target,
+    Household,
+    Profile,
+    Location,
+    Status,
+    Clear,
+    Exit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SlashCommandSpec {
+    pub name: &'static str,
+    pub aliases: &'static [&'static str],
+    pub usage: &'static str,
+    pub description: &'static str,
+    kind: SlashCommandKind,
+}
+
+pub const SLASH_COMMAND_REGISTRY: &[SlashCommandSpec] = &[
+    SlashCommandSpec {
+        name: "/help",
+        aliases: &["/?"],
+        usage: "/help",
+        description: "Show commands and keyboard help",
+        kind: SlashCommandKind::Help,
+    },
+    SlashCommandSpec {
+        name: "/new",
+        aliases: &[],
+        usage: "/new",
+        description: "Start a fresh conversation",
+        kind: SlashCommandKind::New,
+    },
+    SlashCommandSpec {
+        name: "/voice",
+        aliases: &[],
+        usage: "/voice",
+        description: "Start voice or show availability",
+        kind: SlashCommandKind::Voice,
+    },
+    SlashCommandSpec {
+        name: "/for",
+        aliases: &[],
+        usage: "/for NAME",
+        description: "Target a household member",
+        kind: SlashCommandKind::Target,
+    },
+    SlashCommandSpec {
+        name: "/household",
+        aliases: &[],
+        usage: "/household",
+        description: "View household targeting",
+        kind: SlashCommandKind::Household,
+    },
+    SlashCommandSpec {
+        name: "/profile",
+        aliases: &[],
+        usage: "/profile",
+        description: "View dietary profile readiness",
+        kind: SlashCommandKind::Profile,
+    },
+    SlashCommandSpec {
+        name: "/location",
+        aliases: &[],
+        usage: "/location",
+        description: "View active location context",
+        kind: SlashCommandKind::Location,
+    },
+    SlashCommandSpec {
+        name: "/status",
+        aliases: &[],
+        usage: "/status",
+        description: "Show session readiness",
+        kind: SlashCommandKind::Status,
+    },
+    SlashCommandSpec {
+        name: "/clear",
+        aliases: &[],
+        usage: "/clear",
+        description: "Clear visible scrollback",
+        kind: SlashCommandKind::Clear,
+    },
+    SlashCommandSpec {
+        name: "/exit",
+        aliases: &["/quit"],
+        usage: "/exit",
+        description: "Close hey.food",
+        kind: SlashCommandKind::Exit,
+    },
 ];
+
+#[must_use]
+pub fn slash_suggestions(model: &AppModel, limit: usize) -> Vec<&'static SlashCommandSpec> {
+    let query = model.draft.trim();
+    if !query.starts_with('/') || query.contains(char::is_whitespace) {
+        return Vec::new();
+    }
+    SLASH_COMMAND_REGISTRY
+        .iter()
+        .filter(|spec| {
+            spec.name.starts_with(query)
+                || spec.aliases.iter().any(|alias| alias.starts_with(query))
+        })
+        .take(limit)
+        .collect()
+}
+
+fn resolve_slash_command(name: &str) -> Option<&'static SlashCommandSpec> {
+    SLASH_COMMAND_REGISTRY
+        .iter()
+        .find(|spec| spec.name == name || spec.aliases.contains(&name))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Speaker {
@@ -418,9 +525,16 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
         .map_or((command.as_str(), ""), |(name, arguments)| {
             (name, arguments.trim())
         });
-    match name {
-        "/help" => show_help(model),
-        "/status" => push_notice(
+    let Some(spec) = resolve_slash_command(name) else {
+        push_notice(
+            model,
+            "Unknown command. Use /help to see the interactive command registry.",
+        );
+        return Vec::new();
+    };
+    match spec.kind {
+        SlashCommandKind::Help => show_help(model),
+        SlashCommandKind::Status => push_notice(
             model,
             if model.operation.is_active() {
                 "Connected · a turn is active · Ctrl+C stops it"
@@ -428,48 +542,57 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
                 "Connected · Rust TUI ready · credentials and service are checked before every turn"
             },
         ),
-        "/clear" if model.operation.is_active() => push_notice(
+        SlashCommandKind::Clear if model.operation.is_active() => push_notice(
             model,
             "Finish or stop the active turn before clearing the visible transcript.",
         ),
-        "/clear" => {
+        SlashCommandKind::Clear => {
             model.scrollback.clear();
             model.activity = None;
             follow_tail(model);
         }
-        "/new" if !arguments.is_empty() => {
-            push_notice(model, "Usage: /new");
+        SlashCommandKind::New if !arguments.is_empty() => {
+            push_notice(model, &format!("Usage: {}", spec.usage));
         }
-        "/new" if model.operation.is_active() => push_notice(
+        SlashCommandKind::New if model.operation.is_active() => push_notice(
             model,
             "Stop the active turn with Ctrl+C, then run /new again.",
         ),
-        "/new" => {
+        SlashCommandKind::New => {
             push_notice(model, "Started a fresh conversation.");
             return vec![Effect::ResetConversation];
         }
-        "/exit" => return begin_exit(model, ExitReason::Requested),
-        "/voice" => push_notice(
+        SlashCommandKind::Exit => return begin_exit(model, ExitReason::Requested),
+        SlashCommandKind::Voice => push_notice(
             model,
             "Voice is not connected to the composer yet. Typed conversation remains available.",
         ),
-        "/household" | "/profile" | "/location" => push_notice(
+        SlashCommandKind::Target if arguments.is_empty() => {
+            push_notice(model, &format!("Usage: {}", spec.usage));
+        }
+        SlashCommandKind::Target => push_notice(
             model,
-            "This interactive panel is being connected. Use the corresponding one-shot command for now.",
+            "Household targeting is being connected. The current conversation remains targeted to you.",
         ),
-        _ => push_notice(
-            model,
-            "Unknown command. Use /help to see the interactive command registry.",
-        ),
+        SlashCommandKind::Household | SlashCommandKind::Profile | SlashCommandKind::Location => {
+            push_notice(
+                model,
+                "This interactive panel is being connected. Use the corresponding one-shot command for now.",
+            )
+        }
     }
     Vec::new()
 }
 
 fn show_help(model: &mut AppModel) {
-    push_notice(
-        model,
-        "Commands\n  /help       Show this guide\n  /new        Start a fresh conversation\n  /status     Show local session readiness\n  /clear      Clear visible scrollback\n  /exit       Close hey.food\n  /voice      Voice availability\n\nKeys\n  Enter send · Shift+Enter/Ctrl+J newline · Up/Down history\n  PageUp/PageDown scroll · End follow · Ctrl+C stop · Ctrl+D exit",
+    let mut help = String::from("Commands\n");
+    for spec in SLASH_COMMAND_REGISTRY {
+        let _ = writeln!(help, "  {:<14} {}", spec.usage, spec.description);
+    }
+    help.push_str(
+        "\nKeys\n  Enter send · Shift+Enter/Ctrl+J newline · Up/Down history\n  Tab complete · PageUp/PageDown scroll · End follow\n  Ctrl+C stop · Ctrl+D exit",
     );
+    push_notice(model, &help);
 }
 
 fn push_notice(model: &mut AppModel, text: &str) {
@@ -532,15 +655,9 @@ fn history_next(model: &mut AppModel) {
 }
 
 fn complete_slash(model: &mut AppModel) {
-    if !model.draft.starts_with('/') || model.draft.contains(char::is_whitespace) {
-        return;
-    }
-    let command = SLASH_COMMANDS
-        .iter()
-        .find(|command| command.starts_with(&model.draft))
-        .copied();
-    if let Some(command) = command {
-        model.draft = command.to_owned();
+    let suggestions = slash_suggestions(model, 2);
+    if let [spec] = suggestions.as_slice() {
+        model.draft = spec.name.to_owned();
         model.cursor = model.draft.chars().count();
     }
 }
@@ -1074,6 +1191,25 @@ mod tests {
         let _ = dispatch(&mut model, Action::CompleteSlash);
         assert_eq!(model.draft, "/status");
         assert_eq!(model.cursor, 7);
+    }
+
+    #[test]
+    fn command_registry_drives_aliases_help_and_discovery() {
+        let mut model = AppModel {
+            draft: "/".into(),
+            cursor: 1,
+            ..AppModel::default()
+        };
+        assert_eq!(slash_suggestions(&model, 3).len(), 3);
+        let _ = dispatch(&mut model, Action::CompleteSlash);
+        assert_eq!(model.draft, "/", "ambiguous prefixes must remain editable");
+
+        model.draft = "/quit".into();
+        model.cursor = 5;
+        assert_eq!(
+            dispatch(&mut model, Action::Submit),
+            vec![Effect::Exit(ExitReason::Requested)]
+        );
     }
 
     #[test]

@@ -64,7 +64,7 @@ fn authenticated_one_shot_route_fails_with_registration_guidance_when_disconnect
 }
 
 #[test]
-fn placeholder_command_returns_a_typed_failure() {
+fn interactive_chat_rejects_json_without_entering_terminal_mode() {
     let output = Command::new(env!("CARGO_BIN_EXE_heyfood"))
         .args(["--json", "chat"])
         .output()
@@ -73,7 +73,21 @@ fn placeholder_command_returns_a_typed_failure() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stderr.is_empty());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["error"]["type"], "command_not_available");
+    assert_eq!(value["error"]["type"], "interactive_json_unsupported");
+}
+
+#[test]
+fn interactive_chat_requires_a_tty() {
+    let output = Command::new(env!("CARGO_BIN_EXE_heyfood"))
+        .arg("chat")
+        .output()
+        .expect("native binary should run");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("requires terminal input and output"));
+    assert!(!stderr.contains('\u{1b}'));
 }
 
 #[test]

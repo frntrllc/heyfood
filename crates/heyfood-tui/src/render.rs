@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::{AppModel, OperationState, Speaker};
+use crate::{AppModel, OperationState, Speaker, slash_suggestions};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResponsiveMode {
@@ -35,7 +35,10 @@ pub fn composer_height(model: &AppModel, width: u16) -> u16 {
         .map(|line| line.chars().count().max(1).div_ceil(available))
         .sum::<usize>()
         .clamp(1, 6);
-    u16::try_from(lines).unwrap_or(6).saturating_add(2)
+    let suggestions = slash_suggestions(model, 3).len();
+    u16::try_from(lines.saturating_add(suggestions))
+        .unwrap_or(9)
+        .saturating_add(2)
 }
 
 pub fn render(frame: &mut Frame<'_>, model: &AppModel) {
@@ -170,10 +173,21 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     } else {
         Style::default()
     };
+    let mut lines = vec![Line::from(vec![
+        Span::raw("> "),
+        Span::styled(hint.to_owned(), style),
+    ])];
+    for spec in slash_suggestions(model, 3) {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {:<14}", spec.usage),
+                Style::default().fg(Color::Cyan),
+            ),
+            Span::styled(spec.description, Style::default().fg(Color::DarkGray)),
+        ]));
+    }
     frame.render_widget(
-        Paragraph::new(format!("> {hint}"))
-            .style(style)
-            .wrap(Wrap { trim: false }),
+        Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
         inner,
     );
 
@@ -186,10 +200,10 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     let text = match responsive_mode(area.width) {
-        ResponsiveMode::Compact => " Enter send · ^C stop · ^D exit",
-        ResponsiveMode::Standard => " Enter send · Shift+Enter newline · Ctrl+C stop · End follow",
+        ResponsiveMode::Compact => " / commands · ? help · ^C stop · ^D exit",
+        ResponsiveMode::Standard => " / commands · Enter send · Ctrl+C stop · End follow",
         ResponsiveMode::Wide => {
-            " Enter send · Shift+Enter newline · PageUp/PageDown scroll · Ctrl+C stop · Ctrl+D exit"
+            " / commands · Tab complete · Shift+Enter newline · Ctrl+C stop · Ctrl+D exit"
         }
     };
     let text = if model.unseen_lines > 0 {
@@ -306,7 +320,7 @@ mod tests {
         assert_ne!(narrow, wide);
         assert_eq!(model.scrollback, content);
         assert!(narrow.contains("^C stop"));
-        assert!(wide.contains("PageUp/PageDown"));
+        assert!(wide.contains("Tab complete"));
     }
 
     #[test]
@@ -325,5 +339,15 @@ mod tests {
         assert!(snapshot(&model, 80, 18).contains("new · End follow"));
         let _ = dispatch(&mut model, Action::FollowTail);
         assert!(!snapshot(&model, 80, 18).contains("new · End follow"));
+    }
+
+    #[test]
+    fn slash_registry_is_visible_while_composing_a_command() {
+        let mut model = AppModel::default();
+        model.draft = "/st".into();
+        model.cursor = 3;
+        let rendered = snapshot(&model, 80, 18);
+        assert!(rendered.contains("/status"));
+        assert!(rendered.contains("Show session readiness"));
     }
 }

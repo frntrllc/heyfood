@@ -276,12 +276,35 @@ async fn main() -> ExitCode {
         }
         Some(Command::Register(arguments)) => register(arguments, machine).await,
         Some(Command::Login(arguments)) => login(arguments, machine).await,
+        Some(Command::Chat(_)) => chat(machine).await,
         Some(command) if is_native_one_shot(&command) => {
             one_shot(command, output_mode, machine).await
         }
         Some(_) => pending_command(machine),
         None => bare(machine).await,
     }
+}
+
+async fn chat(machine: bool) -> ExitCode {
+    if machine {
+        return failure(
+            "interactive_json_unsupported",
+            "The interactive terminal cannot emit the one-value JSON contract.",
+            Some("Use `heyfood ask --json \"your question\"` for automation."),
+            true,
+            false,
+        );
+    }
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return failure(
+            "interactive_terminal_required",
+            "The interactive terminal requires terminal input and output.",
+            Some("Use `heyfood ask \"your question\"` in a redirected environment."),
+            false,
+            false,
+        );
+    }
+    bare(false).await
 }
 
 const fn is_native_one_shot(command: &Command) -> bool {

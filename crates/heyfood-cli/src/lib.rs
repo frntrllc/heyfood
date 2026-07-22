@@ -90,8 +90,7 @@ pub enum Command {
     Ask(AskArgs),
     /// Reply to an explicit conversation ID.
     Reply(AskArgs),
-    /// Run classic line-oriented chat.
-    #[command(hide = true)]
+    /// Open the native interactive terminal.
     Chat(LegacyArgs),
     /// Log a meal through the hosted agent.
     Log(LogArgs),
