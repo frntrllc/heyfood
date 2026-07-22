@@ -14,6 +14,8 @@ authentication contracts are stabilized.
   their typed effects and functional panels are complete.
 - Adds cancellable, authenticated `/grocery` and `/health` TUI panels backed by
   live capability/list and provider-neutral integration/context reads.
+- Adds a live `/profile` consent/profile view plus account-bound local
+  `/household` and `/location` panels; mismatched local state fails closed.
 - Archives the final Python parity baseline under the non-release tag
   `archive/python-cli-73494a57` and verifies retained source bytes from Rust.
 

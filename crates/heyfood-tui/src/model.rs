@@ -15,6 +15,9 @@ enum SlashCommandKind {
     New,
     Grocery,
     Health,
+    Household,
+    Profile,
+    Location,
     Status,
     Clear,
     Exit,
@@ -24,6 +27,9 @@ enum SlashCommandKind {
 pub enum PanelRequest {
     Grocery,
     Health,
+    Household,
+    Profile,
+    Location,
 }
 
 impl PanelRequest {
@@ -32,6 +38,9 @@ impl PanelRequest {
         match self {
             Self::Grocery => "Grocery",
             Self::Health => "Health",
+            Self::Household => "Household",
+            Self::Profile => "Dietary profile",
+            Self::Location => "Location",
         }
     }
 }
@@ -73,6 +82,27 @@ pub const SLASH_COMMAND_REGISTRY: &[SlashCommandSpec] = &[
         usage: "/health",
         description: "Open connected health context",
         kind: SlashCommandKind::Health,
+    },
+    SlashCommandSpec {
+        name: "/household",
+        aliases: &[],
+        usage: "/household",
+        description: "Open household targeting",
+        kind: SlashCommandKind::Household,
+    },
+    SlashCommandSpec {
+        name: "/profile",
+        aliases: &[],
+        usage: "/profile",
+        description: "Open dietary profile readiness",
+        kind: SlashCommandKind::Profile,
+    },
+    SlashCommandSpec {
+        name: "/location",
+        aliases: &[],
+        usage: "/location",
+        description: "Open active location context",
+        kind: SlashCommandKind::Location,
     },
     SlashCommandSpec {
         name: "/status",
@@ -573,11 +603,20 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
             push_notice(model, "Started a fresh conversation.");
             return vec![Effect::ResetConversation];
         }
-        SlashCommandKind::Grocery | SlashCommandKind::Health if !arguments.is_empty() => {
+        SlashCommandKind::Grocery
+        | SlashCommandKind::Health
+        | SlashCommandKind::Household
+        | SlashCommandKind::Profile
+        | SlashCommandKind::Location
+            if !arguments.is_empty() =>
+        {
             push_notice(model, &format!("Usage: {}", spec.usage));
         }
         SlashCommandKind::Grocery => return open_panel(model, PanelRequest::Grocery),
         SlashCommandKind::Health => return open_panel(model, PanelRequest::Health),
+        SlashCommandKind::Household => return open_panel(model, PanelRequest::Household),
+        SlashCommandKind::Profile => return open_panel(model, PanelRequest::Profile),
+        SlashCommandKind::Location => return open_panel(model, PanelRequest::Location),
         SlashCommandKind::Exit => return begin_exit(model, ExitReason::Requested),
     }
     Vec::new()
@@ -1362,16 +1401,19 @@ mod tests {
 
     #[test]
     fn incomplete_panels_are_not_advertised_as_available_commands() {
-        for command in ["/voice", "/for", "/household", "/profile", "/location"] {
+        for command in ["/voice", "/for"] {
             assert!(resolve_slash_command(command).is_none(), "{command}");
         }
     }
 
     #[test]
-    fn grocery_and_health_commands_dispatch_typed_panel_effects() {
+    fn available_panel_commands_dispatch_typed_effects() {
         for (command, panel) in [
             ("/grocery", PanelRequest::Grocery),
             ("/health", PanelRequest::Health),
+            ("/household", PanelRequest::Household),
+            ("/profile", PanelRequest::Profile),
+            ("/location", PanelRequest::Location),
         ] {
             let mut model = AppModel {
                 draft: command.into(),

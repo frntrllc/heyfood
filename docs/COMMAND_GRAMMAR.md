@@ -78,11 +78,12 @@ preference can never silently cross processors or open a browser.
 ## Discovering opaque ids
 
 Inside the Rust TUI, `/grocery` opens the live capability-gated active list and
-`/health` opens the live provider-neutral integration/context view. Both are
-read-only, use the authenticated Rust transport, and can be cancelled without
-mutating server state. Slash commands for voice, household targeting, profile,
-and location remain absent from discovery until their complete typed workflows
-and panels are connected.
+`/health` opens the live provider-neutral integration/context view. `/profile`
+reads consent and the synchronized dietary profile, while `/household` and
+`/location` render account-bound local context without a network request. These
+panels are read-only and cancellable. Voice and the mutating `/for` household
+target switch remain absent from discovery until their complete typed workflows
+are connected.
 
 Use `heyfood members list` before passing `--member-id`. It lists synced member
 profile ids returned by the service. Use `heyfood conversation list` to inspect

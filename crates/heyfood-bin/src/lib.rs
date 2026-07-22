@@ -1230,6 +1230,7 @@ pub struct InteractiveTurnDriver {
     service: Arc<dyn ServicePort>,
     interactive_service: Option<Arc<HttpService>>,
     authorization_scope: Arc<str>,
+    local_state: Option<Arc<ImportedPythonState>>,
     ensure_session: Arc<EnsureSession>,
     session: Arc<Mutex<SessionSnapshot>>,
     conversation_id: Arc<Mutex<Option<String>>>,
@@ -1252,6 +1253,7 @@ impl InteractiveTurnDriver {
             service,
             interactive_service: None,
             authorization_scope: Arc::from(""),
+            local_state: None,
             ensure_session,
             session: Arc::new(Mutex::new(session)),
             conversation_id: Arc::new(Mutex::new(None)),
@@ -1271,6 +1273,12 @@ impl InteractiveTurnDriver {
         driver.interactive_service = Some(service);
         driver.authorization_scope = authorization_scope.into();
         Ok(driver)
+    }
+
+    #[must_use]
+    pub fn with_local_state(mut self, state: Option<ImportedPythonState>) -> Self {
+        self.local_state = state.map(Arc::new);
+        self
     }
 
     fn reap_finished(&mut self) {
@@ -1392,6 +1400,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         let ensure_session = self.ensure_session.clone();
         let session = self.session.clone();
         let authorization_scope = self.authorization_scope.clone();
+        let local_state = self.local_state.clone();
         let task = self.runtime.spawn(async move {
             let result = run_interactive_panel(
                 panel,
@@ -1399,6 +1408,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 ensure_session,
                 session,
                 &authorization_scope,
+                local_state,
                 task_cancellation.clone(),
             )
             .await;
@@ -1586,15 +1596,19 @@ async fn run_interactive_panel(
     ensure_session: Arc<EnsureSession>,
     session: Arc<Mutex<SessionSnapshot>>,
     authorization_scope: &str,
+    local_state: Option<Arc<ImportedPythonState>>,
     cancellation: CancellationToken,
 ) -> Result<String, String> {
     let required_scope = match panel {
-        PanelRequest::Grocery => "grocery:read",
-        PanelRequest::Health => "health:read",
+        PanelRequest::Grocery => Some("grocery:read"),
+        PanelRequest::Health => Some("health:read"),
+        PanelRequest::Profile => Some("profile:read"),
+        PanelRequest::Household | PanelRequest::Location => None,
     };
-    if !authorization_scope
-        .split_whitespace()
-        .any(|scope| scope == required_scope)
+    if let Some(required_scope) = required_scope
+        && !authorization_scope
+            .split_whitespace()
+            .any(|scope| scope == required_scope)
     {
         return Err(format!(
             "Additional authorization ({required_scope}) is required. Exit the TUI and run `heyfood login`, then reopen this panel."
@@ -1602,6 +1616,18 @@ async fn run_interactive_panel(
     }
 
     let snapshot = session.lock().await.clone();
+    if matches!(panel, PanelRequest::Household | PanelRequest::Location) {
+        if local_state.as_ref().is_some_and(|state| {
+            state.account_user_id.as_deref() != Some(snapshot.credentials.account_id.as_str())
+        }) {
+            return Err("Saved local context belongs to a different account.".into());
+        }
+        return match panel {
+            PanelRequest::Household => Ok(render_household_panel(local_state.as_deref())),
+            PanelRequest::Location => Ok(render_location_panel(local_state.as_deref())),
+            PanelRequest::Grocery | PanelRequest::Health | PanelRequest::Profile => unreachable!(),
+        };
+    }
     let credentials = match ensure_session
         .execute(snapshot, cancellation.child_token())
         .await
@@ -1669,7 +1695,159 @@ async fn run_interactive_panel(
             output.push_str("\nHealth context is informational and is not a diagnosis.\n");
             Ok(output)
         }
+        PanelRequest::Profile => {
+            let consent = service
+                .profile_consent_status(
+                    &credentials,
+                    OperationId::new(),
+                    cancellation.child_token(),
+                )
+                .await
+                .map_err(panel_error)?;
+            if !consent
+                .get("has_consent")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                return Ok(
+                    "Profile sync consent: not granted\nNo synced dietary profile was read.".into(),
+                );
+            }
+            match service
+                .download_profile(&credentials, "_self", OperationId::new(), cancellation)
+                .await
+            {
+                Ok(profile) => Ok(render_profile_panel(&profile)),
+                Err(error) if error.code == "resource_not_found" => {
+                    Ok("Profile sync consent: granted\nNo synced dietary profile exists.".into())
+                }
+                Err(error) => Err(panel_error(error)),
+            }
+        }
+        PanelRequest::Household | PanelRequest::Location => unreachable!(),
     }
+}
+
+fn render_household_panel(state: Option<&ImportedPythonState>) -> String {
+    let household = state
+        .and_then(|state| state.account_scoped.get("household"))
+        .and_then(Value::as_object);
+    let members = household
+        .and_then(|household| household.get("members"))
+        .and_then(Value::as_array);
+    let active_scope = household
+        .and_then(|household| household.get("active_scope"))
+        .and_then(Value::as_str)
+        .unwrap_or("_self");
+    let scope_label = if active_scope == "_self" {
+        "Me".to_owned()
+    } else if active_scope == "__everyone__" {
+        "Everyone".to_owned()
+    } else {
+        members
+            .into_iter()
+            .flatten()
+            .find(|member| member.get("id").and_then(Value::as_str) == Some(active_scope))
+            .and_then(|member| member.get("name").and_then(Value::as_str))
+            .map(terminal_safe_text)
+            .unwrap_or_else(|| terminal_safe_text(active_scope))
+    };
+    let mut output = format!("Active scope: {scope_label}\n");
+    let mut count = 0_usize;
+    for member in members.into_iter().flatten() {
+        let Some(name) = member.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let relationship = member
+            .get("relationship")
+            .and_then(Value::as_str)
+            .unwrap_or("member");
+        output.push_str(&format!(
+            "• {} — {}\n",
+            terminal_safe_text(name),
+            terminal_safe_text(relationship)
+        ));
+        count = count.saturating_add(1);
+    }
+    if count == 0 {
+        output.push_str("• Me — self\nNo additional household members are saved.\n");
+    }
+    output
+}
+
+fn render_location_panel(state: Option<&ImportedPythonState>) -> String {
+    let location = state
+        .and_then(|state| state.account_scoped.get("location"))
+        .and_then(Value::as_object);
+    let Some(location) = location else {
+        return "No default location is saved.".into();
+    };
+    let label = location
+        .get("label")
+        .and_then(Value::as_str)
+        .map(terminal_safe_text)
+        .unwrap_or_else(|| "Saved coordinates".into());
+    let latitude = location.get("latitude").and_then(Value::as_f64);
+    let longitude = location.get("longitude").and_then(Value::as_f64);
+    match (latitude, longitude) {
+        (Some(latitude), Some(longitude))
+            if latitude.is_finite()
+                && longitude.is_finite()
+                && (-90.0..=90.0).contains(&latitude)
+                && (-180.0..=180.0).contains(&longitude) =>
+        {
+            format!("{label}\nLatitude: {latitude:.5}\nLongitude: {longitude:.5}")
+        }
+        _ => "Saved location data is incomplete and was not applied.".into(),
+    }
+}
+
+fn render_profile_panel(document: &Value) -> String {
+    let profile = document
+        .get("profile_data")
+        .and_then(Value::as_object)
+        .or_else(|| document.as_object());
+    let Some(profile) = profile else {
+        return "Profile sync consent: granted\nThe dietary profile response is empty.".into();
+    };
+    let mut output = String::from("Profile sync consent: granted\n");
+    if let Some(version) = document.get("version").and_then(Value::as_u64) {
+        output.push_str(&format!("Version: {version}\n"));
+    }
+    let sections = [
+        ("Diet styles", &["diet_style_ids", "preferences"][..]),
+        (
+            "Allergies and restrictions",
+            &["allergy_ids", "restrictions"],
+        ),
+        ("Health conditions", &["health_condition_ids"]),
+        ("Ingredients to avoid", &["avoid_ingredients"]),
+        ("Cuisine preferences", &["cuisine_preferences"]),
+    ];
+    let mut populated = false;
+    for (label, keys) in sections {
+        let values = keys
+            .iter()
+            .find_map(|key| profile.get(*key).and_then(Value::as_array))
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(terminal_safe_text)
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        if !values.is_empty() {
+            output.push_str(&format!("{label}: {}\n", values.join(", ")));
+            populated = true;
+        }
+    }
+    if let Some(activity) = profile.get("activity_level").and_then(Value::as_str) {
+        output.push_str(&format!("Activity: {}\n", terminal_safe_text(activity)));
+        populated = true;
+    }
+    if !populated {
+        output.push_str("The synced dietary profile is empty.\n");
+    }
+    output
 }
 
 fn panel_error(error: heyfood_application::PortError) -> String {
@@ -1819,7 +1997,11 @@ fn route_effect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{collections::VecDeque, sync::Mutex as StdMutex, thread};
+    use std::{
+        collections::{BTreeMap, VecDeque},
+        sync::Mutex as StdMutex,
+        thread,
+    };
 
     use heyfood_application::{
         AcceptedTurn, BoxFuture, ClockPort, CredentialCommit, CredentialPort, EventStream,
@@ -2079,7 +2261,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grocery_and_health_panels_render_authenticated_service_results() {
+    async fn interactive_panels_render_authenticated_and_account_bound_results() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let responses = [
@@ -2145,6 +2327,26 @@ mod tests {
                     "goals": []
                 }),
             ),
+            (
+                "/v1/profile/consent",
+                serde_json::json!({"has_consent": true, "consent_version": 1}),
+            ),
+            (
+                "/v1/profile/sync?member_id=_self",
+                serde_json::json!({
+                    "member_id": "_self",
+                    "version": 7,
+                    "updated_at": "2026-07-22T00:00:00Z",
+                    "profile_data": {
+                        "diet_style_ids": ["vegetarian"],
+                        "allergy_ids": ["peanuts"],
+                        "health_condition_ids": [],
+                        "avoid_ingredients": ["raw onion"],
+                        "cuisine_preferences": ["thai"],
+                        "activity_level": "moderate"
+                    }
+                }),
+            ),
         ];
         let server = tokio::spawn(async move {
             for (expected_path, body) in responses {
@@ -2203,6 +2405,7 @@ mod tests {
             ensure_session.clone(),
             session.clone(),
             "health:read",
+            None,
             CancellationToken::new(),
         )
         .await
@@ -2215,6 +2418,7 @@ mod tests {
             ensure_session.clone(),
             session.clone(),
             "grocery:read health:read",
+            None,
             CancellationToken::new(),
         )
         .await
@@ -2224,10 +2428,11 @@ mod tests {
 
         let health = run_interactive_panel(
             PanelRequest::Health,
-            service,
-            ensure_session,
-            session,
+            service.clone(),
+            ensure_session.clone(),
+            session.clone(),
             "grocery:read health:read",
+            None,
             CancellationToken::new(),
         )
         .await
@@ -2235,6 +2440,73 @@ mod tests {
         assert!(health.contains("• oura: connected"));
         assert!(health.contains("Health context: connected"));
         assert!(health.contains("Health context is informational and is not a diagnosis."));
+
+        let profile = run_interactive_panel(
+            PanelRequest::Profile,
+            service.clone(),
+            ensure_session.clone(),
+            session.clone(),
+            "profile:read",
+            None,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(profile.contains("Profile sync consent: granted"));
+        assert!(profile.contains("Version: 7"));
+        assert!(profile.contains("Diet styles: vegetarian"));
+
+        let local_state = Arc::new(ImportedPythonState {
+            account_user_id: Some("account-1".into()),
+            global: BTreeMap::new(),
+            account_scoped: BTreeMap::from([
+                (
+                    "household".into(),
+                    serde_json::json!({
+                        "active_scope": "member-sarah",
+                        "members": [{
+                            "id": "member-sarah",
+                            "name": "Sarah",
+                            "relationship": "partner"
+                        }]
+                    }),
+                ),
+                (
+                    "location".into(),
+                    serde_json::json!({
+                        "label": "San Luis Obispo, CA",
+                        "latitude": 35.2828,
+                        "longitude": -120.6596
+                    }),
+                ),
+            ]),
+        });
+        let household = run_interactive_panel(
+            PanelRequest::Household,
+            service.clone(),
+            ensure_session.clone(),
+            session.clone(),
+            "",
+            Some(local_state.clone()),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(household.contains("Active scope: Sarah"));
+        assert!(household.contains("Sarah — partner"));
+        let location = run_interactive_panel(
+            PanelRequest::Location,
+            service,
+            ensure_session,
+            session,
+            "",
+            Some(local_state),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(location.contains("San Luis Obispo, CA"));
+        assert!(location.contains("Latitude: 35.28280"));
         server.await.unwrap();
     }
 

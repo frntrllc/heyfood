@@ -345,13 +345,29 @@ async fn bare(machine: bool) -> ExitCode {
             );
         }
     };
+    let local_state = match load_interactive_state(
+        &prepared.paths,
+        prepared.snapshot.credentials.account_id.as_str(),
+    ) {
+        Ok(state) => state,
+        Err(error) => {
+            return failure(
+                error.code,
+                &terminal_safe_text(&error.message),
+                None,
+                false,
+                error.outcome_uncertain,
+            );
+        }
+    };
     let result = tokio::task::block_in_place(move || {
         let mut driver = heyfood_bin::InteractiveTurnDriver::new_http(
             prepared.service,
             prepared.ensure_session,
             prepared.snapshot,
             prepared.authorization_scope,
-        )?;
+        )?
+        .with_local_state(local_state);
         heyfood_bin::run_qualified_session(&mut driver)
             .map_err(|error| io::Error::other(error.to_string()))
     });
@@ -365,6 +381,27 @@ async fn bare(machine: bool) -> ExitCode {
             false,
         ),
     }
+}
+
+fn load_interactive_state(
+    paths: &NativePaths,
+    account_id: &str,
+) -> Result<Option<heyfood_core::ImportedPythonState>, heyfood_bin::OneShotError> {
+    let importer = PythonStateImporter::discover(paths).map_err(heyfood_bin::OneShotError::from)?;
+    importer.import().map_err(heyfood_bin::OneShotError::from)?;
+    let state = importer
+        .load_state()
+        .map_err(heyfood_bin::OneShotError::from)?;
+    if state
+        .as_ref()
+        .is_some_and(|state| state.account_user_id.as_deref() != Some(account_id))
+    {
+        return Err(heyfood_bin::OneShotError::new(
+            "local_state_account_mismatch",
+            "Saved local context belongs to a different account.",
+        ));
+    }
+    Ok(state)
 }
 
 fn pending_command(machine: bool) -> ExitCode {
