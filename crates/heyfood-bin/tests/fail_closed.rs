@@ -47,7 +47,8 @@ fn authenticated_one_shot_route_fails_with_registration_guidance_when_disconnect
     command
         .args(["ask", "What can I eat?"])
         .env("HOME", &root.0)
-        .env("XDG_CONFIG_HOME", &root.0);
+        .env("XDG_CONFIG_HOME", &root.0)
+        .env("HEYFOOD_STATE_DIR", &root.0);
     #[cfg(not(windows))]
     command.env("HEYFOOD_CREDENTIAL_STORE", "file");
     #[cfg(windows)]
