@@ -7,6 +7,18 @@ pub const MAX_SCROLLBACK_ENTRIES: usize = 1_000;
 pub const MAX_RENDERED_LINES: usize = 20_000;
 pub const MAX_SCROLLBACK_BYTES: usize = 4 * 1024 * 1024;
 const TRUNCATION_NOTICE: &str = "[… earlier content truncated …]\n";
+const MAX_PROMPT_HISTORY: usize = 100;
+const SLASH_COMMANDS: &[&str] = &[
+    "/clear",
+    "/exit",
+    "/help",
+    "/household",
+    "/location",
+    "/new",
+    "/profile",
+    "/status",
+    "/voice",
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Speaker {
@@ -81,6 +93,12 @@ impl Scrollback {
     #[must_use]
     pub const fn rendered_bytes(&self) -> usize {
         self.rendered_bytes
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.rendered_lines = 0;
+        self.rendered_bytes = 0;
     }
 
     fn mutate_last_assistant(&mut self, mutate: impl FnOnce(&mut SemanticEntry)) {
@@ -219,6 +237,9 @@ pub struct AppModel {
     pub scroll_from_tail: usize,
     pub unseen_lines: usize,
     pub idle_exit_armed: bool,
+    prompt_history: VecDeque<String>,
+    history_index: Option<usize>,
+    history_draft: String,
     next_operation_id: u64,
 }
 
@@ -236,6 +257,9 @@ impl Default for AppModel {
             scroll_from_tail: 0,
             unseen_lines: 0,
             idle_exit_armed: false,
+            prompt_history: VecDeque::new(),
+            history_index: None,
+            history_draft: String::new(),
             next_operation_id: 1,
         }
     }
@@ -266,6 +290,9 @@ pub enum Action {
     Delete,
     MoveLeft,
     MoveRight,
+    HistoryPrevious,
+    HistoryNext,
+    CompleteSlash,
     InsertNewline,
     Submit,
     CancelOrExit,
@@ -282,25 +309,41 @@ pub enum Action {
 pub enum Effect {
     SubmitTurn { operation_id: u64, prompt: String },
     CancelTurn { operation_id: u64 },
+    ResetConversation,
     Exit(ExitReason),
 }
 
 #[must_use]
 pub fn dispatch(model: &mut AppModel, action: Action) -> Vec<Effect> {
     match action {
+        Action::Insert('?') if model.draft.is_empty() => show_help(model),
         Action::Insert(character) => {
+            reset_history_navigation(model);
             insert_at_cursor(model, &character.to_string());
             model.idle_exit_armed = false;
         }
         Action::InsertText(text) => {
+            reset_history_navigation(model);
             insert_at_cursor(model, &text);
             model.idle_exit_armed = false;
         }
-        Action::Backspace => backspace(model),
-        Action::Delete => delete(model),
+        Action::Backspace => {
+            reset_history_navigation(model);
+            backspace(model);
+        }
+        Action::Delete => {
+            reset_history_navigation(model);
+            delete(model);
+        }
         Action::MoveLeft => model.cursor = model.cursor.saturating_sub(1),
         Action::MoveRight => model.cursor = (model.cursor + 1).min(model.draft.chars().count()),
-        Action::InsertNewline => insert_at_cursor(model, "\n"),
+        Action::HistoryPrevious => history_previous(model),
+        Action::HistoryNext => history_next(model),
+        Action::CompleteSlash => complete_slash(model),
+        Action::InsertNewline => {
+            reset_history_navigation(model);
+            insert_at_cursor(model, "\n");
+        }
         Action::Submit => return submit(model),
         Action::CancelOrExit => return cancel_or_exit(model),
         Action::Exit if model.draft.is_empty() => {
@@ -332,10 +375,17 @@ pub fn dispatch(model: &mut AppModel, action: Action) -> Vec<Effect> {
 }
 
 fn submit(model: &mut AppModel) -> Vec<Effect> {
-    if model.operation.is_active() || model.draft.trim().is_empty() {
+    if model.draft.trim().is_empty() {
+        return Vec::new();
+    }
+    if model.draft.trim_start().starts_with('/') {
+        return submit_slash_command(model);
+    }
+    if model.operation.is_active() {
         return Vec::new();
     }
     let prompt = std::mem::take(&mut model.draft);
+    remember_prompt(model, &prompt);
     model.cursor = 0;
     let operation_id = model.next_operation_id;
     model.next_operation_id = model.next_operation_id.saturating_add(1);
@@ -356,6 +406,143 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
         operation_id,
         prompt,
     }]
+}
+
+fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
+    let command = model.draft.trim().to_owned();
+    remember_prompt(model, &command);
+    model.draft.clear();
+    model.cursor = 0;
+    let (name, arguments) = command
+        .split_once(char::is_whitespace)
+        .map_or((command.as_str(), ""), |(name, arguments)| {
+            (name, arguments.trim())
+        });
+    match name {
+        "/help" => show_help(model),
+        "/status" => push_notice(
+            model,
+            if model.operation.is_active() {
+                "Connected · a turn is active · Ctrl+C stops it"
+            } else {
+                "Connected · Rust TUI ready · credentials and service are checked before every turn"
+            },
+        ),
+        "/clear" if model.operation.is_active() => push_notice(
+            model,
+            "Finish or stop the active turn before clearing the visible transcript.",
+        ),
+        "/clear" => {
+            model.scrollback.clear();
+            model.activity = None;
+            follow_tail(model);
+        }
+        "/new" if !arguments.is_empty() => {
+            push_notice(model, "Usage: /new");
+        }
+        "/new" if model.operation.is_active() => push_notice(
+            model,
+            "Stop the active turn with Ctrl+C, then run /new again.",
+        ),
+        "/new" => {
+            push_notice(model, "Started a fresh conversation.");
+            return vec![Effect::ResetConversation];
+        }
+        "/exit" => return begin_exit(model, ExitReason::Requested),
+        "/voice" => push_notice(
+            model,
+            "Voice is not connected to the composer yet. Typed conversation remains available.",
+        ),
+        "/household" | "/profile" | "/location" => push_notice(
+            model,
+            "This interactive panel is being connected. Use the corresponding one-shot command for now.",
+        ),
+        _ => push_notice(
+            model,
+            "Unknown command. Use /help to see the interactive command registry.",
+        ),
+    }
+    Vec::new()
+}
+
+fn show_help(model: &mut AppModel) {
+    push_notice(
+        model,
+        "Commands\n  /help       Show this guide\n  /new        Start a fresh conversation\n  /status     Show local session readiness\n  /clear      Clear visible scrollback\n  /exit       Close hey.food\n  /voice      Voice availability\n\nKeys\n  Enter send · Shift+Enter/Ctrl+J newline · Up/Down history\n  PageUp/PageDown scroll · End follow · Ctrl+C stop · Ctrl+D exit",
+    );
+}
+
+fn push_notice(model: &mut AppModel, text: &str) {
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::Notice,
+        text: text.into(),
+        streaming: false,
+    });
+    follow_tail(model);
+}
+
+fn remember_prompt(model: &mut AppModel, prompt: &str) {
+    if model
+        .prompt_history
+        .back()
+        .is_none_or(|last| last != prompt)
+    {
+        model.prompt_history.push_back(prompt.to_owned());
+        while model.prompt_history.len() > MAX_PROMPT_HISTORY {
+            model.prompt_history.pop_front();
+        }
+    }
+    reset_history_navigation(model);
+}
+
+fn reset_history_navigation(model: &mut AppModel) {
+    model.history_index = None;
+    model.history_draft.clear();
+}
+
+fn history_previous(model: &mut AppModel) {
+    if model.prompt_history.is_empty() {
+        return;
+    }
+    let next = match model.history_index {
+        None => {
+            model.history_draft = model.draft.clone();
+            model.prompt_history.len() - 1
+        }
+        Some(index) => index.saturating_sub(1),
+    };
+    model.history_index = Some(next);
+    model.draft = model.prompt_history[next].clone();
+    model.cursor = model.draft.chars().count();
+}
+
+fn history_next(model: &mut AppModel) {
+    let Some(index) = model.history_index else {
+        return;
+    };
+    if index + 1 < model.prompt_history.len() {
+        let next = index + 1;
+        model.history_index = Some(next);
+        model.draft = model.prompt_history[next].clone();
+    } else {
+        model.history_index = None;
+        model.draft = std::mem::take(&mut model.history_draft);
+    }
+    model.cursor = model.draft.chars().count();
+}
+
+fn complete_slash(model: &mut AppModel) {
+    if !model.draft.starts_with('/') || model.draft.contains(char::is_whitespace) {
+        return;
+    }
+    let command = SLASH_COMMANDS
+        .iter()
+        .find(|command| command.starts_with(&model.draft))
+        .copied();
+    if let Some(command) = command {
+        model.draft = command.to_owned();
+        model.cursor = model.draft.chars().count();
+    }
 }
 
 fn cancel_or_exit(model: &mut AppModel) -> Vec<Effect> {
@@ -825,6 +1012,68 @@ mod tests {
             ]
         );
         assert_eq!(ExitReason::Terminate.exit_code(), 143);
+    }
+
+    #[test]
+    fn slash_commands_are_local_and_new_resets_conversation() {
+        let mut model = AppModel {
+            draft: "/help".into(),
+            cursor: 5,
+            ..AppModel::default()
+        };
+        assert!(dispatch(&mut model, Action::Submit).is_empty());
+        assert!(model.draft.is_empty());
+        assert!(
+            model
+                .scrollback
+                .entries()
+                .back()
+                .unwrap()
+                .text
+                .contains("/new")
+        );
+
+        model.draft = "/new".into();
+        model.cursor = 4;
+        assert_eq!(
+            dispatch(&mut model, Action::Submit),
+            vec![Effect::ResetConversation]
+        );
+    }
+
+    #[test]
+    fn prompt_history_restores_the_unsent_draft() {
+        let mut model = AppModel {
+            draft: "first".into(),
+            cursor: 5,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFinished {
+                operation_id: 1,
+                outcome: RunTurnOutcome::Completed,
+            }),
+        );
+        model.draft = "working draft".into();
+        model.cursor = model.draft.chars().count();
+        let _ = dispatch(&mut model, Action::HistoryPrevious);
+        assert_eq!(model.draft, "first");
+        let _ = dispatch(&mut model, Action::HistoryNext);
+        assert_eq!(model.draft, "working draft");
+    }
+
+    #[test]
+    fn tab_completes_a_unique_slash_prefix() {
+        let mut model = AppModel {
+            draft: "/sta".into(),
+            cursor: 4,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::CompleteSlash);
+        assert_eq!(model.draft, "/status");
+        assert_eq!(model.cursor, 7);
     }
 
     #[test]

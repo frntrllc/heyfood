@@ -2,12 +2,12 @@
 
 #![forbid(unsafe_code)]
 
-use std::{fmt, io, time::Duration};
+use std::{fmt, io, sync::Arc, time::Duration};
 
 use heyfood_agent_runtime::{GroceryExport, HttpService};
 use heyfood_application::{
-    EnsureSession, EnsureSessionError, EnsureSessionOutcome, RefreshPolicy, TurnContext,
-    TurnRequest, execute_one_shot_turn,
+    EnsureSession, EnsureSessionError, EnsureSessionOutcome, RefreshPolicy, RunTurnOutcome,
+    ServicePort, TurnContext, TurnRequest, execute_one_shot_turn,
 };
 use heyfood_cli::{
     AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, OutputMode,
@@ -15,14 +15,18 @@ use heyfood_cli::{
     render_item_result, render_json,
 };
 use heyfood_core::{
-    AddItemsRequestWire, GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId,
-    GroceryItemInputWire, GroceryListVersion, GroceryMutationConfirmRequestWire,
-    ImportedPythonState, OperationId, RemoveItemsRequestWire, SessionCredentials,
+    AddItemsRequestWire, AgentEvent, GroceryConfirmationToken, GroceryDecisionWire,
+    GroceryEntityId, GroceryItemInputWire, GroceryListVersion, GroceryMutationConfirmRequestWire,
+    ImportedPythonState, OperationId, RemoveItemsRequestWire, SessionCredentials, SessionSnapshot,
     UpdateItemStateRequestWire, terminal_safe_text,
 };
 use heyfood_tui::{Effect, ExitReason, RuntimeEvent, TuiError};
 use serde_json::{Map, Value, json};
-use tokio::sync::mpsc;
+use tokio::{
+    runtime::Runtime,
+    sync::{Mutex, mpsc},
+    task::JoinHandle,
+};
 use tokio_util::sync::CancellationToken;
 
 pub const QUALIFIED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
@@ -1202,6 +1206,249 @@ fn ensure_oura(provider: heyfood_cli::HealthProviderArgument) -> Result<(), OneS
     Ok(())
 }
 
+struct OwnedInteractiveTurn {
+    operation_id: u64,
+    cancellation: CancellationToken,
+    task: JoinHandle<()>,
+}
+
+/// Production driver for the retained terminal surface.
+///
+/// The terminal loop stays synchronous and owns stdout. Every authenticated
+/// refresh and SSE operation runs on this driver's private Tokio runtime and
+/// communicates with the reducer through the bounded runtime-event channel.
+/// Conversation continuity is process-memory-only, matching the TUI privacy
+/// contract.
+pub struct InteractiveTurnDriver {
+    runtime: Runtime,
+    service: Arc<dyn ServicePort>,
+    ensure_session: Arc<EnsureSession>,
+    session: Arc<Mutex<SessionSnapshot>>,
+    conversation_id: Arc<Mutex<Option<String>>>,
+    turns: Vec<OwnedInteractiveTurn>,
+}
+
+impl InteractiveTurnDriver {
+    pub fn new(
+        service: Arc<dyn ServicePort>,
+        ensure_session: Arc<EnsureSession>,
+        session: SessionSnapshot,
+    ) -> io::Result<Self> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_name("heyfood-turn")
+            .build()?;
+        Ok(Self {
+            runtime,
+            service,
+            ensure_session,
+            session: Arc::new(Mutex::new(session)),
+            conversation_id: Arc::new(Mutex::new(None)),
+            turns: Vec::new(),
+        })
+    }
+
+    fn reap_finished(&mut self) {
+        self.turns.retain(|turn| !turn.task.is_finished());
+    }
+}
+
+impl QualifiedTurnDriver for InteractiveTurnDriver {
+    fn start_turn(
+        &mut self,
+        operation_id: u64,
+        prompt: String,
+        runtime_events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        self.reap_finished();
+        if !self.turns.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "a conversational turn is already active",
+            ));
+        }
+
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+        let service = self.service.clone();
+        let ensure_session = self.ensure_session.clone();
+        let session = self.session.clone();
+        let conversation_id = self.conversation_id.clone();
+        let task = self.runtime.spawn(async move {
+            let outcome = run_interactive_turn(
+                operation_id,
+                prompt,
+                service,
+                ensure_session,
+                session,
+                conversation_id,
+                task_cancellation,
+                runtime_events.clone(),
+            )
+            .await;
+            let terminal_event = match outcome {
+                Ok(outcome) => RuntimeEvent::TurnFinished {
+                    operation_id,
+                    outcome,
+                },
+                Err(message) => RuntimeEvent::TurnFailed {
+                    operation_id,
+                    message,
+                },
+            };
+            let _ = runtime_events.send(terminal_event).await;
+        });
+        self.turns.push(OwnedInteractiveTurn {
+            operation_id,
+            cancellation,
+            task,
+        });
+        Ok(())
+    }
+
+    fn cancel_turn(&mut self, operation_id: u64) -> io::Result<()> {
+        let turn = self
+            .turns
+            .iter()
+            .find(|turn| turn.operation_id == operation_id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "active turn is missing"))?;
+        turn.cancellation.cancel();
+        Ok(())
+    }
+
+    fn reset_conversation(&mut self) -> io::Result<()> {
+        self.runtime.block_on(async {
+            *self.conversation_id.lock().await = None;
+        });
+        Ok(())
+    }
+
+    fn shutdown_and_join(&mut self, timeout: Duration) -> io::Result<()> {
+        for turn in &self.turns {
+            turn.cancellation.cancel();
+        }
+        let turns = std::mem::take(&mut self.turns);
+        self.runtime.block_on(async move {
+            tokio::time::timeout(timeout, async move {
+                for turn in turns {
+                    turn.task.await.map_err(|error| {
+                        io::Error::other(format!("turn supervisor task failed: {error}"))
+                    })?;
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "turn supervisor exceeded its shutdown deadline",
+                )
+            })?
+        })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_interactive_turn(
+    operation_id: u64,
+    prompt: String,
+    service: Arc<dyn ServicePort>,
+    ensure_session: Arc<EnsureSession>,
+    session: Arc<Mutex<SessionSnapshot>>,
+    conversation_id: Arc<Mutex<Option<String>>>,
+    cancellation: CancellationToken,
+    runtime_events: mpsc::Sender<RuntimeEvent>,
+) -> Result<RunTurnOutcome, String> {
+    let snapshot = session.lock().await.clone();
+    let credentials = match ensure_session
+        .execute(snapshot.clone(), cancellation.child_token())
+        .await
+        .map_err(|error| terminal_safe_text(&error.to_string()))?
+    {
+        EnsureSessionOutcome::Current(credentials) => credentials,
+        EnsureSessionOutcome::Refreshed(credentials) => {
+            let mut current = session.lock().await;
+            current.credentials = credentials.clone();
+            current.reconciliation_required = false;
+            credentials
+        }
+        EnsureSessionOutcome::CancelledBeforeDispatch => {
+            return Ok(RunTurnOutcome::CancelledBeforeServerAcceptance);
+        }
+    };
+
+    if cancellation.is_cancelled() {
+        return Ok(RunTurnOutcome::CancelledBeforeServerAcceptance);
+    }
+    let request = TurnRequest {
+        prompt,
+        conversation_id: conversation_id.lock().await.clone(),
+        context: TurnContext::default(),
+        refresh: RefreshPolicy::Never,
+    };
+    let accepted = service
+        .open_turn(
+            request,
+            credentials,
+            OperationId::new(),
+            cancellation.child_token(),
+        )
+        .await;
+    let mut accepted = match accepted {
+        Ok(accepted) => accepted,
+        Err(error) if error.code == "converse_cancelled_before_dispatch" => {
+            return Ok(RunTurnOutcome::CancelledBeforeServerAcceptance);
+        }
+        Err(error) if error.outcome_uncertain => {
+            return Ok(RunTurnOutcome::CancelledAfterDispatchOutcomeUnknown);
+        }
+        Err(error) => return Err(terminal_safe_text(&error.message)),
+    };
+
+    loop {
+        let next = accepted.events.next();
+        let event = tokio::select! {
+            () = cancellation.cancelled() => {
+                let _ = accepted.events.close().await;
+                return Ok(RunTurnOutcome::CancelledAfterServerAcceptance);
+            }
+            event = next => event.map_err(|error| terminal_safe_text(&error.message))?,
+        };
+        let Some(event) = event else {
+            let _ = accepted.events.close().await;
+            return Err("The response stream ended before a final result arrived.".into());
+        };
+        let terminal = matches!(event, AgentEvent::Result { .. } | AgentEvent::Error { .. });
+        if let AgentEvent::Result {
+            conversation_id: Some(next_conversation),
+            ..
+        } = &event
+        {
+            *conversation_id.lock().await = Some(next_conversation.clone());
+        }
+        if runtime_events
+            .send(RuntimeEvent::TurnEvent {
+                operation_id,
+                event,
+            })
+            .await
+            .is_err()
+        {
+            cancellation.cancel();
+            let _ = accepted.events.close().await;
+            return Ok(RunTurnOutcome::CancelledAfterServerAcceptance);
+        }
+        if terminal {
+            accepted
+                .events
+                .close()
+                .await
+                .map_err(|error| terminal_safe_text(&error.message))?;
+            return Ok(RunTurnOutcome::Completed);
+        }
+    }
+}
+
 /// Runtime supervisor boundary used only after bootstrap has validated every
 /// required input. Implementations must enqueue work and return promptly; the
 /// retained terminal thread must never perform network IO.
@@ -1214,6 +1461,12 @@ pub trait QualifiedTurnDriver {
     ) -> io::Result<()>;
 
     fn cancel_turn(&mut self, operation_id: u64) -> io::Result<()>;
+
+    /// Forget process-local conversation continuity without touching persisted
+    /// credentials or server-side data.
+    fn reset_conversation(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 
     /// Cancel any remaining operations, close their transports, and join every
     /// owned worker before the deadline. Returning `Ok` certifies that no turn
@@ -1298,6 +1551,9 @@ fn route_effect(
         Effect::CancelTurn { operation_id } => driver
             .cancel_turn(operation_id)
             .map_err(CompositionError::Driver),
+        Effect::ResetConversation => driver
+            .reset_conversation()
+            .map_err(CompositionError::Driver),
         Effect::Exit(_) => Ok(()),
     }
 }
@@ -1305,7 +1561,120 @@ fn route_effect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use heyfood_core::AgentEvent;
+    use std::{collections::VecDeque, sync::Mutex as StdMutex, thread};
+
+    use heyfood_application::{
+        AcceptedTurn, BoxFuture, ClockPort, CredentialCommit, CredentialPort, EventStream,
+        PortError,
+    };
+    use heyfood_core::{
+        AccountId, AgentEvent, CommitId, CredentialVersion, RefreshOutcome, RefreshRequest,
+        SensitiveString,
+    };
+
+    struct FixedClock;
+
+    impl ClockPort for FixedClock {
+        fn unix_timestamp(&self) -> i64 {
+            0
+        }
+    }
+
+    struct MemoryCredentialPort;
+
+    impl CredentialPort for MemoryCredentialPort {
+        fn load(&self) -> BoxFuture<'_, Result<Option<SessionCredentials>, PortError>> {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn commit(&self, _commit: CredentialCommit) -> BoxFuture<'_, Result<(), PortError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn mark_reconciliation_required(
+            &self,
+            _commit_id: CommitId,
+        ) -> BoxFuture<'_, Result<(), PortError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn clear_reconciliation_required(
+            &self,
+            _commit_id: CommitId,
+        ) -> BoxFuture<'_, Result<(), PortError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    struct FixtureStream {
+        events: VecDeque<AgentEvent>,
+    }
+
+    impl EventStream for FixtureStream {
+        fn next(&mut self) -> BoxFuture<'_, Result<Option<AgentEvent>, PortError>> {
+            Box::pin(async { Ok(self.events.pop_front()) })
+        }
+
+        fn close(self: Box<Self>) -> BoxFuture<'static, Result<(), PortError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[derive(Default)]
+    struct FixtureService {
+        requests: StdMutex<Vec<TurnRequest>>,
+    }
+
+    impl ServicePort for FixtureService {
+        fn refresh_session(
+            &self,
+            _request: RefreshRequest,
+            _cancellation: CancellationToken,
+        ) -> BoxFuture<'_, Result<RefreshOutcome, PortError>> {
+            Box::pin(async {
+                Err(PortError::new(
+                    "unexpected_refresh",
+                    "fixture credentials must remain current",
+                ))
+            })
+        }
+
+        fn open_turn(
+            &self,
+            request: TurnRequest,
+            _credentials: SessionCredentials,
+            _operation_id: OperationId,
+            _cancellation: CancellationToken,
+        ) -> BoxFuture<'_, Result<AcceptedTurn, PortError>> {
+            self.requests.lock().unwrap().push(request);
+            Box::pin(async {
+                Ok(AcceptedTurn {
+                    events: Box::new(FixtureStream {
+                        events: VecDeque::from([
+                            AgentEvent::Partial {
+                                text: "Hello ".into(),
+                            },
+                            AgentEvent::Result {
+                                document: serde_json::json!({"text": "Hello there"}),
+                                conversation_id: Some("conversation-1".into()),
+                            },
+                        ]),
+                    }),
+                })
+            })
+        }
+    }
+
+    fn fixture_credentials() -> SessionCredentials {
+        SessionCredentials::from_unix_expiry(
+            AccountId::parse("account-1").unwrap(),
+            SensitiveString::new("access"),
+            SensitiveString::new("refresh"),
+            CredentialVersion::new(1),
+            4_102_444_800,
+        )
+        .unwrap()
+    }
 
     #[derive(Default)]
     struct ControlledDriver {
@@ -1341,6 +1710,83 @@ mod tests {
             self.joined = true;
             Ok(())
         }
+    }
+
+    #[test]
+    fn interactive_driver_streams_and_retains_conversation_in_memory() {
+        let service = Arc::new(FixtureService::default());
+        let service_port: Arc<dyn ServicePort> = service.clone();
+        let ensure_session = Arc::new(EnsureSession::new(
+            service_port.clone(),
+            Arc::new(MemoryCredentialPort),
+            Arc::new(FixedClock),
+        ));
+        let mut driver = InteractiveTurnDriver::new(
+            service_port,
+            ensure_session,
+            SessionSnapshot {
+                credentials: fixture_credentials(),
+                reconciliation_required: false,
+            },
+        )
+        .unwrap();
+        let (sender, mut receiver) = mpsc::channel(16);
+
+        driver
+            .start_turn(1, "first question".into(), sender.clone())
+            .unwrap();
+        let mut first_events = Vec::new();
+        loop {
+            let event = receiver.blocking_recv().expect("first turn event");
+            let finished = matches!(
+                event,
+                RuntimeEvent::TurnFinished {
+                    operation_id: 1,
+                    outcome: RunTurnOutcome::Completed
+                }
+            );
+            first_events.push(event);
+            if finished {
+                break;
+            }
+        }
+        assert!(first_events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Partial { text }
+            } if text == "Hello "
+        )));
+
+        for _ in 0..100 {
+            if driver.turns.iter().all(|turn| turn.task.is_finished()) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        driver
+            .start_turn(2, "follow up".into(), sender)
+            .expect("completed turn is reaped before the next turn");
+        loop {
+            if matches!(
+                receiver.blocking_recv().expect("second turn event"),
+                RuntimeEvent::TurnFinished {
+                    operation_id: 2,
+                    outcome: RunTurnOutcome::Completed
+                }
+            ) {
+                break;
+            }
+        }
+        driver.shutdown_and_join(Duration::from_secs(1)).unwrap();
+
+        let requests = service.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].conversation_id, None);
+        assert_eq!(
+            requests[1].conversation_id.as_deref(),
+            Some("conversation-1")
+        );
     }
 
     #[test]

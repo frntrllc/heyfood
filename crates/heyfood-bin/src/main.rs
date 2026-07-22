@@ -280,7 +280,7 @@ async fn main() -> ExitCode {
             one_shot(command, output_mode, machine).await
         }
         Some(_) => pending_command(machine),
-        None => bare(machine),
+        None => bare(machine).await,
     }
 }
 
@@ -296,17 +296,51 @@ const fn is_native_one_shot(command: &Command) -> bool {
     )
 }
 
-fn bare(machine: bool) -> ExitCode {
+async fn bare(machine: bool) -> ExitCode {
     if machine {
         println!(
             "{{\"ok\":true,\"message\":\"Run an explicit native command.\",\"next_command\":\"heyfood register\"}}"
         );
-    } else {
+        return ExitCode::SUCCESS;
+    }
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         println!(
             "hello.food for your terminal.\n\nStart: heyfood register\nAsk:   heyfood ask \"What can I eat?\"\nHelp:  heyfood --help"
         );
+        return ExitCode::SUCCESS;
     }
-    ExitCode::SUCCESS
+
+    let prepared = match prepare_native_session(None, CancellationToken::new()).await {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            return failure(
+                error.code,
+                &terminal_safe_text(&error.message),
+                one_shot_hint(error.code),
+                false,
+                error.outcome_uncertain,
+            );
+        }
+    };
+    let result = tokio::task::block_in_place(move || {
+        let mut driver = heyfood_bin::InteractiveTurnDriver::new(
+            prepared.service,
+            prepared.ensure_session,
+            prepared.snapshot,
+        )?;
+        heyfood_bin::run_qualified_session(&mut driver)
+            .map_err(|error| io::Error::other(error.to_string()))
+    });
+    match result {
+        Ok(reason) => ExitCode::from(u8::try_from(reason.exit_code()).unwrap_or(1)),
+        Err(error) => failure(
+            "interactive_session",
+            &terminal_safe_text(&error.to_string()),
+            Some("Run `heyfood ask \"your question\"` if this terminal cannot host the TUI."),
+            false,
+            false,
+        ),
+    }
 }
 
 fn pending_command(machine: bool) -> ExitCode {
@@ -347,11 +381,17 @@ async fn one_shot(command: Command, output_mode: OutputMode, machine: bool) -> E
     }
 }
 
-async fn one_shot_inner(
-    command: Command,
-    output_mode: OutputMode,
+struct PreparedNativeSession {
+    paths: NativePaths,
+    service: Arc<HttpService>,
+    ensure_session: Arc<EnsureSession>,
+    snapshot: SessionSnapshot,
+}
+
+async fn prepare_native_session(
+    command: Option<&Command>,
     cancellation: CancellationToken,
-) -> Result<String, heyfood_bin::OneShotError> {
+) -> Result<PreparedNativeSession, heyfood_bin::OneShotError> {
     let paths = NativePaths::discover().map_err(heyfood_bin::OneShotError::from)?;
     let auth_store =
         NativeAuthStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?;
@@ -368,7 +408,7 @@ async fn one_shot_inner(
     {
         return Err(heyfood_bin::OneShotError::new(
             "reauthorization_reconciliation_required",
-            "A staged login must be reconciled before any command can run. Run `heyfood login`.",
+            "A staged login must be reconciled before continuing. Run `heyfood login`.",
         ));
     }
     let mut auth = auth_store
@@ -380,16 +420,15 @@ async fn one_shot_inner(
                 "No hello.food account is connected. Run `heyfood register` first.",
             )
         })?;
-    ensure_command_scopes(&command, &auth.channel.scope)?;
+    if let Some(command) = command {
+        ensure_command_scopes(command, &auth.channel.scope)?;
+    }
 
     let (service_url, policy) = service_url().map_err(registration_to_one_shot)?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |value| value.as_secs());
     if auth.channel.expires_at_unix() <= i64::try_from(now).unwrap_or(i64::MAX) {
-        // Refresh tokens rotate. Serialize the reload, remote consumption, and
-        // durable replacement across CLI processes so a stale process cannot
-        // consume and then overwrite another process's grant.
         let refresh = auth_store
             .begin_refresh()
             .map_err(heyfood_bin::OneShotError::from)?;
@@ -413,9 +452,6 @@ async fn one_shot_inner(
                     "Channel refresh was cancelled before dispatch.",
                 ));
             }
-            // Write ahead before the consuming POST. A hard process exit or
-            // Ctrl-C after dispatch therefore leaves durable evidence that the
-            // old grant must not be retried.
             refresh.mark_reconciliation_required().map_err(|_| {
                 uncertain_one_shot(
                     "channel_refresh_reconciliation_write",
@@ -437,8 +473,6 @@ async fn one_shot_inner(
                     return Err(registration_to_one_shot(error));
                 }
             };
-            // A rotated refresh token is server-accepted state. Persist the whole
-            // bundle before allowing session re-exchange to consume it.
             if refresh.replace(&auth).is_err() {
                 return Err(uncertain_one_shot(
                     "channel_refresh_persistence_outcome_uncertain",
@@ -448,8 +482,6 @@ async fn one_shot_inner(
         }
     }
 
-    // Re-read both stores under the account-binding transaction after any
-    // channel refresh and before composing the authenticated service.
     auth = auth_store
         .load_account_bound(credential_store.as_ref())
         .map_err(heyfood_bin::OneShotError::from)?
@@ -460,11 +492,9 @@ async fn one_shot_inner(
             )
         })?;
     let credentials = auth.session.clone();
-    let imported_state = load_selector_state(&paths, &command, credentials.account_id.as_str())?;
     let reconciliation_required = credential_store
         .reconciliation_required()
         .map_err(heyfood_bin::OneShotError::from)?;
-
     let api_key = std::env::var("HEYFOOD_API_KEY")
         .ok()
         .filter(|value| !value.is_empty())
@@ -480,16 +510,38 @@ async fn one_shot_inner(
             .map_err(heyfood_bin::OneShotError::from)?
             .with_cli_auth(cli_auth),
     );
-    let ensure_session =
-        EnsureSession::new(service.clone(), credential_store, Arc::new(NativeClock));
-    let stdin = read_command_stdin(&command)?;
-    heyfood_bin::execute_qualified_one_shot_with_state(
-        service.as_ref(),
-        &ensure_session,
-        SessionSnapshot {
+    let ensure_session = Arc::new(EnsureSession::new(
+        service.clone(),
+        credential_store,
+        Arc::new(NativeClock),
+    ));
+    Ok(PreparedNativeSession {
+        paths,
+        service,
+        ensure_session,
+        snapshot: SessionSnapshot {
             credentials,
             reconciliation_required,
         },
+    })
+}
+
+async fn one_shot_inner(
+    command: Command,
+    output_mode: OutputMode,
+    cancellation: CancellationToken,
+) -> Result<String, heyfood_bin::OneShotError> {
+    let prepared = prepare_native_session(Some(&command), cancellation.child_token()).await?;
+    let imported_state = load_selector_state(
+        &prepared.paths,
+        &command,
+        prepared.snapshot.credentials.account_id.as_str(),
+    )?;
+    let stdin = read_command_stdin(&command)?;
+    heyfood_bin::execute_qualified_one_shot_with_state(
+        prepared.service.as_ref(),
+        prepared.ensure_session.as_ref(),
+        prepared.snapshot,
         output_mode,
         command,
         &stdin,
