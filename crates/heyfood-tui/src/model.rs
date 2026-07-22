@@ -2,8 +2,9 @@ use std::{collections::VecDeque, fmt::Write as _};
 
 use heyfood_application::{RunTurnOutcome, agent_result_text};
 use heyfood_core::{
-    AgentEvent, OnboardingOption, OnboardingProfileInput, activity_options, allergy_options,
-    condition_options, cuisine_options, diet_options, terminal_safe_text,
+    ActionConfirmationEnvelopeWire, AgentConfirmationCommandWire, AgentEvent,
+    ConfirmationDecisionWire, OnboardingOption, OnboardingProfileInput, activity_options,
+    allergy_options, condition_options, cuisine_options, diet_options, terminal_safe_text,
 };
 
 pub const MAX_SCROLLBACK_ENTRIES: usize = 1_000;
@@ -398,6 +399,22 @@ struct MultiSelection {
     custom: Vec<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingActionConfirmation {
+    confirmation_id: heyfood_core::GroceryConfirmationId,
+    idempotency_key: heyfood_core::GroceryIdempotencyKey,
+}
+
+impl PendingActionConfirmation {
+    const fn command(&self, decision: ConfirmationDecisionWire) -> AgentConfirmationCommandWire {
+        AgentConfirmationCommandWire {
+            confirmation_id: self.confirmation_id,
+            idempotency_key: self.idempotency_key,
+            decision,
+        }
+    }
+}
+
 impl Default for OnboardingFlow {
     fn default() -> Self {
         Self {
@@ -425,6 +442,7 @@ pub struct AppModel {
     history_index: Option<usize>,
     history_draft: String,
     pending_choice_labels: Vec<String>,
+    pending_confirmation: Option<PendingActionConfirmation>,
     onboarding: Option<OnboardingFlow>,
     next_operation_id: u64,
 }
@@ -447,6 +465,7 @@ impl Default for AppModel {
             history_index: None,
             history_draft: String::new(),
             pending_choice_labels: Vec::new(),
+            pending_confirmation: None,
             onboarding: None,
             next_operation_id: 1,
         }
@@ -538,6 +557,10 @@ pub enum Effect {
         operation_id: u64,
         prompt: String,
     },
+    ConfirmAction {
+        operation_id: u64,
+        command: AgentConfirmationCommandWire,
+    },
     OpenPanel {
         operation_id: u64,
         panel: PanelRequest,
@@ -623,6 +646,9 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
     if model.onboarding.is_some() {
         return submit_onboarding(model);
     }
+    if model.pending_confirmation.is_some() {
+        return submit_confirmation_answer(model);
+    }
     if model.draft.trim_start().starts_with('/') {
         return submit_slash_command(model);
     }
@@ -651,6 +677,64 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
     vec![Effect::SubmitTurn {
         operation_id,
         prompt,
+    }]
+}
+
+fn submit_confirmation_answer(model: &mut AppModel) -> Vec<Effect> {
+    if model.operation.is_active() {
+        return Vec::new();
+    }
+    let answer = model.draft.trim().to_ascii_lowercase();
+    let decision = match answer.as_str() {
+        "y" | "yes" | "confirm" | "accept" => ConfirmationDecisionWire::Accept,
+        "n" | "no" | "cancel" => ConfirmationDecisionWire::Cancel,
+        _ => {
+            push_notice(
+                model,
+                "A write is awaiting your decision. Type `y` to confirm or `n` to cancel.",
+            );
+            return Vec::new();
+        }
+    };
+    submit_confirmation(model, decision)
+}
+
+fn submit_confirmation(model: &mut AppModel, decision: ConfirmationDecisionWire) -> Vec<Effect> {
+    if model.operation.is_active() {
+        return Vec::new();
+    }
+    let Some(pending) = model.pending_confirmation.as_ref() else {
+        return Vec::new();
+    };
+    let command = pending.command(decision);
+    model.draft.clear();
+    model.cursor = 0;
+    let operation_id = model.next_operation_id;
+    model.next_operation_id = model.next_operation_id.saturating_add(1);
+    let label = match decision {
+        ConfirmationDecisionWire::Accept => "Confirm",
+        ConfirmationDecisionWire::Cancel => "Cancel",
+    };
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::User,
+        text: label.into(),
+        streaming: false,
+    });
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::Assistant,
+        text: String::new(),
+        streaming: true,
+    });
+    model.operation = OperationState::Running(operation_id);
+    model.activity = Some(match decision {
+        ConfirmationDecisionWire::Accept => "Confirming…".into(),
+        ConfirmationDecisionWire::Cancel => "Cancelling proposal…".into(),
+    });
+    model.idle_exit_armed = false;
+    follow_tail(model);
+    vec![Effect::ConfirmAction {
+        operation_id,
+        command,
     }]
 }
 
@@ -1338,6 +1422,9 @@ fn complete_slash(model: &mut AppModel) {
 }
 
 fn cancel_or_exit(model: &mut AppModel) -> Vec<Effect> {
+    if model.pending_confirmation.is_some() && !model.operation.is_active() {
+        return submit_confirmation(model, ConfirmationDecisionWire::Cancel);
+    }
     if !model.draft.is_empty() {
         model.draft.clear();
         model.cursor = 0;
@@ -1621,25 +1708,49 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             model.activity = Some("Choose an option".into());
         }
         AgentEvent::Result { document, .. } => {
+            let confirmation = ActionConfirmationEnvelopeWire::from_result_document(&document);
             let result = agent_result_text(&document).map(terminal_safe_text);
             let choice_labels = std::mem::take(&mut model.pending_choice_labels);
             model.scrollback.mutate_last_assistant(|entry| {
-                if let Some(result) = result {
-                    if !result.is_empty() {
-                        entry.text = result;
-                        append_choice_labels(&mut entry.text, &choice_labels);
+                match confirmation.as_ref() {
+                    Ok(Some(envelope)) => {
+                        entry.text = render_action_confirmation(envelope);
                     }
-                } else if entry.text.is_empty() {
-                    entry.text = terminal_safe_text(&document.to_string());
+                    Err(message) => {
+                        entry.text = format!(
+                            "Unable to present this confirmation safely: {}",
+                            terminal_safe_text(message)
+                        );
+                    }
+                    Ok(None) => {
+                        if let Some(result) = result {
+                            if !result.is_empty() {
+                                entry.text = result;
+                                append_choice_labels(&mut entry.text, &choice_labels);
+                            }
+                        } else if entry.text.is_empty() {
+                            entry.text = terminal_safe_text(&document.to_string());
+                        }
+                    }
                 }
                 entry.streaming = false;
             });
+            match confirmation {
+                Ok(Some(envelope)) => {
+                    model.pending_confirmation = Some(PendingActionConfirmation {
+                        confirmation_id: envelope.confirmation_id,
+                        idempotency_key: envelope.idempotency_key,
+                    });
+                }
+                Ok(None) | Err(_) => model.pending_confirmation = None,
+            }
             mark_finishing(model);
             model.activity = Some("Finishing…".into());
             model.idle_exit_armed = false;
         }
         AgentEvent::Error { error } => {
             model.pending_choice_labels.clear();
+            model.pending_confirmation = None;
             let code = terminal_safe_text(&error.code);
             let message = terminal_safe_text(&error.message);
             model.scrollback.mutate_last_assistant(|entry| {
@@ -1654,6 +1765,71 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
         }
     }
     account_for_new_lines(model, old_lines);
+}
+
+fn render_action_confirmation(envelope: &ActionConfirmationEnvelopeWire) -> String {
+    let mut output = format!(
+        "Review before changing anything\n\n{}\n",
+        terminal_safe_text(&envelope.preview)
+    );
+    if let Some(items) = envelope
+        .structured_preview
+        .as_ref()
+        .and_then(|preview| preview.get("items"))
+        .and_then(serde_json::Value::as_array)
+    {
+        for (index, item) in items.iter().enumerate() {
+            let name = ["name", "requested_name", "canonical_name"]
+                .into_iter()
+                .find_map(|key| item.get(key).and_then(serde_json::Value::as_str))
+                .map(terminal_safe_text)
+                .unwrap_or_else(|| "item".into());
+            let quantity = item.get("quantity").and_then(|value| {
+                value
+                    .as_str()
+                    .map(terminal_safe_text)
+                    .or_else(|| value.as_f64().map(|value| value.to_string()))
+            });
+            let unit = item
+                .get("unit")
+                .and_then(serde_json::Value::as_str)
+                .map(terminal_safe_text);
+            let amount = match (quantity, unit) {
+                (Some(quantity), Some(unit)) => format!(" · {quantity} {unit}"),
+                (Some(quantity), None) => format!(" · {quantity}"),
+                _ => String::new(),
+            };
+            let _ = writeln!(output, "{}. {name}{amount}", index + 1);
+            if let Some(flags) = item
+                .get("safety_flags")
+                .and_then(serde_json::Value::as_array)
+            {
+                for flag in flags {
+                    let member = flag
+                        .get("member_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(terminal_safe_text)
+                        .unwrap_or_else(|| "member".into());
+                    let status = flag
+                        .get("status")
+                        .and_then(serde_json::Value::as_str)
+                        .map(terminal_safe_text)
+                        .unwrap_or_else(|| "unable to evaluate".into());
+                    let _ = writeln!(output, "   • {member}: {status}");
+                    if let Some(reason) = flag.get("reason").and_then(serde_json::Value::as_str) {
+                        let _ = writeln!(output, "     {}", terminal_safe_text(reason));
+                    }
+                }
+            }
+        }
+    }
+    if let Some(expires_at) = envelope.expires_at.as_deref() {
+        let _ = writeln!(output, "\nExpires: {}", terminal_safe_text(expires_at));
+    }
+    output.push_str(
+        "\nNothing has changed yet. Type `y` to confirm or `n` to cancel. Ctrl+C cancels.",
+    );
+    output
 }
 
 fn append_choice_labels(output: &mut String, choices: &[String]) {
@@ -2321,6 +2497,102 @@ mod tests {
             );
             assert!(!entry.streaming);
         }
+    }
+
+    #[test]
+    fn action_confirmation_renders_a_card_and_requires_typed_accept_or_cancel() {
+        let confirmation_document = serde_json::json!({
+            "text": "I prepared a grocery update.",
+            "structured": {
+                "type": "action_confirmation",
+                "envelope_version": 1,
+                "confirmation_id": "00000000-0000-4000-8000-000000000001",
+                "idempotency_key": "00000000-0000-4000-8000-000000000002",
+                "action": "grocery_list_add_items",
+                "preview": "Add two screened ingredients",
+                "expires_at": "2026-07-22T12:05:00Z",
+                "card_form": "item_list",
+                "structured_preview": {
+                    "items": [{
+                        "name": "onion",
+                        "quantity": 1,
+                        "unit": "whole",
+                        "safety_flags": [{
+                            "member_id": "maya",
+                            "status": "risky",
+                            "reason": "High-FODMAP ingredient"
+                        }]
+                    }]
+                }
+            }
+        });
+        let mut model = AppModel {
+            draft: "add ingredients".into(),
+            cursor: 15,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: confirmation_document,
+                    conversation_id: Some("conversation-grocery".into()),
+                },
+            }),
+        );
+        let card = &model.scrollback.entries().back().unwrap().text;
+        assert!(card.contains("Review before changing anything"));
+        assert!(card.contains("1. onion · 1 whole"));
+        assert!(card.contains("maya: risky"));
+        assert!(card.contains("Type `y` to confirm or `n` to cancel"));
+        assert!(!card.contains("confirmation_id"));
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFinished {
+                operation_id: 1,
+                outcome: RunTurnOutcome::Completed,
+            }),
+        );
+
+        model.draft = "y".into();
+        model.cursor = 1;
+        let effects = dispatch(&mut model, Action::Submit);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::ConfirmAction { operation_id: 2, command }]
+                if command.decision == ConfirmationDecisionWire::Accept
+                    && command.confirmation_id.as_uuid().to_string()
+                        == "00000000-0000-4000-8000-000000000001"
+        ));
+    }
+
+    #[test]
+    fn ctrl_c_cancels_a_pending_action_confirmation_through_the_server() {
+        let mut model = AppModel {
+            draft: "an unsubmitted answer".into(),
+            cursor: 21,
+            pending_confirmation: Some(PendingActionConfirmation {
+                confirmation_id: heyfood_core::GroceryConfirmationId::parse(
+                    "00000000-0000-4000-8000-000000000001",
+                )
+                .unwrap(),
+                idempotency_key: heyfood_core::GroceryIdempotencyKey::parse(
+                    "00000000-0000-4000-8000-000000000002",
+                )
+                .unwrap(),
+            }),
+            ..AppModel::default()
+        };
+        let effects = dispatch(&mut model, Action::CancelOrExit);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::ConfirmAction { operation_id: 1, command }]
+                if command.decision == ConfirmationDecisionWire::Cancel
+        ));
+        assert!(model.draft.is_empty());
+        assert!(!model.idle_exit_armed);
     }
 
     #[test]

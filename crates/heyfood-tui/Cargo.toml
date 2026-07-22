@@ -13,6 +13,7 @@ crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
 heyfood-application = { version = "=0.5.0", path = "../heyfood-application" }
 heyfood-core = { version = "=0.5.0", path = "../heyfood-core" }
 ratatui = { workspace = true, features = ["crossterm"] }
+serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["sync", "time"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -22,7 +23,6 @@ crossterm = { workspace = true, features = ["windows"] }
 insta.workspace = true
 portable-pty.workspace = true
 proptest = { workspace = true, features = ["std"] }
-serde_json = { workspace = true, features = ["std"] }
 
 [lints]
 workspace = true

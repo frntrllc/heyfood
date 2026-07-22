@@ -34,10 +34,10 @@ pub async fn execute_one_shot_turn(
     operation_id: OperationId,
     cancellation: CancellationToken,
 ) -> Result<OneShotTurnResult, PortError> {
-    if request.prompt.trim().is_empty() {
+    if !request.has_exactly_one_input() {
         return Err(PortError::new(
             "invalid_prompt",
-            "turn prompt must not be empty",
+            "turn requires exactly one prompt or confirmation",
         ));
     }
 

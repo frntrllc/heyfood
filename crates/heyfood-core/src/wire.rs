@@ -110,6 +110,77 @@ pub enum GroceryMutationStatusWire {
     Cancelled,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfirmationDecisionWire {
+    Accept,
+    Cancel,
+}
+
+/// C3 conversational confirmation command. This is sent as the `confirm`
+/// member of `/v1/agent/converse` and is mutually exclusive with `query`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentConfirmationCommandWire {
+    pub confirmation_id: GroceryConfirmationId,
+    pub idempotency_key: GroceryIdempotencyKey,
+    pub decision: ConfirmationDecisionWire,
+}
+
+/// Additive C3 envelope carried in a terminal result's `structured` member.
+/// Unknown additive fields remain allowed by the frozen contract.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct ActionConfirmationEnvelopeWire {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub confirmation_id: GroceryConfirmationId,
+    pub idempotency_key: GroceryIdempotencyKey,
+    pub action: String,
+    pub preview: String,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub card_form: Option<String>,
+    #[serde(default)]
+    pub structured_preview: Option<Value>,
+}
+
+impl ActionConfirmationEnvelopeWire {
+    pub fn from_result_document(document: &Value) -> Result<Option<Self>, &'static str> {
+        let Some(structured) = document.get("structured") else {
+            return Ok(None);
+        };
+        if structured.get("type").and_then(Value::as_str) != Some("action_confirmation") {
+            return Ok(None);
+        }
+        let envelope: Self = serde_json::from_value(structured.clone())
+            .map_err(|_| "action confirmation envelope is invalid")?;
+        if envelope.kind != "action_confirmation"
+            || envelope.action.is_empty()
+            || envelope.action.len() > 128
+            || envelope.action.chars().any(char::is_control)
+            || envelope.preview.is_empty()
+            || envelope.preview.len() > 16 * 1024
+            || envelope.preview.chars().any(char::is_control)
+        {
+            return Err("action confirmation envelope is invalid");
+        }
+        Ok(Some(envelope))
+    }
+
+    #[must_use]
+    pub const fn command(
+        &self,
+        decision: ConfirmationDecisionWire,
+    ) -> AgentConfirmationCommandWire {
+        AgentConfirmationCommandWire {
+            confirmation_id: self.confirmation_id,
+            idempotency_key: self.idempotency_key,
+            decision,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ItemSourceWire {
@@ -256,6 +327,14 @@ pub struct ExclusionMutationRequestWire {
     pub name: String,
     pub list_id: GroceryEntityId,
     pub expected_version: GroceryListVersion,
+}
+
+/// Exact response shape frozen by `GET /v1/grocery/exclusions` in the
+/// imported Grocery Phase-A REST contract.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExclusionListResponseWire {
+    pub exclusions: Vec<String>,
 }
 
 #[derive(Clone, PartialEq, Deserialize, Serialize)]

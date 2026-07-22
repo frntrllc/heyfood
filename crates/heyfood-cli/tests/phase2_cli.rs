@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 
 use clap::{CommandFactory, Parser};
 use heyfood_cli::{
-    Command, CommandLine, GroceryCommand, GroceryDecisionArgument, OutputMode, render_grocery_list,
-    render_json,
+    Command, CommandLine, GroceryCommand, GroceryDecisionArgument, OutputMode,
+    render_grocery_exclusions, render_grocery_list, render_grocery_proposal, render_json,
 };
-use heyfood_core::GroceryListWire;
+use heyfood_core::{ExclusionListResponseWire, GroceryListWire, GroceryMutationProposalWire};
 use serde_json::json;
 
 #[test]
@@ -60,7 +60,7 @@ fn confirmation_token_is_never_accepted_as_a_command_line_argument() {
     assert!(matches!(
         parsed.command,
         Some(Command::Grocery {
-            command: GroceryCommand::Confirm(ref args),
+            command: Some(GroceryCommand::Confirm(ref args)),
         }) if args.decision == GroceryDecisionArgument::Cancel && args.proposal_stdin
     ));
     assert!(
@@ -74,6 +74,49 @@ fn confirmation_token_is_never_accepted_as_a_command_line_argument() {
         ])
         .is_err()
     );
+}
+
+#[test]
+fn grocery_show_exclusions_and_never_commands_are_typed() {
+    let parsed = CommandLine::try_parse_from(["heyfood", "grocery"]).unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(Command::Grocery { command: None })
+    ));
+    for alias in ["list", "show"] {
+        let parsed = CommandLine::try_parse_from(["heyfood", "grocery", alias]).unwrap();
+        assert!(matches!(
+            parsed.command,
+            Some(Command::Grocery {
+                command: Some(GroceryCommand::List),
+            })
+        ));
+    }
+    let parsed = CommandLine::try_parse_from(["heyfood", "grocery", "exclusions"]).unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(Command::Grocery {
+            command: Some(GroceryCommand::Exclusions),
+        })
+    ));
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "grocery",
+        "never",
+        "--list-id",
+        "00000000-0000-4000-8000-000000000123",
+        "--version",
+        "4",
+        "--remove",
+        "raw onion",
+    ])
+    .unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(Command::Grocery {
+            command: Some(GroceryCommand::Never(ref arguments)),
+        }) if arguments.remove && arguments.item == "raw onion"
+    ));
 }
 
 #[test]
@@ -115,6 +158,63 @@ fn human_grocery_renderer_removes_terminal_controls() {
     assert!(!plain.contains('\u{1b}'));
     assert!(plain.contains("List[2J"));
     assert!(plain.contains("milk[31m"));
+}
+
+#[test]
+fn grocery_renderer_surfaces_stable_ids_provenance_member_flags_and_substitutions() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/contracts/grocery-backend/phase-a/fixtures/grocery/founding_scenario_maya.json"
+    ))
+    .unwrap();
+    let list: GroceryListWire = serde_json::from_value(fixture["list"].clone()).unwrap();
+    let output = render_grocery_list(&list, OutputMode::HumanPlain);
+    assert!(output.contains("id:i2"));
+    assert!(output.contains("source: recipe:dahl-001"));
+    assert!(output.contains("maya-uuid: risky"));
+    assert!(output.contains("try: green parts of scallion, garlic-infused oil"));
+    assert!(output.contains("Screened at ingredient level — verify the product label."));
+
+    let exclusions = ExclusionListResponseWire {
+        exclusions: vec!["pork\u{1b}[2J".into(), "raw onion".into()],
+    };
+    let rendered = render_grocery_exclusions(&exclusions, OutputMode::HumanPlain);
+    assert!(!rendered.contains('\u{1b}'));
+    assert!(rendered.contains("pork[2J"));
+}
+
+#[test]
+fn human_grocery_proposal_is_a_reviewable_non_mutating_card() {
+    let proposal: GroceryMutationProposalWire = serde_json::from_value(json!({
+        "confirmation_id": "00000000-0000-4000-8000-000000000001",
+        "idempotency_key": "00000000-0000-4000-8000-000000000002",
+        "operation": "add_items",
+        "expires_at": "2026-07-22T12:05:00Z",
+        "structured_preview": {
+            "items": [{
+                "requested_name": "onion",
+                "intended_for": "maya",
+                "safety": {
+                    "status": "risky",
+                    "member_flags": [{
+                        "member_id": "maya",
+                        "status": "risky",
+                        "substitutions": ["green parts of scallion"]
+                    }],
+                    "label_hint": "Screened at ingredient level — verify the product label."
+                }
+            }]
+        },
+        "preconditions": [{"type": "list_version", "expected_version": 4}],
+        "confirmation_token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }))
+    .unwrap();
+    let output = render_grocery_proposal(&proposal, OutputMode::HumanPlain);
+    assert!(output.contains("Review add_items"));
+    assert!(output.contains("1. onion for maya"));
+    assert!(output.contains("maya: risky"));
+    assert!(output.contains("try: green parts of scallion"));
+    assert!(output.contains("Nothing has changed"));
+    assert!(!output.contains("aaaaaaaa"));
 }
 
 #[test]

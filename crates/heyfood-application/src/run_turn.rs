@@ -3,7 +3,9 @@
 use std::fmt;
 use std::sync::Arc;
 
-use heyfood_core::{AgentEvent, CommitId, RefreshOutcome, RefreshRequest};
+use heyfood_core::{
+    AgentConfirmationCommandWire, AgentEvent, CommitId, RefreshOutcome, RefreshRequest,
+};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -31,8 +33,8 @@ pub struct TurnRequest {
     pub refresh: RefreshPolicy,
 }
 
-/// Optional fields emitted by the Python `ask` command for a normal text turn.
-/// Confirmation payloads remain outside the dormant Phase 0 surface.
+/// Optional context emitted for a normal text turn, plus the mutually
+/// exclusive structured C3 confirmation input used by the interactive TUI.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TurnContext {
     pub dietary: Option<Value>,
@@ -40,6 +42,16 @@ pub struct TurnContext {
     pub meal: Option<Value>,
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
+    /// Structured C3 decision, mutually exclusive with a prompt.
+    pub confirmation: Option<AgentConfirmationCommandWire>,
+}
+
+impl TurnRequest {
+    #[must_use]
+    pub fn has_exactly_one_input(&self) -> bool {
+        let has_prompt = !self.prompt.trim().is_empty();
+        has_prompt != self.context.confirmation.is_some()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -132,9 +144,9 @@ impl RunTurn {
         cancellation: CancellationToken,
         events: mpsc::Sender<TurnEvent>,
     ) -> Result<RunTurnOutcome, RunTurnError> {
-        if request.prompt.trim().is_empty() {
+        if !request.has_exactly_one_input() {
             return Err(RunTurnError::InvalidRequest(
-                "turn prompt must not be empty",
+                "turn requires exactly one prompt or confirmation",
             ));
         }
         if snapshot.session.reconciliation_required {

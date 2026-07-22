@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 
 use heyfood_core::{
-    ApplicationCapabilitiesWire, GROCERY_WIRE_SCHEMA_SHA256, GroceryConfirmationToken,
-    GroceryListWire, GroceryMutationProposalWire, HealthContextWire,
+    ActionConfirmationEnvelopeWire, ApplicationCapabilitiesWire, ConfirmationDecisionWire,
+    GROCERY_WIRE_SCHEMA_SHA256, GroceryConfirmationToken, GroceryListWire,
+    GroceryMutationProposalWire, HealthContextWire,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -113,6 +114,49 @@ fn confirmation_authority_is_redacted_and_bounded() {
     assert!(!debug.contains("onion"));
     assert!(!debug.contains("aaaaaaaa"));
     assert!(GroceryConfirmationToken::parse("short".into()).is_err());
+}
+
+#[test]
+fn c3_action_confirmation_is_parsed_only_from_the_structured_result_member() {
+    let document = json!({
+        "text": "review",
+        "structured": {
+            "type": "action_confirmation",
+            "envelope_version": 1,
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "action": "grocery_list_add_items",
+            "preview": "Add onion",
+            "card_form": "item_list",
+            "structured_preview": {"items": [{"name": "onion"}]},
+            "additive_future_field": true
+        }
+    });
+    let envelope = ActionConfirmationEnvelopeWire::from_result_document(&document)
+        .unwrap()
+        .unwrap();
+    let command = envelope.command(ConfirmationDecisionWire::Cancel);
+    assert_eq!(
+        serde_json::to_value(command).unwrap(),
+        json!({
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "decision": "cancel"
+        })
+    );
+    assert!(
+        ActionConfirmationEnvelopeWire::from_result_document(
+            &json!({"structured": {"type": "general_response"}})
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        ActionConfirmationEnvelopeWire::from_result_document(
+            &json!({"structured": {"type": "action_confirmation"}})
+        )
+        .is_err()
+    );
 }
 
 #[test]

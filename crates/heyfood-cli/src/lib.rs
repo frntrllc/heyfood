@@ -9,8 +9,9 @@ use std::time::Duration;
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use heyfood_core::{
-    GroceryDecisionWire, GroceryItemStateWire, GroceryListWire, GroceryMutationProposalWire,
-    HealthContextWire, HealthFreshnessStatus, HealthProvider, ProfileStatus, terminal_safe_text,
+    ExclusionListResponseWire, GroceryDecisionWire, GroceryItemStateWire, GroceryListWire,
+    GroceryMutationProposalWire, GrocerySafetyStatus, HealthContextWire, HealthFreshnessStatus,
+    HealthProvider, ProfileStatus, terminal_safe_text,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -133,7 +134,7 @@ pub enum Command {
     /// Manage the active Grocery list.
     Grocery {
         #[command(subcommand)]
-        command: GroceryCommand,
+        command: Option<GroceryCommand>,
     },
     /// Read health context and manage provider integrations.
     Health {
@@ -378,6 +379,7 @@ impl LoginArgs {
 #[derive(Clone, Debug, Subcommand)]
 pub enum GroceryCommand {
     /// Read the active list without creating or replacing it.
+    #[command(name = "show", alias = "list")]
     List,
     /// Prepare an add-items mutation; never commits during preparation.
     Add(GroceryAddArgs),
@@ -385,6 +387,10 @@ pub enum GroceryCommand {
     Remove(GroceryReferencesArgs),
     /// Prepare an item-state mutation.
     State(GroceryStateArgs),
+    /// Read the account's canonical never-buy exclusions.
+    Exclusions,
+    /// Prepare a never-buy exclusion change; never commits during preparation.
+    Never(GroceryExclusionArgs),
     /// Export a list in a server-defined format.
     Export(GroceryExportArgs),
     /// Accept or cancel one server-signed proposal read from stdin.
@@ -426,6 +432,17 @@ pub struct GroceryStateArgs {
     pub item: String,
     #[arg(value_enum)]
     pub state: GroceryStateArgument,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct GroceryExclusionArgs {
+    #[command(flatten)]
+    pub list: GroceryVersionArgs,
+    #[arg(value_name = "ITEM")]
+    pub item: String,
+    /// Remove this item from the never-buy list instead of adding it.
+    #[arg(long)]
+    pub remove: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -742,15 +759,97 @@ pub fn render_grocery_list(list: &GroceryListWire, mode: OutputMode) -> String {
             .map(terminal_safe_text)
             .map(|value| format!(" for {value}"))
             .unwrap_or_default();
-        let _ = writeln!(output, "{}. {name}{intended} [{state}]", index + 1);
+        let quantity = match (item.quantity, item.unit.as_deref(), item.package_quantity) {
+            (Some(value), Some(unit), _) => {
+                format!(" · {value} {}", terminal_safe_text(unit))
+            }
+            (Some(value), None, _) => format!(" · {value}"),
+            (None, _, Some(packages)) => format!(" · {packages} package(s)"),
+            _ => String::new(),
+        };
+        let _ = writeln!(
+            output,
+            "{}. {name}{intended}{quantity} [{state}]  id:{}",
+            index + 1,
+            terminal_safe_text(&item.id)
+        );
+        if !item.sources.is_empty() {
+            let provenance = item
+                .sources
+                .iter()
+                .map(|source| {
+                    let kind = terminal_safe_text(&source.source_type);
+                    source
+                        .source_ref
+                        .as_deref()
+                        .map_or(kind.clone(), |reference| {
+                            format!("{kind}:{}", terminal_safe_text(reference))
+                        })
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(output, "   source: {provenance}");
+        }
         if let Some(safety) = &item.safety {
-            let status = serde_json::to_value(safety.status)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_owned))
-                .unwrap_or_else(|| "unable_to_evaluate".into());
-            let _ = writeln!(output, "   ingredient screening: {status}");
+            let _ = writeln!(
+                output,
+                "   ingredient screening: {}",
+                grocery_safety_label(safety.status)
+            );
+            for flag in &safety.member_flags {
+                let intended_marker = item
+                    .intended_for
+                    .as_deref()
+                    .filter(|member| *member == flag.member_id)
+                    .map_or("", |_| " · intended");
+                let _ = writeln!(
+                    output,
+                    "   • {}: {}{intended_marker}",
+                    terminal_safe_text(&flag.member_id),
+                    grocery_safety_label(flag.status)
+                );
+                if let Some(reason) = flag.reason.as_deref() {
+                    let _ = writeln!(output, "     {}", terminal_safe_text(reason));
+                }
+                if !flag.substitutions.is_empty() {
+                    let substitutions = flag
+                        .substitutions
+                        .iter()
+                        .map(|value| terminal_safe_text(value))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let _ = writeln!(output, "     try: {substitutions}");
+                }
+            }
             let _ = writeln!(output, "   {}", terminal_safe_text(&safety.label_hint));
         }
+    }
+    output
+}
+
+const fn grocery_safety_label(status: GrocerySafetyStatus) -> &'static str {
+    match status {
+        GrocerySafetyStatus::GenerallySafer => "generally safer",
+        GrocerySafetyStatus::Risky => "risky",
+        GrocerySafetyStatus::Avoid => "avoid",
+        GrocerySafetyStatus::UnableToEvaluate => "unable to evaluate",
+    }
+}
+
+#[must_use]
+pub fn render_grocery_exclusions(
+    exclusions: &ExclusionListResponseWire,
+    mode: OutputMode,
+) -> String {
+    if mode == OutputMode::Json {
+        return render_json(exclusions).expect("Grocery exclusions DTO is serializable");
+    }
+    if exclusions.exclusions.is_empty() {
+        return "Never-buy list is empty.\n".into();
+    }
+    let mut output = String::from("Never buy\n");
+    for exclusion in &exclusions.exclusions {
+        let _ = writeln!(output, "• {}", terminal_safe_text(exclusion));
     }
     output
 }
@@ -764,10 +863,78 @@ pub fn render_grocery_proposal(proposal: &GroceryMutationProposalWire, mode: Out
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "grocery_mutation".into());
-    format!(
-        "Prepared {operation}; expires at {}. Review the structured preview and explicitly accept or cancel.\n",
+    let mut output = format!("Review {operation}\n");
+    if let Some(items) = proposal
+        .structured_preview
+        .get("items")
+        .and_then(Value::as_array)
+    {
+        for (index, item) in items.iter().enumerate() {
+            let name = ["name", "requested_name", "canonical_name"]
+                .into_iter()
+                .find_map(|key| item.get(key).and_then(Value::as_str))
+                .map(terminal_safe_text)
+                .unwrap_or_else(|| "item".into());
+            let intended = item
+                .get("intended_for")
+                .and_then(Value::as_str)
+                .map(terminal_safe_text)
+                .map(|member| format!(" for {member}"))
+                .unwrap_or_default();
+            let _ = writeln!(output, "{}. {name}{intended}", index + 1);
+            if let Some(safety) = item.get("safety") {
+                if let Some(status) = safety.get("status").and_then(Value::as_str) {
+                    let _ = writeln!(
+                        output,
+                        "   ingredient screening: {}",
+                        terminal_safe_text(status).replace('_', " ")
+                    );
+                }
+                if let Some(flags) = safety.get("member_flags").and_then(Value::as_array) {
+                    for flag in flags {
+                        let member = flag
+                            .get("member_id")
+                            .and_then(Value::as_str)
+                            .map(terminal_safe_text)
+                            .unwrap_or_else(|| "member".into());
+                        let status = flag
+                            .get("status")
+                            .and_then(Value::as_str)
+                            .map(terminal_safe_text)
+                            .unwrap_or_else(|| "unable to evaluate".into());
+                        let _ = writeln!(output, "   • {member}: {status}");
+                        if let Some(substitutions) = flag
+                            .get("substitutions")
+                            .and_then(Value::as_array)
+                            .filter(|values| !values.is_empty())
+                        {
+                            let substitutions = substitutions
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(terminal_safe_text)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            if !substitutions.is_empty() {
+                                let _ = writeln!(output, "     try: {substitutions}");
+                            }
+                        }
+                    }
+                }
+                if let Some(hint) = safety.get("label_hint").and_then(Value::as_str) {
+                    let _ = writeln!(output, "   {}", terminal_safe_text(hint));
+                }
+            }
+        }
+    }
+    let _ = writeln!(
+        output,
+        "Expires: {}",
         terminal_safe_text(&proposal.expires_at)
-    )
+    );
+    output.push_str(
+        "Nothing has changed. Use `--json` and pipe this proposal to `heyfood grocery confirm --decision accept|cancel`.\n",
+    );
+    output
 }
 
 #[must_use]

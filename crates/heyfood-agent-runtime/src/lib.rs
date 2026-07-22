@@ -294,10 +294,24 @@ impl ServicePort for HttpService {
             })?;
             let client = self.client(true)?;
             let endpoint = self.endpoint("/v1/agent/converse")?;
-            let mut body = serde_json::json!({
-                "input_mode": "text",
-                "query": request.prompt,
-            });
+            if !request.has_exactly_one_input() {
+                return Err(PortError::new(
+                    "converse_input",
+                    "conversational requests require exactly one query or confirmation",
+                ));
+            }
+            let confirmation = request.context.confirmation.clone();
+            let mut body = if let Some(confirmation) = confirmation {
+                serde_json::json!({
+                    "input_mode": "text",
+                    "confirm": confirmation,
+                })
+            } else {
+                serde_json::json!({
+                    "input_mode": "text",
+                    "query": request.prompt,
+                })
+            };
             if let Some(conversation_id) = request.conversation_id {
                 body["conversation_id"] = serde_json::Value::String(conversation_id);
             }

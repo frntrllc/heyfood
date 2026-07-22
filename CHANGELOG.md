@@ -39,6 +39,13 @@ authentication contracts are stabilized.
   unobserved profile-upload response remains outcome-unknown.
 - Verifies Rust onboarding payload parity against the frozen Python derivation
   tables for every v2 diet, allergy, condition, activity, and cuisine option.
+- Adds contract-derived Grocery exclusion reads and add/remove proposals, and
+  shows the never-buy list in the authenticated Grocery TUI panel.
+- Renders stable item IDs, quantities, provenance, member-specific ingredient
+  screening, reasons, and substitutions in Grocery list and proposal views.
+- Parses the frozen C3 item-list confirmation envelope into a native TUI card;
+  `y`/`n` and Ctrl+C send an explicit `confirm` decision with the original
+  server confirmation and idempotency IDs, mutually exclusive with `query`.
 - Archives the final Python parity baseline under the non-release tag
   `archive/python-cli-73494a57` and verifies retained source bytes from Rust.
 

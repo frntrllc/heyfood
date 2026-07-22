@@ -3,9 +3,9 @@
 use heyfood_application::PortError;
 use heyfood_core::{
     AddItemsRequestWire, ApplicationCapabilitiesWire, AuthorizationServerMetadataWire,
-    GroceryEntityId, GroceryListWire, GroceryMutationConfirmRequestWire,
-    GroceryMutationProposalWire, GroceryMutationResultWire, HealthContextWire,
-    IntegrationAuthorizeRequestWire, IntegrationAuthorizeResponseWire,
+    ExclusionListResponseWire, ExclusionMutationRequestWire, GroceryEntityId, GroceryListWire,
+    GroceryMutationConfirmRequestWire, GroceryMutationProposalWire, GroceryMutationResultWire,
+    HealthContextWire, IntegrationAuthorizeRequestWire, IntegrationAuthorizeResponseWire,
     IntegrationDisconnectResponseWire, IntegrationListWire, IntegrationRedirectTargetWire,
     IntegrationSyncResponseWire, OperationId, RemoveItemsRequestWire, SessionCredentials,
     UpdateItemStateRequestWire, terminal_safe_text,
@@ -299,6 +299,64 @@ impl HttpService {
             credentials,
             operation_id,
             "/v1/grocery/items/state",
+            request,
+            cancellation,
+        )
+        .await
+    }
+
+    pub async fn grocery_exclusions(
+        &self,
+        capabilities: &ApplicationCapabilitiesWire,
+        credentials: &SessionCredentials,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> Result<ExclusionListResponseWire, PortError> {
+        Self::require_grocery_v1(capabilities)?;
+        let builder = self
+            .request(
+                Method::GET,
+                "/v1/grocery/exclusions",
+                Some(credentials),
+                operation_id,
+            )?
+            .header(header::ACCEPT, "application/json");
+        self.dispatch_json(builder, cancellation, DispatchKind::Safe)
+            .await
+    }
+
+    pub async fn grocery_prepare_add_exclusion(
+        &self,
+        capabilities: &ApplicationCapabilitiesWire,
+        credentials: &SessionCredentials,
+        operation_id: OperationId,
+        request: &ExclusionMutationRequestWire,
+        cancellation: CancellationToken,
+    ) -> Result<GroceryMutationProposalWire, PortError> {
+        self.grocery_mutation(
+            capabilities,
+            credentials,
+            operation_id,
+            "/v1/grocery/exclusions",
+            request,
+            cancellation,
+        )
+        .await
+    }
+
+    pub async fn grocery_prepare_remove_exclusion(
+        &self,
+        capabilities: &ApplicationCapabilitiesWire,
+        credentials: &SessionCredentials,
+        operation_id: OperationId,
+        request: &ExclusionMutationRequestWire,
+        cancellation: CancellationToken,
+    ) -> Result<GroceryMutationProposalWire, PortError> {
+        self.grocery_mutation(
+            capabilities,
+            credentials,
+            operation_id,
+            "/v1/grocery/exclusions/remove",
             request,
             cancellation,
         )

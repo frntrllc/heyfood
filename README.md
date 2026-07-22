@@ -97,7 +97,9 @@ heyfood ask "What can I eat?"
 heyfood reply --conversation-id CONVERSATION_ID "The second option"
 heyfood log "I ate the first option"
 heyfood item "pad thai at Pismo's"
-heyfood grocery list
+heyfood grocery show
+heyfood grocery exclusions
+heyfood grocery never --list-id UUID --version 4 "raw onion"
 heyfood health status
 heyfood health show
 ```
@@ -152,8 +154,10 @@ stop an active turn, and Ctrl+D or `/exit` to leave. Use `/help` for the current
 command registry, `/new` for a fresh conversation, `/clear` to clear visible
 scrollback, and `/status` to inspect session readiness.
 
-Read-only Grocery, Health, profile, household, location, and status panels are
-connected on the draft branch. Onboarding, interactive Grocery confirmation,
+Grocery, Health, profile, household, location, and status panels are connected
+on the draft branch. Grocery list cards expose stable IDs, provenance, member
+screening, substitutions, and never-buy exclusions. Conversational item-list
+proposals support typed accept/cancel decisions in the TUI; proposal editing,
 Menu Watch, and native voice capture remain incomplete release gates. Hidden
 compatibility routes continue to fail closed where a native workflow is not
 complete.

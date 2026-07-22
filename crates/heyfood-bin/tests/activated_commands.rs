@@ -206,9 +206,12 @@ fn response_for(method: &str, path: &str) -> (&'static str, Vec<u8>) {
     }
     let value = match (method, path.split('?').next().unwrap()) {
         ("GET", "/v1/grocery/list") => list(),
+        ("GET", "/v1/grocery/exclusions") => json!({"exclusions": ["pork"]}),
         ("POST", "/v1/grocery/items") => proposal("add_items"),
         ("POST", "/v1/grocery/items/remove") => proposal("remove_items"),
         ("POST", "/v1/grocery/items/state") => proposal("update_item_state"),
+        ("POST", "/v1/grocery/exclusions") => proposal("add_exclusion"),
+        ("POST", "/v1/grocery/exclusions/remove") => proposal("remove_exclusion"),
         ("POST", "/v1/grocery/confirm") => json!({
             "status": "cancelled",
             "operation": "add_items",
@@ -241,14 +244,14 @@ fn response_for(method: &str, path: &str) -> (&'static str, Vec<u8>) {
 }
 
 #[tokio::test]
-async fn public_binary_dispatches_all_eleven_health_and_grocery_routes() {
+async fn public_binary_dispatches_all_fourteen_health_and_grocery_routes() {
     let root = TempRoot::new("routes");
     initialize(&root.0, FULL_SCOPE);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
         let mut product_routes = BTreeSet::new();
-        for _ in 0..19 {
+        for _ in 0..25 {
             let (mut socket, _) = listener.accept().await.unwrap();
             let request = read_request(&mut socket).await;
             let mut request_line = request.lines().next().unwrap().split_whitespace();
@@ -267,7 +270,7 @@ async fn public_binary_dispatches_all_eleven_health_and_grocery_routes() {
     });
 
     let cases: Vec<(Vec<&str>, Option<Vec<u8>>)> = vec![
-        (vec!["--json", "grocery", "list"], None),
+        (vec!["--json", "grocery"], None),
         (
             vec![
                 "--json",
@@ -316,6 +319,34 @@ async fn public_binary_dispatches_all_eleven_health_and_grocery_routes() {
             vec!["--json", "grocery", "confirm", "--decision", "cancel"],
             Some(serde_json::to_vec(&proposal("add_items")).unwrap()),
         ),
+        (vec!["--json", "grocery", "exclusions"], None),
+        (
+            vec![
+                "--json",
+                "grocery",
+                "never",
+                "--list-id",
+                LIST_ID,
+                "--version",
+                "4",
+                "pork",
+            ],
+            None,
+        ),
+        (
+            vec![
+                "--json",
+                "grocery",
+                "never",
+                "--list-id",
+                LIST_ID,
+                "--version",
+                "4",
+                "--remove",
+                "pork",
+            ],
+            None,
+        ),
         (vec!["--json", "health", "status"], None),
         (vec!["--json", "health", "show"], None),
         (vec!["--json", "health", "connect", "oura"], None),
@@ -340,6 +371,9 @@ async fn public_binary_dispatches_all_eleven_health_and_grocery_routes() {
         "POST /v1/grocery/items".into(),
         "POST /v1/grocery/items/remove".into(),
         "POST /v1/grocery/items/state".into(),
+        "GET /v1/grocery/exclusions".into(),
+        "POST /v1/grocery/exclusions".into(),
+        "POST /v1/grocery/exclusions/remove".into(),
         "POST /v1/grocery/confirm".into(),
         format!("GET /v1/grocery/lists/{LIST_ID}/export"),
         "GET /v1/health/context".into(),

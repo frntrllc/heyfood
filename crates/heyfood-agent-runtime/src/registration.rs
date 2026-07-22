@@ -1416,6 +1416,15 @@ mod tests {
                 "/v1/grocery/confirm",
                 &["grocery:read", "grocery:write"][..],
             ),
+            ("/v1/grocery/exclusions", &["grocery:read"][..]),
+            (
+                "/v1/grocery/exclusions",
+                &["grocery:read", "grocery:write"][..],
+            ),
+            (
+                "/v1/grocery/exclusions/remove",
+                &["grocery:read", "grocery:write"][..],
+            ),
             ("/v1/grocery/lists/{list_id}/export", &["grocery:read"][..]),
             ("/v1/health/context", &["health:read"][..]),
             ("/v1/integrations", &["health:read"][..]),
@@ -1426,7 +1435,7 @@ mod tests {
             ),
             ("/v1/integrations/{provider}", &["integrations:manage"][..]),
         ];
-        assert_eq!(released_routes.len(), 11);
+        assert_eq!(released_routes.len(), 14);
         for (route, required_scopes) in released_routes {
             for required in required_scopes {
                 assert!(

@@ -35,6 +35,16 @@ The old channel and app-session credentials remain authoritative through the
 new browser/device grant and session exchange. A durable reconciliation marker
 blocks use if the final two-store replacement cannot complete.
 
+Grocery reads include `grocery show` (compatibility alias `list`) and
+`grocery exclusions`.
+`grocery never --list-id UUID --version N ITEM` prepares an exclusion addition;
+`--remove` prepares its removal. Preparation never mutates server state. REST
+proposals are confirmed only from a JSON proposal read on stdin. Conversational
+Grocery proposals use the C3 item-list card in the TUI: `y` accepts, `n`
+cancels, and Ctrl+C sends a structured cancel. The confirmation request echoes
+the server IDs and idempotency key and never converts natural language into
+consent.
+
 Legacy top-level `recommend`, `location`, `search`, `household`, `profile`, and
 other hidden topology are unavailable in this cut. Recognized legacy paths fail
 closed with `command_not_available`; recognition is not a support or

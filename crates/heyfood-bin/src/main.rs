@@ -797,7 +797,7 @@ fn read_command_stdin(command: &Command) -> Result<Vec<u8>, heyfood_bin::OneShot
         Command::Ask(arguments) | Command::Reply(arguments) => arguments.text.is_empty(),
         Command::Log(arguments) => arguments.meal.is_empty(),
         Command::Grocery {
-            command: heyfood_cli::GroceryCommand::Confirm(_),
+            command: Some(heyfood_cli::GroceryCommand::Confirm(_)),
         } => true,
         _ => false,
     };
@@ -832,7 +832,13 @@ fn ensure_command_scopes(
 ) -> Result<(), heyfood_bin::OneShotError> {
     let required: &[&str] = match command {
         Command::Grocery {
-            command: heyfood_cli::GroceryCommand::List | heyfood_cli::GroceryCommand::Export(_),
+            command:
+                None
+                | Some(
+                    heyfood_cli::GroceryCommand::List
+                    | heyfood_cli::GroceryCommand::Exclusions
+                    | heyfood_cli::GroceryCommand::Export(_),
+                ),
         } => &["grocery:read"],
         Command::Grocery { .. } => &["grocery:read", "grocery:write"],
         Command::Health {

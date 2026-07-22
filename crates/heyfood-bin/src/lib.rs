@@ -11,14 +11,15 @@ use heyfood_application::{
 };
 use heyfood_cli::{
     AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, OutputMode,
-    render_agent_result, render_grocery_list, render_grocery_proposal, render_health_context,
-    render_item_result, render_json,
+    render_agent_result, render_grocery_exclusions, render_grocery_list, render_grocery_proposal,
+    render_health_context, render_item_result, render_json,
 };
 use heyfood_core::{
-    AddItemsRequestWire, AgentEvent, GroceryConfirmationToken, GroceryDecisionWire,
-    GroceryEntityId, GroceryItemInputWire, GroceryListVersion, GroceryMutationConfirmRequestWire,
-    ImportedPythonState, OnboardingProfileInput, OperationId, RemoveItemsRequestWire,
-    SessionCredentials, SessionSnapshot, UpdateItemStateRequestWire, terminal_safe_text,
+    AddItemsRequestWire, AgentConfirmationCommandWire, AgentEvent, ExclusionMutationRequestWire,
+    GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId, GroceryItemInputWire,
+    GroceryListVersion, GroceryMutationConfirmRequestWire, ImportedPythonState,
+    OnboardingProfileInput, OperationId, RemoveItemsRequestWire, SessionCredentials,
+    SessionSnapshot, UpdateItemStateRequestWire, terminal_safe_text,
 };
 use heyfood_platform::{NativeSignalSource, SignalEvent};
 use heyfood_tui::{Effect, ExitReason, PanelRequest, RuntimeEvent, TuiError};
@@ -202,7 +203,8 @@ impl<'a> OneShotExecutor<'a> {
             Command::Log(arguments) => self.execute_log(arguments, stdin, cancellation).await,
             Command::Item(arguments) => self.execute_item(arguments, cancellation).await,
             Command::Grocery { command } => {
-                self.execute_grocery(command, stdin, cancellation).await
+                self.execute_grocery(command.unwrap_or(GroceryCommand::List), stdin, cancellation)
+                    .await
             }
             Command::Health { command } => self.execute_health(command, cancellation).await,
             Command::Completion { shell } => {
@@ -536,6 +538,47 @@ impl<'a> OneShotExecutor<'a> {
                         cancellation,
                     )
                     .await?;
+                Ok(render_grocery_proposal(&proposal, self.output_mode))
+            }
+            GroceryCommand::Exclusions => {
+                let exclusions = self
+                    .service
+                    .grocery_exclusions(
+                        &capabilities,
+                        self.credentials,
+                        OperationId::new(),
+                        cancellation,
+                    )
+                    .await?;
+                Ok(render_grocery_exclusions(&exclusions, self.output_mode))
+            }
+            GroceryCommand::Never(arguments) => {
+                let request = ExclusionMutationRequestWire {
+                    name: bounded_text(arguments.item, 255, "grocery exclusion")?,
+                    list_id: parse_list_id(&arguments.list.list_id)?,
+                    expected_version: parse_list_version(arguments.list.version)?,
+                };
+                let proposal = if arguments.remove {
+                    self.service
+                        .grocery_prepare_remove_exclusion(
+                            &capabilities,
+                            self.credentials,
+                            OperationId::new(),
+                            &request,
+                            cancellation,
+                        )
+                        .await?
+                } else {
+                    self.service
+                        .grocery_prepare_add_exclusion(
+                            &capabilities,
+                            self.credentials,
+                            OperationId::new(),
+                            &request,
+                            cancellation,
+                        )
+                        .await?
+                };
                 Ok(render_grocery_proposal(&proposal, self.output_mode))
             }
             GroceryCommand::Export(arguments) => {
@@ -1346,6 +1389,64 @@ impl InteractiveTurnDriver {
     fn reap_finished(&mut self) {
         self.turns.retain(|turn| !turn.task.is_finished());
     }
+
+    fn start_conversational_input(
+        &mut self,
+        operation_id: u64,
+        prompt: String,
+        confirmation: Option<AgentConfirmationCommandWire>,
+        runtime_events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        self.reap_finished();
+        if !self.turns.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "a conversational turn is already active",
+            ));
+        }
+
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+        let service = self.service.clone();
+        let ensure_session = self.ensure_session.clone();
+        let session = self.session.clone();
+        let continuity = self.continuity.clone();
+        let context_service = self.interactive_service.clone();
+        let local_state = self.local_state.clone();
+        let task = self.runtime.spawn(async move {
+            let outcome = run_interactive_turn(
+                operation_id,
+                prompt,
+                confirmation,
+                service,
+                ensure_session,
+                session,
+                continuity,
+                context_service,
+                local_state,
+                task_cancellation,
+                runtime_events.clone(),
+            )
+            .await;
+            let terminal_event = match outcome {
+                Ok(outcome) => RuntimeEvent::TurnFinished {
+                    operation_id,
+                    outcome,
+                },
+                Err(message) => RuntimeEvent::TurnFailed {
+                    operation_id,
+                    message,
+                },
+            };
+            let _ = runtime_events.send(terminal_event).await;
+        });
+        self.turns.push(OwnedInteractiveTurn {
+            operation_id,
+            cancellation,
+            task,
+        });
+        Ok(())
+    }
 }
 
 impl QualifiedTurnDriver for InteractiveTurnDriver {
@@ -1405,54 +1506,16 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         prompt: String,
         runtime_events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()> {
-        self.reap_finished();
-        if !self.turns.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "a conversational turn is already active",
-            ));
-        }
+        self.start_conversational_input(operation_id, prompt, None, runtime_events)
+    }
 
-        let cancellation = CancellationToken::new();
-        let task_cancellation = cancellation.clone();
-        let service = self.service.clone();
-        let ensure_session = self.ensure_session.clone();
-        let session = self.session.clone();
-        let continuity = self.continuity.clone();
-        let context_service = self.interactive_service.clone();
-        let local_state = self.local_state.clone();
-        let task = self.runtime.spawn(async move {
-            let outcome = run_interactive_turn(
-                operation_id,
-                prompt,
-                service,
-                ensure_session,
-                session,
-                continuity,
-                context_service,
-                local_state,
-                task_cancellation,
-                runtime_events.clone(),
-            )
-            .await;
-            let terminal_event = match outcome {
-                Ok(outcome) => RuntimeEvent::TurnFinished {
-                    operation_id,
-                    outcome,
-                },
-                Err(message) => RuntimeEvent::TurnFailed {
-                    operation_id,
-                    message,
-                },
-            };
-            let _ = runtime_events.send(terminal_event).await;
-        });
-        self.turns.push(OwnedInteractiveTurn {
-            operation_id,
-            cancellation,
-            task,
-        });
-        Ok(())
+    fn start_confirmation(
+        &mut self,
+        operation_id: u64,
+        command: AgentConfirmationCommandWire,
+        runtime_events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        self.start_conversational_input(operation_id, String::new(), Some(command), runtime_events)
     }
 
     fn start_household_scope(
@@ -1686,6 +1749,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
 async fn run_interactive_turn(
     operation_id: u64,
     prompt: String,
+    confirmation: Option<AgentConfirmationCommandWire>,
     service: Arc<dyn ServicePort>,
     ensure_session: Arc<EnsureSession>,
     session: Arc<Mutex<SessionSnapshot>>,
@@ -1716,7 +1780,7 @@ async fn run_interactive_turn(
     if cancellation.is_cancelled() {
         return Ok(RunTurnOutcome::CancelledBeforeServerAcceptance);
     }
-    let context = match (context_service, local_state) {
+    let mut context = match (context_service, local_state) {
         (Some(service), Some(state)) => {
             let selector = continuity.lock().await.household_scope.clone();
             build_household_turn_context(
@@ -1731,6 +1795,7 @@ async fn run_interactive_turn(
         }
         _ => TurnContext::default(),
     };
+    context.confirmation = confirmation;
     let request = TurnRequest {
         prompt,
         conversation_id: continuity.lock().await.conversation_id.clone(),
@@ -2073,11 +2138,26 @@ async fn run_interactive_panel(
                     &capabilities,
                     &credentials,
                     OperationId::new(),
+                    cancellation.child_token(),
+                )
+                .await
+                .map_err(panel_error)?;
+            let exclusions = service
+                .grocery_exclusions(
+                    &capabilities,
+                    &credentials,
+                    OperationId::new(),
                     cancellation,
                 )
                 .await
                 .map_err(panel_error)?;
-            Ok(render_grocery_list(&list, OutputMode::HumanPlain))
+            let mut output = render_grocery_list(&list, OutputMode::HumanPlain);
+            output.push('\n');
+            output.push_str(&render_grocery_exclusions(
+                &exclusions,
+                OutputMode::HumanPlain,
+            ));
+            Ok(output)
         }
         PanelRequest::Health => {
             let integrations = service
@@ -2293,6 +2373,18 @@ pub trait QualifiedTurnDriver {
         events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()>;
 
+    fn start_confirmation(
+        &mut self,
+        _operation_id: u64,
+        _command: AgentConfirmationCommandWire,
+        _events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "interactive confirmations are unavailable in this driver",
+        ))
+    }
+
     fn start_panel(
         &mut self,
         _operation_id: u64,
@@ -2425,6 +2517,12 @@ fn route_effect(
             prompt,
         } => driver
             .start_turn(operation_id, prompt, runtime_sender.clone())
+            .map_err(CompositionError::Driver),
+        Effect::ConfirmAction {
+            operation_id,
+            command,
+        } => driver
+            .start_confirmation(operation_id, command, runtime_sender.clone())
             .map_err(CompositionError::Driver),
         Effect::OpenPanel {
             operation_id,
@@ -2619,6 +2717,7 @@ mod tests {
     #[derive(Default)]
     struct ControlledDriver {
         started: Vec<(u64, String)>,
+        confirmed: Vec<(u64, AgentConfirmationCommandWire)>,
         cancelled: Vec<u64>,
         joined: bool,
     }
@@ -2643,6 +2742,16 @@ mod tests {
 
         fn cancel_turn(&mut self, operation_id: u64) -> io::Result<()> {
             self.cancelled.push(operation_id);
+            Ok(())
+        }
+
+        fn start_confirmation(
+            &mut self,
+            operation_id: u64,
+            command: AgentConfirmationCommandWire,
+            _events: mpsc::Sender<RuntimeEvent>,
+        ) -> io::Result<()> {
+            self.confirmed.push((operation_id, command));
             Ok(())
         }
 
@@ -2913,6 +3022,7 @@ mod tests {
         let outcome = run_interactive_turn(
             1,
             "What should Sarah eat?".into(),
+            None,
             service_port,
             ensure_session,
             Arc::new(Mutex::new(SessionSnapshot {
@@ -3255,6 +3365,31 @@ mod tests {
             })
         ));
 
+        route_effect(
+            &mut driver,
+            &sender,
+            Effect::ConfirmAction {
+                operation_id: 8,
+                command: AgentConfirmationCommandWire {
+                    confirmation_id: heyfood_core::GroceryConfirmationId::parse(
+                        "00000000-0000-4000-8000-000000000001",
+                    )
+                    .unwrap(),
+                    idempotency_key: heyfood_core::GroceryIdempotencyKey::parse(
+                        "00000000-0000-4000-8000-000000000002",
+                    )
+                    .unwrap(),
+                    decision: heyfood_core::ConfirmationDecisionWire::Cancel,
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(driver.confirmed.len(), 1);
+        assert_eq!(
+            driver.confirmed[0].1.decision,
+            heyfood_core::ConfirmationDecisionWire::Cancel
+        );
+
         route_effect(&mut driver, &sender, Effect::CancelTurn { operation_id: 7 }).unwrap();
         assert_eq!(driver.cancelled, [7]);
     }
@@ -3293,6 +3428,10 @@ mod tests {
                     "created_at": "2026-07-22T00:00:00Z",
                     "updated_at": "2026-07-22T00:00:00Z"
                 }),
+            ),
+            (
+                "/v1/grocery/exclusions",
+                serde_json::json!({"exclusions": ["pork", "raw onion"]}),
             ),
             (
                 "/v1/integrations",
@@ -3446,6 +3585,7 @@ mod tests {
         .unwrap();
         assert!(grocery.contains("Weekly groceries  version 3"));
         assert!(grocery.contains("No grocery items."));
+        assert!(grocery.contains("Never buy\n• pork\n• raw onion"));
 
         let health = run_interactive_panel(
             PanelRequest::Health,

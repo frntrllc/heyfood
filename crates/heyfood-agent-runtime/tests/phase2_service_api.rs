@@ -3,10 +3,10 @@ use std::time::Duration;
 use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
 use heyfood_core::{
     AccountId, AddItemsRequestWire, ApplicationCapabilitiesWire, CredentialVersion,
-    GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId, GroceryItemInputWire,
-    GroceryItemStateWire, GroceryListVersion, GroceryMutationConfirmRequestWire, NetworkPolicy,
-    OperationId, RemoveItemsRequestWire, SensitiveString, ServiceUrl, SessionCredentials,
-    UpdateItemStateRequestWire,
+    ExclusionMutationRequestWire, GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId,
+    GroceryItemInputWire, GroceryItemStateWire, GroceryListVersion,
+    GroceryMutationConfirmRequestWire, NetworkPolicy, OperationId, RemoveItemsRequestWire,
+    SensitiveString, ServiceUrl, SessionCredentials, UpdateItemStateRequestWire,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -177,6 +177,16 @@ async fn capability_discovery_gates_typed_grocery_reads() {
                 .contains("authorization: bearer session-access")
         );
         respond(&mut socket, 200, list_fixture()).await;
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("GET /v1/grocery/exclusions "));
+        respond(
+            &mut socket,
+            200,
+            json!({"exclusions": ["pork", "raw onion"]}),
+        )
+        .await;
     });
 
     let advertised = service
@@ -193,6 +203,16 @@ async fn capability_discovery_gates_typed_grocery_reads() {
         .await
         .unwrap();
     assert_eq!(list.version, 4);
+    let exclusions = service
+        .grocery_exclusions(
+            &advertised,
+            &credentials(),
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(exclusions.exclusions, ["pork", "raw onion"]);
     server.await.unwrap();
 }
 
@@ -327,6 +347,24 @@ async fn every_grocery_post_preserves_the_contract_payload() {
                 }),
                 "update_item_state",
             ),
+            (
+                "/v1/grocery/exclusions",
+                json!({
+                    "name": "pork",
+                    "list_id": "00000000-0000-4000-8000-000000000123",
+                    "expected_version": 4
+                }),
+                "add_exclusion",
+            ),
+            (
+                "/v1/grocery/exclusions/remove",
+                json!({
+                    "name": "pork",
+                    "list_id": "00000000-0000-4000-8000-000000000123",
+                    "expected_version": 4
+                }),
+                "remove_exclusion",
+            ),
         ];
         for (path, body, operation) in expected {
             let (mut socket, _) = listener.accept().await.unwrap();
@@ -412,6 +450,31 @@ async fn every_grocery_post_preserves_the_contract_payload() {
                 item_id: "item-1".into(),
                 state: GroceryItemStateWire::Purchased,
             },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let exclusion = ExclusionMutationRequestWire {
+        name: "pork".into(),
+        list_id: list_id(),
+        expected_version: version,
+    };
+    service
+        .grocery_prepare_add_exclusion(
+            &capabilities,
+            &credentials,
+            OperationId::new(),
+            &exclusion,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    service
+        .grocery_prepare_remove_exclusion(
+            &capabilities,
+            &credentials,
+            OperationId::new(),
+            &exclusion,
             CancellationToken::new(),
         )
         .await
