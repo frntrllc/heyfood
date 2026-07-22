@@ -20,6 +20,7 @@ use heyfood_core::{
     ImportedPythonState, OperationId, RemoveItemsRequestWire, SessionCredentials, SessionSnapshot,
     UpdateItemStateRequestWire, terminal_safe_text,
 };
+use heyfood_platform::{NativeSignalSource, SignalEvent};
 use heyfood_tui::{Effect, ExitReason, RuntimeEvent, TuiError};
 use serde_json::{Map, Value, json};
 use tokio::{
@@ -1212,6 +1213,11 @@ struct OwnedInteractiveTurn {
     task: JoinHandle<()>,
 }
 
+struct OwnedSignalForwarder {
+    cancellation: CancellationToken,
+    task: JoinHandle<io::Result<()>>,
+}
+
 /// Production driver for the retained terminal surface.
 ///
 /// The terminal loop stays synchronous and owns stdout. Every authenticated
@@ -1226,6 +1232,7 @@ pub struct InteractiveTurnDriver {
     session: Arc<Mutex<SessionSnapshot>>,
     conversation_id: Arc<Mutex<Option<String>>>,
     turns: Vec<OwnedInteractiveTurn>,
+    signals: Option<OwnedSignalForwarder>,
 }
 
 impl InteractiveTurnDriver {
@@ -1245,6 +1252,7 @@ impl InteractiveTurnDriver {
             session: Arc::new(Mutex::new(session)),
             conversation_id: Arc::new(Mutex::new(None)),
             turns: Vec::new(),
+            signals: None,
         })
     }
 
@@ -1254,6 +1262,43 @@ impl InteractiveTurnDriver {
 }
 
 impl QualifiedTurnDriver for InteractiveTurnDriver {
+    fn start_session(&mut self, runtime_events: mpsc::Sender<RuntimeEvent>) -> io::Result<()> {
+        if self.signals.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "interactive signal forwarding is already active",
+            ));
+        }
+        let mut source = self
+            .runtime
+            .block_on(async { NativeSignalSource::install() })
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+        let task = self.runtime.spawn(async move {
+            let signal = tokio::select! {
+                signal = source.next() => signal,
+                () = task_cancellation.cancelled() => None,
+            };
+            if let Some(signal) = signal {
+                let reason = match signal {
+                    SignalEvent::Interrupt => ExitReason::Interrupt,
+                    SignalEvent::Terminate | SignalEvent::ConsoleClose => ExitReason::Terminate,
+                    SignalEvent::Hangup => ExitReason::Hangup,
+                };
+                let _ = runtime_events
+                    .send(RuntimeEvent::ExternalSignal(reason))
+                    .await;
+            }
+            source
+                .shutdown(Duration::from_secs(1))
+                .await
+                .map_err(|error| io::Error::other(error.to_string()))
+        });
+        self.signals = Some(OwnedSignalForwarder { cancellation, task });
+        Ok(())
+    }
+
     fn start_turn(
         &mut self,
         operation_id: u64,
@@ -1328,12 +1373,21 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
             turn.cancellation.cancel();
         }
         let turns = std::mem::take(&mut self.turns);
+        if let Some(signals) = &self.signals {
+            signals.cancellation.cancel();
+        }
+        let signals = self.signals.take();
         self.runtime.block_on(async move {
             tokio::time::timeout(timeout, async move {
                 for turn in turns {
                     turn.task.await.map_err(|error| {
                         io::Error::other(format!("turn supervisor task failed: {error}"))
                     })?;
+                }
+                if let Some(signals) = signals {
+                    signals.task.await.map_err(|error| {
+                        io::Error::other(format!("signal supervisor task failed: {error}"))
+                    })??;
                 }
                 Ok(())
             })
@@ -1453,6 +1507,12 @@ async fn run_interactive_turn(
 /// required input. Implementations must enqueue work and return promptly; the
 /// retained terminal thread must never perform network IO.
 pub trait QualifiedTurnDriver {
+    /// Attach process-signal forwarding to the terminal event queue before the
+    /// alternate screen is entered.
+    fn start_session(&mut self, _events: mpsc::Sender<RuntimeEvent>) -> io::Result<()> {
+        Ok(())
+    }
+
     fn start_turn(
         &mut self,
         operation_id: u64,
@@ -1510,6 +1570,9 @@ pub fn run_qualified_session(
     driver: &mut impl QualifiedTurnDriver,
 ) -> Result<ExitReason, CompositionError> {
     let (runtime_sender, mut runtime_receiver) = mpsc::channel(64);
+    driver
+        .start_session(runtime_sender.clone())
+        .map_err(CompositionError::Driver)?;
     let terminal = heyfood_tui::run_terminal(&mut runtime_receiver, |effect| {
         route_effect(driver, &runtime_sender, effect).map_err(|error| match error {
             CompositionError::Driver(error) => error,
@@ -1731,6 +1794,9 @@ mod tests {
         )
         .unwrap();
         let (sender, mut receiver) = mpsc::channel(16);
+        driver
+            .start_session(sender.clone())
+            .expect("native signal forwarding starts with the session");
 
         driver
             .start_turn(1, "first question".into(), sender.clone())
