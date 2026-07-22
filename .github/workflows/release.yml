@@ -25,7 +25,7 @@ jobs:
       - name: Refuse releases while native installation is suspended
         shell: bash
         run: |
-          if grep -q "Installation is temporarily suspended" install.sh; then
+          if grep -Fqx '# HEYFOOD_NATIVE_INSTALLATION_SUSPENDED=1' install.sh; then
             echo "Native distribution is suspended; replace the fail-closed installer before publishing another release." >&2
             exit 1
           fi
