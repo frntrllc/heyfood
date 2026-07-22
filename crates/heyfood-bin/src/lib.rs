@@ -17,8 +17,8 @@ use heyfood_cli::{
 use heyfood_core::{
     AddItemsRequestWire, AgentEvent, GroceryConfirmationToken, GroceryDecisionWire,
     GroceryEntityId, GroceryItemInputWire, GroceryListVersion, GroceryMutationConfirmRequestWire,
-    ImportedPythonState, OperationId, RemoveItemsRequestWire, SessionCredentials, SessionSnapshot,
-    UpdateItemStateRequestWire, terminal_safe_text,
+    ImportedPythonState, OnboardingProfileInput, OperationId, RemoveItemsRequestWire,
+    SessionCredentials, SessionSnapshot, UpdateItemStateRequestWire, terminal_safe_text,
 };
 use heyfood_platform::{NativeSignalSource, SignalEvent};
 use heyfood_tui::{Effect, ExitReason, PanelRequest, RuntimeEvent, TuiError};
@@ -1278,6 +1278,7 @@ pub struct InteractiveTurnDriver {
     authorization_scope: Arc<str>,
     local_state: Option<Arc<ImportedPythonState>>,
     startup_notice: Option<String>,
+    startup_onboarding: bool,
     ensure_session: Arc<EnsureSession>,
     session: Arc<Mutex<SessionSnapshot>>,
     continuity: Arc<Mutex<InteractiveContinuity>>,
@@ -1302,6 +1303,7 @@ impl InteractiveTurnDriver {
             authorization_scope: Arc::from(""),
             local_state: None,
             startup_notice: None,
+            startup_onboarding: false,
             ensure_session,
             session: Arc::new(Mutex::new(session)),
             continuity: Arc::new(Mutex::new(InteractiveContinuity::default())),
@@ -1335,6 +1337,12 @@ impl InteractiveTurnDriver {
         self
     }
 
+    #[must_use]
+    pub fn with_startup_onboarding(mut self, enabled: bool) -> Self {
+        self.startup_onboarding = enabled;
+        self
+    }
+
     fn reap_finished(&mut self) {
         self.turns.retain(|turn| !turn.task.is_finished());
     }
@@ -1356,6 +1364,14 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
             runtime_events
                 .try_send(RuntimeEvent::Notice { message })
                 .map_err(io::Error::other)?;
+        }
+        if self.startup_onboarding {
+            runtime_events
+                .try_send(RuntimeEvent::BeginOnboarding {
+                    message: "Let's build your dietary profile. Nothing is sent until you review and save it.".into(),
+                })
+                .map_err(io::Error::other)?;
+            self.startup_onboarding = false;
         }
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
@@ -1558,6 +1574,63 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         Ok(())
     }
 
+    fn start_onboarding(
+        &mut self,
+        operation_id: u64,
+        profile: OnboardingProfileInput,
+        runtime_events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        self.reap_finished();
+        if !self.turns.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "interactive work is already active",
+            ));
+        }
+        let service = self.interactive_service.clone().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "dietary onboarding requires the authenticated HTTP adapter",
+            )
+        })?;
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+        let ensure_session = self.ensure_session.clone();
+        let session = self.session.clone();
+        let authorization_scope = self.authorization_scope.clone();
+        let task = self.runtime.spawn(async move {
+            let result = run_interactive_onboarding(
+                profile,
+                service,
+                ensure_session,
+                session,
+                &authorization_scope,
+                task_cancellation,
+            )
+            .await;
+            let event = match result {
+                Ok(()) => RuntimeEvent::OnboardingSaved { operation_id },
+                Err(OnboardingOperationError::Failed(message)) => RuntimeEvent::OnboardingFailed {
+                    operation_id,
+                    message,
+                },
+                Err(OnboardingOperationError::Cancelled(outcome)) => {
+                    RuntimeEvent::OnboardingCancelled {
+                        operation_id,
+                        outcome,
+                    }
+                }
+            };
+            let _ = runtime_events.send(event).await;
+        });
+        self.turns.push(OwnedInteractiveTurn {
+            operation_id,
+            cancellation,
+            task,
+        });
+        Ok(())
+    }
+
     fn cancel_turn(&mut self, operation_id: u64) -> io::Result<()> {
         let turn = self
             .turns
@@ -1724,6 +1797,150 @@ async fn run_interactive_turn(
                 .map_err(|error| terminal_safe_text(&error.message))?;
             return Ok(RunTurnOutcome::Completed);
         }
+    }
+}
+
+enum OnboardingOperationError {
+    Failed(String),
+    Cancelled(RunTurnOutcome),
+}
+
+async fn run_interactive_onboarding(
+    profile: OnboardingProfileInput,
+    service: Arc<HttpService>,
+    ensure_session: Arc<EnsureSession>,
+    session: Arc<Mutex<SessionSnapshot>>,
+    authorization_scope: &str,
+    cancellation: CancellationToken,
+) -> Result<(), OnboardingOperationError> {
+    for required_scope in ["profile:read", "profile:write"] {
+        if !authorization_has_scope(authorization_scope, required_scope) {
+            return Err(OnboardingOperationError::Failed(format!(
+                "Additional authorization ({required_scope}) is required. Exit the TUI and run `heyfood login`, then restart onboarding."
+            )));
+        }
+    }
+    let profile_data = profile.profile_data().map_err(|message| {
+        OnboardingOperationError::Failed(format!("The dietary profile is invalid: {message}"))
+    })?;
+    let snapshot = session.lock().await.clone();
+    let credentials = match ensure_session
+        .execute(snapshot, cancellation.child_token())
+        .await
+        .map_err(|error| OnboardingOperationError::Failed(terminal_safe_text(&error.to_string())))?
+    {
+        EnsureSessionOutcome::Current(credentials) => credentials,
+        EnsureSessionOutcome::Refreshed(credentials) => {
+            let mut current = session.lock().await;
+            current.credentials = credentials.clone();
+            current.reconciliation_required = false;
+            credentials
+        }
+        EnsureSessionOutcome::CancelledBeforeDispatch => {
+            return Err(OnboardingOperationError::Cancelled(
+                RunTurnOutcome::CancelledBeforeServerAcceptance,
+            ));
+        }
+    };
+    if cancellation.is_cancelled() {
+        return Err(OnboardingOperationError::Cancelled(
+            RunTurnOutcome::CancelledBeforeServerAcceptance,
+        ));
+    }
+
+    let consent = service
+        .profile_consent_status(&credentials, OperationId::new(), cancellation.child_token())
+        .await
+        .map_err(|error| onboarding_service_error(error, &cancellation))?;
+    let has_consent = consent
+        .get("has_consent")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            OnboardingOperationError::Failed(
+                "The profile-sync consent response was incomplete; no profile was uploaded.".into(),
+            )
+        })?;
+    if !has_consent {
+        if cancellation.is_cancelled() {
+            return Err(OnboardingOperationError::Cancelled(
+                RunTurnOutcome::CancelledBeforeServerAcceptance,
+            ));
+        }
+        let granted = service
+            .grant_profile_consent(&credentials, OperationId::new(), cancellation.child_token())
+            .await
+            .map_err(|error| onboarding_service_error(error, &cancellation))?;
+        if granted.get("has_consent").and_then(Value::as_bool) != Some(true) {
+            return Err(OnboardingOperationError::Failed(
+                "Profile-sync consent was not confirmed; no profile was uploaded.".into(),
+            ));
+        }
+    }
+    if cancellation.is_cancelled() {
+        return Err(OnboardingOperationError::Cancelled(
+            RunTurnOutcome::CancelledBeforeServerAcceptance,
+        ));
+    }
+
+    let expected_version =
+        match service
+            .download_profile(
+                &credentials,
+                "_self",
+                OperationId::new(),
+                cancellation.child_token(),
+            )
+            .await
+        {
+            Ok(document) => Some(document.get("version").and_then(Value::as_u64).ok_or_else(
+                || {
+                    OnboardingOperationError::Failed(
+                        "The existing profile had no usable version; no profile was uploaded."
+                            .into(),
+                    )
+                },
+            )?),
+            Err(error) if error.code == "resource_not_found" => None,
+            Err(error) => return Err(onboarding_service_error(error, &cancellation)),
+        };
+    if cancellation.is_cancelled() {
+        return Err(OnboardingOperationError::Cancelled(
+            RunTurnOutcome::CancelledBeforeServerAcceptance,
+        ));
+    }
+    let uploaded = service
+        .upload_profile(
+            &credentials,
+            "_self",
+            &profile_data,
+            expected_version,
+            OperationId::new(),
+            cancellation.child_token(),
+        )
+        .await
+        .map_err(|error| onboarding_service_error(error, &cancellation))?;
+    if uploaded.get("version").and_then(Value::as_u64).is_none() {
+        return Err(OnboardingOperationError::Cancelled(
+            RunTurnOutcome::CancelledAfterDispatchOutcomeUnknown,
+        ));
+    }
+    Ok(())
+}
+
+fn onboarding_service_error(
+    error: heyfood_application::PortError,
+    cancellation: &CancellationToken,
+) -> OnboardingOperationError {
+    if error.outcome_uncertain {
+        OnboardingOperationError::Cancelled(RunTurnOutcome::CancelledAfterDispatchOutcomeUnknown)
+    } else if cancellation.is_cancelled() {
+        OnboardingOperationError::Cancelled(RunTurnOutcome::CancelledBeforeServerAcceptance)
+    } else {
+        OnboardingOperationError::Failed(format!(
+            "{}: {}",
+            terminal_safe_text(error.code),
+            terminal_safe_text(&error.message)
+        ))
     }
 }
 
@@ -2091,6 +2308,18 @@ pub trait QualifiedTurnDriver {
         ))
     }
 
+    fn start_onboarding(
+        &mut self,
+        _operation_id: u64,
+        _profile: OnboardingProfileInput,
+        _events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "dietary onboarding is unavailable in this driver",
+        ))
+    }
+
     fn cancel_turn(&mut self, operation_id: u64) -> io::Result<()>;
 
     /// Forget process-local conversation continuity without touching persisted
@@ -2176,6 +2405,12 @@ fn route_effect(
     effect: Effect,
 ) -> Result<(), CompositionError> {
     match effect {
+        Effect::SaveOnboarding {
+            operation_id,
+            profile,
+        } => driver
+            .start_onboarding(operation_id, *profile, runtime_sender.clone())
+            .map_err(CompositionError::Driver),
         Effect::SubmitTurn {
             operation_id,
             prompt,
@@ -2674,6 +2909,129 @@ mod tests {
         .unwrap();
         assert_eq!(outcome, RunTurnOutcome::Completed);
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn interactive_onboarding_grants_consent_then_uses_the_observed_profile_version() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let responses = [
+                ("GET /v1/profile/consent ", json!({"has_consent": false})),
+                (
+                    "POST /v1/profile/consent ",
+                    json!({"has_consent": true, "consent_version": 1}),
+                ),
+                (
+                    "GET /v1/profile/sync?member_id=_self ",
+                    json!({"member_id": "_self", "version": 7, "profile_data": {}}),
+                ),
+                (
+                    "PUT /v1/profile/sync ",
+                    json!({"member_id": "_self", "version": 8}),
+                ),
+            ];
+            for (index, (expected, response)) in responses.into_iter().enumerate() {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_complete_http_request(&mut socket).await;
+                assert!(request.starts_with(expected));
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer access")
+                );
+                if index == 1 {
+                    let body: Value =
+                        serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+                    assert_eq!(body, json!({"consent_version": 1}));
+                }
+                if index == 3 {
+                    let body: Value =
+                        serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+                    assert_eq!(body["member_id"], "_self");
+                    assert_eq!(body["expected_version"], 7);
+                    assert_eq!(body["profile_data"]["diet_style_ids"], json!(["vegan"]));
+                    assert_eq!(body["profile_data"]["selection_provenance_version"], 1);
+                }
+                let response = response.to_string();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                            response.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+
+        let service_url =
+            ServiceUrl::parse(&format!("http://{address}"), NetworkPolicy::DEVELOPMENT).unwrap();
+        let service = Arc::new(
+            HttpService::new(service_url, NetworkPolicy::DEVELOPMENT, Default::default()).unwrap(),
+        );
+        let service_port: Arc<dyn ServicePort> = service.clone();
+        let result = run_interactive_onboarding(
+            OnboardingProfileInput {
+                diet_style_ids: vec!["vegan".into()],
+                ..OnboardingProfileInput::default()
+            },
+            service,
+            Arc::new(EnsureSession::new(
+                service_port,
+                Arc::new(MemoryCredentialPort),
+                Arc::new(FixedClock),
+            )),
+            Arc::new(Mutex::new(SessionSnapshot {
+                credentials: fixture_credentials(),
+                reconciliation_required: false,
+            })),
+            "profile:read profile:write",
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_ok());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn interactive_onboarding_rejects_missing_write_scope_before_network_io() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let service_url =
+            ServiceUrl::parse(&format!("http://{address}"), NetworkPolicy::DEVELOPMENT).unwrap();
+        let service = Arc::new(
+            HttpService::new(service_url, NetworkPolicy::DEVELOPMENT, Default::default()).unwrap(),
+        );
+        let service_port: Arc<dyn ServicePort> = service.clone();
+        let result = run_interactive_onboarding(
+            OnboardingProfileInput::default(),
+            service,
+            Arc::new(EnsureSession::new(
+                service_port,
+                Arc::new(MemoryCredentialPort),
+                Arc::new(FixedClock),
+            )),
+            Arc::new(Mutex::new(SessionSnapshot {
+                credentials: fixture_credentials(),
+                reconciliation_required: false,
+            })),
+            "profile:read",
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(OnboardingOperationError::Failed(message)) if message.contains("profile:write")
+        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), listener.accept())
+                .await
+                .is_err(),
+            "missing authorization must fail before opening a connection"
+        );
     }
 
     #[test]

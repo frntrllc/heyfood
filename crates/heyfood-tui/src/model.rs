@@ -1,7 +1,10 @@
 use std::{collections::VecDeque, fmt::Write as _};
 
 use heyfood_application::{RunTurnOutcome, agent_result_text};
-use heyfood_core::{AgentEvent, terminal_safe_text};
+use heyfood_core::{
+    AgentEvent, OnboardingOption, OnboardingProfileInput, activity_options, allergy_options,
+    condition_options, cuisine_options, diet_options, terminal_safe_text,
+};
 
 pub const MAX_SCROLLBACK_ENTRIES: usize = 1_000;
 pub const MAX_RENDERED_LINES: usize = 20_000;
@@ -18,6 +21,7 @@ enum SlashCommandKind {
     Household,
     For,
     Profile,
+    Onboard,
     Location,
     Status,
     Clear,
@@ -106,6 +110,13 @@ pub const SLASH_COMMAND_REGISTRY: &[SlashCommandSpec] = &[
         usage: "/profile",
         description: "Open dietary profile readiness",
         kind: SlashCommandKind::Profile,
+    },
+    SlashCommandSpec {
+        name: "/onboard",
+        aliases: &[],
+        usage: "/onboard",
+        description: "Build or replace your synced dietary profile",
+        kind: SlashCommandKind::Onboard,
     },
     SlashCommandSpec {
         name: "/location",
@@ -362,6 +373,40 @@ impl OperationState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OnboardingStep {
+    Diets,
+    Allergies,
+    Conditions,
+    Severity,
+    AvoidIngredients,
+    Activity,
+    Cuisines,
+    Notes,
+    Review,
+    Saving,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OnboardingFlow {
+    step: OnboardingStep,
+    profile: OnboardingProfileInput,
+}
+
+struct MultiSelection {
+    ids: Vec<String>,
+    custom: Vec<String>,
+}
+
+impl Default for OnboardingFlow {
+    fn default() -> Self {
+        Self {
+            step: OnboardingStep::Diets,
+            profile: OnboardingProfileInput::default(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppModel {
     pub scrollback: Scrollback,
@@ -380,6 +425,7 @@ pub struct AppModel {
     history_index: Option<usize>,
     history_draft: String,
     pending_choice_labels: Vec<String>,
+    onboarding: Option<OnboardingFlow>,
     next_operation_id: u64,
 }
 
@@ -401,6 +447,7 @@ impl Default for AppModel {
             history_index: None,
             history_draft: String::new(),
             pending_choice_labels: Vec::new(),
+            onboarding: None,
             next_operation_id: 1,
         }
     }
@@ -408,6 +455,20 @@ impl Default for AppModel {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RuntimeEvent {
+    BeginOnboarding {
+        message: String,
+    },
+    OnboardingSaved {
+        operation_id: u64,
+    },
+    OnboardingFailed {
+        operation_id: u64,
+        message: String,
+    },
+    OnboardingCancelled {
+        operation_id: u64,
+        outcome: RunTurnOutcome,
+    },
     TurnEvent {
         operation_id: u64,
         event: AgentEvent,
@@ -469,6 +530,10 @@ pub enum Action {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Effect {
+    SaveOnboarding {
+        operation_id: u64,
+        profile: Box<OnboardingProfileInput>,
+    },
     SubmitTurn {
         operation_id: u64,
         prompt: String,
@@ -491,7 +556,9 @@ pub enum Effect {
 #[must_use]
 pub fn dispatch(model: &mut AppModel, action: Action) -> Vec<Effect> {
     match action {
-        Action::Insert('?') if model.draft.is_empty() => show_help(model),
+        Action::Insert('?') if model.draft.is_empty() && model.onboarding.is_none() => {
+            show_help(model)
+        }
         Action::Insert(character) => {
             reset_history_navigation(model);
             insert_at_cursor(model, &character.to_string());
@@ -553,6 +620,9 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
     if model.draft.trim().is_empty() {
         return Vec::new();
     }
+    if model.onboarding.is_some() {
+        return submit_onboarding(model);
+    }
     if model.draft.trim_start().starts_with('/') {
         return submit_slash_command(model);
     }
@@ -582,6 +652,478 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
         operation_id,
         prompt,
     }]
+}
+
+fn begin_onboarding(model: &mut AppModel, message: &str) {
+    if model.onboarding.is_some() {
+        push_notice(model, "Dietary onboarding is already in progress.");
+        return;
+    }
+    model.onboarding = Some(OnboardingFlow::default());
+    model.idle_exit_armed = false;
+    push_notice(model, message);
+    push_onboarding_prompt(model);
+}
+
+fn submit_onboarding(model: &mut AppModel) -> Vec<Effect> {
+    if model.operation.is_active() {
+        return Vec::new();
+    }
+    let answer = std::mem::take(&mut model.draft);
+    model.cursor = 0;
+    let answer = answer.trim();
+    if matches!(answer.to_ascii_lowercase().as_str(), "cancel" | "/cancel") {
+        model.onboarding = None;
+        push_notice(
+            model,
+            "Dietary onboarding cancelled. Nothing was sent or saved.",
+        );
+        return Vec::new();
+    }
+
+    let mut flow = model
+        .onboarding
+        .take()
+        .expect("onboarding submission requires an active flow");
+    if answer.eq_ignore_ascii_case("back") {
+        flow.step = previous_onboarding_step(flow.step, &flow.profile);
+        model.onboarding = Some(flow);
+        push_onboarding_prompt(model);
+        return Vec::new();
+    }
+
+    let result = apply_onboarding_answer(&mut flow, answer);
+    if let Err(message) = result {
+        model.onboarding = Some(flow);
+        push_notice(model, &message);
+        push_onboarding_prompt(model);
+        return Vec::new();
+    }
+
+    if flow.step == OnboardingStep::Saving {
+        let profile = flow.profile.clone();
+        if let Err(message) = profile.profile_data() {
+            flow.step = OnboardingStep::Review;
+            model.onboarding = Some(flow);
+            push_notice(model, &format!("Unable to review this profile: {message}"));
+            return Vec::new();
+        }
+        let operation_id = model.next_operation_id;
+        model.next_operation_id = model.next_operation_id.saturating_add(1);
+        model.scrollback.push(SemanticEntry {
+            speaker: Speaker::User,
+            text: "Save dietary profile".into(),
+            streaming: false,
+        });
+        model.scrollback.push(SemanticEntry {
+            speaker: Speaker::Assistant,
+            text: String::new(),
+            streaming: true,
+        });
+        model.onboarding = Some(flow);
+        model.operation = OperationState::Running(operation_id);
+        model.activity = Some("Saving dietary profile…".into());
+        follow_tail(model);
+        return vec![Effect::SaveOnboarding {
+            operation_id,
+            profile: Box::new(profile),
+        }];
+    }
+
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::User,
+        text: terminal_safe_text(answer),
+        streaming: false,
+    });
+    model.onboarding = Some(flow);
+    push_onboarding_prompt(model);
+    Vec::new()
+}
+
+fn apply_onboarding_answer(flow: &mut OnboardingFlow, answer: &str) -> Result<(), String> {
+    match flow.step {
+        OnboardingStep::Diets => {
+            let selected = parse_multi_options(answer, diet_options(), 10, 40)?;
+            flow.profile.diet_style_ids = selected.ids;
+            flow.profile.custom_diet_styles = selected.custom;
+            flow.step = OnboardingStep::Allergies;
+        }
+        OnboardingStep::Allergies => {
+            let selected = parse_multi_options(answer, allergy_options(), 10, 60)?;
+            flow.profile.allergy_ids = selected.ids;
+            flow.profile.custom_restrictions = selected.custom;
+            flow.step = OnboardingStep::Conditions;
+        }
+        OnboardingStep::Conditions => {
+            let selected = parse_multi_options(answer, condition_options(), 10, 60)?;
+            flow.profile.health_condition_ids = selected.ids;
+            flow.profile.custom_health_conditions = selected.custom;
+            flow.step = if flow.profile.health_condition_ids.is_empty() {
+                flow.profile.severity_level = None;
+                OnboardingStep::AvoidIngredients
+            } else {
+                OnboardingStep::Severity
+            };
+        }
+        OnboardingStep::Severity => {
+            let severity = answer
+                .parse::<u8>()
+                .ok()
+                .filter(|value| (1..=5).contains(value))
+                .ok_or_else(|| "Enter a condition severity from 1 to 5.".to_owned())?;
+            flow.profile.severity_level = Some(severity);
+            flow.step = OnboardingStep::AvoidIngredients;
+        }
+        OnboardingStep::AvoidIngredients => {
+            flow.profile.avoid_ingredients = parse_free_text_list(answer, 20, 40)?;
+            flow.step = OnboardingStep::Activity;
+        }
+        OnboardingStep::Activity => {
+            flow.profile.activity_level = parse_single_option(answer, activity_options())?;
+            flow.step = OnboardingStep::Cuisines;
+        }
+        OnboardingStep::Cuisines => {
+            let selected = parse_multi_options(answer, cuisine_options(), 10, 40)?;
+            flow.profile.cuisine_preferences = selected.ids;
+            flow.profile.custom_cuisines = selected.custom;
+            flow.step = OnboardingStep::Notes;
+        }
+        OnboardingStep::Notes => {
+            flow.profile.notes = parse_optional_text(answer, 280)?;
+            flow.step = OnboardingStep::Review;
+        }
+        OnboardingStep::Review if answer.eq_ignore_ascii_case("save") => {
+            flow.step = OnboardingStep::Saving;
+        }
+        OnboardingStep::Review => {
+            return Err(
+                "Type `save` to confirm, `back` to edit, or `cancel` to discard it.".into(),
+            );
+        }
+        OnboardingStep::Saving => return Err("The dietary profile is already being saved.".into()),
+    }
+    Ok(())
+}
+
+fn previous_onboarding_step(
+    step: OnboardingStep,
+    profile: &OnboardingProfileInput,
+) -> OnboardingStep {
+    match step {
+        OnboardingStep::Diets => OnboardingStep::Diets,
+        OnboardingStep::Allergies => OnboardingStep::Diets,
+        OnboardingStep::Conditions => OnboardingStep::Allergies,
+        OnboardingStep::Severity => OnboardingStep::Conditions,
+        OnboardingStep::AvoidIngredients if profile.health_condition_ids.is_empty() => {
+            OnboardingStep::Conditions
+        }
+        OnboardingStep::AvoidIngredients => OnboardingStep::Severity,
+        OnboardingStep::Activity => OnboardingStep::AvoidIngredients,
+        OnboardingStep::Cuisines => OnboardingStep::Activity,
+        OnboardingStep::Notes => OnboardingStep::Cuisines,
+        OnboardingStep::Review | OnboardingStep::Saving => OnboardingStep::Notes,
+    }
+}
+
+fn parse_multi_options(
+    answer: &str,
+    options: &[OnboardingOption],
+    custom_maximum: usize,
+    custom_max_length: usize,
+) -> Result<MultiSelection, String> {
+    if is_none_answer(answer) {
+        return Ok(MultiSelection {
+            ids: Vec::new(),
+            custom: Vec::new(),
+        });
+    }
+    if let Some(option) = resolve_onboarding_option(answer.trim(), options) {
+        return Ok(MultiSelection {
+            ids: vec![option.id.clone()],
+            custom: Vec::new(),
+        });
+    }
+    let mut selected = MultiSelection {
+        ids: Vec::new(),
+        custom: Vec::new(),
+    };
+    for token in answer
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if is_none_answer(token) {
+            return Err("Use `none` by itself to clear this section.".into());
+        }
+        if let Some((start, end)) = numeric_range(token)? {
+            if start == 0 || start > end || end > options.len() {
+                return Err(
+                    "A numeric range must refer to listed options in ascending order.".into(),
+                );
+            }
+            for index in start..=end {
+                let id = &options[index - 1].id;
+                if !selected.ids.contains(id) {
+                    selected.ids.push(id.clone());
+                }
+            }
+            continue;
+        }
+        if let Some(option) = resolve_onboarding_option(token, options) {
+            if !selected.ids.contains(&option.id) {
+                selected.ids.push(option.id.clone());
+            }
+            continue;
+        }
+        if token.parse::<usize>().is_ok() {
+            return Err("A numeric choice must refer to one of the listed options.".into());
+        }
+        if token.chars().count() > custom_max_length || token.chars().any(char::is_control) {
+            return Err(format!(
+                "Custom entries must be at most {custom_max_length} characters."
+            ));
+        }
+        if !selected.custom.iter().any(|value| value == token) {
+            selected.custom.push(token.to_owned());
+        }
+    }
+    if selected.ids.is_empty() && selected.custom.is_empty() {
+        return Err("Choose at least one option, or type `none`.".into());
+    }
+    if selected.custom.len() > custom_maximum {
+        return Err(format!("Enter at most {custom_maximum} custom selections."));
+    }
+    Ok(selected)
+}
+
+fn numeric_range(token: &str) -> Result<Option<(usize, usize)>, String> {
+    let Some((start, end)) = token.split_once('-') else {
+        return Ok(None);
+    };
+    if start.trim().chars().all(|value| value.is_ascii_digit())
+        && end.trim().chars().all(|value| value.is_ascii_digit())
+    {
+        let start = start
+            .trim()
+            .parse()
+            .map_err(|_| "The numeric range is too large.".to_owned())?;
+        let end = end
+            .trim()
+            .parse()
+            .map_err(|_| "The numeric range is too large.".to_owned())?;
+        Ok(Some((start, end)))
+    } else {
+        Ok(None)
+    }
+}
+
+fn parse_single_option(
+    answer: &str,
+    options: &[OnboardingOption],
+) -> Result<Option<String>, String> {
+    if is_none_answer(answer) {
+        return Ok(None);
+    }
+    if answer.contains(',') {
+        return Err("Choose one activity level, or type `none`.".into());
+    }
+    resolve_onboarding_option(answer.trim(), options)
+        .map(|option| Some(option.id.clone()))
+        .ok_or_else(|| "Choose an activity by number, exact label, or canonical ID.".into())
+}
+
+fn resolve_onboarding_option<'a>(
+    token: &str,
+    options: &'a [OnboardingOption],
+) -> Option<&'a OnboardingOption> {
+    if let Ok(number) = token.parse::<usize>() {
+        return number.checked_sub(1).and_then(|index| options.get(index));
+    }
+    let normalized = normalize_choice(token);
+    options.iter().find(|option| {
+        normalize_choice(&option.id) == normalized || normalize_choice(&option.label) == normalized
+    })
+}
+
+fn normalize_choice(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn parse_free_text_list(
+    answer: &str,
+    maximum: usize,
+    max_length: usize,
+) -> Result<Vec<String>, String> {
+    if is_none_answer(answer) {
+        return Ok(Vec::new());
+    }
+    let mut values = Vec::new();
+    for value in answer
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if value.chars().count() > max_length || value.chars().any(char::is_control) {
+            return Err(format!(
+                "Each entry must be at most {max_length} characters."
+            ));
+        }
+        if !values.iter().any(|current| current == value) {
+            values.push(value.to_owned());
+        }
+    }
+    if values.is_empty() {
+        return Err("Enter comma-separated ingredients, or type `none`.".into());
+    }
+    if values.len() > maximum {
+        return Err(format!("Enter at most {maximum} ingredients."));
+    }
+    Ok(values)
+}
+
+fn parse_optional_text(answer: &str, maximum: usize) -> Result<Option<String>, String> {
+    if is_none_answer(answer) {
+        return Ok(None);
+    }
+    if answer.chars().count() > maximum || answer.chars().any(char::is_control) {
+        return Err(format!("Notes must be at most {maximum} characters."));
+    }
+    Ok(Some(answer.to_owned()))
+}
+
+fn is_none_answer(answer: &str) -> bool {
+    matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "none" | "0" | "skip"
+    )
+}
+
+fn push_onboarding_prompt(model: &mut AppModel) {
+    let Some(flow) = model.onboarding.as_ref() else {
+        return;
+    };
+    let prompt = onboarding_prompt(flow);
+    push_notice(model, &prompt);
+}
+
+fn onboarding_prompt(flow: &OnboardingFlow) -> String {
+    match flow.step {
+        OnboardingStep::Diets => option_prompt(
+            "Diet styles · 1/8",
+            "Choose any that apply by number, range, ID, label, or custom text. Separate choices with commas; type `none` for no restrictions.",
+            diet_options(),
+        ),
+        OnboardingStep::Allergies => option_prompt(
+            "Allergies & restrictions · 2/8",
+            "Choose every option that must be avoided by number, range, ID, label, or custom text; type `none` if there are none.",
+            allergy_options(),
+        ),
+        OnboardingStep::Conditions => option_prompt(
+            "Health conditions · 3/8",
+            "Choose conditions by number, range, ID, label, or custom text; type `none` if there are none.",
+            condition_options(),
+        ),
+        OnboardingStep::Severity => {
+            "Condition severity · 4/8\nChoose a shared severity from 1 (mild) to 5 (critical).".into()
+        }
+        OnboardingStep::AvoidIngredients => "Ingredients to avoid · 5/8\nEnter up to 20 ingredients separated by commas, or type `none`.".into(),
+        OnboardingStep::Activity => option_prompt(
+            "Activity level · 6/8",
+            "Choose one option by number, ID, or label; type `none` to leave it unset.",
+            activity_options(),
+        ),
+        OnboardingStep::Cuisines => option_prompt(
+            "Cuisines you love · 7/8",
+            "Choose favorites by number, range, ID, label, or custom text; type `none` to skip.",
+            cuisine_options(),
+        ),
+        OnboardingStep::Notes => "Additional notes · 8/8\nAdd anything else the food guide should know (280 characters maximum), or type `none`.".into(),
+        OnboardingStep::Review => onboarding_review(&flow.profile),
+        OnboardingStep::Saving => "Saving your dietary profile…".into(),
+    }
+}
+
+fn option_prompt(title: &str, instructions: &str, options: &[OnboardingOption]) -> String {
+    let mut output = format!("{title}\n{instructions}\n\n");
+    for (index, option) in options.iter().enumerate() {
+        let _ = writeln!(output, "{:>2}. {}", index + 1, option.label);
+    }
+    output
+        .push_str("\nType `back` to revisit the previous step or `cancel` to discard onboarding.");
+    output
+}
+
+fn onboarding_review(profile: &OnboardingProfileInput) -> String {
+    format!(
+        "Review dietary profile\n\nDiet styles: {}\nAllergies: {}\nHealth conditions: {}\nCondition severity: {}\nAvoid ingredients: {}\nActivity: {}\nCuisines: {}\nNotes: {}\n\nNo profile data has been sent yet. Type `save` to grant profile-sync consent and replace the synced profile, `back` to edit, or `cancel` to discard it.",
+        labels_and_custom(
+            &profile.diet_style_ids,
+            &profile.custom_diet_styles,
+            diet_options()
+        ),
+        labels_and_custom(
+            &profile.allergy_ids,
+            &profile.custom_restrictions,
+            allergy_options()
+        ),
+        labels_and_custom(
+            &profile.health_condition_ids,
+            &profile.custom_health_conditions,
+            condition_options()
+        ),
+        profile
+            .severity_level
+            .map_or_else(|| "None".into(), |value| value.to_string()),
+        display_values(&profile.avoid_ingredients),
+        profile.activity_level.as_deref().map_or_else(
+            || "None".into(),
+            |value| labels_for(&[value.to_owned()], activity_options())
+        ),
+        labels_and_custom(
+            &profile.cuisine_preferences,
+            &profile.custom_cuisines,
+            cuisine_options()
+        ),
+        profile.notes.clone().unwrap_or_else(|| "None".into()),
+    )
+}
+
+fn labels_for(values: &[String], options: &[OnboardingOption]) -> String {
+    if values.is_empty() {
+        return "None".into();
+    }
+    values
+        .iter()
+        .map(|value| {
+            options
+                .iter()
+                .find(|option| option.id == *value)
+                .map_or(value.as_str(), |option| option.label.as_str())
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn labels_and_custom(values: &[String], custom: &[String], options: &[OnboardingOption]) -> String {
+    let canonical = labels_for(values, options);
+    match (canonical.as_str(), custom.is_empty()) {
+        ("None", true) => canonical,
+        ("None", false) => custom.join(", "),
+        (_, true) => canonical,
+        (_, false) => format!("{canonical}, {}", custom.join(", ")),
+    }
+}
+
+fn display_values(values: &[String]) -> String {
+    if values.is_empty() {
+        "None".into()
+    } else {
+        values.join(", ")
+    }
 }
 
 fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
@@ -628,6 +1170,7 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
         | SlashCommandKind::Health
         | SlashCommandKind::Household
         | SlashCommandKind::Profile
+        | SlashCommandKind::Onboard
         | SlashCommandKind::Location
             if !arguments.is_empty() =>
         {
@@ -642,6 +1185,14 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
         }
         SlashCommandKind::For => return select_household(model, arguments),
         SlashCommandKind::Profile => return open_panel(model, PanelRequest::Profile),
+        SlashCommandKind::Onboard if model.operation.is_active() => push_notice(
+            model,
+            "Finish or stop the active work before starting dietary onboarding.",
+        ),
+        SlashCommandKind::Onboard => begin_onboarding(
+            model,
+            "Dietary onboarding replaces your synced profile only after you review and save it.",
+        ),
         SlashCommandKind::Location => return open_panel(model, PanelRequest::Location),
         SlashCommandKind::Exit => return begin_exit(model, ExitReason::Requested),
     }
@@ -793,6 +1344,16 @@ fn cancel_or_exit(model: &mut AppModel) -> Vec<Effect> {
         model.idle_exit_armed = false;
         return Vec::new();
     }
+    if model.onboarding.is_some() && !model.operation.is_active() {
+        model.onboarding = None;
+        model.idle_exit_armed = false;
+        model.activity = None;
+        push_notice(
+            model,
+            "Dietary onboarding cancelled. Nothing was sent or saved.",
+        );
+        return Vec::new();
+    }
     match model.operation {
         OperationState::Running(operation_id) => {
             model.operation = OperationState::Cancelling(operation_id);
@@ -824,6 +1385,29 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
     match runtime {
         RuntimeEvent::ExternalSignal(reason) => return begin_exit(model, reason),
         RuntimeEvent::Notice { message } => push_notice(model, &terminal_safe_text(&message)),
+        RuntimeEvent::BeginOnboarding { message }
+            if model.operation == OperationState::Idle && model.onboarding.is_none() =>
+        {
+            begin_onboarding(model, &terminal_safe_text(&message));
+        }
+        RuntimeEvent::OnboardingSaved { operation_id }
+            if model.operation.operation_id() == Some(operation_id) =>
+        {
+            finish_onboarding(model, Ok(()));
+        }
+        RuntimeEvent::OnboardingFailed {
+            operation_id,
+            message,
+        } if model.operation.operation_id() == Some(operation_id) => {
+            finish_onboarding(model, Err(message));
+        }
+        RuntimeEvent::OnboardingCancelled {
+            operation_id,
+            outcome,
+        } if model.operation.operation_id() == Some(operation_id) => {
+            model.onboarding = None;
+            finish_onboarding_cancel(model, outcome);
+        }
         RuntimeEvent::TurnEvent {
             operation_id,
             event,
@@ -877,7 +1461,11 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
         } if model.operation.operation_id() == Some(operation_id) => {
             finish_household_scope(model, Err(message));
         }
-        RuntimeEvent::TurnEvent { .. }
+        RuntimeEvent::BeginOnboarding { .. }
+        | RuntimeEvent::OnboardingSaved { .. }
+        | RuntimeEvent::OnboardingFailed { .. }
+        | RuntimeEvent::OnboardingCancelled { .. }
+        | RuntimeEvent::TurnEvent { .. }
         | RuntimeEvent::TurnFinished { .. }
         | RuntimeEvent::TurnFailed { .. }
         | RuntimeEvent::PanelReady { .. }
@@ -886,6 +1474,59 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
         | RuntimeEvent::HouseholdScopeFailed { .. } => {}
     }
     Vec::new()
+}
+
+fn finish_onboarding(model: &mut AppModel, result: Result<(), String>) {
+    let old_lines = model.scrollback.rendered_lines();
+    match result {
+        Ok(()) => {
+            model.scrollback.mutate_last_assistant(|entry| {
+                entry.text = "Dietary profile saved\n\nYour hello.food guidance now uses this synced profile across supported experiences.".into();
+                entry.streaming = false;
+            });
+            model.onboarding = None;
+        }
+        Err(message) => {
+            if let Some(flow) = model.onboarding.as_mut() {
+                flow.step = OnboardingStep::Review;
+            }
+            let review = model
+                .onboarding
+                .as_ref()
+                .map(|flow| onboarding_review(&flow.profile))
+                .unwrap_or_default();
+            model.scrollback.mutate_last_assistant(|entry| {
+                entry.text = format!(
+                    "Dietary profile was not saved: {}\n\n{}",
+                    terminal_safe_text(&message),
+                    review
+                );
+                entry.streaming = false;
+            });
+        }
+    }
+    model.operation = OperationState::Idle;
+    model.activity = None;
+    model.idle_exit_armed = false;
+    account_for_new_lines(model, old_lines);
+}
+
+fn finish_onboarding_cancel(model: &mut AppModel, outcome: RunTurnOutcome) {
+    let old_lines = model.scrollback.rendered_lines();
+    model.scrollback.mutate_last_assistant(|entry| {
+        entry.text = match outcome {
+            RunTurnOutcome::CancelledAfterDispatchOutcomeUnknown => "Dietary profile save stopped after dispatch, and the server outcome is unknown. Open `/profile` to inspect current state before starting onboarding again.".into(),
+            RunTurnOutcome::CancelledBeforeServerAcceptance
+            | RunTurnOutcome::CancelledAfterServerAcceptance
+            | RunTurnOutcome::StaleGeneration
+            | RunTurnOutcome::Completed => "Dietary profile save cancelled. The profile upload was not dispatched; profile-sync consent may already have been granted.".into(),
+        };
+        entry.streaming = false;
+    });
+    model.operation = OperationState::Idle;
+    model.activity = None;
+    model.idle_exit_armed = false;
+    account_for_new_lines(model, old_lines);
 }
 
 fn finish_household_scope(model: &mut AppModel, result: Result<String, String>) {
@@ -1125,6 +1766,145 @@ fn byte_index(text: &str, character_index: usize) -> usize {
 mod tests {
     use super::*;
     use heyfood_core::AgentFailure;
+
+    fn submit_text(model: &mut AppModel, value: &str) -> Vec<Effect> {
+        model.draft = value.into();
+        model.cursor = value.chars().count();
+        dispatch(model, Action::Submit)
+    }
+
+    fn advance_to_onboarding_review(model: &mut AppModel) {
+        assert!(submit_text(model, "1, vegan").is_empty());
+        assert!(submit_text(model, "none").is_empty());
+        assert!(submit_text(model, "celiac").is_empty());
+        assert!(submit_text(model, "5").is_empty());
+        assert!(submit_text(model, "raw onion").is_empty());
+        assert!(submit_text(model, "2").is_empty());
+        assert!(submit_text(model, "Mexican, 2").is_empty());
+        assert!(submit_text(model, "none").is_empty());
+        assert_eq!(
+            model.onboarding.as_ref().map(|flow| flow.step),
+            Some(OnboardingStep::Review)
+        );
+    }
+
+    #[test]
+    fn onboarding_is_local_until_explicit_review_and_save() {
+        let mut model = AppModel::default();
+        assert!(
+            dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::BeginOnboarding {
+                    message: "Complete your dietary profile.".into(),
+                })
+            )
+            .is_empty()
+        );
+        advance_to_onboarding_review(&mut model);
+
+        let effects = submit_text(&mut model, "save");
+        assert_eq!(effects.len(), 1);
+        let Effect::SaveOnboarding {
+            operation_id,
+            profile,
+        } = &effects[0]
+        else {
+            panic!("expected an onboarding save effect");
+        };
+        assert_eq!(*operation_id, 1);
+        assert_eq!(profile.diet_style_ids, ["gluten_free", "vegan"]);
+        assert_eq!(profile.health_condition_ids, ["celiac"]);
+        assert_eq!(profile.severity_level, Some(5));
+        assert_eq!(profile.avoid_ingredients, ["raw onion"]);
+        assert_eq!(profile.activity_level.as_deref(), Some("moderate"));
+        assert_eq!(profile.cuisine_preferences, ["mexican", "italian"]);
+        assert_eq!(model.operation, OperationState::Running(1));
+    }
+
+    #[test]
+    fn onboarding_cancel_discards_local_answers_without_a_mutation_effect() {
+        let mut model = AppModel::default();
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::BeginOnboarding {
+                message: "Complete your dietary profile.".into(),
+            }),
+        );
+        assert!(submit_text(&mut model, "vegan").is_empty());
+        assert!(submit_text(&mut model, "cancel").is_empty());
+        assert!(model.onboarding.is_none());
+        assert_eq!(model.operation, OperationState::Idle);
+        assert!(
+            model
+                .scrollback
+                .entries()
+                .back()
+                .is_some_and(|entry| entry.text.contains("Nothing was sent or saved"))
+        );
+    }
+
+    #[test]
+    fn failed_onboarding_save_returns_to_the_review_for_an_explicit_retry() {
+        let mut model = AppModel::default();
+        begin_onboarding(&mut model, "Complete your dietary profile.");
+        advance_to_onboarding_review(&mut model);
+        let _ = submit_text(&mut model, "save");
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::OnboardingFailed {
+                operation_id: 1,
+                message: "profile version changed".into(),
+            }),
+        );
+        assert_eq!(model.operation, OperationState::Idle);
+        assert_eq!(
+            model.onboarding.as_ref().map(|flow| flow.step),
+            Some(OnboardingStep::Review)
+        );
+        assert!(
+            model
+                .scrollback
+                .entries()
+                .back()
+                .unwrap()
+                .text
+                .contains("profile version changed")
+        );
+        assert!(matches!(
+            submit_text(&mut model, "save").as_slice(),
+            [Effect::SaveOnboarding {
+                operation_id: 2,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn invalid_onboarding_selection_stays_on_the_same_step() {
+        let mut model = AppModel::default();
+        begin_onboarding(&mut model, "Complete your dietary profile.");
+        assert!(submit_text(&mut model, "99").is_empty());
+        assert_eq!(
+            model.onboarding.as_ref().map(|flow| flow.step),
+            Some(OnboardingStep::Diets)
+        );
+        assert!(
+            model
+                .scrollback
+                .entries()
+                .iter()
+                .rev()
+                .any(|entry| entry.text.contains("numeric choice"))
+        );
+    }
+
+    #[test]
+    fn onboarding_accepts_numeric_ranges_and_bounded_custom_entries() {
+        let selected = parse_multi_options("1-3, family recipe diet", diet_options(), 10, 40)
+            .expect("valid range and custom diet");
+        assert_eq!(selected.ids, ["gluten_free", "dairy_free", "vegetarian"]);
+        assert_eq!(selected.custom, ["family recipe diet"]);
+    }
 
     #[test]
     fn draft_remains_editable_while_streaming_and_is_not_auto_submitted() {

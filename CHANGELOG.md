@@ -26,8 +26,11 @@ authentication contracts are stabilized.
   journal deletion before subsequent reads, and uses a bounded process-table
   observation after broker kill-and-reap.
 - Lets an unauthenticated bare `heyfood` session complete device registration
-  and continue into the TUI in the same process; incomplete dietary onboarding
-  remains explicit.
+  and continue into the TUI in the same process.
+- Adds an eight-step first-run and `/onboard` TUI journey backed by the frozen
+  v2 dietary catalog. All answers remain local through review; explicit save
+  grants versioned profile-sync consent and performs one optimistic profile
+  upload without blind mutation retries.
 - Archives the final Python parity baseline under the non-release tag
   `archive/python-cli-73494a57` and verifies retained source bytes from Rust.
 

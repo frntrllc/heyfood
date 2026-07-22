@@ -88,6 +88,58 @@ impl HttpService {
             .await
     }
 
+    /// Grant the versioned account-level consent required for synchronized
+    /// dietary profiles. This mutation is never retried automatically.
+    pub async fn grant_profile_consent(
+        &self,
+        credentials: &SessionCredentials,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> Result<Value, PortError> {
+        let builder = self
+            .request(
+                Method::POST,
+                "/v1/profile/consent",
+                Some(credentials),
+                operation_id,
+            )?
+            .header(header::ACCEPT, "application/json")
+            .json(&serde_json::json!({"consent_version": 1}));
+        self.dispatch_json(builder, cancellation, DispatchKind::Mutation)
+            .await
+    }
+
+    /// Replace one synchronized dietary profile using the last observed
+    /// version when present. This mutation is never retried automatically.
+    pub async fn upload_profile(
+        &self,
+        credentials: &SessionCredentials,
+        member_id: &str,
+        profile_data: &Value,
+        expected_version: Option<u64>,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> Result<Value, PortError> {
+        let mut body = serde_json::json!({
+            "member_id": member_id,
+            "profile_data": profile_data,
+        });
+        if let Some(expected_version) = expected_version {
+            body["expected_version"] = Value::from(expected_version);
+        }
+        let builder = self
+            .request(
+                Method::PUT,
+                "/v1/profile/sync",
+                Some(credentials),
+                operation_id,
+            )?
+            .header(header::ACCEPT, "application/json")
+            .json(&body);
+        self.dispatch_json(builder, cancellation, DispatchKind::Mutation)
+            .await
+    }
+
     /// Evaluate an item through the released provider-neutral channel-tool
     /// contract. This deliberately uses channel authority, matching the
     /// Python CLI, rather than converting the request into an agent prompt.

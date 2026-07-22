@@ -102,7 +102,7 @@ pub enum Command {
     /// Display a dietary profile.
     #[command(hide = true)]
     Profile(LegacyArgs),
-    /// Complete dietary onboarding; retained for parity but implemented in Phase 4.
+    /// Open guided dietary onboarding in the native TUI.
     #[command(hide = true)]
     Onboard(LegacyArgs),
     /// Authenticate or expand authorization for an existing account.
@@ -621,9 +621,7 @@ impl RegistrationResultDocument {
             authenticated: true,
             account_outcome: None,
             profile_status,
-            // Classic chat and native onboarding are not implemented yet.
-            // Never send a newly connected user to a placeholder command.
-            next_command: "heyfood ask \"What can I eat?\"".into(),
+            next_command: "heyfood".into(),
         }
     }
 }
@@ -1057,7 +1055,7 @@ mod registration_tests {
         assert_eq!(value["authenticated"], true);
         assert_eq!(value["account_outcome"], Value::Null);
         assert_eq!(value["profile_status"], "missing");
-        assert_eq!(value["next_command"], "heyfood ask \"What can I eat?\"");
+        assert_eq!(value["next_command"], "heyfood");
         assert!(!rendered.contains('\u{1b}'));
         assert!(rendered.ends_with('\n'));
     }

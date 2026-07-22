@@ -10,6 +10,7 @@ pub mod grocery;
 pub mod health;
 pub mod migration;
 pub mod network;
+pub mod onboarding;
 pub mod operation;
 pub mod presentation;
 pub mod validation;
@@ -40,6 +41,10 @@ pub use migration::{
     PythonImportReport,
 };
 pub use network::{BrowserUrl, NetworkPolicy, ProxyUrl, ServiceUrl, ServiceUrlError};
+pub use onboarding::{
+    OnboardingOption, OnboardingProfileInput, activity_options, allergy_options, condition_options,
+    cuisine_options, diet_options,
+};
 pub use operation::{CommitId, GenerationId, OperationId};
 pub use presentation::{
     NoticeLevel, PresentationBlock, PresentationDocument, PresentationError, PresentationText,

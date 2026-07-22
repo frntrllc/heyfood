@@ -227,6 +227,64 @@ async fn optional_scope_negotiation_uses_live_authorization_metadata() {
 }
 
 #[tokio::test]
+async fn profile_consent_and_versioned_upload_preserve_the_frozen_contract() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/profile/consent "));
+        assert_eq!(request_body(&request), json!({"consent_version": 1}));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer session-access")
+        );
+        respond(
+            &mut socket,
+            200,
+            json!({"has_consent": true, "consent_version": 1}),
+        )
+        .await;
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("PUT /v1/profile/sync "));
+        assert_eq!(
+            request_body(&request),
+            json!({
+                "member_id": "_self",
+                "profile_data": {"diet_style_ids": ["vegan"]},
+                "expected_version": 7,
+            })
+        );
+        respond(
+            &mut socket,
+            200,
+            json!({"member_id": "_self", "version": 8}),
+        )
+        .await;
+    });
+
+    service
+        .grant_profile_consent(&credentials(), OperationId::new(), CancellationToken::new())
+        .await
+        .unwrap();
+    let uploaded = service
+        .upload_profile(
+            &credentials(),
+            "_self",
+            &json!({"diet_style_ids": ["vegan"]}),
+            Some(7),
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(uploaded["version"], 8);
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn every_grocery_post_preserves_the_contract_payload() {
     let (listener, service) = fixture_service().await;
     let server = tokio::spawn(async move {

@@ -16,7 +16,7 @@ use heyfood_agent_runtime::{
 };
 #[cfg(feature = "native-credentials")]
 use heyfood_application::{BoxFuture, CredentialCommit, CredentialPort, PortError};
-use heyfood_application::{BrowserPort, EnsureSession};
+use heyfood_application::{BrowserPort, EnsureSession, EnsureSessionOutcome};
 use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
 use heyfood_core::{
     BrowserUrl, NetworkPolicy, OperationId, ProfileStatus, SensitiveString, ServiceUrl,
@@ -277,6 +277,7 @@ async fn main() -> ExitCode {
         Some(Command::Register(arguments)) => register(arguments, machine).await,
         Some(Command::Login(arguments)) => login(arguments, machine).await,
         Some(Command::Chat(_)) => chat(machine).await,
+        Some(Command::Onboard(_)) => onboard(machine).await,
         Some(command) if is_native_one_shot(&command) => {
             one_shot(command, output_mode, machine).await
         }
@@ -307,6 +308,28 @@ async fn chat(machine: bool) -> ExitCode {
     bare(false).await
 }
 
+async fn onboard(machine: bool) -> ExitCode {
+    if machine {
+        return failure(
+            "onboarding_json_unsupported",
+            "Guided dietary onboarding requires the interactive terminal.",
+            Some("Run `heyfood` in a terminal and use `/onboard`."),
+            true,
+            false,
+        );
+    }
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return failure(
+            "interactive_terminal_required",
+            "Guided dietary onboarding requires terminal input and output.",
+            Some("Run `heyfood onboard` from an interactive terminal."),
+            false,
+            false,
+        );
+    }
+    interactive(false, true).await
+}
+
 const fn is_native_one_shot(command: &Command) -> bool {
     matches!(
         command,
@@ -333,7 +356,13 @@ async fn bare(machine: bool) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let (prepared, startup_notice) = match prepare_bare_session().await {
+    interactive(false, false).await
+}
+
+async fn interactive(machine: bool, force_onboarding: bool) -> ExitCode {
+    debug_assert!(!machine, "interactive entry rejects machine mode");
+    let (prepared, mut startup_notice, mut startup_onboarding) = match prepare_bare_session().await
+    {
         Ok(prepared) => prepared,
         Err(error) => {
             return failure(
@@ -345,6 +374,11 @@ async fn bare(machine: bool) -> ExitCode {
             );
         }
     };
+    if force_onboarding {
+        startup_onboarding = true;
+        startup_notice =
+            Some("Review and replace your synced dietary profile through the guided setup.".into());
+    }
     let local_state = match load_interactive_state(
         &prepared.paths,
         prepared.snapshot.credentials.account_id.as_str(),
@@ -368,7 +402,8 @@ async fn bare(machine: bool) -> ExitCode {
             prepared.authorization_scope,
         )?
         .with_local_state(local_state)
-        .with_startup_notice(startup_notice);
+        .with_startup_notice(startup_notice)
+        .with_startup_onboarding(startup_onboarding);
         heyfood_bin::run_qualified_session(&mut driver)
             .map_err(|error| io::Error::other(error.to_string()))
     });
@@ -385,9 +420,17 @@ async fn bare(machine: bool) -> ExitCode {
 }
 
 async fn prepare_bare_session()
--> Result<(PreparedNativeSession, Option<String>), heyfood_bin::OneShotError> {
+-> Result<(PreparedNativeSession, Option<String>, bool), heyfood_bin::OneShotError> {
     match prepare_native_session(None, CancellationToken::new()).await {
-        Ok(prepared) => Ok((prepared, None)),
+        Ok(mut prepared) => {
+            let startup_onboarding = profile_needs_onboarding(&mut prepared)
+                .await
+                .unwrap_or(false);
+            let startup_notice = startup_onboarding.then(|| {
+                "Your connected account has no synced dietary profile. Complete the guided setup before your first personalized request.".into()
+            });
+            Ok((prepared, startup_notice, startup_onboarding))
+        }
         Err(error) if error.code == "login_required" => {
             eprintln!("Welcome to heyfood. Connect your hello.food account to continue.");
             let registration = register_inner(
@@ -395,7 +438,7 @@ async fn prepare_bare_session()
                     device: true,
                     no_browser: false,
                     timeout: 600,
-                    no_onboard: true,
+                    no_onboard: false,
                 },
                 false,
             )
@@ -405,9 +448,61 @@ async fn prepare_bare_session()
             Ok((
                 prepared,
                 Some(registration_startup_notice(registration.profile_status)),
+                registration.profile_status == ProfileStatus::Missing,
             ))
         }
         Err(error) => Err(error),
+    }
+}
+
+async fn profile_needs_onboarding(prepared: &mut PreparedNativeSession) -> Option<bool> {
+    if !["profile:read", "profile:write"].iter().all(|required| {
+        prepared
+            .authorization_scope
+            .split_whitespace()
+            .any(|scope| scope == *required)
+    }) {
+        return None;
+    }
+    let credentials = match prepared
+        .ensure_session
+        .execute(prepared.snapshot.clone(), CancellationToken::new())
+        .await
+        .ok()?
+    {
+        EnsureSessionOutcome::Current(credentials) => credentials,
+        EnsureSessionOutcome::Refreshed(credentials) => {
+            prepared.snapshot.credentials = credentials.clone();
+            prepared.snapshot.reconciliation_required = false;
+            credentials
+        }
+        EnsureSessionOutcome::CancelledBeforeDispatch => return None,
+    };
+    let consent = prepared
+        .service
+        .profile_consent_status(&credentials, OperationId::new(), CancellationToken::new())
+        .await
+        .ok()?;
+    match consent
+        .get("has_consent")
+        .and_then(serde_json::Value::as_bool)
+    {
+        Some(false) => Some(true),
+        Some(true) => match prepared
+            .service
+            .download_profile(
+                &credentials,
+                "_self",
+                OperationId::new(),
+                CancellationToken::new(),
+            )
+            .await
+        {
+            Ok(_) => Some(false),
+            Err(error) if error.code == "resource_not_found" => Some(true),
+            Err(_) => None,
+        },
+        None => None,
     }
 }
 
@@ -416,7 +511,7 @@ fn registration_startup_notice(status: ProfileStatus) -> String {
         ProfileStatus::Ready => {
             "Account connected. Your dietary profile is ready; ask your first question.".into()
         }
-        ProfileStatus::Missing => "Account connected. Your dietary profile still needs setup; personalized guidance may be limited until onboarding is completed.".into(),
+        ProfileStatus::Missing => "Account connected. Complete the guided dietary profile before your first personalized request.".into(),
         ProfileStatus::Unknown => "Account connected. Dietary profile readiness could not be confirmed; personalized guidance may be limited.".into(),
     }
 }
