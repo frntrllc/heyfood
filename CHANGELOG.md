@@ -4,11 +4,18 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
-## Unreleased
+## 0.5.0 - Unreleased
 
-_Nothing yet._
+- Replaces the unsupported `v0.4.0` and `v0.4.1` incident artifacts with the
+  fully qualified Rust CLI and interactive TUI recovery release.
+- Preserves terminal stream content when a terminal SSE document omits final
+  text and recognizes the frozen `message`, `text`, and `response` result forms.
+- Keeps unfinished interactive commands out of slash-command discovery until
+  their typed effects and functional panels are complete.
+- Archives the final Python parity baseline under the non-release tag
+  `archive/python-cli-73494a57` and verifies retained source bytes from Rust.
 
-## 0.4.1 - 2026-07-21
+## 0.4.1 - 2026-07-21 — unsupported, do not install
 
 ### Fixed
 
@@ -23,7 +30,7 @@ _Nothing yet._
   the old grant remains authoritative until the full channel and app-session
   replacement is validated and committed.
 
-## 0.4.0 - 2026-07-19
+## 0.4.0 - 2026-07-19 — unsupported, do not install
 
 ### Added
 

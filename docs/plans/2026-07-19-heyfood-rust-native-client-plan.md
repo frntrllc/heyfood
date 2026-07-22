@@ -1,12 +1,12 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v17 — Rust Phase 1 and the bounded Grocery Phase-A import are closed with GO; PR #19 merged as `e8a143a9877f008b76a58e54f478a7acd83d4d00`, and Phase 2 wire/runtime/one-shot implementation is authorized while Phase 3, activation, publication, and product cutover remain gated
+**Status:** Draft v18 — Rust Phase 1 and the bounded Grocery Phase-A import are closed with GO; Phase 2 remediation continues in draft PR #27 while activation, publication, and product cutover remain gated
 **Baseline:** final unpublished Python `0.4.0` candidate at `73494a57468dac83b4904ce6c390e36926f5c6fe`; the last public Python release remains `0.3.2`
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`
 **Active companion:** `frntrllc/hellofood` Platform P0, Grocery Phase A/Kroger, Security D2, and Health H1-H3 workstreams dated 2026-07-19
 **Primary user:** a developer using hello.food throughout the working day from a terminal
-**Replacement target:** `0.4.0`, released only when the complete Rust client passes every gate
+**Replacement target:** `0.5.0`, released only when the complete Rust client passes every gate; immutable `v0.4.0` and `v0.4.1` remain unsupported incident records
 **License:** Apache-2.0
 
 ## Executive decision

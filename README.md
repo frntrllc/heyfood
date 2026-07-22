@@ -3,35 +3,17 @@
 Native command-line access to personalized food and dietary guidance from
 [hello.food](https://hello.food).
 
-This repository is moving the CLI to Rust. The current public native cut is
-deliberately bounded: registration, hosted-agent turns, Grocery, and
-provider-neutral Health are active. Guidance comes from the hosted hello.food
-service and is not a substitute for professional medical advice or emergency
-care.
+This repository is moving the CLI and interactive terminal experience to Rust.
+The recovery release target is `0.5.0`. Publication is suspended while the
+installed-artifact journeys, native distribution, and exact-SHA release gates
+are completed. The immutable `v0.4.0` and `v0.4.1` releases are unsupported and
+must not be installed.
 
 ## Installation
 
-On macOS or glibc-based Linux, install the native Rust release with:
-
-```bash
-curl -fsSL https://hey.food/install.sh | bash
-```
-
-The [installer source](install.sh) selects the matching Apple Darwin or GNU
-Linux archive for the current `aarch64` or `x86_64` CPU. It downloads that
-archive and `SHA256SUMS` from the same GitHub Release, verifies the checksum and
-single-file archive policy, runs the downloaded executable's exact `--version`
-check, and atomically installs it to
-`${HEYFOOD_BIN_DIR:-$HOME/.local/bin}/heyfood`. It never uses `sudo`, edits shell
-startup files, or requires Python or `pipx`.
-
-Pin an exact release or choose another user-owned installation directory with:
-
-```bash
-curl -fsSL https://hey.food/install.sh | HEYFOOD_VERSION=0.4.1 bash
-curl -fsSL https://hey.food/install.sh | \
-  HEYFOOD_BIN_DIR="$HOME/bin" bash
-```
+The hosted native installer intentionally fails closed until the reviewed
+`v0.5.0` artifact is published and passes its public smoke tests. There is no
+supported binary installation command during qualification.
 
 To inspect immutable installer bytes before running them, replace `REVISION`
 with a reviewed full commit SHA and verify the separately reviewed checksum:
@@ -61,9 +43,9 @@ cargo build --release --locked --package heyfood-bin
 ./target/release/heyfood --help
 ```
 
-GitHub Releases and the hosted installer are the only supported public binary
-distribution path. Building a reviewed source revision remains supported for
-contributors.
+After qualification, GitHub Releases and the hosted installer will be the
+supported public binary distribution path. Building a reviewed source revision
+remains supported for contributors.
 
 ## Register
 

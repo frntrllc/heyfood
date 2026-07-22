@@ -87,13 +87,14 @@ evidence content only and is also not Phase 2 exit or merge approval.
 
 ## Release-boundary incident
 
-Public immutable GitHub Releases `v0.4.0` and `v0.4.1` already exist despite the
-approved prohibition on Phase 2 publication and supported-product cutover. They
-target `b26174322ba5b0da79946ca879eb0118a5acbabd` and
-`9f3b5ad9683fdff9211e3fc077c1ac01c4916896`, contain downloadable native
-artifacts, and have recorded downloads. This remediation did not create,
-modify, or remove those releases. The owner/release team must classify and
-reconcile them before any publication or cutover claim.
+Public immutable GitHub Releases `v0.4.0` and `v0.4.1` were published despite
+the prohibition on Phase 2 publication and supported-product cutover. They are
+permanently classified as unsupported incident evidence and must retain their
+warnings, tags, assets, attestations, and logs. The recovery release is
+`v0.5.0`; neither immutable version may be repurposed or retroactively approved.
+The installer and release publication remain fail-closed until the exact
+`v0.5.0` product SHA, signed native artifacts, production canaries, and public
+artifact smoke tests are independently approved.
 
 The draft remediation PR must remain unmerged. Grocery activation, provider
 token storage, Kroger binding, Phase 3, publication, and product cutover remain

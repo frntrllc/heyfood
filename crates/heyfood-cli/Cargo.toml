@@ -11,8 +11,8 @@ publish.workspace = true
 [dependencies]
 clap = { workspace = true, features = ["color", "derive", "error-context", "help", "std", "suggestions", "usage"] }
 clap_complete.workspace = true
-heyfood-application = { version = "=0.4.1", path = "../heyfood-application" }
-heyfood-core = { version = "=0.4.1", path = "../heyfood-core" }
+heyfood-application = { version = "=0.5.0", path = "../heyfood-application" }
+heyfood-core = { version = "=0.5.0", path = "../heyfood-core" }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 
