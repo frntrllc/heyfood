@@ -38,6 +38,21 @@ fn python_oracle() -> Value {
     .unwrap()
 }
 
+fn repository_text_sha256(bytes: &[u8]) -> String {
+    let mut normalized = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+            normalized.push(b'\n');
+            index += 2;
+        } else {
+            normalized.push(bytes[index]);
+            index += 1;
+        }
+    }
+    format!("{:x}", Sha256::digest(normalized))
+}
+
 #[test]
 fn python_oracle_provenance_matches_the_pinned_source_bytes() {
     let oracle = python_oracle();
@@ -62,7 +77,7 @@ fn python_oracle_provenance_matches_the_pinned_source_bytes() {
     ];
 
     for (path, bytes) in sources {
-        let digest = format!("{:x}", Sha256::digest(bytes));
+        let digest = repository_text_sha256(bytes);
         assert_eq!(expected[path], digest, "oracle source drifted: {path}");
     }
 }
