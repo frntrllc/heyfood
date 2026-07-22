@@ -1030,10 +1030,17 @@ mod registration_tests {
 
     #[test]
     fn register_accepts_machine_flags_after_the_command() {
-        let cli =
-            Cli::try_parse_from(["heyfood", "register", "--device", "--no-browser", "--json"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "heyfood",
+            "register",
+            "--device",
+            "--no-browser",
+            "--no-input",
+            "--json",
+        ])
+        .unwrap();
         assert!(cli.machine_output());
+        assert!(cli.no_input);
         assert!(matches!(
             cli.command,
             Some(Command::Register(RegisterArgs {

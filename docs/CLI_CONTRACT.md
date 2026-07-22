@@ -129,7 +129,8 @@ continues into the TUI and starts guided onboarding when the service reports a
 missing profile. `--no-onboard` is the explicit opt-out: it persists the
 connected account and exits without opening the TUI. JSON mode and redirected
 input or output also return the registration document without attempting an
-interactive handoff.
+interactive handoff. Global `--no-input` likewise suppresses the questionnaire
+handoff while preserving the hosted device-authorization flow.
 
 Native account state is written only after OAuth approval, application-session
 exchange, and response validation succeed. A complete authorization grant and

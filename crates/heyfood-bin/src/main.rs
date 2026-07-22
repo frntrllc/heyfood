@@ -256,6 +256,7 @@ async fn main() -> ExitCode {
 
     let cli = Cli::parse_env();
     let machine = cli.machine_output();
+    let no_input = cli.no_input;
     let output_mode = cli.output_mode(io::stdout().is_terminal());
     if cli.raw {
         eprintln!("--raw is deprecated; use --json.");
@@ -274,7 +275,7 @@ async fn main() -> ExitCode {
             heyfood_cli::write_completions(shell, &mut io::stdout());
             ExitCode::SUCCESS
         }
-        Some(Command::Register(arguments)) => register(arguments, machine).await,
+        Some(Command::Register(arguments)) => register(arguments, machine, no_input).await,
         Some(Command::Login(arguments)) => login(arguments, machine).await,
         Some(Command::Chat(_)) => chat(machine).await,
         Some(Command::Onboard(_)) => onboard(machine).await,
@@ -1309,10 +1310,11 @@ fn reconciliation_error() -> RegistrationError {
     }
 }
 
-async fn register(arguments: heyfood_cli::RegisterArgs, machine: bool) -> ExitCode {
+async fn register(arguments: heyfood_cli::RegisterArgs, machine: bool, no_input: bool) -> ExitCode {
     let continue_to_tui = registration_continues_to_tui(
         &arguments,
         machine,
+        no_input,
         io::stdin().is_terminal(),
         io::stdout().is_terminal(),
     );
@@ -1349,10 +1351,11 @@ async fn register(arguments: heyfood_cli::RegisterArgs, machine: bool) -> ExitCo
 const fn registration_continues_to_tui(
     arguments: &heyfood_cli::RegisterArgs,
     machine: bool,
+    no_input: bool,
     stdin_is_terminal: bool,
     stdout_is_terminal: bool,
 ) -> bool {
-    !arguments.no_onboard && !machine && stdin_is_terminal && stdout_is_terminal
+    !arguments.no_onboard && !machine && !no_input && stdin_is_terminal && stdout_is_terminal
 }
 
 async fn register_inner(
@@ -1526,6 +1529,7 @@ mod tests {
         assert!(registration_continues_to_tui(
             &registration_arguments(false),
             false,
+            false,
             true,
             true,
         ));
@@ -1536,6 +1540,7 @@ mod tests {
         assert!(!registration_continues_to_tui(
             &registration_arguments(true),
             false,
+            false,
             true,
             true,
         ));
@@ -1544,12 +1549,25 @@ mod tests {
     #[test]
     fn registration_never_starts_a_tui_for_json_or_redirected_output() {
         let arguments = registration_arguments(false);
-        assert!(!registration_continues_to_tui(&arguments, true, true, true));
         assert!(!registration_continues_to_tui(
-            &arguments, false, false, true
+            &arguments, true, false, true, true
         ));
         assert!(!registration_continues_to_tui(
-            &arguments, false, true, false
+            &arguments, false, false, false, true
+        ));
+        assert!(!registration_continues_to_tui(
+            &arguments, false, false, true, false
+        ));
+    }
+
+    #[test]
+    fn no_input_never_hands_registration_into_the_questionnaire_tui() {
+        assert!(!registration_continues_to_tui(
+            &registration_arguments(false),
+            false,
+            true,
+            true,
+            true,
         ));
     }
 }

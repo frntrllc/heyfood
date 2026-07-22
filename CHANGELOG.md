@@ -32,8 +32,8 @@ authentication contracts are stabilized.
   grants versioned profile-sync consent and performs one optimistic profile
   upload without blind mutation retries.
 - Continues an explicit interactive `heyfood register` into the TUI by default;
-  `--no-onboard`, JSON mode, and redirected environments remain explicit
-  non-TUI handoffs.
+  `--no-onboard`, global `--no-input`, JSON mode, and redirected environments
+  remain explicit non-TUI handoffs.
 - Classifies onboarding cancellation from the adapter's observed dispatch stage
   so a late Ctrl-C cannot relabel a determinate service response, while an
   unobserved profile-upload response remains outcome-unknown.
