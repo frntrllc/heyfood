@@ -1,5 +1,11 @@
 # heyfood
 
+> [!CAUTION]
+> **Native installation is suspended. Do not install or use v0.4.0 or v0.4.1.**
+> Both releases were published before release authorization and are unsupported.
+> The hosted installer intentionally exits without installing anything until a
+> supported release is available.
+
 Native command-line access to personalized food and dietary guidance from
 [hello.food](https://hello.food).
 
@@ -9,47 +15,24 @@ provider-neutral Health are active. Guidance comes from the hosted hello.food
 service and is not a substitute for professional medical advice or emergency
 care.
 
-## Installation
+See the [current capability and distribution status](docs/CAPABILITY_STATUS.md)
+before evaluating the client.
 
-On macOS or glibc-based Linux, install the native Rust release with:
+## Installation status
+
+There is no supported public native binary today. The hosted command currently
+prints the release status without installing anything:
 
 ```bash
 curl -fsSL https://hey.food/install.sh | bash
 ```
 
-The [installer source](install.sh) selects the matching Apple Darwin or GNU
-Linux archive for the current `aarch64` or `x86_64` CPU. It downloads that
-archive and `SHA256SUMS` from the same GitHub Release, verifies the checksum and
-single-file archive policy, runs the downloaded executable's exact `--version`
-check, and atomically installs it to
-`${HEYFOOD_BIN_DIR:-$HOME/.local/bin}/heyfood`. It never uses `sudo`, edits shell
-startup files, or requires Python or `pipx`.
+It prints the release-incident notice to stderr and exits `1`. Do not pin
+v0.4.0 or v0.4.1 to bypass the suspension. A successful install command will
+return here only after a replacement release passes testing and receives
+explicit release approval.
 
-Pin an exact release or choose another user-owned installation directory with:
-
-```bash
-curl -fsSL https://hey.food/install.sh | HEYFOOD_VERSION=0.4.1 bash
-curl -fsSL https://hey.food/install.sh | \
-  HEYFOOD_BIN_DIR="$HOME/bin" bash
-```
-
-To inspect immutable installer bytes before running them, replace `REVISION`
-with a reviewed full commit SHA and verify the separately reviewed checksum:
-
-```bash
-REVISION="<full-reviewed-commit-sha>"
-curl -fsSLO "https://raw.githubusercontent.com/frntrllc/heyfood/${REVISION}/install.sh"
-curl -fsSLO "https://raw.githubusercontent.com/frntrllc/heyfood/${REVISION}/install.sh.sha256"
-if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum -c install.sh.sha256
-else
-  shasum -a 256 -c install.sh.sha256
-fi
-less install.sh
-bash install.sh
-```
-
-## Build from source
+## Inspect or build from source
 
 The native workspace requires the Rust toolchain declared in `Cargo.toml`.
 
@@ -62,8 +45,8 @@ cargo build --release --locked --package heyfood-bin
 ```
 
 GitHub Releases and the hosted installer are the only supported public binary
-distribution path. Building a reviewed source revision remains supported for
-contributors.
+distribution path. Building a reviewed source revision is available for
+contributors, but it is not a supported substitute for the suspended release.
 
 ## Register
 
@@ -96,7 +79,7 @@ exchange, and response-contract validation all succeed. If it reports an
 uncertain session-exchange or persistence outcome, do not start another
 registration attempt until account state is reconciled.
 
-Native `0.4.0` credentials predate the Grocery and Health scopes. If a command
+Older native credentials may predate the Grocery and Health scopes. If a command
 reports `authorization_scope_upgrade_required`, approve the explicit upgrade:
 
 ```bash
@@ -107,7 +90,7 @@ OAuth refresh cannot add authority. Login preserves the existing credentials
 through device approval and session exchange, verifies the complete expanded
 grant, and only then replaces both native credential stores.
 
-## Active commands
+## Current Rust command surface
 
 ```bash
 heyfood ask "What can I eat?"
@@ -161,7 +144,7 @@ interactive chat/TUI, onboarding, profile, account-management, restaurant
 search, saved location, recommendation, menu, recipe, household, voice,
 context, configuration, or diagnostic workflows. Hidden
 compatibility topology may recognize some old command names, but those paths
-fail closed with `command_not_available`; they are not supported commands.
+return `command_not_available`; they are not supported commands.
 
 The bare `heyfood` invocation is informational only. It prints runnable next
 steps and never starts a TUI, browser, registration, onboarding, or network
@@ -186,6 +169,7 @@ approved contract bytes or update their hashes as part of unrelated changes.
 
 Additional project references:
 
+- [Capability and distribution status](docs/CAPABILITY_STATUS.md)
 - [Development setup](DEVELOPMENT.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
