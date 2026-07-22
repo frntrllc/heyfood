@@ -26,6 +26,7 @@ enum SlashCommandKind {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PanelRequest {
+    Status,
     Grocery,
     Health,
     Household,
@@ -37,6 +38,7 @@ impl PanelRequest {
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
+            Self::Status => "Status",
             Self::Grocery => "Grocery",
             Self::Health => "Health",
             Self::Household => "Household",
@@ -377,6 +379,7 @@ pub struct AppModel {
     prompt_history: VecDeque<String>,
     history_index: Option<usize>,
     history_draft: String,
+    pending_choice_labels: Vec<String>,
     next_operation_id: u64,
 }
 
@@ -397,6 +400,7 @@ impl Default for AppModel {
             prompt_history: VecDeque::new(),
             history_index: None,
             history_draft: String::new(),
+            pending_choice_labels: Vec::new(),
             next_operation_id: 1,
         }
     }
@@ -556,6 +560,7 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
         return Vec::new();
     }
     let prompt = std::mem::take(&mut model.draft);
+    model.pending_choice_labels.clear();
     remember_prompt(model, &prompt);
     model.cursor = 0;
     let operation_id = model.next_operation_id;
@@ -598,14 +603,6 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
     };
     match spec.kind {
         SlashCommandKind::Help => show_help(model),
-        SlashCommandKind::Status => push_notice(
-            model,
-            if model.operation.is_active() {
-                "Connected · a turn is active · Ctrl+C stops it"
-            } else {
-                "Connected · Rust TUI ready · credentials and service are checked before every turn"
-            },
-        ),
         SlashCommandKind::Clear if model.operation.is_active() => push_notice(
             model,
             "Finish or stop the active turn before clearing the visible transcript.",
@@ -626,7 +623,8 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
             push_notice(model, "Started a fresh conversation.");
             return vec![Effect::ResetConversation];
         }
-        SlashCommandKind::Grocery
+        SlashCommandKind::Status
+        | SlashCommandKind::Grocery
         | SlashCommandKind::Health
         | SlashCommandKind::Household
         | SlashCommandKind::Profile
@@ -635,6 +633,7 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
         {
             push_notice(model, &format!("Usage: {}", spec.usage));
         }
+        SlashCommandKind::Status => return open_panel(model, PanelRequest::Status),
         SlashCommandKind::Grocery => return open_panel(model, PanelRequest::Grocery),
         SlashCommandKind::Health => return open_panel(model, PanelRequest::Health),
         SlashCommandKind::Household => return open_panel(model, PanelRequest::Household),
@@ -964,6 +963,10 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             model.activity = Some("Responding…".into());
         }
         AgentEvent::Choices { choices, .. } => {
+            model.pending_choice_labels = choices
+                .iter()
+                .map(|choice| terminal_safe_text(&choice.label))
+                .collect();
             model.scrollback.mutate_last_assistant(|entry| {
                 if !entry.text.is_empty() {
                     entry.text.push('\n');
@@ -978,10 +981,12 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
         }
         AgentEvent::Result { document, .. } => {
             let result = agent_result_text(&document).map(terminal_safe_text);
+            let choice_labels = std::mem::take(&mut model.pending_choice_labels);
             model.scrollback.mutate_last_assistant(|entry| {
                 if let Some(result) = result {
                     if !result.is_empty() {
                         entry.text = result;
+                        append_choice_labels(&mut entry.text, &choice_labels);
                     }
                 } else if entry.text.is_empty() {
                     entry.text = terminal_safe_text(&document.to_string());
@@ -993,6 +998,7 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             model.idle_exit_armed = false;
         }
         AgentEvent::Error { error } => {
+            model.pending_choice_labels.clear();
             let code = terminal_safe_text(&error.code);
             let message = terminal_safe_text(&error.message);
             model.scrollback.mutate_last_assistant(|entry| {
@@ -1009,6 +1015,22 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
     account_for_new_lines(model, old_lines);
 }
 
+fn append_choice_labels(output: &mut String, choices: &[String]) {
+    if choices.is_empty() {
+        return;
+    }
+    if !output.is_empty() {
+        output.push_str("\n\n");
+    }
+    output.push_str("Options\n");
+    for choice in choices {
+        output.push_str("• ");
+        output.push_str(choice);
+        output.push('\n');
+    }
+    output.pop();
+}
+
 fn mark_finishing(model: &mut AppModel) {
     if let Some(operation_id) = model.operation.operation_id() {
         model.operation = OperationState::Finishing(operation_id);
@@ -1016,6 +1038,7 @@ fn mark_finishing(model: &mut AppModel) {
 }
 
 fn finish_stream(model: &mut AppModel, outcome: RunTurnOutcome) {
+    model.pending_choice_labels.clear();
     let old_lines = model.scrollback.rendered_lines();
     model.scrollback.mutate_last_assistant(|entry| {
         let notice = match outcome {
@@ -1461,6 +1484,66 @@ mod tests {
     }
 
     #[test]
+    fn terminal_result_preserves_choices_after_partial_content() {
+        for field in ["message", "text", "response"] {
+            let mut model = AppModel {
+                draft: "question".into(),
+                cursor: 8,
+                ..AppModel::default()
+            };
+            let _ = dispatch(&mut model, Action::Submit);
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Partial {
+                        text: "Review the available paths.".into(),
+                    },
+                }),
+            );
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Choices {
+                        choices: vec![
+                            heyfood_core::AgentChoice::from_untrusted(
+                                "Cook at home".into(),
+                                Some("cook".into()),
+                            )
+                            .unwrap(),
+                            heyfood_core::AgentChoice::from_untrusted(
+                                "Eat out".into(),
+                                Some("restaurant".into()),
+                            )
+                            .unwrap(),
+                        ],
+                        allow_multiple: false,
+                    },
+                }),
+            );
+            let mut document = serde_json::json!({});
+            document[field] = serde_json::Value::String("Which path works for you?".into());
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Result {
+                        document,
+                        conversation_id: Some("conversation-choices".into()),
+                    },
+                }),
+            );
+            let entry = model.scrollback.entries().back().unwrap();
+            assert_eq!(
+                entry.text,
+                "Which path works for you?\n\nOptions\n• Cook at home\n• Eat out"
+            );
+            assert!(!entry.streaming);
+        }
+    }
+
+    #[test]
     fn partial_only_terminal_document_preserves_the_streamed_answer() {
         let mut model = AppModel {
             draft: "question".into(),
@@ -1545,6 +1628,7 @@ mod tests {
     #[test]
     fn available_panel_commands_dispatch_typed_effects() {
         for (command, panel) in [
+            ("/status", PanelRequest::Status),
             ("/grocery", PanelRequest::Grocery),
             ("/health", PanelRequest::Health),
             ("/household", PanelRequest::Household),

@@ -1258,6 +1258,12 @@ struct OwnedSignalForwarder {
     task: JoinHandle<io::Result<()>>,
 }
 
+#[derive(Default)]
+struct InteractiveContinuity {
+    conversation_id: Option<String>,
+    household_scope: Option<String>,
+}
+
 /// Production driver for the retained terminal surface.
 ///
 /// The terminal loop stays synchronous and owns stdout. Every authenticated
@@ -1274,8 +1280,7 @@ pub struct InteractiveTurnDriver {
     startup_notice: Option<String>,
     ensure_session: Arc<EnsureSession>,
     session: Arc<Mutex<SessionSnapshot>>,
-    conversation_id: Arc<Mutex<Option<String>>>,
-    active_household_scope: Arc<Mutex<Option<String>>>,
+    continuity: Arc<Mutex<InteractiveContinuity>>,
     turns: Vec<OwnedInteractiveTurn>,
     signals: Option<OwnedSignalForwarder>,
 }
@@ -1299,8 +1304,7 @@ impl InteractiveTurnDriver {
             startup_notice: None,
             ensure_session,
             session: Arc::new(Mutex::new(session)),
-            conversation_id: Arc::new(Mutex::new(None)),
-            active_household_scope: Arc::new(Mutex::new(None)),
+            continuity: Arc::new(Mutex::new(InteractiveContinuity::default())),
             turns: Vec::new(),
             signals: None,
         })
@@ -1398,10 +1402,9 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         let service = self.service.clone();
         let ensure_session = self.ensure_session.clone();
         let session = self.session.clone();
-        let conversation_id = self.conversation_id.clone();
+        let continuity = self.continuity.clone();
         let context_service = self.interactive_service.clone();
         let local_state = self.local_state.clone();
-        let active_household_scope = self.active_household_scope.clone();
         let task = self.runtime.spawn(async move {
             let outcome = run_interactive_turn(
                 operation_id,
@@ -1409,10 +1412,9 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 service,
                 ensure_session,
                 session,
-                conversation_id,
+                continuity,
                 context_service,
                 local_state,
-                active_household_scope,
                 task_cancellation,
                 runtime_events.clone(),
             )
@@ -1451,7 +1453,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
             ));
         }
         let local_state = self.local_state.clone();
-        let active_household_scope = self.active_household_scope.clone();
+        let continuity = self.continuity.clone();
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
         let task = self.runtime.spawn(async move {
@@ -1470,7 +1472,9 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                             message: "Household target change was cancelled.".into(),
                         }
                     } else {
-                        *active_household_scope.lock().await = Some(identifier);
+                        let mut continuity = continuity.lock().await;
+                        continuity.household_scope = Some(identifier);
+                        continuity.conversation_id = None;
                         RuntimeEvent::HouseholdScopeReady {
                             operation_id,
                             label,
@@ -1566,7 +1570,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
 
     fn reset_conversation(&mut self) -> io::Result<()> {
         self.runtime.block_on(async {
-            *self.conversation_id.lock().await = None;
+            self.continuity.lock().await.conversation_id = None;
         });
         Ok(())
     }
@@ -1612,10 +1616,9 @@ async fn run_interactive_turn(
     service: Arc<dyn ServicePort>,
     ensure_session: Arc<EnsureSession>,
     session: Arc<Mutex<SessionSnapshot>>,
-    conversation_id: Arc<Mutex<Option<String>>>,
+    continuity: Arc<Mutex<InteractiveContinuity>>,
     context_service: Option<Arc<HttpService>>,
     local_state: Option<Arc<ImportedPythonState>>,
-    active_household_scope: Arc<Mutex<Option<String>>>,
     cancellation: CancellationToken,
     runtime_events: mpsc::Sender<RuntimeEvent>,
 ) -> Result<RunTurnOutcome, String> {
@@ -1642,7 +1645,7 @@ async fn run_interactive_turn(
     }
     let context = match (context_service, local_state) {
         (Some(service), Some(state)) => {
-            let selector = active_household_scope.lock().await.clone();
+            let selector = continuity.lock().await.household_scope.clone();
             build_household_turn_context(
                 &service,
                 &credentials,
@@ -1657,7 +1660,7 @@ async fn run_interactive_turn(
     };
     let request = TurnRequest {
         prompt,
-        conversation_id: conversation_id.lock().await.clone(),
+        conversation_id: continuity.lock().await.conversation_id.clone(),
         context,
         refresh: RefreshPolicy::Never,
     };
@@ -1699,7 +1702,7 @@ async fn run_interactive_turn(
             ..
         } = &event
         {
-            *conversation_id.lock().await = Some(next_conversation.clone());
+            continuity.lock().await.conversation_id = Some(next_conversation.clone());
         }
         if runtime_events
             .send(RuntimeEvent::TurnEvent {
@@ -1737,7 +1740,7 @@ async fn run_interactive_panel(
         PanelRequest::Grocery => Some("grocery:read"),
         PanelRequest::Health => Some("health:read"),
         PanelRequest::Profile => Some("profile:read"),
-        PanelRequest::Household | PanelRequest::Location => None,
+        PanelRequest::Status | PanelRequest::Household | PanelRequest::Location => None,
     };
     if let Some(required_scope) = required_scope
         && !authorization_scope
@@ -1759,7 +1762,10 @@ async fn run_interactive_panel(
         return match panel {
             PanelRequest::Household => Ok(render_household_panel(local_state.as_deref())),
             PanelRequest::Location => Ok(render_location_panel(local_state.as_deref())),
-            PanelRequest::Grocery | PanelRequest::Health | PanelRequest::Profile => unreachable!(),
+            PanelRequest::Status
+            | PanelRequest::Grocery
+            | PanelRequest::Health
+            | PanelRequest::Profile => unreachable!(),
         };
     }
     let credentials = match ensure_session
@@ -1783,6 +1789,54 @@ async fn run_interactive_panel(
     }
 
     match panel {
+        PanelRequest::Status => {
+            let capabilities = service
+                .discover_capabilities(cancellation.child_token())
+                .await
+                .map_err(panel_error)?;
+            let profile = if authorization_has_scope(authorization_scope, "profile:read") {
+                let consent = service
+                    .profile_consent_status(
+                        &credentials,
+                        OperationId::new(),
+                        cancellation.child_token(),
+                    )
+                    .await
+                    .map_err(panel_error)?;
+                if consent
+                    .get("has_consent")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    "authorized · sync consent granted"
+                } else {
+                    "authorized · sync consent not granted"
+                }
+            } else {
+                "not authorized"
+            };
+            let grocery = match (
+                capabilities.application_version("grocery"),
+                authorization_has_scope(authorization_scope, "grocery:read"),
+            ) {
+                (Some("v1"), true) => "available · authorized",
+                (Some("v1"), false) => "available · authorization required",
+                _ => "not advertised by service",
+            };
+            let health = if authorization_has_scope(authorization_scope, "health:read") {
+                "authorized"
+            } else {
+                "authorization required"
+            };
+            let voice = if authorization_has_scope(authorization_scope, "audio:transcribe") {
+                "transcription authorized · native capture not yet available"
+            } else {
+                "transcription authorization required · native capture not yet available"
+            };
+            Ok(format!(
+                "Session: active\nService: reachable\nProfile: {profile}\nGrocery: {grocery}\nHealth: {health}\nVoice: {voice}"
+            ))
+        }
         PanelRequest::Grocery => {
             let capabilities = service
                 .discover_capabilities(cancellation.child_token())
@@ -1860,6 +1914,10 @@ async fn run_interactive_panel(
         }
         PanelRequest::Household | PanelRequest::Location => unreachable!(),
     }
+}
+
+fn authorization_has_scope(scope: &str, required: &str) -> bool {
+    scope.split_whitespace().any(|scope| scope == required)
 }
 
 fn render_household_panel(state: Option<&ImportedPythonState>) -> String {
@@ -2449,9 +2507,12 @@ mod tests {
         )
         .unwrap()
         .with_local_state(Some(state));
+        driver.runtime.block_on(async {
+            driver.continuity.lock().await.conversation_id = Some("prior-household-turn".into());
+        });
         let (sender, mut receiver) = mpsc::channel(4);
         driver
-            .start_household_scope(1, "Sarah".into(), sender)
+            .start_household_scope(1, "Sarah".into(), sender.clone())
             .unwrap();
         assert!(matches!(
             receiver.blocking_recv(),
@@ -2460,14 +2521,33 @@ mod tests {
                 label
             }) if label == "Sarah"
         ));
-        assert_eq!(
-            driver
-                .runtime
-                .block_on(async { driver.active_household_scope.lock().await.clone() })
-                .as_deref(),
-            Some("member-sarah")
-        );
+        driver.runtime.block_on(async {
+            let continuity = driver.continuity.lock().await;
+            assert_eq!(continuity.household_scope.as_deref(), Some("member-sarah"));
+            assert_eq!(continuity.conversation_id, None);
+        });
+        for _ in 0..100 {
+            if driver.turns.iter().all(|turn| turn.task.is_finished()) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        driver
+            .start_turn(2, "fresh household question".into(), sender)
+            .unwrap();
+        loop {
+            if matches!(
+                receiver.blocking_recv(),
+                Some(RuntimeEvent::TurnFinished {
+                    operation_id: 2,
+                    outcome: RunTurnOutcome::Completed
+                })
+            ) {
+                break;
+            }
+        }
         driver.shutdown_and_join(Duration::from_secs(1)).unwrap();
+        assert_eq!(service.requests.lock().unwrap()[0].conversation_id, None);
     }
 
     #[tokio::test]
@@ -2581,10 +2661,12 @@ mod tests {
                 credentials: fixture_credentials(),
                 reconciliation_required: false,
             })),
-            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(InteractiveContinuity {
+                conversation_id: None,
+                household_scope: Some("member-sarah".into()),
+            })),
             Some(service),
             Some(state),
-            Arc::new(Mutex::new(Some("member-sarah".into()))),
             CancellationToken::new(),
             events,
         )
@@ -2707,6 +2789,28 @@ mod tests {
                     }
                 }),
             ),
+            (
+                "/v1/auth/capabilities",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "self_registration": {
+                        "status": "available",
+                        "regions": ["US"],
+                        "identity_methods": ["sms", "email"]
+                    },
+                    "authorization": {
+                        "loopback_pkce": true,
+                        "device_code": true,
+                        "identity_methods": ["sms", "email"]
+                    },
+                    "profile_readiness": true,
+                    "application_capabilities": {"grocery": "v1"}
+                }),
+            ),
+            (
+                "/v1/profile/consent",
+                serde_json::json!({"has_consent": true, "consent_version": 1}),
+            ),
         ];
         let server = tokio::spawn(async move {
             for (expected_path, body) in responses {
@@ -2815,6 +2919,26 @@ mod tests {
         assert!(profile.contains("Profile sync consent: granted"));
         assert!(profile.contains("Version: 7"));
         assert!(profile.contains("Diet styles: vegetarian"));
+
+        let status = run_interactive_panel(
+            PanelRequest::Status,
+            service.clone(),
+            ensure_session.clone(),
+            session.clone(),
+            "profile:read grocery:read health:read audio:transcribe",
+            None,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(status.contains("Session: active"));
+        assert!(status.contains("Service: reachable"));
+        assert!(status.contains("Profile: authorized · sync consent granted"));
+        assert!(status.contains("Grocery: available · authorized"));
+        assert!(status.contains("Health: authorized"));
+        assert!(
+            status.contains("Voice: transcription authorized · native capture not yet available")
+        );
 
         let local_state = Arc::new(ImportedPythonState {
             account_user_id: Some("account-1".into()),

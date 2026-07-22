@@ -714,6 +714,18 @@ mod tests {
         command.spawn().expect("spawn blocking fixture")
     }
 
+    fn assert_process_exited(pid: Pid) {
+        let mut system = System::new();
+        for _ in 0..100 {
+            system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+            if system.process(pid).is_none() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("timed-out broker process remained alive");
+    }
+
     #[test]
     fn blocking_broker_concurrently_drains_full_bounded_input_and_output() {
         let child = blocking_fixture("echo", None);
@@ -755,10 +767,7 @@ mod tests {
             .trim()
             .parse::<u32>()
             .expect("fixture PID");
-        let pid = Pid::from_u32(pid);
-        let mut system = System::new();
-        system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
-        assert!(system.process(pid).is_none());
+        assert_process_exited(Pid::from_u32(pid));
         let _ = std::fs::remove_file(pid_path);
     }
 
@@ -795,17 +804,7 @@ mod tests {
             .trim()
             .parse::<u32>()
             .expect("fixture PID");
-        let pid = Pid::from_u32(pid);
-        let mut system = System::new();
-        for _ in 0..100 {
-            system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
-            if system.process(pid).is_none() {
-                let _ = std::fs::remove_file(&pid_path);
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        assert_process_exited(Pid::from_u32(pid));
         let _ = std::fs::remove_file(&pid_path);
-        panic!("timed-out broker process remained alive");
     }
 }

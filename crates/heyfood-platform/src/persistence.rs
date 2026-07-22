@@ -1760,23 +1760,32 @@ impl NativeAuthStore {
 
     #[cfg(all(windows, feature = "native-credentials"))]
     fn delete_authorization_journal_unlocked(&self) -> Result<(), PortError> {
-        for (target, username) in [
-            (
+        let entries = [
+            self.replacement_entry(
                 &self.replacement_pending_target,
                 "authorization-replacement-pending",
-            ),
-            (
+            )?,
+            self.replacement_entry(
                 &self.replacement_previous_target,
                 "authorization-replacement-previous",
-            ),
-            (&self.replacement_target, "authorization-replacement"),
-        ] {
-            delete_keyring_entry(
-                &self.replacement_entry(target, username)?,
-                "authorization_journal_delete",
-            )?;
+            )?,
+            self.replacement_entry(&self.replacement_target, "authorization-replacement")?,
+        ];
+        for entry in &entries {
+            delete_keyring_entry(entry, "authorization_journal_delete")?;
         }
-        Ok(())
+        verify_credential_delete_visibility(
+            CREDENTIAL_WRITE_VERIFY_TIMEOUT,
+            || {
+                for entry in &entries {
+                    if keyring_secret_exists(entry)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            },
+            thread::sleep,
+        )
     }
 
     #[cfg(all(windows, feature = "native-credentials"))]
@@ -3031,6 +3040,27 @@ fn verify_credential_write_visibility(
 }
 
 #[cfg(any(windows, test))]
+fn verify_credential_delete_visibility(
+    timeout: Duration,
+    mut any_entry_exists: impl FnMut() -> Result<bool, PortError>,
+    mut wait: impl FnMut(Duration),
+) -> Result<(), PortError> {
+    let started = Instant::now();
+    loop {
+        if !any_entry_exists()? {
+            return Ok(());
+        }
+        if started.elapsed() >= timeout {
+            return Err(PortError::uncertain(
+                "credential_manager_delete_verify",
+                "Windows Credential Manager still returned a credential after successful deletion",
+            ));
+        }
+        wait(CREDENTIAL_WRITE_VERIFY_INTERVAL);
+    }
+}
+
+#[cfg(any(windows, test))]
 fn credential_write_verify_error() -> PortError {
     PortError::uncertain(
         "credential_manager_write_verify",
@@ -3862,6 +3892,30 @@ mod credential_write_verification_tests {
 
     fn assert_uncertain_verify_error(error: PortError) {
         assert_eq!(error.code, "credential_manager_write_verify");
+        assert!(error.outcome_uncertain);
+    }
+
+    #[test]
+    fn delayed_credential_deletion_is_observed_before_cleanup_returns() {
+        let mut observations = VecDeque::from([true, true, false]);
+        let mut waits = 0;
+        verify_credential_delete_visibility(
+            CREDENTIAL_WRITE_VERIFY_TIMEOUT,
+            || Ok(observations.pop_front().unwrap()),
+            |_| waits += 1,
+        )
+        .unwrap();
+
+        assert_eq!(waits, 2);
+        assert!(observations.is_empty());
+
+        let error = verify_credential_delete_visibility(
+            Duration::ZERO,
+            || Ok(true),
+            |_| panic!("a zero-duration deadline must not wait"),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "credential_manager_delete_verify");
         assert!(error.outcome_uncertain);
     }
 

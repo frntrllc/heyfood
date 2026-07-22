@@ -17,7 +17,13 @@ authentication contracts are stabilized.
 - Adds a live `/profile` consent/profile view plus account-bound local
   `/household` and `/location` panels; mismatched local state fails closed.
 - Adds a functional `/for MEMBER|everyone` context switch and threads the
-  resolved consent-aware household context through subsequent TUI turns.
+  resolved consent-aware household context through subsequent TUI turns while
+  atomically clearing conversation continuity across household boundaries.
+- Preserves streamed choices when a final SSE result supplies replacement text,
+  and adds a typed `/status` panel backed by live service, consent, scope, and
+  capability checks without overstating native voice readiness.
+- Verifies Windows Credential Manager journal deletion before subsequent reads
+  and uses a bounded process-table observation after broker kill-and-reap.
 - Lets an unauthenticated bare `heyfood` session complete device registration
   and continue into the TUI in the same process; incomplete dietary onboarding
   remains explicit.
