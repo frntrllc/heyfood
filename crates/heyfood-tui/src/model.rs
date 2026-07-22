@@ -1750,7 +1750,9 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
         }
         AgentEvent::Error { error } => {
             model.pending_choice_labels.clear();
-            model.pending_confirmation = None;
+            if !confirmation_error_preserves_pending(&error.code) {
+                model.pending_confirmation = None;
+            }
             let code = terminal_safe_text(&error.code);
             let message = terminal_safe_text(&error.message);
             model.scrollback.mutate_last_assistant(|entry| {
@@ -1765,6 +1767,10 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
         }
     }
     account_for_new_lines(model, old_lines);
+}
+
+fn confirmation_error_preserves_pending(code: &str) -> bool {
+    matches!(code, "edit_invalid" | "temporarily_unavailable")
 }
 
 fn render_action_confirmation(envelope: &ActionConfirmationEnvelopeWire) -> String {
@@ -2593,6 +2599,99 @@ mod tests {
         ));
         assert!(model.draft.is_empty());
         assert!(!model.idle_exit_armed);
+    }
+
+    #[test]
+    fn confirmation_store_outage_preserves_exact_ids_for_accept_and_cancel_replay() {
+        for (answer, decision) in [
+            ("y", ConfirmationDecisionWire::Accept),
+            ("n", ConfirmationDecisionWire::Cancel),
+        ] {
+            let mut model = AppModel {
+                draft: answer.into(),
+                cursor: 1,
+                pending_confirmation: Some(PendingActionConfirmation {
+                    confirmation_id: heyfood_core::GroceryConfirmationId::parse(
+                        "00000000-0000-4000-8000-000000000001",
+                    )
+                    .unwrap(),
+                    idempotency_key: heyfood_core::GroceryIdempotencyKey::parse(
+                        "00000000-0000-4000-8000-000000000002",
+                    )
+                    .unwrap(),
+                }),
+                ..AppModel::default()
+            };
+            let first = dispatch(&mut model, Action::Submit);
+            let first_command = match first.as_slice() {
+                [Effect::ConfirmAction { command, .. }] => command.clone(),
+                effects => panic!("expected confirmation effect, got {effects:?}"),
+            };
+            assert_eq!(first_command.decision, decision);
+
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Error {
+                        error: AgentFailure {
+                            code: "temporarily_unavailable".into(),
+                            message: "confirmation store unavailable".into(),
+                            retryable: true,
+                        },
+                    },
+                }),
+            );
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnFinished {
+                    operation_id: 1,
+                    outcome: RunTurnOutcome::Completed,
+                }),
+            );
+
+            model.draft = answer.into();
+            model.cursor = 1;
+            let replay = dispatch(&mut model, Action::Submit);
+            assert!(matches!(
+                replay.as_slice(),
+                [Effect::ConfirmAction { operation_id: 2, command }]
+                    if command == &first_command
+            ));
+        }
+    }
+
+    #[test]
+    fn edit_invalid_keeps_pending_confirmation_authority() {
+        let pending = PendingActionConfirmation {
+            confirmation_id: heyfood_core::GroceryConfirmationId::parse(
+                "00000000-0000-4000-8000-000000000001",
+            )
+            .unwrap(),
+            idempotency_key: heyfood_core::GroceryIdempotencyKey::parse(
+                "00000000-0000-4000-8000-000000000002",
+            )
+            .unwrap(),
+        };
+        let mut model = AppModel {
+            operation: OperationState::Running(1),
+            pending_confirmation: Some(pending.clone()),
+            ..AppModel::default()
+        };
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Error {
+                    error: AgentFailure {
+                        code: "edit_invalid".into(),
+                        message: "invalid edit".into(),
+                        retryable: false,
+                    },
+                },
+            }),
+        );
+        assert_eq!(model.pending_confirmation, Some(pending));
     }
 
     #[test]
