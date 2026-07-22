@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "evidence_date": "2026-07-21",
+  "rust_lineage": {
+    "repository": "https://github.com/frntrllc/heyfood.git",
+    "branch": "codex/rust-phase2-remediation",
+    "reviewed_base_sha": "38ad4a68b59cb4dd55a7ae133fa19cf1cc39e466",
+    "product_commit_sha": "d1b2b92cfd47e9a1e2d60a206e477ca376d008e7",
+    "product_tree_sha": "c3e72e1a8156bed8a781b02c1de381b3e2ebd195",
+    "evidence_commit_sha": null
+  },
+  "review_findings": [
+    {
+      "id": "R2-1-account-bound-composition",
+      "status": "approved_exact_sha",
+      "evidence": [
+        "crates/heyfood-platform/src/persistence.rs",
+        "crates/heyfood-platform/tests/native_persistence.rs",
+        "crates/heyfood-bin/src/main.rs"
+      ]
+    },
+    {
+      "id": "R2-2-log-item-semantics",
+      "status": "approved_exact_sha",
+      "evidence": [
+        "crates/heyfood-cli/src/lib.rs",
+        "crates/heyfood-bin/src/lib.rs",
+        "crates/heyfood-agent-runtime/src/service_api.rs",
+        "crates/heyfood-bin/tests/phase2_one_shot.rs",
+        "crates/heyfood-bin/tests/fixtures/python-phase2-command-parity.v1.json"
+      ]
+    },
+    {
+      "id": "R2-3-stream-content-merge",
+      "status": "approved_exact_sha",
+      "evidence": [
+        "crates/heyfood-application/src/one_shot_turn.rs",
+        "crates/heyfood-application/tests/one_shot_turn.rs",
+        "crates/heyfood-cli/src/lib.rs"
+      ]
+    },
+    {
+      "id": "R2-4-native-credential-composition",
+      "status": "approved_exact_sha",
+      "evidence": [
+        "crates/heyfood-bin/Cargo.toml",
+        "crates/heyfood-bin/src/main.rs",
+        "crates/heyfood-platform/src/credential_broker.rs",
+        "crates/heyfood-platform/src/persistence.rs",
+        "crates/heyfood-bin/tests/native_composition.rs",
+        ".github/workflows/rust-ci.yml",
+        ".github/workflows/release.yml"
+      ]
+    },
+    {
+      "id": "R2-5-coordinate-parity",
+      "status": "approved_exact_sha",
+      "evidence": [
+        "crates/heyfood-cli/src/lib.rs",
+        "crates/heyfood-cli/tests/phase2_cli.rs"
+      ]
+    },
+    {
+      "id": "R2-6-json-completion",
+      "status": "approved_exact_sha",
+      "evidence": [
+        "crates/heyfood-bin/src/main.rs",
+        "crates/heyfood-bin/tests/fail_closed.rs"
+      ]
+    }
+  ],
+  "phase2_exit_gate": {
+    "status": "hold",
+    "requirements": [
+      {
+        "id": "P2-1-runtime-transport",
+        "status": "satisfied_for_remediation",
+        "blocker": null
+      },
+      {
+        "id": "P2-2-complete-command-use-cases",
+        "status": "blocked",
+        "blocker": "24 root command families remain explicit fail-closed placeholders"
+      },
+      {
+        "id": "P2-3-ansi-json-renderers",
+        "status": "partial",
+        "blocker": "unported command leaves do not yet have parity renderers"
+      },
+      {
+        "id": "P2-4-parity-matrix",
+        "status": "partial",
+        "blocker": "full help/arguments/endpoints/payloads/scope/location/household fixture matrix is incomplete"
+      },
+      {
+        "id": "P2-5-completion-and-classic-chat",
+        "status": "partial",
+        "blocker": "classic chat is not implemented"
+      },
+      {
+        "id": "P2-6-grocery",
+        "status": "partial",
+        "blocker": "weekly, exclusions/never, explicit screening, stable index cache, secure file export, DG-R2 proof, and production canaries remain incomplete"
+      },
+      {
+        "id": "P2-7-health",
+        "status": "partial",
+        "blocker": "bounded authorization completion polling and production canaries remain incomplete"
+      }
+    ]
+  },
+  "qualification": {
+    "local": "passed",
+    "hosted": "passed",
+    "hosted_runs": {
+      "rust_ci": {
+        "run_id": 29886443450,
+        "successes": 39,
+        "expected_skips": 1,
+        "failures": 0
+      },
+      "native_cli_ci": {
+        "run_id": 29886443453,
+        "successes": 6,
+        "failures": 0
+      }
+    },
+    "independent_rust_review": "approved_six_finding_remediation",
+    "independent_review_scope": "not Phase 2 exit or merge approval",
+    "dg_r2": "incomplete",
+    "production_canaries": "not_run"
+  },
+  "prohibitions_preserved": [
+    "provider token types or storage",
+    "Kroger binding",
+    "Phase 3 TUI implementation",
+    "no publication performed by this remediation",
+    "supported-product cutover",
+    "merge before independent exact-SHA review"
+  ],
+  "external_boundary_incidents": [
+    {
+      "id": "public-native-releases-before-cutover-approval",
+      "status": "owner_reconciliation_required",
+      "tags": [
+        "v0.4.0",
+        "v0.4.1"
+      ],
+      "immutable": true,
+      "action_taken_by_remediation": "none"
+    }
+  ]
+}
