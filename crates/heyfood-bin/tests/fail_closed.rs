@@ -47,6 +47,7 @@ fn authenticated_one_shot_route_fails_with_registration_guidance_when_disconnect
         .args(["ask", "What can I eat?"])
         .env("HOME", &root.0)
         .env("XDG_CONFIG_HOME", &root.0)
+        .env("HEYFOOD_CREDENTIAL_STORE", "file")
         .output()
         .expect("native binary should run");
 
@@ -69,4 +70,17 @@ fn placeholder_command_returns_a_typed_failure() {
     assert!(output.stderr.is_empty());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["error"]["type"], "command_not_available");
+}
+
+#[test]
+fn json_completion_is_rejected_as_one_json_error() {
+    let output = Command::new(env!("CARGO_BIN_EXE_heyfood"))
+        .args(["--json", "completion", "bash"])
+        .output()
+        .expect("native binary should run");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["type"], "completion_json_unsupported");
 }

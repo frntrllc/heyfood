@@ -94,9 +94,9 @@ pub enum Command {
     #[command(hide = true)]
     Chat(LegacyArgs),
     /// Log a meal through the hosted agent.
-    Log(AskArgs),
+    Log(LogArgs),
     /// Assess a menu or food item.
-    Item(AskArgs),
+    Item(ItemArgs),
     /// Display the daily meal summary.
     #[command(hide = true)]
     Daily(LegacyArgs),
@@ -208,10 +208,24 @@ pub struct AskArgs {
     #[arg(long)]
     pub conversation_id: Option<String>,
 
-    #[arg(long, requires = "longitude")]
+    /// Latitude for location-aware requests.
+    #[arg(
+        long = "lat",
+        alias = "latitude",
+        requires = "longitude",
+        allow_hyphen_values = true,
+        value_parser = parse_latitude
+    )]
     pub latitude: Option<f64>,
 
-    #[arg(long, requires = "latitude")]
+    /// Longitude for location-aware requests.
+    #[arg(
+        long = "lng",
+        alias = "longitude",
+        requires = "latitude",
+        allow_hyphen_values = true,
+        value_parser = parse_longitude
+    )]
     pub longitude: Option<f64>,
 }
 
@@ -220,6 +234,90 @@ impl AskArgs {
     pub fn prompt(&self) -> String {
         self.text.join(" ")
     }
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct LogArgs {
+    /// Meal text submitted to the hosted agent.
+    #[arg(value_name = "MEAL", num_args = 0..)]
+    pub meal: Vec<String>,
+
+    /// Optional meal category.
+    #[arg(long = "type", value_enum)]
+    pub meal_type: Option<MealType>,
+
+    /// Household member name/id, `me`, or `everyone`.
+    #[arg(long = "for", value_name = "MEMBER")]
+    pub checking_for: Option<String>,
+}
+
+impl LogArgs {
+    #[must_use]
+    pub fn meal_text(&self) -> String {
+        self.meal.join(" ")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum MealType {
+    Breakfast,
+    Lunch,
+    Dinner,
+    Snack,
+}
+
+impl MealType {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Breakfast => "breakfast",
+            Self::Lunch => "lunch",
+            Self::Dinner => "dinner",
+            Self::Snack => "snack",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct ItemArgs {
+    /// Food or menu item to evaluate.
+    #[arg(value_name = "ITEM", num_args = 1..)]
+    pub name: Vec<String>,
+
+    /// Restaurant context.
+    #[arg(long, short = 'r')]
+    pub restaurant: Option<String>,
+
+    /// Restaurant index from the last search.
+    #[arg(long, conflicts_with = "restaurant")]
+    pub at: Option<String>,
+}
+
+impl ItemArgs {
+    #[must_use]
+    pub fn item_name(&self) -> String {
+        self.name.join(" ")
+    }
+}
+
+fn parse_latitude(value: &str) -> Result<f64, String> {
+    parse_coordinate(value, -90.0, 90.0, "latitude")
+}
+
+fn parse_longitude(value: &str) -> Result<f64, String> {
+    parse_coordinate(value, -180.0, 180.0, "longitude")
+}
+
+fn parse_coordinate(value: &str, minimum: f64, maximum: f64, label: &str) -> Result<f64, String> {
+    let coordinate = value
+        .parse::<f64>()
+        .map_err(|_| format!("{label} must be a number"))?;
+    if !coordinate.is_finite() || !(minimum..=maximum).contains(&coordinate) {
+        return Err(format!(
+            "{label} must be finite and between {minimum} and {maximum}"
+        ));
+    }
+    Ok(coordinate)
 }
 
 /// Compatibility placeholder for Phase 2 command-topology inventory. These

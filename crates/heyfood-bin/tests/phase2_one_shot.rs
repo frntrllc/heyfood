@@ -359,6 +359,92 @@ async fn one_shot_ask_collects_sse_into_exactly_one_json_value() {
 }
 
 #[tokio::test]
+async fn log_preserves_the_frozen_meal_prompt_and_type_semantics() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/agent/converse "));
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(
+            body["query"],
+            "Log this meal: oatmeal and berries. Meal type: breakfast."
+        );
+        respond_stream(
+            &mut socket,
+            b"event: result\ndata: {\"message\":\"Logged.\"}\n\nevent: done\ndata: {}\n\n",
+        )
+        .await;
+    });
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "--json",
+        "log",
+        "--type",
+        "breakfast",
+        "oatmeal",
+        "and",
+        "berries",
+    ])
+    .unwrap();
+    let output = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&output).unwrap()["message"],
+        "Logged."
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn item_uses_the_channel_tool_and_preserves_restaurant_context() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/channel/tools/explain_item "));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer channel")
+        );
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["item_name"], "veggie burger");
+        assert_eq!(body["restaurant_name"], "Cafe One");
+        respond(
+            &mut socket,
+            json!({
+                "item_name": "veggie burger",
+                "status": "compatible",
+                "summary": "This item fits the profile."
+            }),
+        )
+        .await;
+    });
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "--json",
+        "item",
+        "--restaurant",
+        "Cafe One",
+        "veggie",
+        "burger",
+    ])
+    .unwrap();
+    let output = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&output).unwrap()["status"],
+        "compatible"
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn invalid_terminal_events_fail_without_returning_partial_machine_output() {
     for (terminal, expected_code) in [
         (

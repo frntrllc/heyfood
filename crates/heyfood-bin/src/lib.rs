@@ -10,8 +10,9 @@ use heyfood_application::{
     TurnRequest, execute_one_shot_turn,
 };
 use heyfood_cli::{
-    AskArgs, Command, GroceryCommand, HealthCommand, OutputMode, render_agent_result,
-    render_grocery_list, render_grocery_proposal, render_health_context, render_json,
+    AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, OutputMode,
+    render_agent_result, render_grocery_list, render_grocery_proposal, render_health_context,
+    render_json,
 };
 use heyfood_core::{
     AddItemsRequestWire, GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId,
@@ -145,9 +146,7 @@ impl<'a> OneShotExecutor<'a> {
         cancellation: CancellationToken,
     ) -> Result<String, OneShotError> {
         match command {
-            Command::Ask(arguments) | Command::Log(arguments) | Command::Item(arguments) => {
-                self.execute_agent(arguments, stdin, cancellation).await
-            }
+            Command::Ask(arguments) => self.execute_agent(arguments, stdin, cancellation).await,
             Command::Reply(arguments) => {
                 if arguments.conversation_id.is_none() {
                     return Err(OneShotError::new(
@@ -157,6 +156,8 @@ impl<'a> OneShotExecutor<'a> {
                 }
                 self.execute_agent(arguments, stdin, cancellation).await
             }
+            Command::Log(arguments) => self.execute_log(arguments, stdin, cancellation).await,
+            Command::Item(arguments) => self.execute_item(arguments, cancellation).await,
             Command::Grocery { command } => {
                 self.execute_grocery(command, stdin, cancellation).await
             }
@@ -194,16 +195,97 @@ impl<'a> OneShotExecutor<'a> {
             arguments.prompt()
         };
         let prompt = bounded_text(prompt, MAX_CONFIRMATION_STDIN_BYTES, "prompt")?;
+        self.execute_prompt(
+            prompt,
+            arguments.conversation_id,
+            TurnContext {
+                latitude: arguments.latitude,
+                longitude: arguments.longitude,
+                ..TurnContext::default()
+            },
+            cancellation,
+        )
+        .await
+    }
+
+    async fn execute_log(
+        &self,
+        arguments: LogArgs,
+        stdin: &[u8],
+        cancellation: CancellationToken,
+    ) -> Result<String, OneShotError> {
+        if arguments.checking_for.is_some() {
+            return Err(OneShotError::new(
+                "household_context_unavailable",
+                "Native household targeting is not yet qualified; omit --for or use the supported Python client.",
+            ));
+        }
+        let meal = if arguments.meal.is_empty() {
+            if stdin.is_empty() || stdin.len() > MAX_CONFIRMATION_STDIN_BYTES {
+                return Err(OneShotError::new(
+                    "invalid_meal",
+                    "meal text or at most 1 MiB of UTF-8 stdin is required",
+                ));
+            }
+            std::str::from_utf8(stdin)
+                .map_err(|_| OneShotError::new("invalid_meal", "meal stdin is not UTF-8"))?
+                .trim_end_matches(['\r', '\n'])
+                .to_owned()
+        } else {
+            arguments.meal_text()
+        };
+        let meal = bounded_text(meal, MAX_CONFIRMATION_STDIN_BYTES, "meal")?;
+        let mut prompt = format!("Log this meal: {meal}");
+        if let Some(meal_type) = arguments.meal_type {
+            prompt.push_str(". Meal type: ");
+            prompt.push_str(meal_type.as_str());
+            prompt.push('.');
+        }
+        self.execute_prompt(prompt, None, TurnContext::default(), cancellation)
+            .await
+    }
+
+    async fn execute_item(
+        &self,
+        arguments: ItemArgs,
+        cancellation: CancellationToken,
+    ) -> Result<String, OneShotError> {
+        if arguments.at.is_some() {
+            return Err(OneShotError::new(
+                "restaurant_selector_unavailable",
+                "Native last-search selection is not yet qualified; pass --restaurant explicitly.",
+            ));
+        }
+        let item_name = bounded_text(arguments.item_name(), 200, "item name")?;
+        let restaurant = arguments
+            .restaurant
+            .map(|value| bounded_text(value, 200, "restaurant name"))
+            .transpose()?;
+        let document = self
+            .service
+            .explain_item(
+                &item_name,
+                restaurant.as_deref(),
+                OperationId::new(),
+                cancellation,
+            )
+            .await?;
+        Ok(render_agent_result(&document, self.output_mode))
+    }
+
+    async fn execute_prompt(
+        &self,
+        prompt: String,
+        conversation_id: Option<String>,
+        context: TurnContext,
+        cancellation: CancellationToken,
+    ) -> Result<String, OneShotError> {
         let result = execute_one_shot_turn(
             self.service,
             TurnRequest {
                 prompt,
-                conversation_id: arguments.conversation_id,
-                context: TurnContext {
-                    latitude: arguments.latitude,
-                    longitude: arguments.longitude,
-                    ..TurnContext::default()
-                },
+                conversation_id,
+                context,
                 refresh: RefreshPolicy::Never,
             },
             self.credentials.clone(),

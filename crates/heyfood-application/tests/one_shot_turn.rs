@@ -6,9 +6,10 @@ use heyfood_application::{
     RefreshPolicy, ServicePort, TurnContext, TurnRequest, execute_one_shot_turn,
 };
 use heyfood_core::{
-    AccountId, AgentEvent, CredentialVersion, OperationId, RefreshOutcome, RefreshRequest,
-    SensitiveString, SessionCredentials,
+    AccountId, AgentChoice, AgentEvent, CredentialVersion, OperationId, RefreshOutcome,
+    RefreshRequest, SensitiveString, SessionCredentials,
 };
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 enum StreamBehavior {
@@ -16,6 +17,7 @@ enum StreamBehavior {
     Eof,
     Error(Option<PortError>),
     Partials(usize),
+    Events(Vec<AgentEvent>),
 }
 
 struct FixtureStream(StreamBehavior);
@@ -33,6 +35,13 @@ impl EventStream for FixtureStream {
                     } else {
                         *remaining -= 1;
                         Ok(Some(AgentEvent::Partial { text: "x".into() }))
+                    }
+                }
+                StreamBehavior::Events(events) => {
+                    if events.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(events.remove(0)))
                     }
                 }
             }
@@ -99,6 +108,26 @@ async fn execute(behavior: StreamBehavior, cancellation: CancellationToken) -> P
     .unwrap_err()
 }
 
+async fn execute_success(events: Vec<AgentEvent>) -> heyfood_application::OneShotTurnResult {
+    let service = FixtureService(Mutex::new(Some(Box::new(FixtureStream(
+        StreamBehavior::Events(events),
+    )))));
+    execute_one_shot_turn(
+        &service,
+        TurnRequest {
+            prompt: "choose lunch".into(),
+            conversation_id: None,
+            context: TurnContext::default(),
+            refresh: RefreshPolicy::Never,
+        },
+        credentials(),
+        OperationId::new(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap()
+}
+
 #[tokio::test]
 async fn cancellation_after_acceptance_is_uncertain() {
     let cancellation = CancellationToken::new();
@@ -137,4 +166,51 @@ async fn bounded_stream_exit_after_acceptance_is_uncertain() {
     .await;
     assert_eq!(error.code, "stream_limit");
     assert!(error.outcome_uncertain);
+}
+
+#[tokio::test]
+async fn partials_and_choices_are_merged_into_the_terminal_document() {
+    let result = execute_success(vec![
+        AgentEvent::Partial {
+            text: "hello ".into(),
+        },
+        AgentEvent::Partial {
+            text: "world".into(),
+        },
+        AgentEvent::Choices {
+            choices: vec![AgentChoice::from_untrusted("One".into(), None).unwrap()],
+            allow_multiple: true,
+        },
+        AgentEvent::Result {
+            document: json!({"conversation_id": "conversation-1"}),
+            conversation_id: Some("conversation-1".into()),
+        },
+    ])
+    .await;
+
+    assert_eq!(result.document["text"], "hello world");
+    assert_eq!(result.document["choices"]["allow_multiple"], true);
+    assert_eq!(result.document["choices"]["choices"][0]["label"], "One");
+}
+
+#[tokio::test]
+async fn terminal_text_wins_but_streamed_choices_are_preserved() {
+    let result = execute_success(vec![
+        AgentEvent::Partial {
+            text: "draft".into(),
+        },
+        AgentEvent::Choices {
+            choices: vec![AgentChoice::from_untrusted("First".into(), Some("1".into())).unwrap()],
+            allow_multiple: false,
+        },
+        AgentEvent::Result {
+            document: json!({"message": "final"}),
+            conversation_id: None,
+        },
+    ])
+    .await;
+
+    assert_eq!(result.document["message"], "final");
+    assert!(result.document.get("text").is_none());
+    assert_eq!(result.document["choices"]["choices"][0]["value"], "1");
 }

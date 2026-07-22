@@ -44,7 +44,7 @@ jobs:
           fi
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - name: Test the exact native workspace
-        run: cargo test --workspace --locked --all-targets
+        run: cargo test --workspace --locked --all-targets --no-default-features
 
   build:
     name: Build / ${{ matrix.target }}

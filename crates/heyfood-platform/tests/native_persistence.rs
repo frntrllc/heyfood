@@ -157,6 +157,78 @@ fn complete_auth_bundle_is_atomic_owner_only_and_refuses_overwrite() {
 
 #[test]
 #[cfg(not(windows))]
+fn account_bound_initialization_commits_and_verifies_both_stores() {
+    let root = TempRoot::new("account-bound-initialize");
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let expected = auth_bundle();
+
+    auth_store
+        .initialize_account_bound(&expected, &session_store)
+        .unwrap();
+
+    assert_eq!(
+        auth_store.load_account_bound(&session_store).unwrap(),
+        Some(expected)
+    );
+    assert!(!root.0.join("auth.reconciliation").exists());
+}
+
+#[test]
+#[cfg(not(windows))]
+fn account_bound_load_blocks_cross_account_state_with_a_durable_marker() {
+    let root = TempRoot::new("account-bound-conflict");
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    auth_store.initialize(&auth_bundle()).unwrap();
+    let other_session = SessionCredentials::from_unix_expiry(
+        AccountId::parse("different-account").unwrap(),
+        SensitiveString::new("other-access"),
+        SensitiveString::new("other-refresh"),
+        CredentialVersion::new(1),
+        4_102_444_800,
+    )
+    .unwrap();
+    session_store.initialize(&other_session).unwrap();
+
+    let error = auth_store.load_account_bound(&session_store).unwrap_err();
+    assert_eq!(error.code, "authorization_account_conflict");
+    assert!(error.outcome_uncertain);
+    assert_eq!(
+        std::fs::read(root.0.join("auth.reconciliation")).unwrap(),
+        b"account_binding_conflict\n"
+    );
+    assert_eq!(
+        auth_store
+            .load_account_bound(&session_store)
+            .unwrap_err()
+            .code,
+        "auth_reconciliation_required"
+    );
+}
+
+#[test]
+#[cfg(not(windows))]
+fn account_bound_load_recovers_a_legacy_missing_session_before_use() {
+    let root = TempRoot::new("account-bound-legacy");
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let expected = auth_bundle();
+    auth_store.initialize(&expected).unwrap();
+
+    assert_eq!(
+        auth_store.load_account_bound(&session_store).unwrap(),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        block_on(session_store.load()).unwrap(),
+        Some(expected.session)
+    );
+    assert!(!root.0.join("auth.reconciliation").exists());
+}
+
+#[test]
+#[cfg(not(windows))]
 fn channel_refresh_transaction_is_single_flight_and_reconciliation_is_durable() {
     let root = TempRoot::new("auth-refresh-transaction");
     let store = Arc::new(NativeAuthStore::open(&root.0).unwrap());
@@ -860,6 +932,18 @@ fn native_keyring_rotates_and_reconciles_without_token_files() {
     store.delete().unwrap();
     assert!(!store.reconciliation_required().unwrap());
     store.initialize(&credentials(1)).unwrap();
+    let staged = credentials(2);
+    store
+        .stage_authorized_session("native-keyring-stage", &credentials(1), &staged)
+        .unwrap();
+    store
+        .verify_staged_authorized_session("native-keyring-stage", &credentials(1), &staged)
+        .unwrap();
+    assert!(store.reconciliation_required().unwrap());
+    store
+        .clear_staged_authorized_session("native-keyring-stage", &staged)
+        .unwrap();
+    assert_eq!(block_on(store.load()).unwrap(), Some(credentials(1)));
     let commit = CredentialCommit {
         commit_id: CommitId::new(),
         expected_version: CredentialVersion::new(1),

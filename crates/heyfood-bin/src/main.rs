@@ -12,13 +12,19 @@ use heyfood_agent_runtime::{
     ReauthorizationStageStatus, ReauthorizationStatus, RegistrationClient, RegistrationError,
     StagedReauthorization,
 };
-use heyfood_application::{BrowserPort, CredentialPort, EnsureSession};
+#[cfg(all(not(windows), feature = "native-credentials"))]
+use heyfood_application::{BoxFuture, CredentialCommit, CredentialPort, PortError};
+use heyfood_application::{BrowserPort, EnsureSession};
 use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
 use heyfood_core::{
     BrowserUrl, NetworkPolicy, OperationId, ProfileStatus, SensitiveString, ServiceUrl,
     SessionSnapshot, terminal_safe_text,
 };
-#[cfg(not(windows))]
+#[cfg(all(not(windows), feature = "native-credentials"))]
+use heyfood_core::{CommitId, SessionCredentials};
+#[cfg(all(not(windows), feature = "native-credentials"))]
+use heyfood_platform::AuthorizationSessionStore;
+#[cfg(all(not(windows), not(feature = "native-credentials")))]
 use heyfood_platform::FileCredentialStore as NativeSessionStore;
 #[cfg(windows)]
 use heyfood_platform::WindowsCredentialStore as NativeSessionStore;
@@ -26,7 +32,171 @@ use heyfood_platform::{
     AuthorizationReplacementJournal, AuthorizationReplacementPhase, NativeAuthStore, NativeBrowser,
     NativeClock, NativePaths,
 };
+#[cfg(all(not(windows), feature = "native-credentials"))]
+use heyfood_platform::{FileCredentialStore, KeyringCredentialStore};
 use tokio_util::sync::CancellationToken;
+
+#[cfg(all(not(windows), feature = "native-credentials"))]
+enum NativeSessionStore {
+    Platform(KeyringCredentialStore),
+    OwnerOnlyFile(FileCredentialStore),
+}
+
+#[cfg(all(not(windows), feature = "native-credentials"))]
+impl NativeSessionStore {
+    fn open(root: impl AsRef<std::path::Path>) -> Result<Self, PortError> {
+        let root = root.as_ref();
+        match std::env::var("HEYFOOD_CREDENTIAL_STORE").as_deref() {
+            Ok("file") => {
+                eprintln!(
+                    "heyfood: using explicitly requested owner-only file credential storage; unset HEYFOOD_CREDENTIAL_STORE to use the operating-system credential store"
+                );
+                FileCredentialStore::open(root).map(Self::OwnerOnlyFile)
+            }
+            Ok("native") => KeyringCredentialStore::open(root).map(Self::Platform),
+            Err(std::env::VarError::NotPresent) => {
+                let legacy = FileCredentialStore::open(root)?;
+                let legacy_state_exists = match legacy.load_authorized_session() {
+                    Ok(Some(_)) | Err(_) => true,
+                    Ok(None) => legacy.reconciliation_required()?,
+                };
+                if legacy_state_exists {
+                    eprintln!(
+                        "heyfood: continuing with disclosed owner-only legacy credential storage; set HEYFOOD_CREDENTIAL_STORE=native after completing credential migration"
+                    );
+                    Ok(Self::OwnerOnlyFile(legacy))
+                } else {
+                    KeyringCredentialStore::open(root).map(Self::Platform)
+                }
+            }
+            Ok(_) | Err(std::env::VarError::NotUnicode(_)) => Err(PortError::new(
+                "credential_store_selection",
+                "HEYFOOD_CREDENTIAL_STORE must be `native` or the explicit `file` fallback",
+            )),
+        }
+    }
+
+    fn reconciliation_required(&self) -> Result<bool, PortError> {
+        match self {
+            Self::Platform(store) => store.reconciliation_required(),
+            Self::OwnerOnlyFile(store) => store.reconciliation_required(),
+        }
+    }
+}
+
+#[cfg(all(not(windows), feature = "native-credentials"))]
+impl CredentialPort for NativeSessionStore {
+    fn load(&self) -> BoxFuture<'_, Result<Option<SessionCredentials>, PortError>> {
+        match self {
+            Self::Platform(store) => store.load(),
+            Self::OwnerOnlyFile(store) => store.load(),
+        }
+    }
+
+    fn commit(&self, commit: CredentialCommit) -> BoxFuture<'_, Result<(), PortError>> {
+        match self {
+            Self::Platform(store) => store.commit(commit),
+            Self::OwnerOnlyFile(store) => store.commit(commit),
+        }
+    }
+
+    fn mark_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        match self {
+            Self::Platform(store) => store.mark_reconciliation_required(commit_id),
+            Self::OwnerOnlyFile(store) => store.mark_reconciliation_required(commit_id),
+        }
+    }
+
+    fn clear_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        match self {
+            Self::Platform(store) => store.clear_reconciliation_required(commit_id),
+            Self::OwnerOnlyFile(store) => store.clear_reconciliation_required(commit_id),
+        }
+    }
+}
+
+#[cfg(all(not(windows), feature = "native-credentials"))]
+impl AuthorizationSessionStore for NativeSessionStore {
+    fn initialize_authorized_session(
+        &self,
+        credentials: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        match self {
+            Self::Platform(store) => store.initialize_authorized_session(credentials),
+            Self::OwnerOnlyFile(store) => store.initialize_authorized_session(credentials),
+        }
+    }
+
+    fn load_authorized_session(&self) -> Result<Option<SessionCredentials>, PortError> {
+        match self {
+            Self::Platform(store) => store.load_authorized_session(),
+            Self::OwnerOnlyFile(store) => store.load_authorized_session(),
+        }
+    }
+
+    fn replace_authorized_session(
+        &self,
+        credentials: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        match self {
+            Self::Platform(store) => store.replace_authorized_session(credentials),
+            Self::OwnerOnlyFile(store) => store.replace_authorized_session(credentials),
+        }
+    }
+
+    fn stage_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        match self {
+            Self::Platform(store) => {
+                store.stage_authorized_session(client_transaction_id, previous, replacement)
+            }
+            Self::OwnerOnlyFile(store) => {
+                store.stage_authorized_session(client_transaction_id, previous, replacement)
+            }
+        }
+    }
+
+    fn verify_staged_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        match self {
+            Self::Platform(store) => {
+                store.verify_staged_authorized_session(client_transaction_id, previous, replacement)
+            }
+            Self::OwnerOnlyFile(store) => {
+                store.verify_staged_authorized_session(client_transaction_id, previous, replacement)
+            }
+        }
+    }
+
+    fn clear_staged_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        expected_replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        match self {
+            Self::Platform(store) => {
+                store.clear_staged_authorized_session(client_transaction_id, expected_replacement)
+            }
+            Self::OwnerOnlyFile(store) => {
+                store.clear_staged_authorized_session(client_transaction_id, expected_replacement)
+            }
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -43,6 +213,15 @@ async fn main() -> ExitCode {
     }
     match cli.command {
         Some(Command::Completion { shell }) => {
+            if machine {
+                return failure(
+                    "completion_json_unsupported",
+                    "Shell completion source cannot be emitted as JSON.",
+                    Some("Run `heyfood completion <shell>` without --json."),
+                    true,
+                    false,
+                );
+            }
             heyfood_cli::write_completions(shell, &mut io::stdout());
             ExitCode::SUCCESS
         }
@@ -144,7 +323,7 @@ async fn one_shot_inner(
         ));
     }
     let mut auth = auth_store
-        .load()
+        .load_account_bound(credential_store.as_ref())
         .map_err(heyfood_bin::OneShotError::from)?
         .ok_or_else(|| {
             heyfood_bin::OneShotError::new(
@@ -220,21 +399,18 @@ async fn one_shot_inner(
         }
     }
 
-    let credentials = match credential_store
-        .load()
-        .await
+    // Re-read both stores under the account-binding transaction after any
+    // channel refresh and before composing the authenticated service.
+    auth = auth_store
+        .load_account_bound(credential_store.as_ref())
         .map_err(heyfood_bin::OneShotError::from)?
-    {
-        Some(credentials) => credentials,
-        None => {
-            // Registration predates the rotating-session store. Seed it once
-            // from the complete authorization bundle, then rotate only here.
-            credential_store
-                .initialize(&auth.session)
-                .map_err(heyfood_bin::OneShotError::from)?;
-            auth.session.clone()
-        }
-    };
+        .ok_or_else(|| {
+            heyfood_bin::OneShotError::new(
+                "login_required",
+                "No hello.food account is connected. Run `heyfood register` first.",
+            )
+        })?;
+    let credentials = auth.session.clone();
     let reconciliation_required = credential_store
         .reconciliation_required()
         .map_err(heyfood_bin::OneShotError::from)?;
@@ -290,10 +466,8 @@ fn uncertain_one_shot(code: &'static str, message: impl Into<String>) -> heyfood
 
 fn read_command_stdin(command: &Command) -> Result<Vec<u8>, heyfood_bin::OneShotError> {
     let should_read = match command {
-        Command::Ask(arguments)
-        | Command::Reply(arguments)
-        | Command::Log(arguments)
-        | Command::Item(arguments) => arguments.text.is_empty(),
+        Command::Ask(arguments) | Command::Reply(arguments) => arguments.text.is_empty(),
+        Command::Log(arguments) => arguments.meal.is_empty(),
         Command::Grocery {
             command: heyfood_cli::GroceryCommand::Confirm(_),
         } => true,
@@ -405,7 +579,7 @@ async fn login_inner(
     }
 
     auth_store
-        .load()
+        .load_account_bound(&session_store)
         .map_err(platform_error)?
         .ok_or_else(|| RegistrationError {
             code: "login_required",
@@ -840,7 +1014,12 @@ async fn register_inner(
 ) -> Result<RegistrationResultDocument, RegistrationError> {
     let paths = NativePaths::discover().map_err(platform_error)?;
     let auth_store = NativeAuthStore::open(paths.config_dir()).map_err(platform_error)?;
-    if auth_store.load().map_err(platform_error)?.is_some() {
+    let session_store = NativeSessionStore::open(paths.config_dir()).map_err(platform_error)?;
+    if auth_store
+        .load_account_bound(&session_store)
+        .map_err(platform_error)?
+        .is_some()
+    {
         return Err(RegistrationError {
             code: "account_already_connected",
             public_message: "A hello.food account is already connected.".into(),
@@ -884,18 +1063,12 @@ async fn register_inner(
     let outcome = outcome?;
 
     // Persist only after OAuth, app-session exchange, and contract validation
-    // all succeed. The owner-only atomic store retains both grants together.
-    auth_store.initialize(&outcome.credentials).map_err(|_| RegistrationError {
-        code: "registration_persistence_outcome_uncertain",
-        public_message: "The account was connected, but native credentials could not be saved. Do not retry registration until account state is reconciled.".into(),
-        retryable: false,
-        outcome_uncertain: true,
-    })?;
-    NativeSessionStore::open(paths.config_dir())
-        .and_then(|store| store.initialize(&outcome.credentials.session))
+    // all succeed. A durable cross-store marker blocks any split outcome.
+    auth_store
+        .initialize_account_bound(&outcome.credentials, &session_store)
         .map_err(|_| RegistrationError {
             code: "registration_persistence_outcome_uncertain",
-            public_message: "The account was connected, but its rotating session could not be initialized. Do not retry registration until account state is reconciled.".into(),
+            public_message: "The account was connected, but its account-bound native credentials could not be initialized. Do not retry registration until account state is reconciled.".into(),
             retryable: false,
             outcome_uncertain: true,
         })?;

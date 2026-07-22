@@ -13,6 +13,7 @@ use heyfood_core::{
 use reqwest::{Method, RequestBuilder, Response, StatusCode, header};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::{HttpService, uncertain_transport};
@@ -53,6 +54,40 @@ impl DispatchKind {
 }
 
 impl HttpService {
+    /// Evaluate an item through the released provider-neutral channel-tool
+    /// contract. This deliberately uses channel authority, matching the
+    /// Python CLI, rather than converting the request into an agent prompt.
+    pub async fn explain_item(
+        &self,
+        item_name: &str,
+        restaurant_name: Option<&str>,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> Result<Value, PortError> {
+        let cli_auth = self.cli_auth.as_ref().ok_or_else(|| {
+            PortError::new(
+                "channel_tool_context",
+                "CLI channel authorization is required for item evaluation",
+            )
+        })?;
+        let body = serde_json::json!({
+            "item_name": item_name,
+            "restaurant_name": restaurant_name,
+        });
+        let builder = self
+            .request(
+                Method::POST,
+                "/v1/channel/tools/explain_item",
+                None,
+                operation_id,
+            )?
+            .header(header::ACCEPT, "application/json")
+            .bearer_auth(cli_auth.channel_access_token.expose_secret())
+            .json(&body);
+        self.dispatch_json(builder, cancellation, DispatchKind::Safe)
+            .await
+    }
+
     pub async fn discover_authorization_metadata(
         &self,
         cancellation: CancellationToken,

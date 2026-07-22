@@ -88,6 +88,7 @@ async fn run(
     command
         .args(args)
         .env("HEYFOOD_STATE_DIR", root)
+        .env("HEYFOOD_CREDENTIAL_STORE", "file")
         .env("HEYFOOD_API_URL", base_url)
         .env("HEYFOOD_API_KEY", "fixture-api-key")
         .stdout(Stdio::piped())

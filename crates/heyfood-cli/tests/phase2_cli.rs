@@ -123,3 +123,37 @@ fn raw_alias_selects_json_but_conflicts_with_json() {
     assert_eq!(parsed.output_mode(true), OutputMode::Json);
     assert!(CommandLine::try_parse_from(["heyfood", "--raw", "--json", "status"]).is_err());
 }
+
+#[test]
+fn coordinates_preserve_short_names_aliases_and_validate_domains() {
+    for arguments in [
+        [
+            "heyfood", "ask", "lunch", "--lat", "34.1", "--lng", "-118.2",
+        ],
+        [
+            "heyfood",
+            "ask",
+            "lunch",
+            "--latitude",
+            "34.1",
+            "--longitude",
+            "-118.2",
+        ],
+    ] {
+        let parsed = CommandLine::try_parse_from(arguments).unwrap();
+        assert!(matches!(
+            parsed.command,
+            Some(Command::Ask(ref ask))
+                if ask.latitude == Some(34.1) && ask.longitude == Some(-118.2)
+        ));
+    }
+
+    for arguments in [
+        vec!["heyfood", "ask", "lunch", "--lat", "91", "--lng", "0"],
+        vec!["heyfood", "ask", "lunch", "--lat", "0", "--lng", "181"],
+        vec!["heyfood", "ask", "lunch", "--lat", "NaN", "--lng", "0"],
+        vec!["heyfood", "ask", "lunch", "--lat", "0", "--lng", "inf"],
+    ] {
+        assert!(CommandLine::try_parse_from(arguments).is_err());
+    }
+}

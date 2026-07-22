@@ -703,6 +703,18 @@ pub struct NativeAuthRefreshGuard<'a> {
 /// must either leave the previous credential intact or return an uncertain
 /// error; the auth-store transaction marker blocks use after either outcome.
 pub trait AuthorizationSessionStore {
+    /// Initialize a previously empty authoritative session store. Callers must
+    /// hold a durable cross-store write-ahead marker until both stores verify.
+    fn initialize_authorized_session(
+        &self,
+        _credentials: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        Err(PortError::new(
+            "credential_initialization_unsupported",
+            "this session store does not support account-bound initialization",
+        ))
+    }
+
     /// Load the authoritative active session under the store's own lock. The
     /// session embedded in the auth bundle may lag normal app-session rotation
     /// and must never be used as rollback authority.
@@ -763,6 +775,167 @@ impl NativeAuthRefreshGuard<'_> {
 }
 
 impl NativeAuthStore {
+    /// Load authorization and rotating-session state as one account-bound
+    /// composition. A recoverable initialization window is completed under a
+    /// durable write-ahead marker; every other split or cross-account state is
+    /// left blocked for explicit reconciliation before any request can run.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn load_account_bound(
+        &self,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<Option<AuthCredentialBundle>, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.load_authorization_journal_unlocked()?.is_some() {
+            return Err(PortError::uncertain(
+                "auth_reconciliation_required",
+                "authorization replacement must be reconciled before loading account state",
+            ));
+        }
+        let initialization_pending = if self.reconciliation_path.exists() {
+            read_limited(&self.reconciliation_path, 1024)? == b"account_binding_pending\n"
+        } else {
+            false
+        };
+        if self.reconciliation_path.exists() && !initialization_pending {
+            return Err(PortError::uncertain(
+                "auth_reconciliation_required",
+                "authorization credentials have an unresolved outcome",
+            ));
+        }
+
+        let auth = self.load_unlocked()?;
+        let session = session_store.load_authorized_session()?;
+        match (auth, session) {
+            (None, None) => {
+                if initialization_pending {
+                    clear_any_reconciliation_marker(&self.reconciliation_path)?;
+                }
+                Ok(None)
+            }
+            (Some(auth), Some(session)) if auth.session.account_id == session.account_id => {
+                if initialization_pending {
+                    clear_any_reconciliation_marker(&self.reconciliation_path)?;
+                }
+                Ok(Some(AuthCredentialBundle {
+                    channel: auth.channel,
+                    session,
+                }))
+            }
+            (Some(auth), None) => {
+                AtomicFile::replace(&self.reconciliation_path, b"account_binding_pending\n")
+                    .map_err(|error| {
+                        PortError::uncertain("auth_reconciliation_write", error.to_string())
+                    })?;
+                session_store.initialize_authorized_session(&auth.session)?;
+                let session = session_store.load_authorized_session()?.ok_or_else(|| {
+                    PortError::uncertain(
+                        "auth_account_binding_verify",
+                        "session initialization was not durably observable",
+                    )
+                })?;
+                if session.account_id != auth.session.account_id {
+                    AtomicFile::replace(&self.reconciliation_path, b"account_binding_conflict\n")?;
+                    return Err(PortError::uncertain(
+                        "authorization_account_conflict",
+                        "authorization and active session belong to different accounts",
+                    ));
+                }
+                clear_any_reconciliation_marker(&self.reconciliation_path)?;
+                Ok(Some(AuthCredentialBundle {
+                    channel: auth.channel,
+                    session,
+                }))
+            }
+            _ => {
+                AtomicFile::replace(&self.reconciliation_path, b"account_binding_conflict\n")
+                    .map_err(|error| {
+                        PortError::uncertain("auth_reconciliation_write", error.to_string())
+                    })?;
+                Err(PortError::uncertain(
+                    "authorization_account_conflict",
+                    "authorization and active session are missing or belong to different accounts",
+                ))
+            }
+        }
+    }
+
+    /// Initialize both credential stores under one durable cross-store
+    /// transaction. Any interrupted write leaves the auth reconciliation
+    /// marker in place, so no command can consume half-initialized authority.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn initialize_account_bound(
+        &self,
+        bundle: &AuthCredentialBundle,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<(), PortError> {
+        bundle
+            .validate()
+            .map_err(|error| PortError::new("auth_validation", error))?;
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        self.ensure_reconciled_unlocked()?;
+        if self.load_unlocked()?.is_some() || session_store.load_authorized_session()?.is_some() {
+            return Err(PortError::new(
+                "auth_exists",
+                "an account is already connected in one or both credential stores",
+            ));
+        }
+        AtomicFile::replace(&self.reconciliation_path, b"account_binding_pending\n").map_err(
+            |error| PortError::uncertain("auth_reconciliation_write", error.to_string()),
+        )?;
+        session_store.initialize_authorized_session(&bundle.session)?;
+        let verified_session = session_store.load_authorized_session()?.ok_or_else(|| {
+            PortError::uncertain(
+                "auth_account_binding_verify",
+                "initialized session was not durably observable",
+            )
+        })?;
+        if verified_session != bundle.session {
+            return Err(PortError::uncertain(
+                "auth_account_binding_verify",
+                "initialized session did not match the authorized session",
+            ));
+        }
+        self.write_initial_unlocked(bundle)?;
+        if self.load_unlocked()?.as_ref() != Some(bundle) {
+            return Err(PortError::uncertain(
+                "auth_account_binding_verify",
+                "initialized authorization was not durably observable",
+            ));
+        }
+        clear_any_reconciliation_marker(&self.reconciliation_path)
+    }
+
+    #[cfg(not(windows))]
+    fn write_initial_unlocked(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
+        if self.state_path.exists() {
+            return Err(PortError::new(
+                "auth_exists",
+                "authorization state already exists",
+            ));
+        }
+        AtomicFile::replace(&self.state_path, &encode_auth_bundle(bundle))
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
+    fn write_initial_unlocked(&self, bundle: &AuthCredentialBundle) -> Result<(), PortError> {
+        if self.read_windows_unlocked()?.is_some() {
+            return Err(PortError::new(
+                "auth_exists",
+                "authorization state already exists",
+            ));
+        }
+        let document = encode_auth_bundle(bundle);
+        if document.len() > WINDOWS_CREDENTIAL_BLOB_MAX_BYTES {
+            return Err(PortError::new(
+                "credential_manager_size",
+                "authorization document exceeds the Windows Credential Manager limit",
+            ));
+        }
+        self.windows_entry()?
+            .set_secret(&document)
+            .map_err(|error| keyring_error("credential_manager_write", error))
+    }
+
     #[cfg(not(windows))]
     pub fn open(root: impl AsRef<Path>) -> Result<Self, PortError> {
         let root = root.as_ref();
@@ -1698,6 +1871,13 @@ impl FileCredentialStore {
 }
 
 impl AuthorizationSessionStore for FileCredentialStore {
+    fn initialize_authorized_session(
+        &self,
+        credentials: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        self.initialize(credentials)
+    }
+
     fn load_authorized_session(&self) -> Result<Option<SessionCredentials>, PortError> {
         let _lock = FileLock::acquire(&self.lock_path, false)?;
         if self.reconciliation_path.exists() {
@@ -2031,6 +2211,13 @@ impl WindowsCredentialStore {
 
 #[cfg(all(windows, feature = "native-credentials"))]
 impl AuthorizationSessionStore for WindowsCredentialStore {
+    fn initialize_authorized_session(
+        &self,
+        credentials: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        self.initialize(credentials)
+    }
+
     fn load_authorized_session(&self) -> Result<Option<SessionCredentials>, PortError> {
         let _lock = FileLock::acquire(&self.lock_path, false)?;
         if self.reconciliation_path.exists() {
@@ -2187,6 +2374,7 @@ impl CredentialPort for WindowsCredentialStore {
 #[derive(Clone, Debug)]
 pub struct KeyringCredentialStore {
     target: String,
+    authorization_stage_target: String,
     lock_path: PathBuf,
     reconciliation_path: PathBuf,
 }
@@ -2196,10 +2384,11 @@ impl KeyringCredentialStore {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, PortError> {
         let root = root.as_ref();
         create_private_dir(root)?;
+        let identity = hex_encode(root.to_string_lossy().as_bytes());
         Ok(Self {
-            target: format!(
-                "{WINDOWS_CREDENTIAL_SERVICE}:{}",
-                hex_encode(root.to_string_lossy().as_bytes())
+            target: format!("{WINDOWS_CREDENTIAL_SERVICE}:{identity}"),
+            authorization_stage_target: format!(
+                "{WINDOWS_CREDENTIAL_SERVICE}:session-authorization-stage:{identity}"
             ),
             lock_path: root.join("credentials.lock"),
             reconciliation_path: root.join("credentials.reconciliation"),
@@ -2208,6 +2397,12 @@ impl KeyringCredentialStore {
 
     pub fn initialize(&self, credentials: &SessionCredentials) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.read_authorization_stage_unlocked()?.is_some() {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "session state has an unresolved authorization replacement",
+            ));
+        }
         if self.read_unlocked()?.is_some() {
             return Err(PortError::new(
                 "credentials_exist",
@@ -2220,11 +2415,20 @@ impl KeyringCredentialStore {
 
     pub fn reconciliation_required(&self) -> Result<bool, PortError> {
         let _lock = FileLock::acquire(&self.lock_path, false)?;
-        Ok(self.reconciliation_path.exists())
+        Ok(
+            self.reconciliation_path.exists()
+                || self.read_authorization_stage_unlocked()?.is_some(),
+        )
     }
 
     pub fn delete(&self) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.read_authorization_stage_unlocked()?.is_some() {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "session state has an unresolved authorization replacement",
+            ));
+        }
         match self.entry()?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => {
                 clear_any_reconciliation_marker(&self.reconciliation_path)
@@ -2236,6 +2440,40 @@ impl KeyringCredentialStore {
     fn entry(&self) -> Result<keyring::Entry, PortError> {
         keyring::Entry::new(&self.target, "session")
             .map_err(|error| keyring_error("native_keyring_entry", error))
+    }
+
+    fn authorization_stage_entry(&self) -> Result<keyring::Entry, PortError> {
+        keyring::Entry::new(
+            &self.authorization_stage_target,
+            "authorization-session-stage",
+        )
+        .map_err(|error| keyring_error("native_keyring_stage_entry", error))
+    }
+
+    fn read_authorization_stage_unlocked(
+        &self,
+    ) -> Result<Option<AuthorizationSessionStage>, PortError> {
+        match self.authorization_stage_entry()?.get_secret() {
+            Ok(document) => AuthorizationSessionStage::decode(&document).map(Some),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(keyring_error("native_keyring_stage_read", error)),
+        }
+    }
+
+    fn write_authorization_stage_unlocked(
+        &self,
+        stage: &AuthorizationSessionStage,
+    ) -> Result<(), PortError> {
+        let document = stage.encode();
+        if document.len() > WINDOWS_CREDENTIAL_BLOB_MAX_BYTES {
+            return Err(PortError::new(
+                "native_keyring_size",
+                "staged session exceeds the native keyring limit",
+            ));
+        }
+        self.authorization_stage_entry()?
+            .set_secret(&document)
+            .map_err(|error| keyring_error("native_keyring_stage_write", error))
     }
 
     fn read_unlocked(&self) -> Result<Option<CredentialState>, PortError> {
@@ -2289,6 +2527,114 @@ impl KeyringCredentialStore {
     pub(crate) fn broker_clear(&self, commit_id: CommitId) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
         clear_reconciliation_marker(&self.reconciliation_path, commit_id)
+    }
+}
+
+#[cfg(all(not(windows), feature = "native-credentials"))]
+impl AuthorizationSessionStore for KeyringCredentialStore {
+    fn initialize_authorized_session(
+        &self,
+        credentials: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        self.initialize(credentials)
+    }
+
+    fn load_authorized_session(&self) -> Result<Option<SessionCredentials>, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, false)?;
+        if self.reconciliation_path.exists() {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "session rotation has an unresolved outcome",
+            ));
+        }
+        Ok(self.read_unlocked()?.map(|state| state.credentials))
+    }
+
+    fn replace_authorized_session(
+        &self,
+        credentials: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let current = self.read_unlocked()?.ok_or_else(|| {
+            PortError::new("credentials_missing", "credentials are not initialized")
+        })?;
+        if current.credentials.account_id != credentials.account_id {
+            return Err(PortError::new(
+                "credential_account_conflict",
+                "authorization replacement cannot change accounts",
+            ));
+        }
+        self.write_unlocked(&CredentialState::new(credentials.clone()))
+    }
+
+    fn stage_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        validate_transaction_id("client transaction", client_transaction_id)?;
+        if previous.account_id != replacement.account_id {
+            return Err(PortError::new(
+                "credential_account_conflict",
+                "staged authorization cannot change accounts",
+            ));
+        }
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let current = self.read_unlocked()?.ok_or_else(|| {
+            PortError::new("credentials_missing", "credentials are not initialized")
+        })?;
+        if current.credentials != *previous {
+            return Err(PortError::new(
+                "authorization_session_version_conflict",
+                "session changed while staged authorization was prepared",
+            ));
+        }
+        self.write_authorization_stage_unlocked(&AuthorizationSessionStage {
+            client_transaction_id: client_transaction_id.to_owned(),
+            previous: previous.clone(),
+            replacement: replacement.clone(),
+        })
+    }
+
+    fn verify_staged_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, false)?;
+        self.read_authorization_stage_unlocked()?
+            .ok_or_else(|| {
+                PortError::new(
+                    "authorization_session_stage_missing",
+                    "staged session is missing",
+                )
+            })?
+            .verify(client_transaction_id, previous, replacement)
+    }
+
+    fn clear_staged_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        expected_replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let Some(stage) = self.read_authorization_stage_unlocked()? else {
+            return Ok(());
+        };
+        if stage.client_transaction_id != client_transaction_id
+            || stage.replacement != *expected_replacement
+        {
+            return Err(PortError::new(
+                "authorization_session_stage_conflict",
+                "stale cleanup cannot remove a different staged session",
+            ));
+        }
+        delete_keyring_entry(
+            &self.authorization_stage_entry()?,
+            "native_keyring_stage_delete",
+        )
     }
 }
 
@@ -2496,7 +2842,7 @@ fn keyring_error(code: &'static str, error: keyring::Error) -> PortError {
     PortError::new(code, error.to_string())
 }
 
-#[cfg(all(windows, feature = "native-credentials"))]
+#[cfg(feature = "native-credentials")]
 fn delete_keyring_entry(entry: &keyring::Entry, code: &'static str) -> Result<(), PortError> {
     match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
