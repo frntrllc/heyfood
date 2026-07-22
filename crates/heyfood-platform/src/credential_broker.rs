@@ -98,7 +98,7 @@ impl CredentialBrokerStore {
                 "credential broker input exceeds its limit",
             ));
         }
-        let mut child = std::process::Command::new(&self.executable)
+        let child = std::process::Command::new(&self.executable)
             .arg(BROKER_MODE)
             .arg(action)
             .arg(&self.root)
@@ -107,62 +107,7 @@ impl CredentialBrokerStore {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|error| PortError::new("credential_broker_spawn", error.to_string()))?;
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| PortError::new("credential_broker_pipe", "broker stdin is missing"))?;
-        stdin
-            .write_all(&input)
-            .map_err(|error| PortError::new("credential_broker_pipe", error.to_string()))?;
-        drop(stdin);
-
-        let started = Instant::now();
-        let status = loop {
-            if let Some(status) = child
-                .try_wait()
-                .map_err(|error| PortError::new("credential_broker_wait", error.to_string()))?
-            {
-                break status;
-            }
-            if started.elapsed() >= self.deadline {
-                let _ = child.kill();
-                child.wait().map_err(|_| {
-                    broker_error(
-                        outcome_uncertain,
-                        "credential_broker_reap",
-                        "native credential broker could not be terminated",
-                    )
-                })?;
-                return Err(broker_error(
-                    outcome_uncertain,
-                    "credential_broker_timeout",
-                    "native credential operation exceeded its deadline",
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        let mut output = Vec::new();
-        child
-            .stdout
-            .take()
-            .ok_or_else(|| PortError::new("credential_broker_pipe", "broker stdout is missing"))?
-            .take((MAX_BROKER_DOCUMENT_BYTES + 1) as u64)
-            .read_to_end(&mut output)
-            .map_err(|error| PortError::new("credential_broker_pipe", error.to_string()))?;
-        if !status.success() {
-            return Err(broker_error(
-                outcome_uncertain,
-                "credential_broker_failed",
-                "native credential operation failed",
-            ));
-        }
-        if output.len() > MAX_BROKER_DOCUMENT_BYTES {
-            return Err(PortError::new(
-                "credential_broker_size",
-                "credential broker output exceeds its limit",
-            ));
-        }
-        Ok(output)
+        run_bounded_child_blocking(child, input, self.deadline, outcome_uncertain)
     }
 
     pub fn reconciliation_required(&self) -> Result<bool, PortError> {
@@ -178,6 +123,118 @@ impl CredentialBrokerStore {
             )),
         }
     }
+}
+
+struct KillReapGuard(Option<std::process::Child>);
+
+impl KillReapGuard {
+    fn child_mut(&mut self) -> &mut std::process::Child {
+        self.0.as_mut().expect("broker child is present")
+    }
+
+    fn kill_and_reap(&mut self) -> std::io::Result<()> {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            child.wait().map(|_| ())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for KillReapGuard {
+    fn drop(&mut self) {
+        let _ = self.kill_and_reap();
+    }
+}
+
+fn run_bounded_child_blocking(
+    child: std::process::Child,
+    input: Vec<u8>,
+    deadline: Duration,
+    outcome_uncertain: bool,
+) -> Result<Vec<u8>, PortError> {
+    let started = Instant::now();
+    let mut child = KillReapGuard(Some(child));
+    let mut stdin = child
+        .child_mut()
+        .stdin
+        .take()
+        .ok_or_else(|| PortError::new("credential_broker_pipe", "broker stdin is missing"))?;
+    let stdout = child
+        .child_mut()
+        .stdout
+        .take()
+        .ok_or_else(|| PortError::new("credential_broker_pipe", "broker stdout is missing"))?;
+    let writer = std::thread::spawn(move || {
+        let result = stdin.write_all(&input);
+        drop(stdin);
+        result
+    });
+    let reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        stdout
+            .take((MAX_BROKER_DOCUMENT_BYTES + 1) as u64)
+            .read_to_end(&mut output)
+            .map(|_| output)
+    });
+    let status = loop {
+        match child.child_mut().try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                child.kill_and_reap().map_err(|_| {
+                    broker_error(
+                        outcome_uncertain,
+                        "credential_broker_reap",
+                        "native credential broker could not be terminated",
+                    )
+                })?;
+                let _ = writer.join();
+                let _ = reader.join();
+                return Err(broker_error(
+                    outcome_uncertain,
+                    "credential_broker_timeout",
+                    "native credential operation exceeded its deadline",
+                ));
+            }
+            Err(error) => {
+                let _ = child.kill_and_reap();
+                let _ = writer.join();
+                let _ = reader.join();
+                return Err(PortError::new("credential_broker_wait", error.to_string()));
+            }
+        }
+    };
+    child.disarm();
+    writer
+        .join()
+        .map_err(|_| PortError::new("credential_broker_pipe", "broker writer panicked"))?
+        .map_err(|error| PortError::new("credential_broker_pipe", error.to_string()))?;
+    let output = reader
+        .join()
+        .map_err(|_| PortError::new("credential_broker_pipe", "broker reader panicked"))?
+        .map_err(|error| PortError::new("credential_broker_pipe", error.to_string()))?;
+    if !status.success() {
+        return Err(broker_error(
+            outcome_uncertain,
+            "credential_broker_failed",
+            "native credential operation failed",
+        ));
+    }
+    if output.len() > MAX_BROKER_DOCUMENT_BYTES {
+        return Err(PortError::new(
+            "credential_broker_size",
+            "credential broker output exceeds its limit",
+        ));
+    }
+    Ok(output)
 }
 
 async fn run_bounded_child(
@@ -599,14 +656,15 @@ fn parse_commit_id(value: &str) -> Result<CommitId, PortError> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
     use std::path::PathBuf;
-    use std::process::Stdio;
+    use std::process::{Command as BlockingCommand, Stdio};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use sysinfo::{Pid, ProcessesToUpdate, System};
     use tokio::process::Command;
 
-    use super::run_bounded_child;
+    use super::{MAX_BROKER_DOCUMENT_BYTES, run_bounded_child, run_bounded_child_blocking};
 
     #[test]
     #[ignore = "spawned only by the bounded broker lifecycle test"]
@@ -616,6 +674,92 @@ mod tests {
             .expect("fixture PID path");
         std::fs::write(path, format!("{}\n", std::process::id())).expect("publish fixture PID");
         std::thread::sleep(Duration::from_secs(30));
+    }
+
+    #[test]
+    #[ignore = "spawned only by the blocking broker lifecycle tests"]
+    fn broker_blocking_io_fixture() {
+        let mode = std::env::var("HEYFOOD_BROKER_BLOCKING_FIXTURE").expect("fixture mode");
+        if let Some(path) = std::env::var_os("HEYFOOD_BROKER_TEST_PID_FILE") {
+            std::fs::write(path, format!("{}\n", std::process::id())).expect("publish fixture PID");
+        }
+        if mode == "stall" {
+            std::thread::sleep(Duration::from_secs(30));
+            return;
+        }
+        let mut input = Vec::new();
+        std::io::stdin().read_to_end(&mut input).unwrap();
+        assert_eq!(input.len(), MAX_BROKER_DOCUMENT_BYTES);
+        std::io::stdout()
+            .write_all(&vec![0; MAX_BROKER_DOCUMENT_BYTES / 2])
+            .unwrap();
+    }
+
+    fn blocking_fixture(mode: &str, pid_path: Option<&std::path::Path>) -> std::process::Child {
+        let mut command = BlockingCommand::new(std::env::current_exe().expect("test executable"));
+        command
+            .args([
+                "--exact",
+                "credential_broker::tests::broker_blocking_io_fixture",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("HEYFOOD_BROKER_BLOCKING_FIXTURE", mode)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        if let Some(path) = pid_path {
+            command.env("HEYFOOD_BROKER_TEST_PID_FILE", path);
+        }
+        command.spawn().expect("spawn blocking fixture")
+    }
+
+    #[test]
+    fn blocking_broker_concurrently_drains_full_bounded_input_and_output() {
+        let child = blocking_fixture("echo", None);
+        let output = run_bounded_child_blocking(
+            child,
+            vec![b'i'; MAX_BROKER_DOCUMENT_BYTES],
+            Duration::from_secs(5),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            output.iter().filter(|byte| **byte == 0).count(),
+            MAX_BROKER_DOCUMENT_BYTES / 2
+        );
+    }
+
+    #[test]
+    fn blocking_broker_deadline_covers_a_child_stalled_before_stdin_read() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let pid_path = std::env::temp_dir().join(format!(
+            "heyfood-blocking-broker-pid-{}-{nonce}",
+            std::process::id()
+        ));
+        let child = blocking_fixture("stall", Some(&pid_path));
+        let error = run_bounded_child_blocking(
+            child,
+            vec![b'i'; MAX_BROKER_DOCUMENT_BYTES],
+            Duration::from_millis(250),
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "credential_broker_timeout");
+        assert!(error.outcome_uncertain);
+        let pid = std::fs::read_to_string(&pid_path)
+            .expect("fixture published PID")
+            .trim()
+            .parse::<u32>()
+            .expect("fixture PID");
+        let pid = Pid::from_u32(pid);
+        let mut system = System::new();
+        system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+        assert!(system.process(pid).is_none());
+        let _ = std::fs::remove_file(pid_path);
     }
 
     #[tokio::test]

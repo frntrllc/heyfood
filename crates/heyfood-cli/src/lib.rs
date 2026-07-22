@@ -289,7 +289,7 @@ pub struct ItemArgs {
     pub restaurant: Option<String>,
 
     /// Restaurant index from the last search.
-    #[arg(long, conflicts_with = "restaurant")]
+    #[arg(long)]
     pub at: Option<String>,
 }
 
@@ -832,14 +832,18 @@ pub fn render_agent_result(document: &Value, mode: OutputMode) -> String {
             output,
             "{}",
             if allow_multiple {
-                "Choose one or more:"
+                "Choose one or more"
             } else {
-                "Choose one:"
+                "Choose one"
             }
         );
         for (index, choice) in choices.iter().filter_map(Value::as_str).enumerate() {
-            let _ = writeln!(output, "{}. {}", index + 1, terminal_safe_text(choice));
+            let _ = writeln!(output, "{}  {}", index + 1, terminal_safe_text(choice));
         }
+        let _ = writeln!(
+            output,
+            "In chat, enter a number. With ask/reply, send the choice text in the next turn."
+        );
     }
     if output.is_empty() {
         let encoded = serde_json::to_string(document).unwrap_or_else(|_| "{}".into());
@@ -869,7 +873,7 @@ pub fn render_item_result(document: &Value, mode: OutputMode) -> String {
     let mut output = format!(
         "{}  {}\n{}\n",
         terminal_safe_text(item),
-        terminal_safe_text(&status),
+        terminal_safe_text(&item_status_label(&status)),
         terminal_safe_text(summary)
     );
     if let Some(confidence) = document.get("confidence").and_then(Value::as_f64) {
@@ -921,6 +925,33 @@ pub fn render_item_result(document: &Value, mode: OutputMode) -> String {
         let _ = writeln!(output, "Freshness: {}", terminal_safe_text(freshness));
     }
     output
+}
+
+fn item_status_label(value: &str) -> String {
+    let normalized = value.trim().to_lowercase().replace(['-', ' '], "_");
+    match normalized.as_str() {
+        "safe" | "safer" | "generally_safe" | "generally_safer" => "Generally safer".into(),
+        "risky" | "risk" | "caution" | "needs_review" => "Risky".into(),
+        "avoid" | "unsafe" => "Avoid".into(),
+        "" | "unknown" | "unable" | "unable_to_evaluate" | "not_evaluated" => {
+            "Unable to evaluate".into()
+        }
+        _ => value
+            .split_whitespace()
+            .enumerate()
+            .map(|(index, word)| {
+                if index == 0 {
+                    let mut characters = word.chars();
+                    characters.next().map_or_else(String::new, |first| {
+                        first.to_uppercase().collect::<String>() + characters.as_str()
+                    })
+                } else {
+                    word.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
 }
 
 fn append_item_conflicts(output: &mut String, document: &Value) {
@@ -1074,7 +1105,13 @@ mod registration_tests {
             }),
             OutputMode::HumanPlain,
         );
-        for line in ["Try soup.", "Choose one:", "1. First", "2. Second"] {
+        for line in [
+            "Try soup.",
+            "Choose one",
+            "1  First",
+            "2  Second",
+            "In chat, enter a number. With ask/reply, send the choice text in the next turn.",
+        ] {
             assert!(rendered.lines().any(|rendered| rendered == line));
         }
     }
@@ -1092,7 +1129,7 @@ mod registration_tests {
             OutputMode::HumanPlain,
         );
         for line in [
-            "veggie burger  compatible",
+            "veggie burger  Compatible",
             "This item fits the profile.",
             "Confidence: 0.95",
             "Applies to: Sarah",

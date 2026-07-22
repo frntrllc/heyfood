@@ -274,13 +274,12 @@ impl<'a> OneShotExecutor<'a> {
             prompt.push('.');
         }
         let prompt = required_text(prompt, 500, "query")?;
-        let context = match arguments.checking_for.as_deref() {
-            Some(selector) => {
-                self.household_turn_context(selector, cancellation.child_token())
-                    .await?
-            }
-            None => TurnContext::default(),
-        };
+        let context = self
+            .household_turn_context(
+                arguments.checking_for.as_deref(),
+                cancellation.child_token(),
+            )
+            .await?;
         self.execute_prompt(prompt, None, context, cancellation)
             .await
     }
@@ -296,7 +295,10 @@ impl<'a> OneShotExecutor<'a> {
             .map(|value| optional_text(Some(value), 200, "restaurant name"))
             .transpose()?
             .flatten();
-        if let Some(selector) = arguments.at.as_deref() {
+        if let Some(selector) = arguments.at.as_deref()
+            && selector.trim().bytes().all(|byte| byte.is_ascii_digit())
+            && !selector.trim().is_empty()
+        {
             restaurant = Some(self.restaurant_from_selector(selector)?);
         }
         let document = self
@@ -313,12 +315,6 @@ impl<'a> OneShotExecutor<'a> {
 
     fn restaurant_from_selector(&self, selector: &str) -> Result<String, OneShotError> {
         let normalized = selector.trim();
-        if normalized.is_empty() || !normalized.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Err(OneShotError::new(
-                "restaurant_selector",
-                "restaurant selection must be a one-based number from the last search",
-            ));
-        }
         let index = normalized
             .parse::<usize>()
             .ok()
@@ -380,21 +376,10 @@ impl<'a> OneShotExecutor<'a> {
 
     async fn household_turn_context(
         &self,
-        selector: &str,
+        selector: Option<&str>,
         cancellation: CancellationToken,
     ) -> Result<TurnContext, OneShotError> {
         let state = self.bound_imported_state()?;
-        if state
-            .account_scoped
-            .get("household_profile_outbox")
-            .and_then(Value::as_object)
-            .is_some_and(|outbox| !outbox.is_empty())
-        {
-            return Err(OneShotError::new(
-                "household_profile_reconciliation_required",
-                "pending Python household profile changes must be reconciled before native household targeting",
-            ));
-        }
         let household = normalized_household(state)?;
         let selected = resolve_household_scope(&household, selector)?;
         let consent = self
@@ -417,6 +402,10 @@ impl<'a> OneShotExecutor<'a> {
             .account_scoped
             .get("household_local_profiles")
             .and_then(Value::as_object);
+        let profile_outbox = state
+            .account_scoped
+            .get("household_profile_outbox")
+            .and_then(Value::as_object);
 
         let dietary = if selected == "__everyone__" {
             let mut members = Vec::with_capacity(active.len());
@@ -425,6 +414,7 @@ impl<'a> OneShotExecutor<'a> {
                     .profile_for_household_member(
                         member,
                         local_profiles,
+                        profile_outbox,
                         has_consent,
                         cancellation.child_token(),
                     )
@@ -452,6 +442,7 @@ impl<'a> OneShotExecutor<'a> {
                 .profile_for_household_member(
                     member,
                     local_profiles,
+                    profile_outbox,
                     has_consent,
                     cancellation.child_token(),
                 )
@@ -506,6 +497,7 @@ impl<'a> OneShotExecutor<'a> {
         &self,
         member: &Map<String, Value>,
         local_profiles: Option<&Map<String, Value>>,
+        profile_outbox: Option<&Map<String, Value>>,
         has_consent: bool,
         cancellation: CancellationToken,
     ) -> Result<Value, OneShotError> {
@@ -513,6 +505,13 @@ impl<'a> OneShotExecutor<'a> {
         if member.get("relationship").and_then(Value::as_str) == Some("child") {
             return Ok(local_profiles
                 .and_then(|profiles| profiles.get(id))
+                .cloned()
+                .unwrap_or_else(|| json!({})));
+        }
+        if let Some(pending) = profile_outbox.and_then(|outbox| outbox.get(id)) {
+            return Ok(pending
+                .get("local_context")
+                .filter(|value| value.is_object())
                 .cloned()
                 .unwrap_or_else(|| json!({})));
         }
@@ -1021,7 +1020,27 @@ fn normalized_household(state: &ImportedPythonState) -> Result<Map<String, Value
             }),
         );
     }
+    let active_ids = members
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|member| {
+            !member
+                .get("archived")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .filter_map(|member| member.get("id").and_then(Value::as_str))
+        .collect::<std::collections::BTreeSet<_>>();
+    let active_scope = household
+        .get("active_scope")
+        .and_then(Value::as_str)
+        .filter(|scope| {
+            active_ids.contains(*scope) || (*scope == "__everyone__" && active_ids.len() >= 2)
+        })
+        .unwrap_or("_self")
+        .to_owned();
     household.insert("owner_id".into(), Value::String("_self".into()));
+    household.insert("active_scope".into(), Value::String(active_scope));
     household.insert("members".into(), Value::Array(members));
     Ok(household)
 }
@@ -1070,15 +1089,13 @@ fn member_name(member: &Map<String, Value>) -> Result<&str, OneShotError> {
 
 fn resolve_household_scope(
     household: &Map<String, Value>,
-    selector: &str,
+    selector: Option<&str>,
 ) -> Result<String, OneShotError> {
-    let selector = selector.trim();
-    if selector.is_empty() {
-        return Err(OneShotError::new(
-            "household_scope",
-            "household scope must not be empty",
-        ));
-    }
+    let selector = selector
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| household.get("active_scope").and_then(Value::as_str))
+        .unwrap_or("_self");
     let members = active_household_members(household);
     let folded = selector.to_lowercase();
     if matches!(folded.as_str(), "me" | "myself" | "self" | "_self") {

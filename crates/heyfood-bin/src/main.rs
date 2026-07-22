@@ -5,7 +5,7 @@
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
-#[cfg(all(not(windows), feature = "native-credentials"))]
+#[cfg(feature = "native-credentials")]
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,7 +14,7 @@ use heyfood_agent_runtime::{
     ReauthorizationStageStatus, ReauthorizationStatus, RegistrationClient, RegistrationError,
     StagedReauthorization,
 };
-#[cfg(all(not(windows), feature = "native-credentials"))]
+#[cfg(feature = "native-credentials")]
 use heyfood_application::{BoxFuture, CredentialCommit, CredentialPort, PortError};
 use heyfood_application::{BrowserPort, EnsureSession};
 use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
@@ -22,30 +22,32 @@ use heyfood_core::{
     BrowserUrl, NetworkPolicy, OperationId, ProfileStatus, SensitiveString, ServiceUrl,
     SessionSnapshot, terminal_safe_text,
 };
-#[cfg(all(not(windows), feature = "native-credentials"))]
+#[cfg(feature = "native-credentials")]
 use heyfood_core::{CommitId, SessionCredentials};
-#[cfg(all(not(windows), feature = "native-credentials"))]
+#[cfg(feature = "native-credentials")]
 use heyfood_platform::AuthorizationSessionStore;
+#[cfg(feature = "native-credentials")]
+use heyfood_platform::CredentialBrokerStore;
 #[cfg(all(not(windows), not(feature = "native-credentials")))]
 use heyfood_platform::FileCredentialStore as NativeSessionStore;
-#[cfg(windows)]
-use heyfood_platform::WindowsCredentialStore as NativeSessionStore;
+#[cfg(all(not(windows), feature = "native-credentials"))]
+use heyfood_platform::FileCredentialStore;
 use heyfood_platform::{
     AuthorizationReplacementJournal, AuthorizationReplacementPhase, NativeAuthStore, NativeBrowser,
     NativeClock, NativePaths, PythonStateImporter,
 };
-#[cfg(all(not(windows), feature = "native-credentials"))]
-use heyfood_platform::{CredentialBrokerStore, FileCredentialStore};
 use tokio_util::sync::CancellationToken;
 
-#[cfg(all(not(windows), feature = "native-credentials"))]
+#[cfg(feature = "native-credentials")]
 enum NativeSessionStore {
     Platform(CredentialBrokerStore),
+    #[cfg(not(windows))]
     OwnerOnlyFile(FileCredentialStore),
 }
 
-#[cfg(all(not(windows), feature = "native-credentials"))]
+#[cfg(feature = "native-credentials")]
 impl NativeSessionStore {
+    #[cfg(not(windows))]
     fn open(root: impl AsRef<std::path::Path>) -> Result<Self, PortError> {
         let root = root.as_ref();
         match std::env::var("HEYFOOD_CREDENTIAL_STORE").as_deref() {
@@ -80,19 +82,39 @@ impl NativeSessionStore {
         }
     }
 
+    #[cfg(windows)]
+    fn open(root: impl AsRef<std::path::Path>) -> Result<Self, PortError> {
+        match std::env::var("HEYFOOD_CREDENTIAL_STORE").as_deref() {
+            Ok("native") | Err(std::env::VarError::NotPresent) => {
+                CredentialBrokerStore::open(root.as_ref(), Duration::from_secs(15))
+                    .map(Self::Platform)
+            }
+            Ok("file") => Err(PortError::new(
+                "credential_store_selection",
+                "owner-only file credential fallback is not supported on Windows",
+            )),
+            Ok(_) | Err(std::env::VarError::NotUnicode(_)) => Err(PortError::new(
+                "credential_store_selection",
+                "HEYFOOD_CREDENTIAL_STORE must be `native` on Windows",
+            )),
+        }
+    }
+
     fn reconciliation_required(&self) -> Result<bool, PortError> {
         match self {
             Self::Platform(store) => store.reconciliation_required(),
+            #[cfg(not(windows))]
             Self::OwnerOnlyFile(store) => store.reconciliation_required(),
         }
     }
 }
 
-#[cfg(all(not(windows), feature = "native-credentials"))]
+#[cfg(feature = "native-credentials")]
 impl CredentialPort for NativeSessionStore {
     fn load(&self) -> BoxFuture<'_, Result<Option<SessionCredentials>, PortError>> {
         match self {
             Self::Platform(store) => store.load(),
+            #[cfg(not(windows))]
             Self::OwnerOnlyFile(store) => store.load(),
         }
     }
@@ -100,6 +122,7 @@ impl CredentialPort for NativeSessionStore {
     fn commit(&self, commit: CredentialCommit) -> BoxFuture<'_, Result<(), PortError>> {
         match self {
             Self::Platform(store) => store.commit(commit),
+            #[cfg(not(windows))]
             Self::OwnerOnlyFile(store) => store.commit(commit),
         }
     }
@@ -110,6 +133,7 @@ impl CredentialPort for NativeSessionStore {
     ) -> BoxFuture<'_, Result<(), PortError>> {
         match self {
             Self::Platform(store) => store.mark_reconciliation_required(commit_id),
+            #[cfg(not(windows))]
             Self::OwnerOnlyFile(store) => store.mark_reconciliation_required(commit_id),
         }
     }
@@ -120,12 +144,13 @@ impl CredentialPort for NativeSessionStore {
     ) -> BoxFuture<'_, Result<(), PortError>> {
         match self {
             Self::Platform(store) => store.clear_reconciliation_required(commit_id),
+            #[cfg(not(windows))]
             Self::OwnerOnlyFile(store) => store.clear_reconciliation_required(commit_id),
         }
     }
 }
 
-#[cfg(all(not(windows), feature = "native-credentials"))]
+#[cfg(feature = "native-credentials")]
 impl AuthorizationSessionStore for NativeSessionStore {
     fn initialize_authorized_session(
         &self,
@@ -133,6 +158,7 @@ impl AuthorizationSessionStore for NativeSessionStore {
     ) -> Result<(), PortError> {
         match self {
             Self::Platform(store) => store.initialize_authorized_session(credentials),
+            #[cfg(not(windows))]
             Self::OwnerOnlyFile(store) => store.initialize_authorized_session(credentials),
         }
     }
@@ -140,6 +166,7 @@ impl AuthorizationSessionStore for NativeSessionStore {
     fn load_authorized_session(&self) -> Result<Option<SessionCredentials>, PortError> {
         match self {
             Self::Platform(store) => store.load_authorized_session(),
+            #[cfg(not(windows))]
             Self::OwnerOnlyFile(store) => store.load_authorized_session(),
         }
     }
@@ -150,6 +177,7 @@ impl AuthorizationSessionStore for NativeSessionStore {
     ) -> Result<(), PortError> {
         match self {
             Self::Platform(store) => store.replace_authorized_session(credentials),
+            #[cfg(not(windows))]
             Self::OwnerOnlyFile(store) => store.replace_authorized_session(credentials),
         }
     }
@@ -164,6 +192,7 @@ impl AuthorizationSessionStore for NativeSessionStore {
             Self::Platform(store) => {
                 store.stage_authorized_session(client_transaction_id, previous, replacement)
             }
+            #[cfg(not(windows))]
             Self::OwnerOnlyFile(store) => {
                 store.stage_authorized_session(client_transaction_id, previous, replacement)
             }
@@ -180,6 +209,7 @@ impl AuthorizationSessionStore for NativeSessionStore {
             Self::Platform(store) => {
                 store.verify_staged_authorized_session(client_transaction_id, previous, replacement)
             }
+            #[cfg(not(windows))]
             Self::OwnerOnlyFile(store) => {
                 store.verify_staged_authorized_session(client_transaction_id, previous, replacement)
             }
@@ -195,6 +225,7 @@ impl AuthorizationSessionStore for NativeSessionStore {
             Self::Platform(store) => {
                 store.clear_staged_authorized_session(client_transaction_id, expected_replacement)
             }
+            #[cfg(not(windows))]
             Self::OwnerOnlyFile(store) => {
                 store.clear_staged_authorized_session(client_transaction_id, expected_replacement)
             }
@@ -208,7 +239,7 @@ async fn main() -> ExitCode {
     if let Some(outcome) = heyfood_platform::run_credential_broker_if_requested() {
         return outcome;
     }
-    #[cfg(all(debug_assertions, not(windows), feature = "native-credentials"))]
+    #[cfg(all(debug_assertions, feature = "native-credentials"))]
     if std::env::var_os("HEYFOOD_TEST_DELETE_NATIVE_CREDENTIALS").as_deref()
         == Some(std::ffi::OsStr::new("1"))
     {
@@ -427,7 +458,7 @@ async fn one_shot_inner(
             )
         })?;
     let credentials = auth.session.clone();
-    let imported_state = load_selector_state(&paths, &command)?;
+    let imported_state = load_selector_state(&paths, &command, credentials.account_id.as_str())?;
     let reconciliation_required = credential_store
         .reconciliation_required()
         .map_err(heyfood_bin::OneShotError::from)?;
@@ -469,22 +500,28 @@ async fn one_shot_inner(
 fn load_selector_state(
     paths: &NativePaths,
     command: &Command,
+    account_id: &str,
 ) -> Result<Option<heyfood_core::ImportedPythonState>, heyfood_bin::OneShotError> {
     let required = matches!(
         command,
-        Command::Log(heyfood_cli::LogArgs {
-            checking_for: Some(_),
-            ..
-        }) | Command::Item(heyfood_cli::ItemArgs { at: Some(_), .. })
+        Command::Log(_) | Command::Item(heyfood_cli::ItemArgs { at: Some(_), .. })
     );
     if !required {
         return Ok(None);
     }
     let importer = PythonStateImporter::discover(paths).map_err(heyfood_bin::OneShotError::from)?;
     importer.import().map_err(heyfood_bin::OneShotError::from)?;
-    importer
+    let imported = importer
         .load_state()
-        .map_err(heyfood_bin::OneShotError::from)
+        .map_err(heyfood_bin::OneShotError::from)?;
+    if imported.is_some() || !matches!(command, Command::Log(_)) {
+        return Ok(imported);
+    }
+    Ok(Some(heyfood_core::ImportedPythonState {
+        account_user_id: Some(account_id.to_owned()),
+        global: std::collections::BTreeMap::new(),
+        account_scoped: std::collections::BTreeMap::new(),
+    }))
 }
 
 fn registration_to_one_shot(error: RegistrationError) -> heyfood_bin::OneShotError {

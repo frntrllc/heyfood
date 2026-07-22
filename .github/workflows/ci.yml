@@ -56,6 +56,11 @@ jobs:
         os: [ubuntu-22.04, macos-15, windows-2025]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the Linux Secret Service fixture
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dbus-x11 gnome-keyring libdbus-1-dev pkg-config
       - name: Build the native release binary
         run: cargo build --release --locked --package heyfood-bin
       - name: Locate the native executable
@@ -79,13 +84,23 @@ jobs:
           "$HEYFOOD_BIN" completion bash > completion.bash
           test -s completion.bash
       - name: Run native CLI and composition-root tests
+        if: runner.os != 'Linux'
         run: cargo test --locked --package heyfood-cli --package heyfood-bin
+      - name: Run Linux native CLI and composition-root tests
+        if: runner.os == 'Linux'
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "\n" | gnome-keyring-daemon --unlock
+            cargo test --locked --package heyfood-cli --package heyfood-bin
+          '
 
   native-release-contract:
     name: Build and verify distribution
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Linux native credential build dependencies
+        run: sudo apt-get update && sudo apt-get install --yes libdbus-1-dev pkg-config
       - name: Build and package the host executable as the four-file fixture set
         shell: bash
         run: |

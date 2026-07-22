@@ -213,4 +213,8 @@ async fn terminal_text_wins_but_streamed_choices_are_preserved() {
     assert_eq!(result.document["message"], "final");
     assert!(result.document.get("text").is_none());
     assert_eq!(result.document["choices"]["choices"][0], "First");
+    assert_eq!(
+        result.document["choices"]["choice_details"][0],
+        json!({"label": "First", "value": "1"})
+    );
 }

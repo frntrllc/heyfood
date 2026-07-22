@@ -29,6 +29,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Linux native credential build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes libdbus-1-dev pkg-config
       - name: Compile the default product feature set
         run: cargo check --locked --workspace --all-targets
       - name: Compile the secondary portable feature set
@@ -55,6 +58,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Linux native credential build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes libdbus-1-dev pkg-config
       - name: Lint the default product feature set
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Lint the secondary portable feature set
@@ -165,6 +171,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Linux native credential build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes libdbus-1-dev pkg-config
       - name: Qualify the portable Unix credential vertical
         if: runner.os != 'Windows'
         run: cargo test --release --locked --package heyfood-bin --test phase0_qualification

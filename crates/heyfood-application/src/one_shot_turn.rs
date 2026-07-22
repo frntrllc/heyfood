@@ -138,6 +138,17 @@ fn merge_stream_content(
     }
     if let Some((choices, allow_multiple)) = choices {
         let mut choice_document = Map::new();
+        let detailed = choices
+            .iter()
+            .filter_map(|choice| {
+                choice.value.as_ref().map(|value| {
+                    serde_json::json!({
+                        "label": &choice.label,
+                        "value": value
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
         choice_document.insert(
             "choices".into(),
             Value::Array(
@@ -147,6 +158,9 @@ fn merge_stream_content(
                     .collect(),
             ),
         );
+        if !detailed.is_empty() {
+            choice_document.insert("choice_details".into(), Value::Array(detailed));
+        }
         choice_document.insert("allow_multiple".into(), Value::Bool(allow_multiple));
         fields.insert("choices".into(), Value::Object(choice_document));
     }

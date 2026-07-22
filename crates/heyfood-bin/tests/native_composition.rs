@@ -1,9 +1,11 @@
-#![cfg(all(not(windows), feature = "native-credentials"))]
+#![cfg(feature = "native-credentials")]
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(windows)]
+use heyfood_platform::NativeAuthStore;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -252,4 +254,6 @@ async fn default_executable_uses_brokered_native_account_bound_credentials() {
         "native broker ok"
     );
     assert!(cleanup(&root.0).await.status.success());
+    #[cfg(windows)]
+    NativeAuthStore::open(&root.0).unwrap().delete().unwrap();
 }
