@@ -32,6 +32,7 @@ keyring = { workspace = true, optional = true, features = ["apple-native"] }
 keyring = { workspace = true, optional = true, features = ["crypto-rust", "linux-native-sync-persistent"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+heyfood-windows-file = { version = "=0.5.0", path = "../heyfood-windows-file" }
 keyring = { workspace = true, optional = true, features = ["windows-native"] }
 
 [dev-dependencies]

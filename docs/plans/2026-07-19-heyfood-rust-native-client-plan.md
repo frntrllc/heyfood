@@ -438,6 +438,8 @@ crates/
 │   └── src/lib.rs
 ├── heyfood-platform/
 │   └── src/lib.rs
+├── heyfood-windows-file/
+│   └── src/lib.rs
 ├── heyfood-voice/
 │   └── src/lib.rs
 ├── heyfood-cli/
@@ -469,6 +471,7 @@ heyfood-core
                           heyfood-bin depends on and wires every adapter/surface
 
 heyfood-installer ──> heyfood-core  # standalone bootstrap/manifest verifier
+heyfood-platform ──> heyfood-windows-file  # Windows-only audited handle boundary
 ```
 
 - `heyfood-core` has no workspace dependencies.
@@ -477,8 +480,13 @@ heyfood-installer ──> heyfood-core  # standalone bootstrap/manifest verifier
   `AudioCapturePort` and `ClipboardPort` traits plus use-case DTOs.
 - `heyfood-agent-runtime -> heyfood-application + heyfood-core`; it implements
   authenticated API and transcription upload. It never imports CLI/TUI/platform.
-- `heyfood-platform -> heyfood-application + heyfood-core`; it implements
-  storage, credentials, browser, clock, TLS-root, and signal/console adapters.
+- `heyfood-platform -> heyfood-application + heyfood-core`, plus the target-only
+  `heyfood-windows-file` boundary on Windows; it implements storage,
+  credentials, browser, clock, TLS-root, and signal/console adapters.
+- `heyfood-windows-file` has no workspace dependencies and exposes only safe
+  owner-only creation and open-handle publication primitives. Its narrowly
+  scoped Win32 calls are the sole file-export exception to the workspace's
+  unsafe-code prohibition.
 - `heyfood-voice -> heyfood-application + heyfood-core`; it captures/encodes
   audio only. The application coordinates transcription through `ServicePort`,
   preventing voice/runtime cycles.
@@ -495,8 +503,9 @@ heyfood-installer ──> heyfood-core  # standalone bootstrap/manifest verifier
   retains sole ownership of terminal RAII, and runtime/platform never import
   one another.
 - No lower layer imports a surface crate, and no adapter imports another
-  adapter. `cargo metadata` plus a repository dependency-policy test enforces
-  the DAG in CI.
+  adapter; the Windows handle crate is a target-specific OS primitive rather
+  than an adapter. `cargo metadata` plus a repository dependency-policy test
+  enforces the DAG in CI.
 
 ### Phase 0 dependency and feature policy
 
@@ -1006,6 +1015,9 @@ local data: owner-only creation, exclusive create by default, explicit
 overwrite, symlink/reparse-point-safe destination handling, same-directory
 atomic replacement, no content logging, and cleanup on failure. `--json`
 continues to emit exactly one value on stdout; file progress/errors use stderr.
+The Windows `CreateFileW` security-attribute and handle-relative rename calls
+are isolated behind the safe API of the audited `heyfood-windows-file` crate;
+the product/platform crates continue to forbid unsafe code.
 
 The backend/platform grocery team owns `HouseholdContextResolver`, typed
 safety-result metadata, generalized confirmation, optional scope tiers,
@@ -1343,6 +1355,7 @@ features, telemetry, services, or internal dependencies.
 | `crates/heyfood-agent-runtime/**` | Authenticated HTTP/SSE/cancellation runtime |
 | `crates/heyfood-application/**` | Use cases, single-flight supervisor, state writer |
 | `crates/heyfood-platform/**` | Credentials, paths, browser, locks, signals, TLS |
+| `crates/heyfood-windows-file/**` | Audited Windows owner-only create and handle-publish boundary |
 | `crates/heyfood-voice/**` | Native/browser voice policy and lifecycle |
 | `crates/heyfood-cli/**` | Clap tree, classic/ANSI/JSON output, completions |
 | `crates/heyfood-tui/**` | Ratatui application, event loop, views, input, terminal guard |

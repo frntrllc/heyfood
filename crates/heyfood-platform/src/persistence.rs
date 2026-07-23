@@ -18,6 +18,8 @@ use heyfood_core::{
     AccountId, AuthCredentialBundle, ChannelCredentials, ClientConfig, CommitId, ConfigRevision,
     CredentialVersion, NetworkPolicy, OperationId, SensitiveString, ServiceUrl, SessionCredentials,
 };
+#[cfg(windows)]
+use heyfood_windows_file::AtomicOwnerOnlyFile;
 
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[cfg(windows)]
@@ -151,20 +153,30 @@ impl SensitiveExportWriter {
             staging.write_all(bytes)?;
             staging.flush()?;
             staging.sync_all()?;
-            drop(staging);
 
-            if overwrite {
-                validate_export_target(&target)
-                    .map_err(|error| std::io::Error::other(error.message))?;
-                fs::rename(&staging_path, &target)?;
-                committed = true;
-            } else {
-                fs::hard_link(&staging_path, &target)?;
-                committed = true;
-                fs::remove_file(&staging_path)?;
-            }
             #[cfg(windows)]
-            remember_windows_owner_acl(&target, false)?;
+            {
+                let published = staging.publish(&target, overwrite)?;
+                committed = true;
+                published.verify_regular()?;
+                apply_windows_owner_acl(&target, false)?;
+                remember_windows_owner_acl(&target, false)?;
+                drop(published);
+            }
+            #[cfg(not(windows))]
+            {
+                drop(staging);
+                if overwrite {
+                    validate_export_target(&target)
+                        .map_err(|error| std::io::Error::other(error.message))?;
+                    fs::rename(&staging_path, &target)?;
+                    committed = true;
+                } else {
+                    fs::hard_link(&staging_path, &target)?;
+                    committed = true;
+                    fs::remove_file(&staging_path)?;
+                }
+            }
             sync_directory(&canonical_parent)?;
             Ok(())
         })();
@@ -197,14 +209,8 @@ fn open_private_export_staging(path: &Path) -> std::io::Result<File> {
 }
 
 #[cfg(windows)]
-fn open_private_export_staging(path: &Path) -> std::io::Result<File> {
-    let file = OpenOptions::new().write(true).create_new(true).open(path)?;
-    if let Err(error) = make_private_staging_file(path) {
-        drop(file);
-        let _ = fs::remove_file(path);
-        return Err(error);
-    }
-    Ok(file)
+fn open_private_export_staging(path: &Path) -> std::io::Result<AtomicOwnerOnlyFile> {
+    AtomicOwnerOnlyFile::create(path, &windows_current_user_sid()?)
 }
 
 #[cfg(not(any(unix, windows)))]

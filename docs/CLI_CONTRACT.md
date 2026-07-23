@@ -44,12 +44,15 @@ export LIST_ID --out FILE` creates an owner-only file exclusively by default;
 `--overwrite` opts into same-directory atomic replacement. Targets and direct
 parent directories that are symlinks or Windows reparse points are rejected,
 temporary files are removed on pre-commit failure, and export contents never
-enter diagnostics. Conversational Grocery proposals use the C3 item-list card
-in the TUI: `y` accepts, `n` cancels, and Ctrl+C sends a structured cancel. The
-confirmation request echoes the server IDs and idempotency key and never
-converts natural language into consent. The generic C3 v1 schema describes
-per-member screening as top-level `item.safety_flags`, while the frozen Grocery
-Phase-A production fixture carries the authoritative Grocery annotation under
+enter diagnostics. Windows installs the protected single-owner DACL in the
+creation call, publishes by the still-open file handle without delete sharing,
+and verifies the final ACL and non-reparse identity before success.
+Conversational Grocery proposals use the C3 item-list card in the TUI: `y`
+accepts, `n` cancels, and Ctrl+C sends a structured cancel. The confirmation
+request echoes the server IDs and idempotency key and never converts natural
+language into consent. The generic C3 v1 schema describes per-member screening
+as top-level `item.safety_flags`, while the frozen Grocery Phase-A production
+fixture carries the authoritative Grocery annotation under
 `item.safety.{status,member_flags,label_hint}`. The TUI prefers and fully renders
 the nested Grocery shape—including intended member, provenance, reasons, and
 substitutions—while retaining top-level `safety_flags` as an additive

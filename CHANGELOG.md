@@ -45,7 +45,8 @@ authentication contracts are stabilized.
   screening, reasons, and substitutions in Grocery list and proposal views.
 - Adds owner-only `grocery export --out FILE` writes with exclusive creation,
   explicit atomic overwrite, symlink/reparse-point rejection, and cleanup on
-  failure.
+  failure. Windows creation installs the protected owner DACL atomically and
+  publishes by open handle before independently verifying the final ACL.
 - Parses the frozen C3 item-list confirmation envelope into a native TUI card;
   `y`/`n` and Ctrl+C send an explicit `confirm` decision with the original
   server confirmation and idempotency IDs, mutually exclusive with `query`.
