@@ -9,9 +9,9 @@
 #[cfg(windows)]
 mod windows {
     use std::ffi::OsStr;
-    use std::fs::File;
+    use std::fs::{self, File};
     use std::io::{self, Write};
-    use std::mem::{offset_of, size_of};
+    use std::mem::size_of;
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::{AsRawHandle, FromRawHandle};
     use std::path::Path;
@@ -98,7 +98,7 @@ mod windows {
 
     #[allow(unsafe_code)]
     fn create_owner_only(path: &Path, owner_sid: &str) -> io::Result<File> {
-        let path = nul_terminated_wide(path.as_os_str())?;
+        let wide_path = nul_terminated_wide(path.as_os_str())?;
         let sddl = nul_terminated_wide(OsStr::new(&format!(
             "O:{owner_sid}D:P(A;;FA;;;{owner_sid})"
         )))?;
@@ -128,7 +128,7 @@ mod windows {
         // final component, and the protected DACL is installed atomically.
         let handle = unsafe {
             CreateFileW(
-                path.as_ptr(),
+                wide_path.as_ptr(),
                 GENERIC_WRITE | DELETE | READ_CONTROL | WRITE_DAC,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 &security,
@@ -143,39 +143,19 @@ mod windows {
         // SAFETY: `handle` is a unique valid owned file handle returned by
         // CreateFileW and ownership transfers exactly once to `File`.
         let file = unsafe { File::from_raw_handle(handle) };
-        verify_regular_file(&file)?;
+        if let Err(error) = verify_regular_file(&file) {
+            drop(file);
+            fs::remove_file(path)?;
+            return Err(error);
+        }
         Ok(file)
     }
 
     #[allow(unsafe_code)]
     fn rename_open_file(file: &File, target: &Path, overwrite: bool) -> io::Result<()> {
         let target = wide_without_nul(target.as_os_str())?;
-        let name_bytes = target.len().checked_mul(size_of::<u16>()).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "target path is too long")
-        })?;
-        let name_offset = offset_of!(FILE_RENAME_INFO, FileName);
-        let buffer_bytes = name_offset.checked_add(name_bytes).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "target path is too long")
-        })?;
-        let word_count = buffer_bytes.div_ceil(size_of::<usize>());
-        let mut buffer = vec![0usize; word_count];
+        let (mut buffer, buffer_bytes) = rename_info_buffer(&target, overwrite)?;
         let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
-        // SAFETY: `buffer` is pointer-aligned and large enough for the fixed
-        // header plus every UTF-16 code unit copied into the flexible tail.
-        unsafe {
-            (*info).Anonymous.ReplaceIfExists = overwrite;
-            (*info).RootDirectory = ptr::null_mut();
-            (*info).FileNameLength = u32::try_from(name_bytes).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "target path is too long")
-            })?;
-            ptr::copy_nonoverlapping(
-                target.as_ptr(),
-                ptr::addr_of_mut!((*info).FileName).cast::<u16>(),
-                target.len(),
-            );
-        }
-        let buffer_bytes = u32::try_from(buffer_bytes)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "target path is too long"))?;
         // SAFETY: `file` remains alive, was opened with DELETE access, and the
         // rename buffer matches FILE_RENAME_INFO for its full declared size.
         if unsafe {
@@ -196,6 +176,45 @@ mod windows {
             });
         }
         Ok(())
+    }
+
+    #[allow(unsafe_code)]
+    fn rename_info_buffer(target: &[u16], overwrite: bool) -> io::Result<(Vec<usize>, u32)> {
+        let name_bytes = target.len().checked_mul(size_of::<u16>()).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "target path is too long")
+        })?;
+        // Win32 requires at least sizeof(FILE_RENAME_INFO) + FileNameLength.
+        // FileNameLength excludes the trailing UTF-16 NUL, which still has to
+        // be present in the supplied buffer.
+        let buffer_bytes = size_of::<FILE_RENAME_INFO>()
+            .checked_add(name_bytes)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "target path is too long")
+            })?;
+        let word_count = buffer_bytes.div_ceil(size_of::<usize>());
+        let mut buffer = vec![0usize; word_count];
+        let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+        // SAFETY: `buffer` is pointer-aligned and large enough for the fixed
+        // structure, every UTF-16 code unit copied into the flexible tail, and
+        // its zero-initialized trailing NUL.
+        unsafe {
+            (*info).Anonymous.ReplaceIfExists = overwrite;
+            (*info).RootDirectory = ptr::null_mut();
+            (*info).FileNameLength = u32::try_from(name_bytes).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "target path is too long")
+            })?;
+            ptr::copy_nonoverlapping(
+                target.as_ptr(),
+                ptr::addr_of_mut!((*info).FileName).cast::<u16>(),
+                target.len(),
+            );
+            *ptr::addr_of_mut!((*info).FileName)
+                .cast::<u16>()
+                .add(target.len()) = 0;
+        }
+        let buffer_bytes = u32::try_from(buffer_bytes)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "target path is too long"))?;
+        Ok((buffer, buffer_bytes))
     }
 
     #[allow(unsafe_code)]
@@ -241,6 +260,41 @@ mod windows {
             ));
         }
         Ok(wide)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        #[allow(unsafe_code)]
+        fn rename_buffer_includes_nul_when_old_allocation_ended_at_name_boundary() {
+            let name_offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+            let mut target = vec![u16::from(b'x')];
+            while !(name_offset + target.len() * size_of::<u16>())
+                .is_multiple_of(size_of::<usize>())
+            {
+                target.push(u16::from(b'x'));
+            }
+            let old_buffer_bytes = name_offset + target.len() * size_of::<u16>();
+            assert_eq!(old_buffer_bytes % size_of::<usize>(), 0);
+
+            let (mut buffer, declared_bytes) = rename_info_buffer(&target, false).unwrap();
+            let expected_bytes = size_of::<FILE_RENAME_INFO>() + target.len() * size_of::<u16>();
+            assert_eq!(usize::try_from(declared_bytes).unwrap(), expected_bytes);
+            assert!(buffer.len() * size_of::<usize>() >= expected_bytes);
+
+            let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+            // SAFETY: the production helper guarantees the flexible filename
+            // tail and its terminator are within the returned allocation.
+            let file_name = unsafe { ptr::addr_of!((*info).FileName).cast::<u16>() };
+            for (index, expected) in target.iter().enumerate() {
+                // SAFETY: `index` is within the copied filename tail.
+                assert_eq!(unsafe { *file_name.add(index) }, *expected);
+            }
+            // SAFETY: the helper reserves and initializes this extra code unit.
+            assert_eq!(unsafe { *file_name.add(target.len()) }, 0);
+        }
     }
 }
 
