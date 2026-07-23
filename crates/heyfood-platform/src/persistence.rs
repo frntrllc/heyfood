@@ -16,7 +16,7 @@ use heyfood_application::{
 };
 use heyfood_core::{
     AccountId, AuthCredentialBundle, ChannelCredentials, ClientConfig, CommitId, ConfigRevision,
-    CredentialVersion, NetworkPolicy, SensitiveString, ServiceUrl, SessionCredentials,
+    CredentialVersion, NetworkPolicy, OperationId, SensitiveString, ServiceUrl, SessionCredentials,
 };
 
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -93,6 +93,159 @@ impl AtomicFile {
         }
         Ok(())
     }
+}
+
+/// Writes a user-selected dietary-data export without following a destination
+/// symlink/reparse point or exposing partially written content.
+pub struct SensitiveExportWriter;
+
+impl SensitiveExportWriter {
+    pub fn write(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), PortError> {
+        let file_name = path
+            .file_name()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| PortError::new("export_path", "export target name is invalid"))?;
+        let parent = path
+            .parent()
+            .filter(|value| !value.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let parent_metadata = fs::symlink_metadata(parent)
+            .map_err(|_| PortError::new("export_parent", "export parent is unavailable"))?;
+        if export_path_redirects(&parent_metadata) || !parent_metadata.is_dir() {
+            return Err(PortError::new(
+                "export_parent",
+                "export parent must be a regular, non-redirected directory",
+            ));
+        }
+        let canonical_parent = fs::canonicalize(parent)
+            .map_err(|_| PortError::new("export_parent", "export parent is unavailable"))?;
+        let target = canonical_parent.join(file_name);
+        let existed = validate_export_target(&target)?;
+        if existed && !overwrite {
+            return Err(PortError::new(
+                "export_exists",
+                "export target already exists; pass --overwrite to replace it",
+            ));
+        }
+
+        let (staging_path, mut staging) = (0..32)
+            .find_map(|_| {
+                let candidate = canonical_parent.join(format!(
+                    ".heyfood-export.{}.tmp",
+                    OperationId::new().as_uuid()
+                ));
+                match open_private_export_staging(&candidate) {
+                    Ok(file) => Some(Ok((candidate, file))),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                    Err(error) => Some(Err(error)),
+                }
+            })
+            .transpose()
+            .map_err(|_| PortError::new("export_stage", "could not create export staging file"))?
+            .ok_or_else(|| {
+                PortError::new("export_stage", "could not allocate export staging file")
+            })?;
+
+        let mut committed = false;
+        let result = (|| -> std::io::Result<()> {
+            staging.write_all(bytes)?;
+            staging.flush()?;
+            staging.sync_all()?;
+            drop(staging);
+
+            if overwrite {
+                validate_export_target(&target)
+                    .map_err(|error| std::io::Error::other(error.message))?;
+                fs::rename(&staging_path, &target)?;
+                committed = true;
+            } else {
+                fs::hard_link(&staging_path, &target)?;
+                committed = true;
+                fs::remove_file(&staging_path)?;
+            }
+            #[cfg(windows)]
+            remember_windows_owner_acl(&target, false)?;
+            sync_directory(&canonical_parent)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = fs::remove_file(&staging_path);
+            return Err(if committed {
+                PortError::uncertain("export_commit", "export durability is uncertain")
+            } else if !overwrite && error.kind() == std::io::ErrorKind::AlreadyExists {
+                PortError::new(
+                    "export_exists",
+                    "export target already exists; pass --overwrite to replace it",
+                )
+            } else {
+                PortError::new("export_write", "could not write the sensitive export")
+            });
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn open_private_export_staging(path: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
+#[cfg(windows)]
+fn open_private_export_staging(path: &Path) -> std::io::Result<File> {
+    let file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    if let Err(error) = make_private_staging_file(path) {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(file)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_private_export_staging(_path: &Path) -> std::io::Result<File> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "private export files are not implemented for this platform",
+    ))
+}
+
+fn validate_export_target(path: &Path) -> Result<bool, PortError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if export_path_redirects(&metadata) => Err(PortError::new(
+            "export_redirect",
+            "export target must not be a symlink or reparse point",
+        )),
+        Ok(metadata) if !metadata.is_file() => Err(PortError::new(
+            "export_target",
+            "export target must be a regular file",
+        )),
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(PortError::new(
+            "export_target",
+            "export target could not be inspected",
+        )),
+    }
+}
+
+fn export_path_redirects(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 pub(crate) struct FileLock {

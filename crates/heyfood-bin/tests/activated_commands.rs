@@ -386,6 +386,61 @@ async fn public_binary_dispatches_all_fourteen_health_and_grocery_routes() {
 }
 
 #[tokio::test]
+async fn public_binary_writes_json_export_to_an_owner_only_file() {
+    let root = TempRoot::new("export-file");
+    initialize(&root.0, FULL_SCOPE);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            let mut request_line = request.lines().next().unwrap().split_whitespace();
+            let method = request_line.next().unwrap();
+            let path = request_line.next().unwrap();
+            let (content_type, body) = response_for(method, path);
+            respond(&mut socket, content_type, &body).await;
+        }
+    });
+    let target = root.0.join("grocery.json");
+    let output = run(
+        &root.0,
+        &base_url,
+        &[
+            "--json",
+            "grocery",
+            "export",
+            LIST_ID,
+            "--format",
+            "json",
+            "--out",
+            target.to_str().unwrap(),
+        ],
+        None,
+    )
+    .await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let receipt: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(receipt["written"], true);
+    assert_eq!(receipt["format"], "json");
+    let written: Value = serde_json::from_slice(&std::fs::read(&target).unwrap()).unwrap();
+    assert_eq!(written, list());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn public_binary_fails_closed_before_route_dispatch_for_scope_capability_and_confirmation() {
     let old = TempRoot::new("old-scope");
     initialize(

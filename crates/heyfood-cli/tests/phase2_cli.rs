@@ -117,6 +117,36 @@ fn grocery_show_exclusions_and_never_commands_are_typed() {
             command: Some(GroceryCommand::Never(ref arguments)),
         }) if arguments.remove && arguments.item == "raw onion"
     ));
+
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "grocery",
+        "export",
+        "00000000-0000-4000-8000-000000000123",
+        "--format",
+        "json",
+        "--out",
+        "grocery.json",
+        "--overwrite",
+    ])
+    .unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(Command::Grocery {
+            command: Some(GroceryCommand::Export(ref arguments)),
+        }) if arguments.out.as_deref() == Some(std::path::Path::new("grocery.json"))
+            && arguments.overwrite
+    ));
+    assert!(
+        CommandLine::try_parse_from([
+            "heyfood",
+            "grocery",
+            "export",
+            "00000000-0000-4000-8000-000000000123",
+            "--overwrite",
+        ])
+        .is_err()
+    );
 }
 
 #[test]

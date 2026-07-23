@@ -62,7 +62,7 @@ heyfood grocery list
 heyfood grocery add --list-id UUID --version VERSION "red lentils" "onion"
 heyfood grocery remove --list-id UUID --version VERSION ITEM_OR_INDEX
 heyfood grocery state --list-id UUID --version VERSION ITEM purchased
-heyfood grocery export UUID --format markdown
+heyfood grocery export UUID --format markdown [--out FILE [--overwrite]]
 heyfood grocery confirm --decision accept --proposal-stdin < proposal.json
 ```
 

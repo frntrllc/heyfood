@@ -21,7 +21,7 @@ use heyfood_core::{
     OnboardingProfileInput, OperationId, RemoveItemsRequestWire, SessionCredentials,
     SessionSnapshot, UpdateItemStateRequestWire, terminal_safe_text,
 };
-use heyfood_platform::{NativeSignalSource, SignalEvent};
+use heyfood_platform::{NativeSignalSource, SensitiveExportWriter, SignalEvent};
 use heyfood_tui::{Effect, ExitReason, PanelRequest, RuntimeEvent, TuiError};
 use serde_json::{Map, Value, json};
 use tokio::{
@@ -593,6 +593,24 @@ impl<'a> OneShotExecutor<'a> {
                         cancellation,
                     )
                     .await?;
+                if let Some(path) = arguments.out.as_deref() {
+                    let bytes = grocery_export_bytes(&export)?;
+                    SensitiveExportWriter::write(path, &bytes, arguments.overwrite)?;
+                    if self.output_mode == OutputMode::Json {
+                        return render_json(&json!({
+                            "written": true,
+                            "format": arguments.format.as_wire_value(),
+                            "bytes": bytes.len()
+                        }))
+                        .map_err(|_| {
+                            OneShotError::new("output_json", "could not encode export receipt")
+                        });
+                    }
+                    return Ok(format!(
+                        "Grocery export written to {}.\n",
+                        terminal_safe_text(&path.display().to_string())
+                    ));
+                }
                 match export {
                     GroceryExport::Json(list) => render_json(&list).map_err(|_| {
                         OneShotError::new("output_json", "could not encode Grocery export")
@@ -787,6 +805,18 @@ impl<'a> OneShotExecutor<'a> {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok((list_id, version, item_ids))
+    }
+}
+
+fn grocery_export_bytes(export: &GroceryExport) -> Result<Vec<u8>, OneShotError> {
+    match export {
+        GroceryExport::Json(list) => {
+            let mut bytes = serde_json::to_vec(list)
+                .map_err(|_| OneShotError::new("output_json", "could not encode Grocery export"))?;
+            bytes.push(b'\n');
+            Ok(bytes)
+        }
+        GroceryExport::Markdown(text) | GroceryExport::Text(text) => Ok(text.as_bytes().to_vec()),
     }
 }
 

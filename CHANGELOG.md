@@ -43,6 +43,9 @@ authentication contracts are stabilized.
   shows the never-buy list in the authenticated Grocery TUI panel.
 - Renders stable item IDs, quantities, provenance, member-specific ingredient
   screening, reasons, and substitutions in Grocery list and proposal views.
+- Adds owner-only `grocery export --out FILE` writes with exclusive creation,
+  explicit atomic overwrite, symlink/reparse-point rejection, and cleanup on
+  failure.
 - Parses the frozen C3 item-list confirmation envelope into a native TUI card;
   `y`/`n` and Ctrl+C send an explicit `confirm` decision with the original
   server confirmation and idempotency IDs, mutually exclusive with `query`.

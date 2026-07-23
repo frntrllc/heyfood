@@ -157,10 +157,12 @@ scrollback, and `/status` to inspect session readiness.
 Grocery, Health, profile, household, location, and status panels are connected
 on the draft branch. Grocery list cards expose stable IDs, provenance, member
 screening, substitutions, and never-buy exclusions. Conversational item-list
-proposals support typed accept/cancel decisions in the TUI; proposal editing,
-Menu Watch, and native voice capture remain incomplete release gates. Hidden
-compatibility routes continue to fail closed where a native workflow is not
-complete.
+proposals support typed accept/cancel decisions in the TUI. `grocery export
+LIST_ID --out FILE` writes annotations through an owner-only, exclusive,
+symlink-safe file path; `--overwrite` opts into atomic replacement. Proposal
+editing, Menu Watch, and native voice capture remain incomplete release gates.
+Hidden compatibility routes continue to fail closed where a native workflow is
+not complete.
 
 ## Development
 

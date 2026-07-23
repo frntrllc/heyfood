@@ -468,6 +468,12 @@ pub struct GroceryExportArgs {
     pub list_id: String,
     #[arg(long, value_enum, default_value_t = GroceryExportFormat::Markdown)]
     pub format: GroceryExportFormat,
+    /// Write sensitive dietary/member annotations to an owner-only file.
+    #[arg(long, value_name = "FILE")]
+    pub out: Option<PathBuf>,
+    /// Atomically replace an existing regular file.
+    #[arg(long, requires = "out")]
+    pub overwrite: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

@@ -25,7 +25,7 @@ pub use persistence::WindowsCredentialStore;
 pub use persistence::{
     AtomicFile, AuthorizationReplacementJournal, AuthorizationReplacementPhase,
     AuthorizationSessionStore, FileCredentialStore, NativeAuthRefreshGuard, NativeAuthStore,
-    NativeConfigStore,
+    NativeConfigStore, SensitiveExportWriter,
 };
 pub use python_import::PythonStateImporter;
 
