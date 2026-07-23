@@ -43,7 +43,13 @@ proposals are confirmed only from a JSON proposal read on stdin. Conversational
 Grocery proposals use the C3 item-list card in the TUI: `y` accepts, `n`
 cancels, and Ctrl+C sends a structured cancel. The confirmation request echoes
 the server IDs and idempotency key and never converts natural language into
-consent.
+consent. The generic C3 v1 schema describes per-member screening as top-level
+`item.safety_flags`, while the frozen Grocery Phase-A production fixture carries
+the authoritative Grocery annotation under
+`item.safety.{status,member_flags,label_hint}`. The TUI prefers and fully renders
+the nested Grocery shape—including intended member, provenance, reasons, and
+substitutions—while retaining top-level `safety_flags` as an additive
+compatibility input.
 
 Legacy top-level `recommend`, `location`, `search`, `household`, `profile`, and
 other hidden topology are unavailable in this cut. Recognized legacy paths fail

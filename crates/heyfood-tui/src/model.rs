@@ -1790,6 +1790,11 @@ fn render_action_confirmation(envelope: &ActionConfirmationEnvelopeWire) -> Stri
                 .find_map(|key| item.get(key).and_then(serde_json::Value::as_str))
                 .map(terminal_safe_text)
                 .unwrap_or_else(|| "item".into());
+            let intended_for = item.get("intended_for").and_then(serde_json::Value::as_str);
+            let intended = intended_for
+                .map(terminal_safe_text)
+                .map(|member| format!(" for {member}"))
+                .unwrap_or_default();
             let quantity = item.get("quantity").and_then(|value| {
                 value
                     .as_str()
@@ -1805,28 +1810,11 @@ fn render_action_confirmation(envelope: &ActionConfirmationEnvelopeWire) -> Stri
                 (Some(quantity), None) => format!(" · {quantity}"),
                 _ => String::new(),
             };
-            let _ = writeln!(output, "{}. {name}{amount}", index + 1);
-            if let Some(flags) = item
-                .get("safety_flags")
-                .and_then(serde_json::Value::as_array)
-            {
-                for flag in flags {
-                    let member = flag
-                        .get("member_id")
-                        .and_then(serde_json::Value::as_str)
-                        .map(terminal_safe_text)
-                        .unwrap_or_else(|| "member".into());
-                    let status = flag
-                        .get("status")
-                        .and_then(serde_json::Value::as_str)
-                        .map(terminal_safe_text)
-                        .unwrap_or_else(|| "unable to evaluate".into());
-                    let _ = writeln!(output, "   • {member}: {status}");
-                    if let Some(reason) = flag.get("reason").and_then(serde_json::Value::as_str) {
-                        let _ = writeln!(output, "     {}", terminal_safe_text(reason));
-                    }
-                }
+            let _ = writeln!(output, "{}. {name}{intended}{amount}", index + 1);
+            if let Some(provenance) = item.get("provenance").and_then(serde_json::Value::as_str) {
+                let _ = writeln!(output, "   source: {}", terminal_safe_text(provenance));
             }
+            render_confirmation_safety(&mut output, item, intended_for);
         }
     }
     if let Some(expires_at) = envelope.expires_at.as_deref() {
@@ -1836,6 +1824,73 @@ fn render_action_confirmation(envelope: &ActionConfirmationEnvelopeWire) -> Stri
         "\nNothing has changed yet. Type `y` to confirm or `n` to cancel. Ctrl+C cancels.",
     );
     output
+}
+
+fn render_confirmation_safety(
+    output: &mut String,
+    item: &serde_json::Value,
+    intended_for: Option<&str>,
+) {
+    // The generic C3 v1 item card placed flags at `item.safety_flags`.
+    // Grocery Phase A's frozen production fixture specializes that shape as
+    // `item.safety.{status,member_flags,label_hint}`. Prefer the production
+    // Grocery shape while retaining the additive generic-C3 compatibility.
+    let nested_safety = item.get("safety");
+    if let Some(status) = nested_safety
+        .and_then(|safety| safety.get("status"))
+        .and_then(serde_json::Value::as_str)
+    {
+        let status = terminal_safe_text(status).replace('_', " ");
+        let _ = writeln!(output, "   ingredient screening: {status}");
+    }
+    let flags = nested_safety
+        .and_then(|safety| safety.get("member_flags"))
+        .and_then(serde_json::Value::as_array)
+        .or_else(|| {
+            item.get("safety_flags")
+                .and_then(serde_json::Value::as_array)
+        });
+    if let Some(flags) = flags {
+        for flag in flags {
+            let member_id = flag.get("member_id").and_then(serde_json::Value::as_str);
+            let member = member_id
+                .map(terminal_safe_text)
+                .unwrap_or_else(|| "member".into());
+            let status = flag
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .map(terminal_safe_text)
+                .map(|value| value.replace('_', " "))
+                .unwrap_or_else(|| "unable to evaluate".into());
+            let intended = member_id
+                .filter(|member| Some(*member) == intended_for)
+                .map_or("", |_| " · intended");
+            let _ = writeln!(output, "   • {member}: {status}{intended}");
+            if let Some(reason) = flag.get("reason").and_then(serde_json::Value::as_str) {
+                let _ = writeln!(output, "     {}", terminal_safe_text(reason));
+            }
+            if let Some(substitutions) = flag
+                .get("substitutions")
+                .and_then(serde_json::Value::as_array)
+            {
+                let substitutions = substitutions
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(terminal_safe_text)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if !substitutions.is_empty() {
+                    let _ = writeln!(output, "     try: {substitutions}");
+                }
+            }
+        }
+    }
+    if let Some(label_hint) = nested_safety
+        .and_then(|safety| safety.get("label_hint"))
+        .and_then(serde_json::Value::as_str)
+    {
+        let _ = writeln!(output, "   {}", terminal_safe_text(label_hint));
+    }
 }
 
 fn append_choice_labels(output: &mut String, choices: &[String]) {
@@ -2506,31 +2561,32 @@ mod tests {
     }
 
     #[test]
-    fn action_confirmation_renders_a_card_and_requires_typed_accept_or_cancel() {
+    fn production_grocery_confirmation_renders_safety_and_requires_typed_accept_or_cancel() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fixtures/contracts/grocery-backend/phase-a/fixtures/grocery/confirmation_round_trip.json"
+        ))
+        .unwrap();
+        let mut structured = fixture["card"].clone();
+        let structured = structured.as_object_mut().unwrap();
+        structured.insert(
+            "confirmation_id".into(),
+            fixture["accept_payload"]["confirmation_id"].clone(),
+        );
+        structured.insert(
+            "idempotency_key".into(),
+            fixture["accept_payload"]["idempotency_key"].clone(),
+        );
+        structured.insert(
+            "preview".into(),
+            serde_json::json!("Add one screened ingredient"),
+        );
+        structured.insert(
+            "expires_at".into(),
+            serde_json::json!("2026-07-22T12:05:00Z"),
+        );
         let confirmation_document = serde_json::json!({
             "text": "I prepared a grocery update.",
-            "structured": {
-                "type": "action_confirmation",
-                "envelope_version": 1,
-                "confirmation_id": "00000000-0000-4000-8000-000000000001",
-                "idempotency_key": "00000000-0000-4000-8000-000000000002",
-                "action": "grocery_list_add_items",
-                "preview": "Add two screened ingredients",
-                "expires_at": "2026-07-22T12:05:00Z",
-                "card_form": "item_list",
-                "structured_preview": {
-                    "items": [{
-                        "name": "onion",
-                        "quantity": 1,
-                        "unit": "whole",
-                        "safety_flags": [{
-                            "member_id": "maya",
-                            "status": "risky",
-                            "reason": "High-FODMAP ingredient"
-                        }]
-                    }]
-                }
-            }
+            "structured": structured
         });
         let mut model = AppModel {
             draft: "add ingredients".into(),
@@ -2550,8 +2606,13 @@ mod tests {
         );
         let card = &model.scrollback.entries().back().unwrap().text;
         assert!(card.contains("Review before changing anything"));
-        assert!(card.contains("1. onion · 1 whole"));
-        assert!(card.contains("maya: risky"));
+        assert!(card.contains("1. onion · 1"));
+        assert!(card.contains("source: manual"));
+        assert!(card.contains("ingredient screening: risky"));
+        assert!(card.contains("maya-uuid: risky"));
+        assert!(card.contains("Onion is high-FODMAP."));
+        assert!(card.contains("try: scallion greens"));
+        assert!(card.contains("Screened at ingredient level — verify the product label."));
         assert!(card.contains("Type `y` to confirm or `n` to cancel"));
         assert!(!card.contains("confirmation_id"));
         let _ = dispatch(
@@ -2570,8 +2631,40 @@ mod tests {
             [Effect::ConfirmAction { operation_id: 2, command }]
                 if command.decision == ConfirmationDecisionWire::Accept
                     && command.confirmation_id.as_uuid().to_string()
-                        == "00000000-0000-4000-8000-000000000001"
+                        == "00000000-0000-0000-0000-000000000001"
         ));
+    }
+
+    #[test]
+    fn generic_c3_safety_flags_and_targeting_remain_visible() {
+        let envelope: ActionConfirmationEnvelopeWire = serde_json::from_value(serde_json::json!({
+            "type": "action_confirmation",
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "action": "grocery_list_add_items",
+            "preview": "Add a targeted ingredient",
+            "card_form": "item_list",
+            "structured_preview": {
+                "items": [{
+                    "name": "tomato",
+                    "quantity": 2,
+                    "unit": "each",
+                    "intended_for": "maya",
+                    "provenance": "menu",
+                    "safety_flags": [{
+                        "member_id": "maya",
+                        "status": "avoid",
+                        "reason": "Member-specific conflict"
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+        let card = render_action_confirmation(&envelope);
+        assert!(card.contains("1. tomato for maya · 2 each"));
+        assert!(card.contains("source: menu"));
+        assert!(card.contains("maya: avoid · intended"));
+        assert!(card.contains("Member-specific conflict"));
     }
 
     #[test]
