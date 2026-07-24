@@ -68,6 +68,8 @@ jobs:
       - name: Smoke the native public executable
         if: runner.os != 'Windows'
         shell: bash
+        env:
+          HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
         run: scripts/release/smoke.sh release "$VERSION" "$TARGET"
       - name: Smoke the native public Windows executable
         if: runner.os == 'Windows'

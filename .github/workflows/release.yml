@@ -161,6 +161,7 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         env:
+          HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
           TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.validate.outputs.version }}
         run: scripts/release/smoke.sh dist "$VERSION" "$TARGET"

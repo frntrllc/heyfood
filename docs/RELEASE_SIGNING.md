@@ -26,7 +26,9 @@ Configure these environment variables:
 The macOS P12 must contain exactly one `Developer ID Application` identity.
 Both macOS architectures are signed with hardened runtime and a secure
 timestamp, submitted with `notarytool --wait`, required to return `Accepted`,
-and assessed by Gatekeeper before packaging.
+and assessed by Gatekeeper before packaging. Signing, packaged-archive smoke,
+and downloaded-public-artifact smoke each require the executable's exact
+`TeamIdentifier` to match `APPLE_DEVELOPER_TEAM_ID`.
 
 The Windows PFX must contain a private key with the Code Signing enhanced key
 usage. The certificate subject must exactly match `WINDOWS_CODESIGN_SUBJECT`.

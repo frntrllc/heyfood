@@ -27,7 +27,19 @@ binary="$staging/heyfood"
 test -f "$binary"
 test -x "$binary"
 if [[ "$target" == *-apple-darwin ]]; then
+  if [[ -z "${HEYFOOD_APPLE_TEAM_ID:-}" ]]; then
+    echo "expected Apple developer team is required for macOS smoke" >&2
+    exit 78
+  fi
   codesign --verify --deep --strict --verbose=2 "$binary"
+  observed_team_id=$(
+    codesign --display --verbose=4 "$binary" 2>&1 |
+      sed -n 's/^TeamIdentifier=//p'
+  )
+  if [[ "$observed_team_id" != "$HEYFOOD_APPLE_TEAM_ID" ]]; then
+    echo "installed macOS executable is not signed by the expected Apple developer team" >&2
+    exit 78
+  fi
   spctl --assess --type execute --verbose=2 "$binary"
 fi
 test "$("$binary" --version)" = "heyfood $version"

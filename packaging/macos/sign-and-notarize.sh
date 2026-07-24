@@ -72,6 +72,14 @@ codesign \
   --keychain "$keychain" \
   "$binary"
 codesign --verify --deep --strict --verbose=2 "$binary"
+observed_team_id=$(
+  codesign --display --verbose=4 "$binary" 2>&1 |
+    sed -n 's/^TeamIdentifier=//p'
+)
+if [[ "$observed_team_id" != "$HEYFOOD_APPLE_TEAM_ID" ]]; then
+  echo "signed executable does not match the protected Apple developer team" >&2
+  exit 78
+fi
 
 ditto -c -k --keepParent "$binary" "$submission"
 xcrun notarytool submit "$submission" \
