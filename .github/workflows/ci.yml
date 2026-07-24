@@ -22,6 +22,7 @@ concurrency:
 jobs:
   installer-contract:
     name: Installer / ${{ matrix.context }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.qualify_signed_candidate) }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -55,6 +56,7 @@ jobs:
 
   native-cli-smoke:
     name: Native CLI / ${{ matrix.os }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.qualify_signed_candidate) }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -209,6 +211,7 @@ jobs:
 
   native-release-contract:
     name: Build and verify distribution
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.qualify_signed_candidate) }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
