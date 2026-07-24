@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, ErrorKind, Read};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -219,7 +219,18 @@ async fn respond_stream_chunks(socket: &mut TcpStream, chunks: &[Vec<u8>]) {
         socket.flush().await.unwrap();
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    socket.write_all(b"0\r\n\r\n").await.unwrap();
+    if let Err(error) = socket.write_all(b"0\r\n\r\n").await {
+        assert!(
+            matches!(
+                error.kind(),
+                ErrorKind::BrokenPipe
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::ConnectionReset
+                    | ErrorKind::NotConnected
+            ),
+            "chunked fixture terminator failed unexpectedly: {error}"
+        );
+    }
 }
 
 async fn respond_capabilities(socket: &mut TcpStream) {
