@@ -7,16 +7,18 @@ use heyfood_core::{
     GroceryMutationConfirmRequestWire, GroceryMutationProposalWire, GroceryMutationResultWire,
     HealthContextWire, IntegrationAuthorizeRequestWire, IntegrationAuthorizeResponseWire,
     IntegrationDisconnectResponseWire, IntegrationListWire, IntegrationRedirectTargetWire,
-    IntegrationSyncResponseWire, OperationId, RemoveItemsRequestWire, SessionCredentials,
-    TRANSCRIPTION_CHANNELS, TRANSCRIPTION_MAX_AUDIO_BYTES, TRANSCRIPTION_MAX_DURATION_SECONDS,
+    IntegrationSyncResponseWire, MenuWatchCreateRequestWire, MenuWatchId,
+    MenuWatchListResponseWire, MenuWatchResponseWire, OperationId, RemoveItemsRequestWire,
+    SessionCredentials, TRANSCRIPTION_CHANNELS, TRANSCRIPTION_CLIENT_ERROR_KINDS,
+    TRANSCRIPTION_MAX_AUDIO_BYTES, TRANSCRIPTION_MAX_DURATION_SECONDS,
     TRANSCRIPTION_MAX_LANGUAGE_CHARACTERS, TRANSCRIPTION_MAX_REQUEST_BYTES,
     TRANSCRIPTION_SAMPLE_WIDTH_BYTES, TRANSCRIPTION_WAV_HEADER_BYTES, Transcription,
     TranscriptionPurpose, TranscriptionWire, UpdateItemStateRequestWire, required_text,
     terminal_safe_text, transcription_sample_rate_supported,
 };
 use reqwest::{Client, Method, RequestBuilder, Response, StatusCode, header};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -25,6 +27,7 @@ use crate::{HttpService, uncertain_transport};
 const MAX_JSON_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EXPORT_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TRANSCRIPTION_RESPONSE_BYTES: usize = 128 * 1024;
+const MAX_TRANSCRIPTION_ERROR_BYTES: usize = 16 * 1024;
 
 #[derive(Clone, PartialEq)]
 pub enum GroceryExport {
@@ -63,6 +66,19 @@ impl HttpService {
     /// performs transcription only; it never submits the transcript to the
     /// agent or converts it into mutation consent.
     pub async fn transcribe_audio(
+        &self,
+        wav_bytes: &[u8],
+        purpose: TranscriptionPurpose,
+        language: Option<&str>,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> Result<Transcription, PortError> {
+        self.transcribe_audio_inner(wav_bytes, purpose, language, operation_id, cancellation)
+            .await
+            .map_err(transcription_public_error)
+    }
+
+    async fn transcribe_audio_inner(
         &self,
         wav_bytes: &[u8],
         purpose: TranscriptionPurpose,
@@ -109,13 +125,10 @@ impl HttpService {
             )
             .bearer_auth(cli_auth.channel_access_token.expose_secret())
             .body(body);
-        let response = self
-            .dispatch(builder, &cancellation, DispatchKind::Safe)
-            .await
-            .map_err(transcription_service_error)?;
+        let response = self.dispatch_transcription(builder, &cancellation).await?;
         if !is_json_media_type(&media_type(&response)) {
             return Err(PortError::new(
-                "response_content_type",
+                "transcription_contract_error",
                 "transcription response is not JSON",
             ));
         }
@@ -294,6 +307,59 @@ impl HttpService {
             .header(header::ACCEPT, "application/json");
         self.dispatch_json(builder, cancellation, DispatchKind::Safe)
             .await
+    }
+
+    pub async fn menu_watch_list(
+        &self,
+        credentials: &SessionCredentials,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> Result<MenuWatchListResponseWire, PortError> {
+        let builder = self
+            .request(
+                Method::GET,
+                "/v1/menu/watch",
+                Some(credentials),
+                operation_id,
+            )?
+            .header(header::ACCEPT, "application/json");
+        self.dispatch_json(builder, cancellation, DispatchKind::Safe)
+            .await
+    }
+
+    pub async fn menu_watch_create(
+        &self,
+        credentials: &SessionCredentials,
+        operation_id: OperationId,
+        request: &MenuWatchCreateRequestWire,
+        cancellation: CancellationToken,
+    ) -> Result<MenuWatchResponseWire, PortError> {
+        let builder = self
+            .request(
+                Method::POST,
+                "/v1/menu/watch",
+                Some(credentials),
+                operation_id,
+            )?
+            .header(header::ACCEPT, "application/json")
+            .json(request);
+        self.dispatch_json(builder, cancellation, DispatchKind::Mutation)
+            .await
+            .map_err(menu_watch_create_error)
+    }
+
+    pub async fn menu_watch_delete(
+        &self,
+        credentials: &SessionCredentials,
+        operation_id: OperationId,
+        watch_id: MenuWatchId,
+        cancellation: CancellationToken,
+    ) -> Result<(), PortError> {
+        let endpoint = format!("/v1/menu/watch/{}", watch_id.as_uuid().hyphenated());
+        let builder = self.request(Method::DELETE, &endpoint, Some(credentials), operation_id)?;
+        self.dispatch(builder, &cancellation, DispatchKind::Mutation)
+            .await?;
+        Ok(())
     }
 
     pub fn require_grocery_v1(capabilities: &ApplicationCapabilitiesWire) -> Result<(), PortError> {
@@ -724,6 +790,43 @@ impl HttpService {
             Err(http_status_error(response.status()))
         }
     }
+
+    async fn dispatch_transcription(
+        &self,
+        builder: RequestBuilder,
+        cancellation: &CancellationToken,
+    ) -> Result<Response, PortError> {
+        if cancellation.is_cancelled() {
+            return Err(PortError::new(
+                "request_cancelled_before_dispatch",
+                "request was cancelled before dispatch",
+            ));
+        }
+        let response = tokio::select! {
+            () = cancellation.cancelled() => {
+                return Err(PortError::new(
+                    "request_cancelled_after_dispatch",
+                    "transcription response was not observed after request dispatch",
+                ));
+            }
+            result = builder.send() => result.map_err(|error| {
+                PortError::new("request_transport", crate::sanitized_reqwest_error(&error))
+            })?,
+        };
+        if response.status().is_success() {
+            return Ok(response);
+        }
+        let status = response.status();
+        let bytes = read_limited(
+            response,
+            cancellation,
+            DispatchKind::Safe,
+            MAX_TRANSCRIPTION_ERROR_BYTES,
+        )
+        .await?;
+        let body = serde_json::from_slice::<TranscriptionErrorBody>(&bytes).unwrap_or_default();
+        Err(transcription_http_error(status, body.error.as_deref()))
+    }
 }
 
 fn dispatch_error(kind: DispatchKind, code: &'static str, message: &'static str) -> PortError {
@@ -756,23 +859,75 @@ fn http_status_error(status: StatusCode) -> PortError {
     PortError::new(code, message)
 }
 
-fn transcription_service_error(error: PortError) -> PortError {
-    let (code, message) = match error.code {
-        "invalid_request" | "payload_too_large" => (
+#[derive(Default, Deserialize)]
+struct TranscriptionErrorBody {
+    #[serde(default)]
+    error: Option<String>,
+}
+
+fn transcription_http_error(status: StatusCode, error: Option<&str>) -> PortError {
+    let (code, message) = match status.as_u16() {
+        400 | 413 => (
             "audio_rejected",
             "the service rejected the recording size or format",
         ),
-        "scope_required" => (
+        401 => ("login_required", "voice transcription requires login"),
+        403 if error == Some("insufficient_scope") => (
             "insufficient_scope",
             "voice transcription requires additional authorization",
         ),
-        "resource_not_found" | "service_unavailable" | "request_transport" => (
+        429 => (
+            "rate_limited",
+            "the transcription service rate limit was reached",
+        ),
+        404 | 503 => (
             "transcription_unavailable",
             "the transcription service is currently unavailable",
         ),
-        _ => return error,
+        _ => (
+            "transcription_unavailable",
+            "the transcription service rejected the request",
+        ),
     };
     PortError::new(code, message)
+}
+
+fn transcription_public_error(error: PortError) -> PortError {
+    if TRANSCRIPTION_CLIENT_ERROR_KINDS.contains(&error.code) {
+        return error;
+    }
+    match error.code {
+        "transcription_context" => PortError::new(
+            "login_required",
+            "voice transcription requires an authenticated CLI channel",
+        ),
+        "transcription_language" => PortError::new(
+            "audio_rejected",
+            "the transcription language tag is invalid",
+        ),
+        "response_content_type" | "response_json" | "response_too_large" => PortError::new(
+            "transcription_contract_error",
+            "the transcription service returned an invalid success response",
+        ),
+        _ => PortError::new(
+            "transcription_unavailable",
+            "the transcription service is currently unavailable",
+        ),
+    }
+}
+
+fn menu_watch_create_error(error: PortError) -> PortError {
+    match error.code {
+        "version_conflict" => PortError::new(
+            "menu_watch_confirmation_or_limit",
+            "the watch needs explicit menu-URL confirmation or the account watch limit was reached",
+        ),
+        "invalid_request" => PortError::new(
+            "menu_watch_rejected",
+            "the service rejected the restaurant, menu identity, schedule, or timezone",
+        ),
+        _ => error,
+    }
 }
 
 fn transcription_multipart(

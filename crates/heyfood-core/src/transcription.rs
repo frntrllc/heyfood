@@ -20,6 +20,14 @@ pub const TRANSCRIPTION_MAX_TRANSCRIPT_CHARACTERS: usize = 20_000;
 pub const TRANSCRIPTION_MAX_RESPONSE_DURATION_SECONDS: f64 = 3_600.0;
 pub const TRANSCRIPTION_MAX_LANGUAGE_CHARACTERS: usize = 35;
 pub const TRANSCRIPTION_MAX_MODEL_VERSION_CHARACTERS: usize = 128;
+pub const TRANSCRIPTION_CLIENT_ERROR_KINDS: &[&str] = &[
+    "insufficient_scope",
+    "audio_rejected",
+    "rate_limited",
+    "transcription_unavailable",
+    "login_required",
+    "transcription_contract_error",
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

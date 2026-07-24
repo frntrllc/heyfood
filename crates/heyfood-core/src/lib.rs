@@ -8,6 +8,7 @@ pub mod config;
 pub mod error;
 pub mod grocery;
 pub mod health;
+pub mod menu_watch;
 pub mod migration;
 pub mod network;
 pub mod onboarding;
@@ -37,6 +38,11 @@ pub use health::{
     HealthCapability, HealthConnectionStatus, HealthFreshness, HealthFreshnessStatus, HealthMetric,
     HealthProvider, HealthTrend, TrendDirection,
 };
+pub use menu_watch::{
+    MENU_WATCH_SCOPE, MENU_WATCH_SOURCE_COMMIT, MENU_WATCH_SOURCE_SHA256,
+    MenuWatchCreateRequestWire, MenuWatchId, MenuWatchListResponseWire, MenuWatchResponseWire,
+    RestaurantId, WatchCadenceWire, WatchHour, WatchWeekday,
+};
 pub use migration::{
     ImportedPythonState, PythonFieldAction, PythonFieldDisposition, PythonImportOutcome,
     PythonImportReport,
@@ -51,14 +57,15 @@ pub use presentation::{
     NoticeLevel, PresentationBlock, PresentationDocument, PresentationError, PresentationText,
 };
 pub use transcription::{
-    TRANSCRIPTION_CHANNELS, TRANSCRIPTION_MAX_AUDIO_BYTES, TRANSCRIPTION_MAX_DURATION_SECONDS,
-    TRANSCRIPTION_MAX_LANGUAGE_CHARACTERS, TRANSCRIPTION_MAX_MODEL_VERSION_CHARACTERS,
-    TRANSCRIPTION_MAX_REQUEST_BYTES, TRANSCRIPTION_MAX_RESPONSE_DURATION_SECONDS,
-    TRANSCRIPTION_MAX_TRANSCRIPT_CHARACTERS, TRANSCRIPTION_PREFERRED_SAMPLE_RATE_HZ,
-    TRANSCRIPTION_SAMPLE_RATE_MAX_HZ, TRANSCRIPTION_SAMPLE_RATE_MIN_HZ,
-    TRANSCRIPTION_SAMPLE_WIDTH_BYTES, TRANSCRIPTION_SCHEMA_SHA256, TRANSCRIPTION_SCHEMA_VERSION,
-    TRANSCRIPTION_WAV_HEADER_BYTES, Transcription, TranscriptionContractError,
-    TranscriptionPurpose, TranscriptionWire, transcription_sample_rate_supported,
+    TRANSCRIPTION_CHANNELS, TRANSCRIPTION_CLIENT_ERROR_KINDS, TRANSCRIPTION_MAX_AUDIO_BYTES,
+    TRANSCRIPTION_MAX_DURATION_SECONDS, TRANSCRIPTION_MAX_LANGUAGE_CHARACTERS,
+    TRANSCRIPTION_MAX_MODEL_VERSION_CHARACTERS, TRANSCRIPTION_MAX_REQUEST_BYTES,
+    TRANSCRIPTION_MAX_RESPONSE_DURATION_SECONDS, TRANSCRIPTION_MAX_TRANSCRIPT_CHARACTERS,
+    TRANSCRIPTION_PREFERRED_SAMPLE_RATE_HZ, TRANSCRIPTION_SAMPLE_RATE_MAX_HZ,
+    TRANSCRIPTION_SAMPLE_RATE_MIN_HZ, TRANSCRIPTION_SAMPLE_WIDTH_BYTES,
+    TRANSCRIPTION_SCHEMA_SHA256, TRANSCRIPTION_SCHEMA_VERSION, TRANSCRIPTION_WAV_HEADER_BYTES,
+    Transcription, TranscriptionContractError, TranscriptionPurpose, TranscriptionWire,
+    transcription_sample_rate_supported,
 };
 pub use validation::{
     ValidationError, bounded_integer, bounded_number, choice, coordinates, iso_date, optional_text,

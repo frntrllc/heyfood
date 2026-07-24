@@ -100,6 +100,8 @@ heyfood item "pad thai at Pismo's"
 heyfood grocery show
 heyfood grocery exclusions
 heyfood grocery never --list-id UUID --version 4 "raw onion"
+heyfood watch list
+heyfood watch add RESTAURANT_UUID --weekday thursday --hour 9 --notify
 heyfood health status
 heyfood health show
 ```
@@ -157,16 +159,19 @@ validated transcript in the composer for editing before submission. Use
 `/clear` to clear visible scrollback, and `/status` to inspect session
 readiness.
 
-Grocery, Health, profile, household, location, and status panels are connected
+Grocery, Menu Watch, Health, profile, household, location, and status panels are connected
 on the draft branch. Grocery list cards expose stable IDs, provenance, member
 screening, substitutions, and never-buy exclusions. Conversational item-list
 proposals support typed accept/cancel decisions in the TUI. `grocery export
 LIST_ID --out FILE` writes annotations through an owner-only, exclusive,
 symlink-safe file path; `--overwrite` opts into atomic replacement. Proposal
-editing and the native voice vertical are present in source. Menu Watch,
-installed-artifact showcase execution, and real-hardware voice qualification
-remain incomplete release gates. Hidden compatibility routes continue to fail
-closed where a native workflow is not complete.
+editing and the native voice vertical are present in source. `heyfood watch`
+and `/watch` create/list/remove or display subscriptions using the deployed
+`menu:watch` contract; the showcased diff view remains blocked on a backend
+account-scoped diff-read route. Installed-artifact showcase execution and
+real-hardware voice qualification remain incomplete release gates. Hidden
+compatibility routes continue to fail closed where a native workflow is not
+complete.
 
 ## Development
 

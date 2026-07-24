@@ -340,6 +340,7 @@ const fn is_native_one_shot(command: &Command) -> bool {
             | Command::Item(_)
             | Command::Grocery { .. }
             | Command::Health { .. }
+            | Command::Watch { .. }
     )
 }
 
@@ -851,6 +852,7 @@ fn ensure_command_scopes(
             command: heyfood_cli::HealthCommand::Status | heyfood_cli::HealthCommand::Show,
         } => &["health:read"],
         Command::Health { .. } => &["integrations:manage"],
+        Command::Watch { .. } => &["menu:watch"],
         _ => &[],
     };
     let granted = granted_scope.split_whitespace().collect::<Vec<_>>();

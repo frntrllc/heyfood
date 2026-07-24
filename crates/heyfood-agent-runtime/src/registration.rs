@@ -17,6 +17,7 @@ pub const LOGIN_SCOPES: &[&str] = &[
     "account:delete",
     "knowledge:read",
     "menu:read",
+    "menu:watch",
     "recommend:read",
     "recipes:read",
     "recipes:write",
@@ -1400,7 +1401,7 @@ mod tests {
     use tokio::sync::Notify;
 
     #[test]
-    fn login_scopes_cover_every_released_health_and_grocery_command() {
+    fn login_scopes_cover_every_released_product_command() {
         let released_routes = [
             ("/v1/grocery/list", &["grocery:read"][..]),
             ("/v1/grocery/items", &["grocery:read", "grocery:write"][..]),
@@ -1426,6 +1427,9 @@ mod tests {
                 &["grocery:read", "grocery:write"][..],
             ),
             ("/v1/grocery/lists/{list_id}/export", &["grocery:read"][..]),
+            ("/v1/menu/watch", &["menu:watch"][..]),
+            ("/v1/menu/watch", &["menu:watch"][..]),
+            ("/v1/menu/watch/{watch_id}", &["menu:watch"][..]),
             ("/v1/health/context", &["health:read"][..]),
             ("/v1/integrations", &["health:read"][..]),
             ("/v1/integrations/authorize", &["integrations:manage"][..]),
@@ -1435,7 +1439,7 @@ mod tests {
             ),
             ("/v1/integrations/{provider}", &["integrations:manage"][..]),
         ];
-        assert_eq!(released_routes.len(), 14);
+        assert_eq!(released_routes.len(), 17);
         for (route, required_scopes) in released_routes {
             for required in required_scopes {
                 assert!(
@@ -1460,7 +1464,21 @@ mod tests {
 
     #[test]
     fn scope_upgrade_preserves_every_existing_scope_or_fails_closed() {
-        let v040 = LOGIN_SCOPES[..LOGIN_SCOPES.len() - 4].join(" ");
+        let v040 = LOGIN_SCOPES
+            .iter()
+            .copied()
+            .filter(|scope| {
+                !matches!(
+                    *scope,
+                    "menu:watch"
+                        | "health:read"
+                        | "integrations:manage"
+                        | "grocery:read"
+                        | "grocery:write"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(assert_preservable_scope(&v040).is_ok());
         assert_eq!(parse_scope(&LOGIN_SCOPES.join(" ")), LOGIN_SCOPES);
         let error = assert_preservable_scope("account:link future:unknown").unwrap_err();
@@ -1529,7 +1547,21 @@ mod tests {
             NetworkPolicy::DEVELOPMENT,
         )
         .unwrap();
-        let previous = LOGIN_SCOPES[..LOGIN_SCOPES.len() - 4].join(" ");
+        let previous = LOGIN_SCOPES
+            .iter()
+            .copied()
+            .filter(|scope| {
+                !matches!(
+                    *scope,
+                    "menu:watch"
+                        | "health:read"
+                        | "integrations:manage"
+                        | "grocery:read"
+                        | "grocery:write"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
         let authorization = client
             .start_device_reauthorization(
                 &previous,

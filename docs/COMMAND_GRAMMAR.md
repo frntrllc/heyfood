@@ -13,6 +13,7 @@ reply         continue an explicit conversation id
 log           log a meal through the hosted agent
 item          assess a food or menu item
 grocery       read, prepare, export, and confirm Grocery operations
+watch         create, list, and remove recurring Menu Watch subscriptions
 health        read health context and manage the Oura integration
 completion    print shell completion syntax
 ```
@@ -84,6 +85,23 @@ Oura is the current direct CLI provider. Apple Health summaries are acquired by
 the hello.food app and exposed only as provider-labeled hosted context; the CLI
 does not access HealthKit.
 
+## Menu Watch
+
+```bash
+heyfood watch list
+heyfood watch add RESTAURANT_UUID --weekday thursday --hour 9 --notify
+heyfood watch add RESTAURANT_UUID --weekday thursday --hour 9 \
+  --menu-url https://restaurant.example/menu --confirm-menu-url \
+  --tz America/Chicago
+heyfood watch remove WATCH_UUID
+```
+
+Watch creation, listing, and removal use the deployed `menu:watch` scope.
+Creation freezes the restaurant-local cadence, resolved timezone, notification
+preference, and identity-gate evidence. The backend does not yet expose its
+persisted snapshot diff through an account-scoped read endpoint, so the Rust
+client does not simulate or claim a watch-diff view.
+
 ## Global process controls
 
 ```text
@@ -105,6 +123,7 @@ installer remains suspended.
 
 ```text
 /grocery             open the capability-gated active Grocery list
+/watch               open recurring Menu Watch subscriptions
 /health              open provider-neutral integration and health context
 /profile             read consent and synchronized dietary profile state
 /household           show account-bound local household context
@@ -122,7 +141,7 @@ The panels are read-only and cancellable. `/voice`, Ctrl+Space, and F8 use the
 same bounded capture/transcription/review state machine when the artifact
 contains native audio support; unavailable artifacts and insufficient scopes
 fail before microphone access. Dietary onboarding, interactive Grocery
-confirmation, Menu Watch, real-hardware voice qualification, and
+confirmation, Menu Watch diff reading, real-hardware voice qualification, and
 installed-artifact showcase qualification remain release gates.
 
 ## Unavailable compatibility topology

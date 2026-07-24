@@ -20,6 +20,7 @@ enum SlashCommandKind {
     Help,
     New,
     Grocery,
+    Watch,
     Health,
     Household,
     For,
@@ -36,6 +37,7 @@ enum SlashCommandKind {
 pub enum PanelRequest {
     Status,
     Grocery,
+    Watch,
     Health,
     Household,
     Profile,
@@ -48,6 +50,7 @@ impl PanelRequest {
         match self {
             Self::Status => "Status",
             Self::Grocery => "Grocery",
+            Self::Watch => "Menu Watch",
             Self::Health => "Health",
             Self::Household => "Household",
             Self::Profile => "Dietary profile",
@@ -86,6 +89,13 @@ pub const SLASH_COMMAND_REGISTRY: &[SlashCommandSpec] = &[
         usage: "/grocery",
         description: "Open the screened active Grocery list",
         kind: SlashCommandKind::Grocery,
+    },
+    SlashCommandSpec {
+        name: "/watch",
+        aliases: &[],
+        usage: "/watch",
+        description: "Open recurring Menu Watch subscriptions",
+        kind: SlashCommandKind::Watch,
     },
     SlashCommandSpec {
         name: "/health",
@@ -642,6 +652,34 @@ pub enum Effect {
 
 #[must_use]
 pub fn dispatch(model: &mut AppModel, action: Action) -> Vec<Effect> {
+    if matches!(
+        model.voice_phase,
+        VoicePhase::Recording { .. } | VoicePhase::Transcribing { .. }
+    ) && matches!(
+        &action,
+        Action::Insert(_)
+            | Action::InsertText(_)
+            | Action::Backspace
+            | Action::Delete
+            | Action::MoveLeft
+            | Action::MoveRight
+            | Action::HistoryPrevious
+            | Action::HistoryNext
+            | Action::CompleteSlash
+            | Action::InsertNewline
+    ) {
+        model.activity = Some(match model.voice_phase {
+            VoicePhase::Recording { .. } => {
+                "Recording · composer editing is paused · stop or cancel voice first".into()
+            }
+            VoicePhase::Transcribing { .. } => {
+                "Transcribing securely… · composer editing is paused · Esc to cancel".into()
+            }
+            VoicePhase::Idle | VoicePhase::Review => unreachable!(),
+        });
+        model.idle_exit_armed = false;
+        return Vec::new();
+    }
     match action {
         Action::Insert('?') if model.draft.is_empty() && model.onboarding.is_none() => {
             show_help(model)
@@ -1519,6 +1557,7 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
         }
         SlashCommandKind::Status
         | SlashCommandKind::Grocery
+        | SlashCommandKind::Watch
         | SlashCommandKind::Health
         | SlashCommandKind::Household
         | SlashCommandKind::Profile
@@ -1531,6 +1570,7 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
         }
         SlashCommandKind::Status => return open_panel(model, PanelRequest::Status),
         SlashCommandKind::Grocery => return open_panel(model, PanelRequest::Grocery),
+        SlashCommandKind::Watch => return open_panel(model, PanelRequest::Watch),
         SlashCommandKind::Health => return open_panel(model, PanelRequest::Health),
         SlashCommandKind::Household => return open_panel(model, PanelRequest::Household),
         SlashCommandKind::For if arguments.is_empty() => {
@@ -3523,6 +3563,74 @@ mod tests {
     }
 
     #[test]
+    fn active_voice_rejects_composer_edits_and_preserves_drafts_deterministically() {
+        fn recording_model() -> AppModel {
+            let mut model = AppModel {
+                draft: "original typed draft".into(),
+                cursor: 20,
+                voice_availability: VoiceAvailability::Ready,
+                ..AppModel::default()
+            };
+            assert_eq!(
+                dispatch(&mut model, Action::VoiceToggle),
+                vec![Effect::StartVoice { operation_id: 1 }]
+            );
+            model
+        }
+
+        let mut success = recording_model();
+        assert!(dispatch(&mut success, Action::InsertText("fallback".into())).is_empty());
+        assert!(success.draft.is_empty());
+        assert!(
+            success
+                .activity
+                .as_deref()
+                .unwrap()
+                .contains("composer editing is paused")
+        );
+        assert_eq!(
+            dispatch(&mut success, Action::Submit),
+            vec![Effect::StopVoice { operation_id: 1 }]
+        );
+        assert!(dispatch(&mut success, Action::Insert('x')).is_empty());
+        let _ = dispatch(
+            &mut success,
+            Action::Runtime(RuntimeEvent::VoiceTranscriptReady {
+                operation_id: 1,
+                transcript: "recognized transcript".into(),
+            }),
+        );
+        assert_eq!(success.draft, "recognized transcript");
+        assert_eq!(success.voice_phase, VoicePhase::Review);
+
+        let mut failure = recording_model();
+        let _ = dispatch(&mut failure, Action::InsertText("fallback".into()));
+        let _ = dispatch(&mut failure, Action::Submit);
+        let _ = dispatch(
+            &mut failure,
+            Action::Runtime(RuntimeEvent::VoiceFailed {
+                operation_id: 1,
+                message: "offline".into(),
+            }),
+        );
+        assert_eq!(failure.draft, "original typed draft");
+        assert_eq!(failure.voice_phase, VoicePhase::Idle);
+
+        let mut cancelled = recording_model();
+        let _ = dispatch(&mut cancelled, Action::InsertText("fallback".into()));
+        assert_eq!(
+            dispatch(&mut cancelled, Action::CancelVoice),
+            vec![Effect::CancelVoice { operation_id: 1 }]
+        );
+        let _ = dispatch(
+            &mut cancelled,
+            Action::Runtime(RuntimeEvent::VoiceCancelled { operation_id: 1 }),
+        );
+        assert_eq!(cancelled.draft, "original typed draft");
+        assert_eq!(cancelled.voice_phase, VoicePhase::Idle);
+    }
+
+    #[test]
     fn household_target_dispatches_and_reports_the_resolved_scope() {
         let mut model = AppModel {
             draft: "/for Sarah".into(),
@@ -3572,6 +3680,7 @@ mod tests {
         for (command, panel) in [
             ("/status", PanelRequest::Status),
             ("/grocery", PanelRequest::Grocery),
+            ("/watch", PanelRequest::Watch),
             ("/health", PanelRequest::Health),
             ("/household", PanelRequest::Household),
             ("/profile", PanelRequest::Profile),

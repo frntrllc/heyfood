@@ -70,13 +70,21 @@ fn capabilities(version: Option<&str>) -> ApplicationCapabilitiesWire {
 }
 
 async fn fixture_service() -> (TcpListener, HttpService) {
+    fixture_service_with_transcription_timeout(Duration::from_secs(2)).await
+}
+
+async fn fixture_service_with_transcription_timeout(
+    transcription: Duration,
+) -> (TcpListener, HttpService) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = ServiceUrl::parse(
         &format!("http://{}/", listener.local_addr().unwrap()),
         NetworkPolicy::DEVELOPMENT,
     )
     .unwrap();
-    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines())
+    let mut deadlines = deadlines();
+    deadlines.transcription = transcription;
+    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines)
         .unwrap()
         .with_cli_auth(
             CliAuthContext::new(
@@ -336,18 +344,25 @@ async fn transcription_maps_oversize_status_to_audio_rejected() {
 
 #[tokio::test]
 async fn transcription_preserves_its_frozen_error_kinds() {
-    for (status, expected) in [
-        (400, "audio_rejected"),
-        (403, "insufficient_scope"),
-        (404, "transcription_unavailable"),
-        (503, "transcription_unavailable"),
+    let mut observed = std::collections::BTreeSet::new();
+    for (status, body_error, expected) in [
+        (400, "audio_too_long", "audio_rejected"),
+        (401, "invalid_token", "login_required"),
+        (403, "insufficient_scope", "insufficient_scope"),
+        (429, "rate_limited", "rate_limited"),
+        (404, "not_found", "transcription_unavailable"),
+        (
+            503,
+            "transcription_unavailable",
+            "transcription_unavailable",
+        ),
     ] {
         let (listener, service) = fixture_service().await;
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let request = read_request(&mut socket).await;
             assert!(request.starts_with("POST /v1/audio/transcriptions "));
-            respond(&mut socket, status, json!({"error": expected})).await;
+            respond(&mut socket, status, json!({"error": body_error})).await;
         });
         let error = service
             .transcribe_audio(
@@ -361,8 +376,126 @@ async fn transcription_preserves_its_frozen_error_kinds() {
             .unwrap_err();
         assert_eq!(error.code, expected);
         assert!(!error.outcome_uncertain);
+        observed.insert(error.code);
         server.await.unwrap();
     }
+    observed.insert("transcription_contract_error");
+    assert_eq!(
+        observed,
+        std::collections::BTreeSet::from([
+            "audio_rejected",
+            "insufficient_scope",
+            "login_required",
+            "rate_limited",
+            "transcription_contract_error",
+            "transcription_unavailable",
+        ])
+    );
+}
+
+#[tokio::test]
+async fn transcription_generic_forbidden_is_not_misreported_as_missing_scope() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _ = read_request(&mut socket).await;
+        respond(
+            &mut socket,
+            403,
+            json!({"error": "forbidden", "message": "policy denied"}),
+        )
+        .await;
+    });
+    let error = service
+        .transcribe_audio(
+            &fixture_wav(),
+            TranscriptionPurpose::Ask,
+            None,
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "transcription_unavailable");
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn malformed_and_oversized_successes_are_contract_errors() {
+    for response in [
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+            .to_owned(),
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            128 * 1024 + 1
+        ),
+    ] {
+        let (listener, service) = fixture_service().await;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = read_request(&mut socket).await;
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        let error = service
+            .transcribe_audio(
+                &fixture_wav(),
+                TranscriptionPurpose::Ask,
+                None,
+                OperationId::new(),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "transcription_contract_error");
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn disconnected_success_body_and_timeout_are_unavailable() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _ = read_request(&mut socket).await;
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{",
+            )
+            .await
+            .unwrap();
+    });
+    let disconnected = service
+        .transcribe_audio(
+            &fixture_wav(),
+            TranscriptionPurpose::Ask,
+            None,
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(disconnected.code, "transcription_unavailable");
+    server.await.unwrap();
+
+    let (listener, service) =
+        fixture_service_with_transcription_timeout(Duration::from_millis(30)).await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _ = read_request(&mut socket).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    });
+    let timed_out = service
+        .transcribe_audio(
+            &fixture_wav(),
+            TranscriptionPurpose::Ask,
+            None,
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(timed_out.code, "transcription_unavailable");
+    server.await.unwrap();
 }
 
 #[tokio::test]

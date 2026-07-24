@@ -10,16 +10,19 @@ use heyfood_application::{
     RunTurnOutcome, ServicePort, TurnContext, TurnRequest, execute_one_shot_turn,
 };
 use heyfood_cli::{
-    AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, OutputMode,
-    render_agent_result, render_grocery_exclusions, render_grocery_list, render_grocery_proposal,
-    render_health_context, render_item_result, render_json,
+    AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, MenuWatchCommand,
+    OutputMode, render_agent_result, render_grocery_exclusions, render_grocery_list,
+    render_grocery_proposal, render_health_context, render_item_result, render_json,
+    render_menu_watch, render_menu_watch_list,
 };
 use heyfood_core::{
     AddItemsRequestWire, AgentConfirmationCommandWire, AgentEvent, ExclusionMutationRequestWire,
     GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId, GroceryItemInputWire,
     GroceryListVersion, GroceryMutationConfirmRequestWire, ImportedPythonState,
-    OnboardingProfileInput, OperationId, RemoveItemsRequestWire, SessionCredentials,
-    SessionSnapshot, TranscriptionPurpose, UpdateItemStateRequestWire, terminal_safe_text,
+    MenuWatchCreateRequestWire, MenuWatchId, OnboardingProfileInput, OperationId,
+    RemoveItemsRequestWire, RestaurantId, SessionCredentials, SessionSnapshot,
+    TranscriptionPurpose, UpdateItemStateRequestWire, WatchCadenceWire, WatchHour, WatchWeekday,
+    terminal_safe_text,
 };
 use heyfood_platform::{NativeSignalSource, SensitiveExportWriter, SignalEvent};
 use heyfood_tui::{Effect, ExitReason, PanelRequest, RuntimeEvent, TuiError, VoiceAvailability};
@@ -207,6 +210,10 @@ impl<'a> OneShotExecutor<'a> {
                     .await
             }
             Command::Health { command } => self.execute_health(command, cancellation).await,
+            Command::Watch { command } => {
+                self.execute_menu_watch(command.unwrap_or(MenuWatchCommand::List), cancellation)
+                    .await
+            }
             Command::Completion { shell } => {
                 String::from_utf8(heyfood_cli::generate_completion(shell)).map_err(|_| {
                     OneShotError::new("completion_encoding", "completion output is invalid UTF-8")
@@ -745,6 +752,70 @@ impl<'a> OneShotExecutor<'a> {
                 render_json(&result).map_err(|_| {
                     OneShotError::new("output_json", "could not encode disconnect result")
                 })
+            }
+        }
+    }
+
+    async fn execute_menu_watch(
+        &self,
+        command: MenuWatchCommand,
+        cancellation: CancellationToken,
+    ) -> Result<String, OneShotError> {
+        match command {
+            MenuWatchCommand::List => {
+                let watches = self
+                    .service
+                    .menu_watch_list(self.credentials, OperationId::new(), cancellation)
+                    .await?;
+                Ok(render_menu_watch_list(&watches, self.output_mode))
+            }
+            MenuWatchCommand::Add(arguments) => {
+                let restaurant_id = RestaurantId::parse(&arguments.restaurant_id)
+                    .map_err(|message| OneShotError::new("restaurant_id", message))?;
+                let menu_url = optional_text(arguments.menu_url, 2_048, "menu URL")?;
+                let timezone = optional_text(arguments.tz, 64, "IANA timezone")?;
+                let weekday = WatchWeekday::new(arguments.weekday.as_contract_value())
+                    .map_err(|message| OneShotError::new("menu_watch_weekday", message))?;
+                let hour = WatchHour::new(arguments.hour)
+                    .map_err(|message| OneShotError::new("menu_watch_hour", message))?;
+                let watch = self
+                    .service
+                    .menu_watch_create(
+                        self.credentials,
+                        OperationId::new(),
+                        &MenuWatchCreateRequestWire {
+                            restaurant_id,
+                            cadence: WatchCadenceWire { weekday, hour },
+                            notify: arguments.notify,
+                            menu_url,
+                            confirm_menu_url: arguments.confirm_menu_url,
+                            tz: timezone,
+                        },
+                        cancellation,
+                    )
+                    .await?;
+                Ok(render_menu_watch(&watch, self.output_mode))
+            }
+            MenuWatchCommand::Remove(arguments) => {
+                let watch_id = MenuWatchId::parse(&arguments.watch_id)
+                    .map_err(|message| OneShotError::new("menu_watch_id", message))?;
+                self.service
+                    .menu_watch_delete(self.credentials, OperationId::new(), watch_id, cancellation)
+                    .await?;
+                if self.output_mode == OutputMode::Json {
+                    render_json(&json!({
+                        "deleted": true,
+                        "watch_id": watch_id.as_uuid().hyphenated().to_string()
+                    }))
+                    .map_err(|_| {
+                        OneShotError::new("output_json", "could not encode Menu Watch result")
+                    })
+                } else {
+                    Ok(format!(
+                        "Removed Menu Watch {}.\n",
+                        watch_id.as_uuid().hyphenated()
+                    ))
+                }
             }
         }
     }
@@ -2292,6 +2363,7 @@ async fn run_interactive_panel(
 ) -> Result<String, String> {
     let required_scope = match panel {
         PanelRequest::Grocery => Some("grocery:read"),
+        PanelRequest::Watch => Some("menu:watch"),
         PanelRequest::Health => Some("health:read"),
         PanelRequest::Profile => Some("profile:read"),
         PanelRequest::Status | PanelRequest::Household | PanelRequest::Location => None,
@@ -2320,6 +2392,7 @@ async fn run_interactive_panel(
             PanelRequest::Location => Ok(render_location_panel(environment.local_state.as_deref())),
             PanelRequest::Status
             | PanelRequest::Grocery
+            | PanelRequest::Watch
             | PanelRequest::Health
             | PanelRequest::Profile => unreachable!(),
         };
@@ -2384,6 +2457,11 @@ async fn run_interactive_panel(
             } else {
                 "authorization required"
             };
+            let menu_watch = if authorization_has_scope(authorization_scope, "menu:watch") {
+                "authorized · create/list/remove available"
+            } else {
+                "authorization required"
+            };
             let voice = match (
                 environment.native_voice_available,
                 authorization_has_scope(authorization_scope, "audio:transcribe"),
@@ -2400,7 +2478,7 @@ async fn run_interactive_panel(
                 }
             };
             Ok(format!(
-                "Session: active\nService: reachable\nProfile: {profile}\nGrocery: {grocery}\nHealth: {health}\nVoice: {voice}"
+                "Session: active\nService: reachable\nProfile: {profile}\nGrocery: {grocery}\nMenu Watch: {menu_watch}\nHealth: {health}\nVoice: {voice}"
             ))
         }
         PanelRequest::Grocery => {
@@ -2433,6 +2511,13 @@ async fn run_interactive_panel(
                 OutputMode::HumanPlain,
             ));
             Ok(output)
+        }
+        PanelRequest::Watch => {
+            let watches = service
+                .menu_watch_list(&credentials, OperationId::new(), cancellation)
+                .await
+                .map_err(panel_error)?;
+            Ok(render_menu_watch_list(&watches, OutputMode::HumanPlain))
         }
         PanelRequest::Health => {
             let integrations = service
@@ -3924,6 +4009,24 @@ mod tests {
                 serde_json::json!({"exclusions": ["pork", "raw onion"]}),
             ),
             (
+                "/v1/menu/watch",
+                serde_json::json!({
+                    "watches": [{
+                        "id": "00000000-0000-4000-8000-000000000010",
+                        "restaurant_id": "0c1cb790-0000-4000-8000-000000000000",
+                        "cadence": {"weekday": 3, "hour": 9},
+                        "tz": "America/Chicago",
+                        "active": true,
+                        "notify": true,
+                        "next_run_at": "2026-07-30T14:00:00Z",
+                        "last_run_at": null,
+                        "last_snapshot_id": null,
+                        "created_at": "2026-07-23T12:00:00Z"
+                    }],
+                    "count": 1
+                }),
+            ),
+            (
                 "/v1/integrations",
                 serde_json::json!({
                     "integrations": [{
@@ -4083,6 +4186,24 @@ mod tests {
         assert!(grocery.contains("No grocery items."));
         assert!(grocery.contains("Never buy\n• pork\n• raw onion"));
 
+        let watch = run_interactive_panel(
+            PanelRequest::Watch,
+            service.clone(),
+            ensure_session.clone(),
+            session.clone(),
+            "menu:watch",
+            InteractivePanelEnvironment {
+                local_state: None,
+                native_voice_available: false,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(watch.contains("Menu Watch"));
+        assert!(watch.contains("Thursday 09:00 · active"));
+        assert!(watch.contains("awaiting first successful baseline"));
+
         let health = run_interactive_panel(
             PanelRequest::Health,
             service.clone(),
@@ -4124,7 +4245,7 @@ mod tests {
             service.clone(),
             ensure_session.clone(),
             session.clone(),
-            "profile:read grocery:read health:read audio:transcribe",
+            "profile:read grocery:read menu:watch health:read audio:transcribe",
             InteractivePanelEnvironment {
                 local_state: None,
                 native_voice_available: true,
@@ -4137,6 +4258,7 @@ mod tests {
         assert!(status.contains("Service: reachable"));
         assert!(status.contains("Profile: authorized · sync consent granted"));
         assert!(status.contains("Grocery: available · authorized"));
+        assert!(status.contains("Menu Watch: authorized · create/list/remove available"));
         assert!(status.contains("Health: authorized"));
         assert!(status.contains(
             "Voice: native capture available · transcription authorized · permission checked on use"

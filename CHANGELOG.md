@@ -27,6 +27,10 @@ authentication contracts are stabilized.
   authenticated no-retry transcription, editable composer review, rerecord,
   cancellation/discard, and the same typed turn path after explicit Enter.
   Scope and artifact availability are checked before microphone access.
+- Adds contract-derived `heyfood watch` create/list/remove commands and a
+  read-only `/watch` TUI panel using the deployed `menu:watch` scope. Cadence,
+  timezone, baseline state, notification preference, and identity evidence are
+  rendered without inventing the still-missing account-scoped diff-read route.
 - Serializes Windows Credential Manager calls within the process, verifies
   journal deletion before subsequent reads, and uses a bounded process-table
   observation after broker kill-and-reap.

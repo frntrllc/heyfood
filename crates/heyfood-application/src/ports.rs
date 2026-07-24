@@ -154,13 +154,27 @@ pub trait BrowserPort: Send + Sync {
     fn open(&self, url: BrowserUrl) -> BoxFuture<'_, Result<(), PortError>>;
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct AudioCapture {
     pub wav_bytes: Vec<u8>,
     pub sample_rate_hz: u32,
     pub duration_millis: u64,
     pub truncated: bool,
     pub overflowed: bool,
+}
+
+impl fmt::Debug for AudioCapture {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AudioCapture")
+            .field("wav_bytes", &"[REDACTED]")
+            .field("byte_length", &self.wav_bytes.len())
+            .field("sample_rate_hz", &self.sample_rate_hz)
+            .field("duration_millis", &self.duration_millis)
+            .field("truncated", &self.truncated)
+            .field("overflowed", &self.overflowed)
+            .finish()
+    }
 }
 
 pub trait AudioCapturePort: Send + Sync {
@@ -181,4 +195,25 @@ pub trait ClipboardPort: Send + Sync {
     fn read_text(&self, maximum_bytes: usize) -> BoxFuture<'_, Result<Option<String>, PortError>>;
 
     fn write_text(&self, text: String) -> BoxFuture<'_, Result<(), PortError>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AudioCapture;
+
+    #[test]
+    fn captured_audio_debug_is_redacted() {
+        let capture = AudioCapture {
+            wav_bytes: b"RIFF-sentinel-sensitive-audio".to_vec(),
+            sample_rate_hz: 16_000,
+            duration_millis: 250,
+            truncated: false,
+            overflowed: false,
+        };
+        let debug = format!("{capture:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(debug.contains("byte_length"));
+        assert!(!debug.contains("sentinel"));
+        assert!(!debug.contains("82, 73, 70, 70"));
+    }
 }

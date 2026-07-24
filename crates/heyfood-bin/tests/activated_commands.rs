@@ -18,7 +18,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
 
 const LIST_ID: &str = "00000000-0000-4000-8000-000000000123";
-const FULL_SCOPE: &str = "account:link account:delete knowledge:read menu:read recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe health:read integrations:manage grocery:read grocery:write";
+const FULL_SCOPE: &str = "account:link account:delete knowledge:read menu:read menu:watch recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe health:read integrations:manage grocery:read grocery:write";
 
 struct TempRoot(PathBuf);
 
@@ -185,6 +185,23 @@ fn list() -> Value {
     })
 }
 
+fn watch() -> Value {
+    json!({
+        "id": "00000000-0000-4000-8000-000000000010",
+        "restaurant_id": "0c1cb790-0000-4000-8000-000000000000",
+        "cadence": {"weekday": 3, "hour": 9},
+        "tz": "America/Chicago",
+        "active": true,
+        "notify": true,
+        "next_run_at": "2026-07-30T14:00:00Z",
+        "last_run_at": null,
+        "last_snapshot_id": null,
+        "created_at": "2026-07-23T12:00:00Z",
+        "identity_verdict": "verified",
+        "identity_confidence": 0.92
+    })
+}
+
 fn proposal(operation: &str) -> Value {
     json!({
         "confirmation_id": "00000000-0000-4000-8000-000000000001",
@@ -238,20 +255,22 @@ fn response_for(method: &str, path: &str) -> (&'static str, Vec<u8>) {
         ("DELETE", "/v1/integrations/oura") => json!({
             "provider": "oura", "status": "disconnected", "message": "disconnected"
         }),
+        ("GET", "/v1/menu/watch") => json!({"watches": [watch()], "count": 1}),
+        ("POST", "/v1/menu/watch") => watch(),
         _ => panic!("unexpected binary route {method} {path}"),
     };
     ("application/json", serde_json::to_vec(&value).unwrap())
 }
 
 #[tokio::test]
-async fn public_binary_dispatches_all_fourteen_health_and_grocery_routes() {
+async fn public_binary_dispatches_all_seventeen_health_grocery_and_watch_routes() {
     let root = TempRoot::new("routes");
     initialize(&root.0, FULL_SCOPE);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
         let mut product_routes = BTreeSet::new();
-        for _ in 0..25 {
+        for _ in 0..28 {
             let (mut socket, _) = listener.accept().await.unwrap();
             let request = read_request(&mut socket).await;
             let mut request_line = request.lines().next().unwrap().split_whitespace();
@@ -263,8 +282,12 @@ async fn public_binary_dispatches_all_fourteen_health_and_grocery_routes() {
             if path == "/v1/grocery/list" {
                 product_routes.insert(format!("{method} {path}"));
             }
-            let (content_type, body) = response_for(method, path);
-            respond(&mut socket, content_type, &body).await;
+            if method == "DELETE" && path.starts_with("/v1/menu/watch/") {
+                respond_status(&mut socket, 204, "No Content", "application/json", b"").await;
+            } else {
+                let (content_type, body) = response_for(method, path);
+                respond(&mut socket, content_type, &body).await;
+            }
         }
         product_routes
     });
@@ -355,6 +378,30 @@ async fn public_binary_dispatches_all_fourteen_health_and_grocery_routes() {
             vec!["--json", "health", "disconnect", "oura", "--yes"],
             None,
         ),
+        (vec!["--json", "watch"], None),
+        (
+            vec![
+                "--json",
+                "watch",
+                "add",
+                "0c1cb790-0000-4000-8000-000000000000",
+                "--weekday",
+                "thursday",
+                "--hour",
+                "9",
+                "--notify",
+            ],
+            None,
+        ),
+        (
+            vec![
+                "--json",
+                "watch",
+                "remove",
+                "00000000-0000-4000-8000-000000000010",
+            ],
+            None,
+        ),
     ];
     for (args, stdin) in cases {
         let output = run(&root.0, &base_url, &args, stdin.as_deref()).await;
@@ -381,6 +428,9 @@ async fn public_binary_dispatches_all_fourteen_health_and_grocery_routes() {
         "POST /v1/integrations/authorize".into(),
         "POST /v1/integrations/oura/sync".into(),
         "DELETE /v1/integrations/oura".into(),
+        "GET /v1/menu/watch".into(),
+        "POST /v1/menu/watch".into(),
+        "DELETE /v1/menu/watch/00000000-0000-4000-8000-000000000010".into(),
     ]);
     assert_eq!(routes, expected);
 }

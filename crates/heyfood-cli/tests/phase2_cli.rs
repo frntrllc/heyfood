@@ -2,10 +2,14 @@ use std::collections::BTreeSet;
 
 use clap::{CommandFactory, Parser};
 use heyfood_cli::{
-    Command, CommandLine, GroceryCommand, GroceryDecisionArgument, OutputMode,
-    render_grocery_exclusions, render_grocery_list, render_grocery_proposal, render_json,
+    Command, CommandLine, GroceryCommand, GroceryDecisionArgument, MenuWatchCommand, OutputMode,
+    WatchWeekdayArgument, render_grocery_exclusions, render_grocery_list, render_grocery_proposal,
+    render_json, render_menu_watch_list,
 };
-use heyfood_core::{ExclusionListResponseWire, GroceryListWire, GroceryMutationProposalWire};
+use heyfood_core::{
+    ExclusionListResponseWire, GroceryListWire, GroceryMutationProposalWire,
+    MenuWatchListResponseWire,
+};
 use serde_json::json;
 
 #[test]
@@ -45,11 +49,97 @@ fn command_tree_contains_python_parity_and_authorized_phase2_families() {
         "search",
         "status",
         "voice",
+        "watch",
     ])
     .into_iter()
     .map(str::to_owned)
     .collect();
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn menu_watch_commands_are_typed_and_bounded() {
+    let parsed = CommandLine::try_parse_from(["heyfood", "watch"]).unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(Command::Watch { command: None })
+    ));
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "watch",
+        "add",
+        "0c1cb790-0000-4000-8000-000000000000",
+        "--weekday",
+        "thursday",
+        "--hour",
+        "9",
+        "--notify",
+        "--tz",
+        "America/Chicago",
+    ])
+    .unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(Command::Watch {
+            command: Some(MenuWatchCommand::Add(ref arguments)),
+        }) if arguments.weekday == WatchWeekdayArgument::Thursday
+            && arguments.hour == 9
+            && arguments.notify
+    ));
+    assert!(
+        CommandLine::try_parse_from([
+            "heyfood",
+            "watch",
+            "add",
+            "0c1cb790-0000-4000-8000-000000000000",
+            "--weekday",
+            "thursday",
+            "--hour",
+            "24",
+        ])
+        .is_err()
+    );
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "watch",
+        "rm",
+        "00000000-0000-4000-8000-000000000010",
+    ])
+    .unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(Command::Watch {
+            command: Some(MenuWatchCommand::Remove(_)),
+        })
+    ));
+}
+
+#[test]
+fn menu_watch_renderer_surfaces_schedule_baseline_and_identity_evidence() {
+    let response: MenuWatchListResponseWire = serde_json::from_value(json!({
+        "watches": [{
+            "id": "00000000-0000-4000-8000-000000000010",
+            "restaurant_id": "0c1cb790-0000-4000-8000-000000000000",
+            "cadence": {"weekday": 3, "hour": 9},
+            "tz": "America/Chicago\u{1b}[2J",
+            "active": true,
+            "notify": true,
+            "next_run_at": "2026-07-30T14:00:00Z",
+            "last_run_at": null,
+            "last_snapshot_id": null,
+            "created_at": "2026-07-23T12:00:00Z",
+            "identity_verdict": "verified",
+            "identity_confidence": 0.92
+        }],
+        "count": 1
+    }))
+    .unwrap();
+    let output = render_menu_watch_list(&response, OutputMode::HumanPlain);
+    assert!(output.contains("Thursday 09:00 · active"));
+    assert!(output.contains("awaiting first successful baseline"));
+    assert!(output.contains("identity: verified · confidence 0.920"));
+    assert!(output.contains("America/Chicago[2J"));
+    assert!(!output.contains('\u{1b}'));
 }
 
 #[test]

@@ -98,9 +98,11 @@ terminal restoration, in-session Grocery confirmation/cancel/proposal editing,
 and the native-audio capture → authenticated transcription → editable composer
 path are present in source. Voice checks authorization before opening the
 microphone, keeps bounded WAV data in memory, never retries transcription, and
-does not submit the transcript until the user presses Enter. Menu Watch,
-authoritative health context in ordinary TUI turns, and meal-memory proof remain
-implementation work. Native voice still requires real-hardware and
+does not submit the transcript until the user presses Enter. Menu Watch
+create/list/remove and a read-only TUI subscription panel are present against
+the deployed least-privilege contract. Its showcased diff stage remains blocked
+on an account-scoped backend diff-read route. Authoritative health context in
+ordinary TUI turns and meal-memory proof remain implementation work. Native voice still requires real-hardware and
 installed-artifact qualification, including denial, truncation, timeout,
 cancellation, and resource-lifecycle cases. Household targeting, consent-aware
 dietary context, and Grocery safety cards likewise still require

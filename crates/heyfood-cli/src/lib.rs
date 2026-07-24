@@ -11,7 +11,8 @@ use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use heyfood_core::{
     ExclusionListResponseWire, GroceryDecisionWire, GroceryItemStateWire, GroceryListWire,
     GroceryMutationProposalWire, GrocerySafetyStatus, HealthContextWire, HealthFreshnessStatus,
-    HealthProvider, ProfileStatus, terminal_safe_text,
+    HealthProvider, MenuWatchListResponseWire, MenuWatchResponseWire, ProfileStatus, WatchWeekday,
+    terminal_safe_text,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -140,6 +141,11 @@ pub enum Command {
     Health {
         #[command(subcommand)]
         command: HealthCommand,
+    },
+    /// Schedule and manage recurring restaurant Menu Watch subscriptions.
+    Watch {
+        #[command(subcommand)]
+        command: Option<MenuWatchCommand>,
     },
     #[command(hide = true)]
     Recipes {
@@ -530,6 +536,76 @@ pub enum HealthCommand {
     Sync(HealthProviderArgs),
     /// Disconnect a provider after explicit confirmation.
     Disconnect(HealthDisconnectArgs),
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum MenuWatchCommand {
+    /// List the current account's Menu Watch subscriptions.
+    #[command(name = "show", alias = "list")]
+    List,
+    /// Create a recurring Menu Watch subscription.
+    #[command(name = "add", alias = "create")]
+    Add(MenuWatchAddArgs),
+    /// Remove one Menu Watch subscription.
+    #[command(name = "remove", alias = "rm", alias = "delete")]
+    Remove(MenuWatchRemoveArgs),
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct MenuWatchAddArgs {
+    /// Internal restaurant UUID returned by restaurant discovery.
+    #[arg(value_name = "RESTAURANT_ID")]
+    pub restaurant_id: String,
+    /// Restaurant-local weekday for the recurring check.
+    #[arg(long, value_enum)]
+    pub weekday: WatchWeekdayArgument,
+    /// Restaurant-local hour in 24-hour time.
+    #[arg(long, value_name = "HOUR", value_parser = clap::value_parser!(u8).range(0..=23))]
+    pub hour: u8,
+    /// Record a quick-read event when a scheduled run finds a real change.
+    #[arg(long)]
+    pub notify: bool,
+    /// Explicit menu URL to verify and watch.
+    #[arg(long, value_name = "URL")]
+    pub menu_url: Option<String>,
+    /// Confirm that the selected menu URL belongs to this restaurant.
+    #[arg(long)]
+    pub confirm_menu_url: bool,
+    /// IANA timezone override when restaurant coordinates are insufficient.
+    #[arg(long, value_name = "IANA_TIMEZONE")]
+    pub tz: Option<String>,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct MenuWatchRemoveArgs {
+    #[arg(value_name = "WATCH_ID")]
+    pub watch_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum WatchWeekdayArgument {
+    Monday,
+    Tuesday,
+    Wednesday,
+    Thursday,
+    Friday,
+    Saturday,
+    Sunday,
+}
+
+impl WatchWeekdayArgument {
+    #[must_use]
+    pub const fn as_contract_value(self) -> u8 {
+        match self {
+            Self::Monday => 0,
+            Self::Tuesday => 1,
+            Self::Wednesday => 2,
+            Self::Thursday => 3,
+            Self::Friday => 4,
+            Self::Saturday => 5,
+            Self::Sunday => 6,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Args)]
@@ -973,6 +1049,103 @@ pub fn render_health_context(context: &HealthContextWire, mode: OutputMode) -> S
         }
     }
     output
+}
+
+#[must_use]
+pub fn render_menu_watch(watch: &MenuWatchResponseWire, mode: OutputMode) -> String {
+    if mode == OutputMode::Json {
+        return render_json(watch).expect("Menu Watch DTO is serializable");
+    }
+    render_menu_watch_entry(watch, mode)
+}
+
+#[must_use]
+pub fn render_menu_watch_list(watches: &MenuWatchListResponseWire, mode: OutputMode) -> String {
+    if mode == OutputMode::Json {
+        return render_json(watches).expect("Menu Watch list DTO is serializable");
+    }
+    let mut output = if mode.ansi() {
+        "\u{1b}[1mMenu Watch\u{1b}[0m\n".to_owned()
+    } else {
+        "Menu Watch\n".to_owned()
+    };
+    if watches.watches.is_empty() {
+        output.push_str("No watched menus.\n");
+        return output;
+    }
+    for watch in &watches.watches {
+        output.push_str(&render_menu_watch_entry(watch, mode));
+    }
+    output
+}
+
+fn render_menu_watch_entry(watch: &MenuWatchResponseWire, mode: OutputMode) -> String {
+    let weekday = weekday_label(watch.cadence.weekday);
+    let status = if watch.active { "active" } else { "inactive" };
+    let notification = if watch.notify {
+        "change events enabled"
+    } else {
+        "change events disabled"
+    };
+    let mut output = String::new();
+    let watch_id = watch.id.as_uuid().hyphenated().to_string();
+    let restaurant_id = watch.restaurant_id.as_uuid().hyphenated().to_string();
+    if mode.ansi() {
+        let _ = writeln!(
+            output,
+            "\u{1b}[1m{weekday} {:02}:00\u{1b}[0m · {status}",
+            watch.cadence.hour.get()
+        );
+    } else {
+        let _ = writeln!(
+            output,
+            "{weekday} {:02}:00 · {status}",
+            watch.cadence.hour.get()
+        );
+    }
+    let _ = writeln!(output, "  watch: {watch_id}");
+    let _ = writeln!(output, "  restaurant: {restaurant_id}");
+    let _ = writeln!(output, "  timezone: {}", terminal_safe_text(&watch.tz));
+    let _ = writeln!(
+        output,
+        "  next check: {}",
+        terminal_safe_text(&watch.next_run_at)
+    );
+    let _ = writeln!(output, "  {notification}");
+    if let Some(snapshot) = watch.last_snapshot_id.as_deref() {
+        let _ = writeln!(
+            output,
+            "  baseline snapshot: {}",
+            terminal_safe_text(snapshot)
+        );
+    } else {
+        output.push_str("  awaiting first successful baseline\n");
+    }
+    if let Some(verdict) = watch.identity_verdict.as_deref() {
+        let confidence = watch
+            .identity_confidence
+            .map(|value| format!(" · confidence {value:.3}"))
+            .unwrap_or_default();
+        let _ = writeln!(
+            output,
+            "  identity: {}{confidence}",
+            terminal_safe_text(verdict)
+        );
+    }
+    output
+}
+
+const fn weekday_label(weekday: WatchWeekday) -> &'static str {
+    match weekday.get() {
+        0 => "Monday",
+        1 => "Tuesday",
+        2 => "Wednesday",
+        3 => "Thursday",
+        4 => "Friday",
+        5 => "Saturday",
+        6 => "Sunday",
+        _ => unreachable!(),
+    }
 }
 
 #[must_use]

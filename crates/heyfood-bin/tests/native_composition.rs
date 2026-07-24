@@ -113,7 +113,7 @@ async fn default_executable_uses_brokered_native_account_bound_credentials() {
     let base_url = format!("http://{}/", listener.local_addr().unwrap());
     let service_url = base_url.clone();
     let server = tokio::spawn(async move {
-        let full_scope = "account:link account:delete knowledge:read menu:read recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe health:read integrations:manage grocery:read grocery:write";
+        let full_scope = "account:link account:delete knowledge:read menu:read menu:watch recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe health:read integrations:manage grocery:read grocery:write";
         let verification_uri = format!("{service_url}authorize");
         for _ in 0..6 {
             let (mut socket, _) = listener.accept().await.unwrap();
