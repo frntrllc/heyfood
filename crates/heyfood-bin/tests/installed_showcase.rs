@@ -18,6 +18,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(windows)]
 use heyfood_platform::WindowsCredentialQualificationCleanup;
+#[cfg(all(not(windows), feature = "native-credentials"))]
+use heyfood_platform::{AuthorizationSessionStore, KeyringCredentialStore};
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -69,6 +71,54 @@ const ENABLE_BRACKETED_PASTE: &[u8] = b"\x1b[?2004h";
 const DISABLE_BRACKETED_PASTE: &[u8] = b"\x1b[?2004l";
 const HIDE_CURSOR: &[u8] = b"\x1b[?25l";
 const SHOW_CURSOR: &[u8] = b"\x1b[?25h";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShowcaseCredentialBackend {
+    IsolatedFile,
+    Native,
+}
+
+impl ShowcaseCredentialBackend {
+    fn from_environment() -> Self {
+        match std::env::var("HEYFOOD_SHOWCASE_CREDENTIAL_BACKEND").as_deref() {
+            Ok("file") => Self::IsolatedFile,
+            Ok("native") => Self::Native,
+            Err(std::env::VarError::NotPresent) if cfg!(windows) => Self::Native,
+            Err(std::env::VarError::NotPresent) => Self::IsolatedFile,
+            Ok(_) | Err(std::env::VarError::NotUnicode(_)) => {
+                panic!("HEYFOOD_SHOWCASE_CREDENTIAL_BACKEND must be `file` or `native`")
+            }
+        }
+    }
+
+    const fn evidence_name(self) -> &'static str {
+        match self {
+            Self::IsolatedFile => "isolated_file",
+            Self::Native => "native",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct InstalledPtyOptions {
+    columns: u16,
+    no_color: bool,
+    credential_backend: ShowcaseCredentialBackend,
+}
+
+impl InstalledPtyOptions {
+    const fn new(
+        columns: u16,
+        no_color: bool,
+        credential_backend: ShowcaseCredentialBackend,
+    ) -> Self {
+        Self {
+            columns,
+            no_color,
+            credential_backend,
+        }
+    }
+}
 
 struct TempRoot(PathBuf);
 
@@ -122,6 +172,54 @@ impl Drop for WindowsCredentialCleanup {
     fn drop(&mut self) {
         if !self.verified_absent {
             let _ = self.cleanup.purge_and_verify_absent();
+        }
+    }
+}
+
+#[cfg(all(not(windows), feature = "native-credentials"))]
+struct NativeCredentialCleanup {
+    store: KeyringCredentialStore,
+    verified_absent: bool,
+}
+
+#[cfg(all(not(windows), feature = "native-credentials"))]
+impl NativeCredentialCleanup {
+    fn open(root: &Path) -> Self {
+        let store = KeyringCredentialStore::open(root)
+            .expect("open isolated native credential qualification store");
+        assert!(
+            store
+                .load_authorized_session()
+                .expect("inspect isolated native credentials")
+                .is_none(),
+            "isolated native credential target must be empty before qualification"
+        );
+        Self {
+            store,
+            verified_absent: false,
+        }
+    }
+
+    fn purge_and_verify_absent(&mut self) {
+        self.store
+            .delete()
+            .expect("delete isolated native credentials");
+        assert!(
+            self.store
+                .load_authorized_session()
+                .expect("verify isolated native credential deletion")
+                .is_none(),
+            "native credentials must be absent after qualification"
+        );
+        self.verified_absent = true;
+    }
+}
+
+#[cfg(all(not(windows), feature = "native-credentials"))]
+impl Drop for NativeCredentialCleanup {
+    fn drop(&mut self) {
+        if !self.verified_absent {
+            let _ = self.store.delete();
         }
     }
 }
@@ -334,6 +432,26 @@ async fn run_installed_archive_core_release_matrix() {
     let evidence_directory = required_absolute_path("HEYFOOD_SHOWCASE_EVIDENCE_DIR");
     let expected_target = required_env("HEYFOOD_SHOWCASE_TARGET");
     let expected_version = required_env("HEYFOOD_SHOWCASE_VERSION");
+    let credential_backend = ShowcaseCredentialBackend::from_environment();
+    let signed_candidate = optional_boolean_environment("HEYFOOD_SHOWCASE_SIGNED_CANDIDATE");
+    let external_credential_cleanup =
+        optional_boolean_environment("HEYFOOD_SHOWCASE_EXTERNAL_CREDENTIAL_CLEANUP");
+    assert!(
+        !signed_candidate || credential_backend == ShowcaseCredentialBackend::Native,
+        "a signed candidate must be qualified with the native credential backend"
+    );
+    assert!(
+        !external_credential_cleanup
+            || (cfg!(target_os = "macos")
+                && credential_backend == ShowcaseCredentialBackend::Native),
+        "external credential cleanup is reserved for an ephemeral macOS qualification keychain"
+    );
+    #[cfg(all(not(windows), not(feature = "native-credentials")))]
+    assert_eq!(
+        credential_backend,
+        ShowcaseCredentialBackend::IsolatedFile,
+        "native credential qualification requires the native-credentials feature"
+    );
     assert_semver(&expected_version);
     fs::create_dir_all(&evidence_directory).expect("create showcase evidence directory");
 
@@ -379,6 +497,10 @@ async fn run_installed_archive_core_release_matrix() {
     );
     #[cfg(windows)]
     let mut credential_cleanup = WindowsCredentialCleanup::open(&user.0);
+    #[cfg(all(not(windows), feature = "native-credentials"))]
+    let mut credential_cleanup = (credential_backend == ShowcaseCredentialBackend::Native
+        && !external_credential_cleanup)
+        .then(|| NativeCredentialCleanup::open(&user.0));
     let fixture = start_fixture_service().await;
     let FixtureService {
         base_url,
@@ -392,8 +514,7 @@ async fn run_installed_archive_core_release_matrix() {
         &user.0,
         &base_url,
         &["register", "--device", "--no-browser", "--timeout", "10"],
-        80,
-        false,
+        InstalledPtyOptions::new(80, false, credential_backend),
         vec![
             PtyAction::Wait("Kosher".into()),
             PtyAction::Submit("none".into()),
@@ -428,8 +549,7 @@ async fn run_installed_archive_core_release_matrix() {
         &user.0,
         &base_url,
         &[],
-        80,
-        false,
+        InstalledPtyOptions::new(80, false, credential_backend),
         vec![
             PtyAction::Wait("hey.food".into()),
             PtyAction::Submit(RETURNING_PROMPT.into()),
@@ -495,8 +615,7 @@ async fn run_installed_archive_core_release_matrix() {
         &user.0,
         &base_url,
         &[],
-        40,
-        false,
+        InstalledPtyOptions::new(40, false, credential_backend),
         vec![
             PtyAction::Wait("hey.food".into()),
             PtyAction::Submit("/grocery".into()),
@@ -513,8 +632,7 @@ async fn run_installed_archive_core_release_matrix() {
         &user.0,
         &base_url,
         &[],
-        120,
-        true,
+        InstalledPtyOptions::new(120, true, credential_backend),
         vec![
             PtyAction::Wait("hey.food".into()),
             PtyAction::Submit(WIDTH_PROMPT.into()),
@@ -530,8 +648,7 @@ async fn run_installed_archive_core_release_matrix() {
         &user.0,
         &base_url,
         &[],
-        80,
-        false,
+        InstalledPtyOptions::new(80, false, credential_backend),
         vec![
             PtyAction::Wait("hey.food".into()),
             PtyAction::CtrlC,
@@ -557,6 +674,10 @@ async fn run_installed_archive_core_release_matrix() {
 
     #[cfg(windows)]
     credential_cleanup.purge_and_verify_absent();
+    #[cfg(all(not(windows), feature = "native-credentials"))]
+    if let Some(cleanup) = credential_cleanup.as_mut() {
+        cleanup.purge_and_verify_absent();
+    }
     fs::remove_dir_all(&user.0).expect("remove isolated installed-user state");
     assert!(
         !user.0.exists(),
@@ -574,10 +695,39 @@ async fn run_installed_archive_core_release_matrix() {
         fs::write(evidence_directory.join(name), bytes)
             .expect("write privacy-safe installed terminal evidence");
     }
+    let signed_candidate_native_backend_proven =
+        signed_candidate && credential_backend == ShowcaseCredentialBackend::Native;
+    let artifact_status = if signed_candidate_native_backend_proven {
+        "passed"
+    } else {
+        "source-qualified"
+    };
+    let artifact_remaining = if signed_candidate_native_backend_proven {
+        Vec::<&str>::new()
+    } else {
+        vec![
+            "rerun_exact_matrix_against_signed_archives",
+            "real_platform_credential_backend_on_every_signed_candidate",
+        ]
+    };
+    let remaining_release_gates = if signed_candidate_native_backend_proven {
+        vec![
+            "production_registration_and_grocery_canaries",
+            "exact_sha_release_review",
+        ]
+    } else {
+        vec![
+            "production_registration_and_grocery_canaries",
+            "protected_signing_environment",
+            "signed_candidate_core_matrix_rerun",
+            "exact_sha_release_review",
+        ]
+    };
     let evidence = json!({
         "schema_version": 2,
         "qualification": "installed-artifact-core-matrix",
         "release_gate_complete": false,
+        "signed_candidate_matrix_complete": signed_candidate_native_backend_proven,
         "archive": {
             "file_name": expected_archive_name,
             "sha256": archive_digest,
@@ -593,15 +743,20 @@ async fn run_installed_archive_core_release_matrix() {
             "clean_user_state": true,
             "legacy_import_absent_during_clean_user": true,
             "household_import_after_clean_user_exit": true,
-            "credentials_absent_after_run": true,
+            "credentials_absent_after_run": !external_credential_cleanup,
             "pty": true,
             "columns": [40, 80, 120],
             "rows": 30,
             "no_color": true,
             "synthetic_backend": true,
-            "credential_backend": if cfg!(windows) { "native" } else { "isolated_file" },
+            "credential_backend": credential_backend.evidence_name(),
+            "credential_cleanup": if external_credential_cleanup {
+                "external_ephemeral_macos_keychain_required"
+            } else {
+                "verified_in_process"
+            },
             "signed_candidate_native_backend_required": true,
-            "signed_candidate_native_backend_proven": false
+            "signed_candidate_native_backend_proven": signed_candidate_native_backend_proven
         },
         "core_matrix": [
             {
@@ -658,17 +813,14 @@ async fn run_installed_archive_core_release_matrix() {
             },
             {
                 "id": "artifact-behavior",
-                "status": "source-qualified",
+                "status": artifact_status,
                 "assertions": [
                     "semantic_output_at_40_80_120_columns",
                     "no_color_has_no_color_sgr",
                     "archive_digest_exact",
                     "packaged_executable_only"
                 ],
-                "remaining": [
-                    "rerun_exact_matrix_against_signed_archives",
-                    "real_platform_credential_backend_on_every_signed_candidate"
-                ]
+                "remaining": artifact_remaining
             }
         ],
         "requests": requests.iter().map(|request| json!({
@@ -697,12 +849,7 @@ async fn run_installed_archive_core_release_matrix() {
             "menu_watch_diff": "not a 0.5.0 gate",
             "health_and_menu_watch_management": "require a bounded live canary or truthful deferral"
         },
-        "remaining_release_gates": [
-            "production_registration_and_grocery_canaries",
-            "protected_signing_environment",
-            "signed_candidate_core_matrix_rerun",
-            "exact_sha_release_review"
-        ]
+        "remaining_release_gates": remaining_release_gates
     });
     fs::write(
         evidence_directory.join("installed-core-matrix.json"),
@@ -752,6 +899,16 @@ fn write_household_import_source(user_root: &Path) {
 
 fn required_env(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("{name} must be configured"))
+}
+
+fn optional_boolean_environment(name: &str) -> bool {
+    match std::env::var(name).as_deref() {
+        Ok("1" | "true") => true,
+        Ok("0" | "false") | Err(std::env::VarError::NotPresent) => false,
+        Ok(_) | Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("{name} must be `true`, `false`, `1`, or `0`")
+        }
+    }
 }
 
 fn required_absolute_path(name: &str) -> PathBuf {
@@ -1678,8 +1835,7 @@ async fn run_installed_pty(
     user_root: &Path,
     base_url: &str,
     arguments: &[&str],
-    columns: u16,
-    no_color: bool,
+    options: InstalledPtyOptions,
     actions: Vec<PtyAction>,
 ) -> Vec<u8> {
     let installed_binary = installed_binary.to_owned();
@@ -1695,8 +1851,7 @@ async fn run_installed_pty(
             &user_root,
             &base_url,
             &arguments,
-            columns,
-            no_color,
+            options,
             actions,
         )
     })
@@ -1709,15 +1864,14 @@ fn run_installed_pty_blocking(
     user_root: &Path,
     base_url: &str,
     arguments: &[String],
-    columns: u16,
-    no_color: bool,
+    options: InstalledPtyOptions,
     actions: Vec<PtyAction>,
 ) -> Vec<u8> {
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
             rows: 30,
-            cols: columns,
+            cols: options.columns,
             pixel_width: 0,
             pixel_height: 0,
         })
@@ -1739,11 +1893,20 @@ fn run_installed_pty_blocking(
     command.env("HEYFOOD_API_URL", base_url);
     command.env("HEYFOOD_API_KEY", "showcase-api-key");
     command.env("HEYFOOD_STATE_DIR", user_root);
-    #[cfg(not(windows))]
-    command.env("HEYFOOD_CREDENTIAL_STORE", "file");
-    #[cfg(windows)]
-    command.env("HEYFOOD_CREDENTIAL_STORE", "native");
-    command.env("HOME", user_root);
+    command.env(
+        "HEYFOOD_CREDENTIAL_STORE",
+        match options.credential_backend {
+            ShowcaseCredentialBackend::IsolatedFile => "file",
+            ShowcaseCredentialBackend::Native => "native",
+        },
+    );
+    // Native Keychain/Secret Service discovery is tied to the logged-in OS
+    // user. Keep that identity while isolating every heyfood/XDG path. The
+    // explicit file backend and Windows fixture continue to receive a fully
+    // synthetic home/profile.
+    if options.credential_backend == ShowcaseCredentialBackend::IsolatedFile || cfg!(windows) {
+        command.env("HOME", user_root);
+    }
     command.env("XDG_CONFIG_HOME", user_root);
     command.env("XDG_DATA_HOME", user_root.join("data"));
     command.env("XDG_CACHE_HOME", user_root.join("cache"));
@@ -1752,7 +1915,7 @@ fn run_installed_pty_blocking(
     command.env("LOCALAPPDATA", user_root.join("local-appdata"));
     command.env("NO_PROXY", "127.0.0.1,localhost");
     command.env("TERM", "xterm-256color");
-    if no_color {
+    if options.no_color {
         command.env("NO_COLOR", "1");
     }
 
@@ -1765,7 +1928,7 @@ fn run_installed_pty_blocking(
     let writer = Arc::new(Mutex::new(
         pair.master.take_writer().expect("take PTY writer"),
     ));
-    let capture = Arc::new(TerminalCapture::new(30, columns));
+    let capture = Arc::new(TerminalCapture::new(30, options.columns));
     let reader_capture = Arc::clone(&capture);
     let cursor_writer = Arc::clone(&writer);
     let reader_task = std::thread::spawn(move || {

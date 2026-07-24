@@ -36,10 +36,21 @@ SignTool uses SHA-256 for the file and RFC 3161 timestamp digests. Both the
 packaging smoke and public artifact smoke require a valid trusted signature,
 the expected publisher subject, and a timestamp certificate.
 
-## Evidence boundary
+## Protected candidate qualification
 
 Ordinary pull-request CI builds unsigned platform fixtures and tests archive
-determinism. It cannot satisfy the signing gate. Signing evidence begins only
-when a protected tag build succeeds with the configured identities, and remains
-incomplete until the downloaded public artifacts pass the post-release platform
-checks.
+determinism. It cannot satisfy the signing gate.
+
+Before merge or publication, dispatch `Native CLI CI` with
+`qualify_signed_candidate=true` at the exact proposed product SHA. The
+`native-release` environment builds the five archives without creating a tag
+or GitHub Release, requires the protected macOS and Windows identities,
+attests each archive, and reruns the bounded installed-artifact matrix with
+Keychain, Secret Service, or Credential Manager. macOS uses a disposable
+qualification Keychain and records its destruction as separate evidence so
+credentials are not left in the runner's login Keychain.
+
+Candidate evidence remains incomplete until all five protected jobs pass and
+an independent reviewer approves the exact product SHA and archive digests.
+Release evidence remains incomplete until the subsequently published,
+downloaded artifacts pass the post-release platform checks.

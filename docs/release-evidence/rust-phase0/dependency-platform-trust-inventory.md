@@ -32,10 +32,10 @@ substitutes for the required real-hardware RC smoke.
 
 | Claim | Required value |
 |---|---|
-| Protected GitHub environment | `native-production-release` |
+| Protected GitHub environment | `native-release` |
 | OIDC issuer | `https://token.actions.githubusercontent.com` |
 | OIDC audience | `sigstore` |
-| OIDC subject | `repo:frntrllc/heyfood:environment:native-production-release` |
+| OIDC subject | `repo:frntrllc/heyfood:environment:native-release` |
 | Repository claim | `frntrllc/heyfood` |
 | Workflow identity | `https://github.com/frntrllc/heyfood/.github/workflows/rust-release.yml@refs/tags/v<VERSION>` |
 | Accepted workflow regex | `^https://github\\.com/frntrllc/heyfood/\\.github/workflows/rust-release\\.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$` |
