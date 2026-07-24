@@ -46,12 +46,35 @@ if ($null -eq $signTool) {
 
 $pfxPath = Join-Path $env:RUNNER_TEMP "heyfood-codesign-$([System.Guid]::NewGuid().ToString('N')).pfx"
 $certificate = $null
+$pfxThumbprints = @()
+$preexistingThumbprints = [System.Collections.Generic.HashSet[string]]::new(
+    [System.StringComparer]::OrdinalIgnoreCase
+)
+Get-ChildItem -LiteralPath Cert:\CurrentUser\My |
+    ForEach-Object { [void] $preexistingThumbprints.Add($_.Thumbprint) }
 try {
     [System.IO.File]::WriteAllBytes(
         $pfxPath,
         [System.Convert]::FromBase64String($CertificateBase64)
     )
     $password = ConvertTo-SecureString $CertificatePassword -AsPlainText -Force
+    $pfxData = Get-PfxData -FilePath $pfxPath -Password $password
+    $pfxThumbprints = @(
+        @($pfxData.EndEntityCertificates) + @($pfxData.OtherCertificates) |
+            ForEach-Object { $_.Thumbprint } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique
+    )
+    if ($pfxThumbprints.Count -eq 0) {
+        throw "PFX does not contain any certificates"
+    }
+    $collision = $pfxThumbprints |
+        Where-Object { $preexistingThumbprints.Contains($_) } |
+        Select-Object -First 1
+    if ($null -ne $collision) {
+        throw "PFX certificate already exists in the signing account certificate store"
+    }
+
     $imported = @(
         Import-PfxCertificate `
             -FilePath $pfxPath `
@@ -96,8 +119,20 @@ try {
     }
 }
 finally {
-    if ($null -ne $certificate) {
-        Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -Force
+    foreach ($thumbprint in $pfxThumbprints) {
+        if ($preexistingThumbprints.Contains($thumbprint)) {
+            continue
+        }
+        $certificatePath = "Cert:\CurrentUser\My\$thumbprint"
+        if (Test-Path -LiteralPath $certificatePath) {
+            $importedCertificate = Get-Item -LiteralPath $certificatePath
+            if ($importedCertificate.HasPrivateKey) {
+                Remove-Item -LiteralPath $certificatePath -DeleteKey -Force
+            }
+            else {
+                Remove-Item -LiteralPath $certificatePath -Force
+            }
+        }
     }
     if (Test-Path -LiteralPath $pfxPath) {
         Remove-Item -LiteralPath $pfxPath -Force
