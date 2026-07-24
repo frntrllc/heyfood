@@ -337,7 +337,10 @@ async fn run_installed_archive_core_release_matrix() {
     assert_installed_version(&installed_binary, &expected_version);
 
     let user = TempRoot::new("user");
-    write_household_import_source(&user.0);
+    assert!(
+        !user.0.join("heyfood").join("config.json").exists(),
+        "clean-user registration must start without a legacy import source"
+    );
     #[cfg(windows)]
     let mut credential_cleanup = WindowsCredentialCleanup::open(&user.0);
     let fixture = start_fixture_service().await;
@@ -382,6 +385,8 @@ async fn run_installed_archive_core_release_matrix() {
     )
     .await;
 
+    write_household_import_source(&user.0);
+
     let returning_user = run_installed_pty(
         &installed_binary,
         &user.0,
@@ -398,6 +403,9 @@ async fn run_installed_archive_core_release_matrix() {
             PtyAction::Wait("Future turns will consider Maya.".into()),
             PtyAction::Pause(Duration::from_millis(250)),
             PtyAction::Submit("/grocery".into()),
+            PtyAction::Wait("onion for maya-uuid".into()),
+            PtyAction::Wait("maya-uuid: risky · intended".into()),
+            PtyAction::Wait("source: recipe:list-dahl-001".into()),
             PtyAction::Wait("Onion is high-FODMAP.".into()),
             PtyAction::Wait("green parts of scallion".into()),
             PtyAction::Pause(Duration::from_millis(250)),
@@ -408,6 +416,9 @@ async fn run_installed_archive_core_release_matrix() {
             PtyAction::Pause(Duration::from_millis(250)),
             PtyAction::Submit(GROCERY_EDIT_PROMPT.into()),
             PtyAction::Wait("Edit proposal for Maya".into()),
+            PtyAction::Wait("1. onion for maya-uuid".into()),
+            PtyAction::Wait("maya-uuid: risky · intended".into()),
+            PtyAction::Wait("source: recipe:dahl-001".into()),
             PtyAction::Wait("scallion greens".into()),
             PtyAction::Submit("edit #1 scallion greens".into()),
             PtyAction::Wait("advanced exactly once to version 5".into()),
@@ -544,6 +555,8 @@ async fn run_installed_archive_core_release_matrix() {
         },
         "environment": {
             "clean_user_state": true,
+            "legacy_import_absent_during_clean_user": true,
+            "household_import_after_clean_user_exit": true,
             "credentials_absent_after_run": true,
             "pty": true,
             "columns": [40, 80, 120],
@@ -582,10 +595,11 @@ async fn run_installed_archive_core_release_matrix() {
                 "status": "passed",
                 "assertions": [
                     "maya_household_scope_bound",
-                    "active_list_and_member_screening_rendered",
-                    "substitutions_and_provenance_rendered",
+                    "active_list_member_binding_screening_substitution_and_provenance_rendered",
+                    "proposal_member_binding_screening_substitution_and_provenance_rendered",
                     "proposal_cancelled_without_mutation",
                     "proposal_edited_and_accepted_once",
+                    "exact_server_minted_idempotency_authority_replayed",
                     "list_advanced_once",
                     "stale_list_authority_rejected",
                     "stale_household_context_authority_rejected"
@@ -598,7 +612,12 @@ async fn run_installed_archive_core_release_matrix() {
                     "uncertain_dispatch_not_retried",
                     "ctrl_c_cancelled_stream",
                     "ctrl_c_cancelled_pending_confirmation_without_mutation",
-                    "terminal_restored_after_normal_failure_and_interrupt_paths"
+                    "typed_failure_rendered_without_terminal_loss",
+                    "full_presentation_restoration_after_normal_and_app_interrupt_exit"
+                ],
+                "companion_ci_requirements": [
+                    "native_signal_and_canonical_mode_internal_pty_gate",
+                    "body_error_and_panic_terminal_guard_tests"
                 ]
             },
             {
@@ -1191,7 +1210,7 @@ fn grocery_list_document(version: u64) -> Value {
             "intended_for": "maya-uuid",
             "sources": [{
                 "source_type": "recipe",
-                "source_ref": "dahl-001",
+                "source_ref": "list-dahl-001",
                 "source_detail": "Red Lentil Dahl"
             }],
             "safety": {
@@ -1225,7 +1244,7 @@ fn grocery_list_document(version: u64) -> Value {
             "intended_for": "maya-uuid",
             "sources": [{
                 "source_type": "recipe",
-                "source_ref": "dahl-001",
+                "source_ref": "list-dahl-001",
                 "source_detail": "Red Lentil Dahl"
             }],
             "safety": {
@@ -1352,6 +1371,19 @@ async fn respond_to_conversation(socket: &mut TcpStream, body: &Value, state: &m
     let confirmation_id = confirmation["confirmation_id"]
         .as_str()
         .expect("confirmation ID");
+    let expected_idempotency_key = match confirmation_id {
+        CANCEL_CONFIRMATION_ID => CANCEL_IDEMPOTENCY_KEY,
+        EDIT_CONFIRMATION_ID => EDIT_IDEMPOTENCY_KEY,
+        STALE_LIST_CONFIRMATION_ID => STALE_LIST_IDEMPOTENCY_KEY,
+        STALE_CONTEXT_CONFIRMATION_ID => STALE_CONTEXT_IDEMPOTENCY_KEY,
+        CTRL_C_CONFIRMATION_ID => CTRL_C_IDEMPOTENCY_KEY,
+        _ => panic!("unexpected installed confirmation ID: {confirmation_id}"),
+    };
+    assert_eq!(
+        confirmation["idempotency_key"].as_str(),
+        Some(expected_idempotency_key),
+        "confirmation must replay the exact server-minted idempotency authority"
+    );
     let decision = confirmation["decision"]
         .as_str()
         .expect("confirmation decision");
@@ -1876,17 +1908,19 @@ fn assert_raw_terminal_text(terminal: &[u8], expected: &str) {
 }
 
 fn assert_terminal_restored(terminal: &[u8]) {
+    const ENTER_SEQUENCE: &[u8] = b"\x1b[?1049h\x1b[?2004h\x1b[?25l";
+    const RESTORE_SEQUENCE: &[u8] = b"\x1b[?2004l\x1b[?25h\x1b[?1049l";
     let entered = terminal
-        .windows(b"\x1b[?1049h".len())
-        .rposition(|window| window == b"\x1b[?1049h")
-        .expect("installed TUI must enter the alternate screen");
+        .windows(ENTER_SEQUENCE.len())
+        .rposition(|window| window == ENTER_SEQUENCE)
+        .expect("installed TUI must enter alternate screen, enable paste, and hide the cursor");
     let restored = terminal
-        .windows(b"\x1b[?1049l".len())
-        .rposition(|window| window == b"\x1b[?1049l")
-        .expect("installed TUI must restore the primary screen");
+        .windows(RESTORE_SEQUENCE.len())
+        .rposition(|window| window == RESTORE_SEQUENCE)
+        .expect("installed TUI must disable paste, show the cursor, and restore primary screen");
     assert!(
         restored > entered,
-        "terminal restoration must follow alternate-screen entry"
+        "complete presentation restoration must follow terminal entry"
     );
 }
 

@@ -36,7 +36,9 @@
         "no blind retry after uncertain dispatch",
         "Ctrl-C stream cancellation",
         "Ctrl-C pending-confirmation cancellation without mutation",
-        "terminal restoration after normal, failure, and interrupt paths"
+        "typed runtime failure remains usable and restores on subsequent clean exit",
+        "full presentation restoration after normal and application-interrupt exits",
+        "native-signal canonical-mode and body-error or panic restoration remain required companion CI gates"
       ]
     },
     {

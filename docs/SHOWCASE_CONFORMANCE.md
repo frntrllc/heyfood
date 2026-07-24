@@ -61,8 +61,11 @@ landing-page inventory. Its machine-readable contract is
   accepted mutation and one list-version advance, plus independent rejection of
   stale list and household-context authority;
 - no blind retry after uncertain dispatch, Ctrl-C stream cancellation, Ctrl-C
-  cancellation of a pending Grocery confirmation without mutation, and
-  terminal restoration after normal, failure, and interrupt paths;
+  cancellation of a pending Grocery confirmation without mutation, a typed
+  failure that leaves the TUI usable, and complete presentation restoration
+  after normal and application-interrupt exits. The companion internal PTY and
+  terminal-guard gates remain required for native-signal canonical-mode and
+  body-error/panic restoration;
 - semantic output at 40, 80, and 120 columns, `NO_COLOR`, the exact archive
   digest, and the real platform credential backend on the final signed
   candidate.
@@ -145,9 +148,13 @@ exercises household Grocery confirmation and conflict paths, checks
 cancellation and uncertain-dispatch behavior, reconstructs visible terminal
 screens at 40/80/120 columns, captures privacy-safe ANSI evidence, and requires
 isolated credentials and user state to be absent before PASS evidence is
-written. The Windows force-clean seam is available only through the non-default
-`qualification-credentials` feature used by the test target; normal product
-builds retain fail-closed logout and reconciliation behavior. Source-archive
-evidence deliberately reports `release_gate_complete: false`; it qualifies the
-bounded matrix but neither the signed candidate nor the broader twelve-stage
-showcase contract.
+written. Installed captures verify the ordered alternate-screen, bracketed
+paste, and cursor restoration sequence. Rust CI's companion
+`Internal PTY, signal, restoration vertical` verifies native signals and
+canonical-mode restoration; terminal-guard tests verify body-error and panic
+restoration. The Windows force-clean seam is available only through the
+non-default `qualification-credentials` feature used by the test target; normal
+product builds retain fail-closed logout and reconciliation behavior.
+Source-archive evidence deliberately reports `release_gate_complete: false`;
+it qualifies the bounded matrix but neither the signed candidate nor the
+broader twelve-stage showcase contract.
