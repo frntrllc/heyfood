@@ -34,7 +34,6 @@ heyfood-platform = { version = "=0.5.0", path = "../heyfood-platform", features 
 
 [dev-dependencies]
 clap = { workspace = true, features = ["derive", "std"] }
-heyfood-platform = { version = "=0.5.0", path = "../heyfood-platform", features = ["qualification-credentials"] }
 portable-pty.workspace = true
 ratatui = { workspace = true, features = ["crossterm"] }
 serde_json = { workspace = true, features = ["std"] }
@@ -42,6 +41,9 @@ sha2 = { workspace = true, features = ["std"] }
 tar.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+heyfood-platform = { version = "=0.5.0", path = "../heyfood-platform", features = ["qualification-credentials"] }
 
 [lints]
 workspace = true
