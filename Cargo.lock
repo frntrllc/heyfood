@@ -1244,6 +1244,10 @@ dependencies = [
  "heyfood-core",
  "hound",
  "proptest",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-util",
  "tracing",
 ]
 

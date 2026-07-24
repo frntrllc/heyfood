@@ -126,6 +126,7 @@ async fn fixture_service() -> (TcpListener, HttpService) {
         HttpDeadlines {
             connect: Duration::from_secs(1),
             request: Duration::from_secs(2),
+            transcription: Duration::from_secs(2),
             pool_idle: Duration::from_secs(1),
             sse_inactivity: Duration::from_secs(2),
         },

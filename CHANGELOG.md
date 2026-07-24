@@ -22,6 +22,11 @@ authentication contracts are stabilized.
 - Preserves streamed choices when a final SSE result supplies replacement text,
   and adds a typed `/status` panel backed by live service, consent, scope, and
   capability checks without overstating native voice readiness.
+- Adds the contract-derived native voice vertical for `native-audio` artifacts:
+  `/voice`, Ctrl+Space, and F8 drive bounded memory-only microphone capture,
+  authenticated no-retry transcription, editable composer review, rerecord,
+  cancellation/discard, and the same typed turn path after explicit Enter.
+  Scope and artifact availability are checked before microphone access.
 - Serializes Windows Credential Manager calls within the process, verifies
   journal deletion before subsequent reads, and uses a bounded process-table
   observation after broker kill-and-reap.

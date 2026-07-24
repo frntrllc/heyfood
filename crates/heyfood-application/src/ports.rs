@@ -157,12 +157,22 @@ pub trait BrowserPort: Send + Sync {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AudioCapture {
     pub wav_bytes: Vec<u8>,
+    pub sample_rate_hz: u32,
     pub duration_millis: u64,
+    pub truncated: bool,
+    pub overflowed: bool,
 }
 
 pub trait AudioCapturePort: Send + Sync {
+    /// Report whether this adapter currently sees a compatible input device.
+    /// This must not open a capture stream or request microphone permission.
+    fn available(&self) -> bool;
+
+    /// Capture in memory until `stop` requests a completed WAV, the hard
+    /// duration limit is reached, or `cancellation` discards the recording.
     fn capture(
         &self,
+        stop: CancellationToken,
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<AudioCapture, PortError>>;
 }

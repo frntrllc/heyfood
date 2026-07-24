@@ -32,7 +32,7 @@ hidden legacy command is not support: unavailable paths return
 | Restaurants and recipes | Via `ask` and `item` | Resolution, menu evidence, and recipe tools | Hosted through current commands |
 | Menu Watch | No native command | Watch creation and diff service behind operational gates | Backend available / gated |
 | Interactive TUI | Draft branch launches authenticated chat and read panels | N/A | Source preview / in testing; not published |
-| Voice capture | No native command | Transcription contract exists | Preview / in testing |
+| Voice capture | TUI `/voice`, Ctrl+Space, and F8 in `native-audio` artifacts | Authenticated transcription | Source implementation; real-hardware and platform qualification pending |
 
 ## Process contract
 

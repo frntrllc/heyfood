@@ -94,9 +94,14 @@ TUI completion requires all of the following:
 
 The current Rust TUI foundation does not yet satisfy this gate. Streaming,
 editable composition, bounded scrollback, responsive rendering, cancellation,
-terminal restoration, and in-session Grocery confirmation/cancel/item-name
-correction are present in source. Menu Watch, authoritative health context in
-ordinary TUI turns, meal-memory proof, and native voice capture/review remain
-implementation work. Household targeting, consent-aware dietary context, and
-Grocery safety cards still require installed-artifact and production-canary
-proof.
+terminal restoration, in-session Grocery confirmation/cancel/proposal editing,
+and the native-audio capture → authenticated transcription → editable composer
+path are present in source. Voice checks authorization before opening the
+microphone, keeps bounded WAV data in memory, never retries transcription, and
+does not submit the transcript until the user presses Enter. Menu Watch,
+authoritative health context in ordinary TUI turns, and meal-memory proof remain
+implementation work. Native voice still requires real-hardware and
+installed-artifact qualification, including denial, truncation, timeout,
+cancellation, and resource-lifecycle cases. Household targeting, consent-aware
+dietary context, and Grocery safety cards likewise still require
+installed-artifact and production-canary proof.

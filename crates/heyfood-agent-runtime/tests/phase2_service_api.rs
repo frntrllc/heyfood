@@ -6,7 +6,8 @@ use heyfood_core::{
     ExclusionMutationRequestWire, GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId,
     GroceryItemInputWire, GroceryItemStateWire, GroceryListVersion,
     GroceryMutationConfirmRequestWire, NetworkPolicy, OperationId, RemoveItemsRequestWire,
-    SensitiveString, ServiceUrl, SessionCredentials, UpdateItemStateRequestWire,
+    SensitiveString, ServiceUrl, SessionCredentials, TranscriptionPurpose,
+    UpdateItemStateRequestWire,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -18,6 +19,7 @@ fn deadlines() -> HttpDeadlines {
     HttpDeadlines {
         connect: Duration::from_secs(1),
         request: Duration::from_secs(2),
+        transcription: Duration::from_secs(2),
         pool_idle: Duration::from_secs(1),
         sse_inactivity: Duration::from_secs(2),
     }
@@ -32,6 +34,24 @@ fn credentials() -> SessionCredentials {
         4_102_444_800,
     )
     .unwrap()
+}
+
+fn fixture_wav() -> Vec<u8> {
+    let mut wav = vec![0_u8; 46];
+    wav[..4].copy_from_slice(b"RIFF");
+    wav[4..8].copy_from_slice(&38_u32.to_le_bytes());
+    wav[8..12].copy_from_slice(b"WAVE");
+    wav[12..16].copy_from_slice(b"fmt ");
+    wav[16..20].copy_from_slice(&16_u32.to_le_bytes());
+    wav[20..22].copy_from_slice(&1_u16.to_le_bytes());
+    wav[22..24].copy_from_slice(&1_u16.to_le_bytes());
+    wav[24..28].copy_from_slice(&16_000_u32.to_le_bytes());
+    wav[28..32].copy_from_slice(&32_000_u32.to_le_bytes());
+    wav[32..34].copy_from_slice(&2_u16.to_le_bytes());
+    wav[34..36].copy_from_slice(&16_u16.to_le_bytes());
+    wav[36..40].copy_from_slice(b"data");
+    wav[40..44].copy_from_slice(&2_u32.to_le_bytes());
+    wav
 }
 
 fn capabilities(version: Option<&str>) -> ApplicationCapabilitiesWire {
@@ -96,7 +116,7 @@ async fn read_request(socket: &mut TcpStream) -> String {
         assert!(count > 0);
         bytes.extend_from_slice(&chunk[..count]);
     }
-    String::from_utf8(bytes).unwrap()
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn request_body(request: &str) -> Value {
@@ -244,6 +264,126 @@ async fn optional_scope_negotiation_uses_live_authorization_metadata() {
         .unwrap();
     assert_eq!(metadata.scopes_supported.last().unwrap(), "grocery:write");
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn transcription_uses_bounded_multipart_channel_authority_and_validates_response() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/audio/transcriptions "));
+        let lowercase = request.to_ascii_lowercase();
+        assert!(lowercase.contains("authorization: bearer channel-access"));
+        assert!(!lowercase.contains("authorization: bearer session-access"));
+        assert!(lowercase.contains("content-type: multipart/form-data; boundary=heyfood-"));
+        assert!(request.contains("name=\"purpose\"\r\n\r\nlog\r\n"));
+        assert!(request.contains("name=\"language\"\r\n\r\nen-US\r\n"));
+        assert!(request.contains("name=\"file\"; filename=\"audio.wav\""));
+        assert!(request.contains("Content-Type: audio/wav\r\n\r\nRIFF"));
+        respond(
+            &mut socket,
+            200,
+            json!({
+                "transcript": "Log oatmeal and berries",
+                "duration_seconds": 1.25,
+                "language": "en-US",
+                "model_version": "hf-transcribe-1"
+            }),
+        )
+        .await;
+    });
+    let wav = fixture_wav();
+    let transcription = service
+        .transcribe_audio(
+            &wav,
+            TranscriptionPurpose::Log,
+            Some("en-US"),
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(transcription.transcript(), "Log oatmeal and berries");
+    assert!(!format!("{transcription:?}").contains("oatmeal"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn transcription_maps_oversize_status_to_audio_rejected() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/audio/transcriptions "));
+        respond(&mut socket, 413, json!({"detail": "too large"})).await;
+    });
+    let wav = fixture_wav();
+    let error = service
+        .transcribe_audio(
+            &wav,
+            TranscriptionPurpose::Ask,
+            None,
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "audio_rejected");
+    assert!(!error.outcome_uncertain);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn transcription_preserves_its_frozen_error_kinds() {
+    for (status, expected) in [
+        (400, "audio_rejected"),
+        (403, "insufficient_scope"),
+        (404, "transcription_unavailable"),
+        (503, "transcription_unavailable"),
+    ] {
+        let (listener, service) = fixture_service().await;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            assert!(request.starts_with("POST /v1/audio/transcriptions "));
+            respond(&mut socket, status, json!({"error": expected})).await;
+        });
+        let error = service
+            .transcribe_audio(
+                &fixture_wav(),
+                TranscriptionPurpose::Ask,
+                None,
+                OperationId::new(),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, expected);
+        assert!(!error.outcome_uncertain);
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn malformed_wav_is_rejected_before_network_dispatch() {
+    let (listener, service) = fixture_service().await;
+    let error = service
+        .transcribe_audio(
+            b"RIFF malformed WAVE",
+            TranscriptionPurpose::Ask,
+            None,
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "audio_rejected");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), listener.accept())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

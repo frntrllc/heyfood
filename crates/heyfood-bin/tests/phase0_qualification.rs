@@ -271,6 +271,7 @@ async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratat
             HttpDeadlines {
                 connect: Duration::from_secs(1),
                 request: Duration::from_secs(2),
+                transcription: Duration::from_secs(2),
                 pool_idle: Duration::from_secs(1),
                 sse_inactivity: Duration::from_secs(2),
             },

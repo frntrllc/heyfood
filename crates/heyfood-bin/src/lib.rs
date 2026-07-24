@@ -6,8 +6,8 @@ use std::{fmt, io, sync::Arc, time::Duration};
 
 use heyfood_agent_runtime::{GroceryExport, HttpService};
 use heyfood_application::{
-    EnsureSession, EnsureSessionError, EnsureSessionOutcome, RefreshPolicy, RunTurnOutcome,
-    ServicePort, TurnContext, TurnRequest, execute_one_shot_turn,
+    AudioCapturePort, EnsureSession, EnsureSessionError, EnsureSessionOutcome, RefreshPolicy,
+    RunTurnOutcome, ServicePort, TurnContext, TurnRequest, execute_one_shot_turn,
 };
 use heyfood_cli::{
     AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, OutputMode,
@@ -19,10 +19,10 @@ use heyfood_core::{
     GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId, GroceryItemInputWire,
     GroceryListVersion, GroceryMutationConfirmRequestWire, ImportedPythonState,
     OnboardingProfileInput, OperationId, RemoveItemsRequestWire, SessionCredentials,
-    SessionSnapshot, UpdateItemStateRequestWire, terminal_safe_text,
+    SessionSnapshot, TranscriptionPurpose, UpdateItemStateRequestWire, terminal_safe_text,
 };
 use heyfood_platform::{NativeSignalSource, SensitiveExportWriter, SignalEvent};
-use heyfood_tui::{Effect, ExitReason, PanelRequest, RuntimeEvent, TuiError};
+use heyfood_tui::{Effect, ExitReason, PanelRequest, RuntimeEvent, TuiError, VoiceAvailability};
 use serde_json::{Map, Value, json};
 use tokio::{
     runtime::Runtime,
@@ -1323,6 +1323,7 @@ fn ensure_oura(provider: heyfood_cli::HealthProviderArgument) -> Result<(), OneS
 struct OwnedInteractiveTurn {
     operation_id: u64,
     cancellation: CancellationToken,
+    stop: Option<CancellationToken>,
     task: JoinHandle<()>,
 }
 
@@ -1348,6 +1349,7 @@ pub struct InteractiveTurnDriver {
     runtime: Runtime,
     service: Arc<dyn ServicePort>,
     interactive_service: Option<Arc<HttpService>>,
+    audio_capture: Option<Arc<dyn AudioCapturePort>>,
     authorization_scope: Arc<str>,
     local_state: Option<Arc<ImportedPythonState>>,
     startup_notice: Option<String>,
@@ -1373,6 +1375,7 @@ impl InteractiveTurnDriver {
             runtime,
             service,
             interactive_service: None,
+            audio_capture: None,
             authorization_scope: Arc::from(""),
             local_state: None,
             startup_notice: None,
@@ -1414,6 +1417,18 @@ impl InteractiveTurnDriver {
     pub fn with_startup_onboarding(mut self, enabled: bool) -> Self {
         self.startup_onboarding = enabled;
         self
+    }
+
+    #[must_use]
+    pub fn with_audio_capture(mut self, audio_capture: Arc<dyn AudioCapturePort>) -> Self {
+        self.audio_capture = Some(audio_capture);
+        self
+    }
+
+    fn native_voice_available(&self) -> bool {
+        self.audio_capture
+            .as_ref()
+            .is_some_and(|capture| capture.available())
     }
 
     fn reap_finished(&mut self) {
@@ -1473,6 +1488,7 @@ impl InteractiveTurnDriver {
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
             cancellation,
+            stop: None,
             task,
         });
         Ok(())
@@ -1504,6 +1520,13 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 .map_err(io::Error::other)?;
             self.startup_onboarding = false;
         }
+        let voice_availability = interactive_voice_availability(
+            self.native_voice_available(),
+            &self.authorization_scope,
+        );
+        runtime_events
+            .try_send(RuntimeEvent::VoiceAvailability(voice_availability))
+            .map_err(io::Error::other)?;
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
         let task = self.runtime.spawn(async move {
@@ -1600,6 +1623,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
             cancellation,
+            stop: None,
             task,
         });
         Ok(())
@@ -1629,7 +1653,16 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         let ensure_session = self.ensure_session.clone();
         let session = self.session.clone();
         let authorization_scope = self.authorization_scope.clone();
-        let local_state = self.local_state.clone();
+        let native_voice_available = self.native_voice_available();
+        runtime_events
+            .try_send(RuntimeEvent::VoiceAvailability(
+                interactive_voice_availability(native_voice_available, &authorization_scope),
+            ))
+            .map_err(io::Error::other)?;
+        let environment = InteractivePanelEnvironment {
+            local_state: self.local_state.clone(),
+            native_voice_available,
+        };
         let task = self.runtime.spawn(async move {
             let result = run_interactive_panel(
                 panel,
@@ -1637,7 +1670,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 ensure_session,
                 session,
                 &authorization_scope,
-                local_state,
+                environment,
                 task_cancellation.clone(),
             )
             .await;
@@ -1662,6 +1695,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
             cancellation,
+            stop: None,
             task,
         });
         Ok(())
@@ -1719,9 +1753,105 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
             cancellation,
+            stop: None,
             task,
         });
         Ok(())
+    }
+
+    fn start_voice(
+        &mut self,
+        operation_id: u64,
+        runtime_events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        self.reap_finished();
+        if !self.turns.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "interactive work is already active",
+            ));
+        }
+        if !authorization_has_scope(&self.authorization_scope, "audio:transcribe") {
+            runtime_events
+                .try_send(RuntimeEvent::VoiceFailed {
+                    operation_id,
+                    message: "Additional authorization (audio:transcribe) is required. Exit the TUI and run `heyfood login`; no microphone was opened.".into(),
+                })
+                .map_err(io::Error::other)?;
+            return Ok(());
+        }
+        let Some(audio_capture) = self.audio_capture.clone() else {
+            runtime_events
+                .try_send(RuntimeEvent::VoiceFailed {
+                    operation_id,
+                    message: "Native microphone capture is unavailable in this artifact. Nothing was recorded or submitted.".into(),
+                })
+                .map_err(io::Error::other)?;
+            return Ok(());
+        };
+        if !audio_capture.available() {
+            runtime_events
+                .try_send(RuntimeEvent::VoiceFailed {
+                    operation_id,
+                    message: "No compatible microphone input device is currently available. Nothing was recorded or submitted.".into(),
+                })
+                .map_err(io::Error::other)?;
+            return Ok(());
+        }
+        let Some(service) = self.interactive_service.clone() else {
+            runtime_events
+                .try_send(RuntimeEvent::VoiceFailed {
+                    operation_id,
+                    message: "Voice transcription requires the authenticated HTTP adapter. Nothing was recorded or submitted.".into(),
+                })
+                .map_err(io::Error::other)?;
+            return Ok(());
+        };
+        let stop = CancellationToken::new();
+        let cancellation = CancellationToken::new();
+        let task_stop = stop.clone();
+        let task_cancellation = cancellation.clone();
+        let task = self.runtime.spawn(async move {
+            let event = run_interactive_voice(
+                operation_id,
+                audio_capture,
+                service,
+                task_stop,
+                task_cancellation,
+                runtime_events.clone(),
+            )
+            .await;
+            let _ = runtime_events.send(event).await;
+        });
+        self.turns.push(OwnedInteractiveTurn {
+            operation_id,
+            cancellation,
+            stop: Some(stop),
+            task,
+        });
+        Ok(())
+    }
+
+    fn stop_voice(&mut self, operation_id: u64) -> io::Result<()> {
+        let turn = self
+            .turns
+            .iter()
+            .find(|turn| turn.operation_id == operation_id)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "active voice input is missing")
+            })?;
+        let stop = turn.stop.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the active operation is not a voice recording",
+            )
+        })?;
+        stop.cancel();
+        Ok(())
+    }
+
+    fn cancel_voice(&mut self, operation_id: u64) -> io::Result<()> {
+        self.cancel_turn(operation_id)
     }
 
     fn cancel_turn(&mut self, operation_id: u64) -> io::Result<()> {
@@ -1772,6 +1902,104 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 )
             })?
         })
+    }
+}
+
+async fn run_interactive_voice(
+    operation_id: u64,
+    audio_capture: Arc<dyn AudioCapturePort>,
+    service: Arc<HttpService>,
+    stop: CancellationToken,
+    cancellation: CancellationToken,
+    runtime_events: mpsc::Sender<RuntimeEvent>,
+) -> RuntimeEvent {
+    let capture = audio_capture.capture(stop, cancellation.child_token());
+    tokio::pin!(capture);
+    let started = tokio::time::Instant::now();
+    let mut elapsed =
+        tokio::time::interval_at(started + Duration::from_secs(1), Duration::from_secs(1));
+    elapsed.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let capture = loop {
+        tokio::select! {
+            result = &mut capture => break result,
+            _ = elapsed.tick() => {
+                let elapsed_event = RuntimeEvent::VoiceRecordingElapsed {
+                        operation_id,
+                        seconds: started.elapsed().as_secs(),
+                    };
+                match runtime_events.try_send(elapsed_event) {
+                    Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        cancellation.cancel();
+                        return RuntimeEvent::VoiceCancelled { operation_id };
+                    }
+                }
+            }
+        }
+    };
+    let capture = match capture {
+        Ok(capture) => capture,
+        Err(_) if cancellation.is_cancelled() => {
+            return RuntimeEvent::VoiceCancelled { operation_id };
+        }
+        Err(error) if error.code == "voice_capture_cancelled" => {
+            return RuntimeEvent::VoiceCancelled { operation_id };
+        }
+        Err(error) => {
+            return RuntimeEvent::VoiceFailed {
+                operation_id,
+                message: terminal_safe_text(&error.message),
+            };
+        }
+    };
+    if cancellation.is_cancelled() {
+        return RuntimeEvent::VoiceCancelled { operation_id };
+    }
+    if capture.truncated || capture.overflowed {
+        return RuntimeEvent::VoiceFailed {
+            operation_id,
+            message: "The recording exceeded a native capture bound or lost audio samples, so it was discarded without transcription or submission.".into(),
+        };
+    }
+    if capture.duration_millis == 0
+        || !heyfood_core::transcription_sample_rate_supported(capture.sample_rate_hz)
+    {
+        return RuntimeEvent::VoiceFailed {
+            operation_id,
+            message: "The recording did not satisfy the transcription contract and was discarded."
+                .into(),
+        };
+    }
+    let transcription = service
+        .transcribe_audio(
+            &capture.wav_bytes,
+            TranscriptionPurpose::Ask,
+            None,
+            OperationId::new(),
+            cancellation.child_token(),
+        )
+        .await;
+    match transcription {
+        Ok(_) if cancellation.is_cancelled() => RuntimeEvent::VoiceCancelled { operation_id },
+        Ok(transcription) => RuntimeEvent::VoiceTranscriptReady {
+            operation_id,
+            transcript: transcription.transcript().to_owned(),
+        },
+        Err(_) if cancellation.is_cancelled() => RuntimeEvent::VoiceCancelled { operation_id },
+        Err(error)
+            if matches!(
+                error.code,
+                "request_cancelled_before_dispatch"
+                    | "request_cancelled_after_dispatch"
+                    | "response_cancelled"
+            ) =>
+        {
+            RuntimeEvent::VoiceCancelled { operation_id }
+        }
+        Err(error) => RuntimeEvent::VoiceFailed {
+            operation_id,
+            message: terminal_safe_text(&error.message),
+        },
     }
 }
 
@@ -2048,13 +2276,18 @@ fn onboarding_service_error(error: heyfood_application::PortError) -> Onboarding
     }
 }
 
+struct InteractivePanelEnvironment {
+    local_state: Option<Arc<ImportedPythonState>>,
+    native_voice_available: bool,
+}
+
 async fn run_interactive_panel(
     panel: PanelRequest,
     service: Arc<HttpService>,
     ensure_session: Arc<EnsureSession>,
     session: Arc<Mutex<SessionSnapshot>>,
     authorization_scope: &str,
-    local_state: Option<Arc<ImportedPythonState>>,
+    environment: InteractivePanelEnvironment,
     cancellation: CancellationToken,
 ) -> Result<String, String> {
     let required_scope = match panel {
@@ -2075,14 +2308,16 @@ async fn run_interactive_panel(
 
     let snapshot = session.lock().await.clone();
     if matches!(panel, PanelRequest::Household | PanelRequest::Location) {
-        if local_state.as_ref().is_some_and(|state| {
+        if environment.local_state.as_ref().is_some_and(|state| {
             state.account_user_id.as_deref() != Some(snapshot.credentials.account_id.as_str())
         }) {
             return Err("Saved local context belongs to a different account.".into());
         }
         return match panel {
-            PanelRequest::Household => Ok(render_household_panel(local_state.as_deref())),
-            PanelRequest::Location => Ok(render_location_panel(local_state.as_deref())),
+            PanelRequest::Household => {
+                Ok(render_household_panel(environment.local_state.as_deref()))
+            }
+            PanelRequest::Location => Ok(render_location_panel(environment.local_state.as_deref())),
             PanelRequest::Status
             | PanelRequest::Grocery
             | PanelRequest::Health
@@ -2149,10 +2384,20 @@ async fn run_interactive_panel(
             } else {
                 "authorization required"
             };
-            let voice = if authorization_has_scope(authorization_scope, "audio:transcribe") {
-                "transcription authorized · native capture not yet available"
-            } else {
-                "transcription authorization required · native capture not yet available"
+            let voice = match (
+                environment.native_voice_available,
+                authorization_has_scope(authorization_scope, "audio:transcribe"),
+            ) {
+                (true, true) => {
+                    "native capture available · transcription authorized · permission checked on use"
+                }
+                (true, false) => "native capture available · transcription authorization required",
+                (false, true) => {
+                    "transcription authorized · native capture unavailable in this artifact"
+                }
+                (false, false) => {
+                    "transcription authorization required · native capture unavailable in this artifact"
+                }
             };
             Ok(format!(
                 "Session: active\nService: reachable\nProfile: {profile}\nGrocery: {grocery}\nHealth: {health}\nVoice: {voice}"
@@ -2254,6 +2499,20 @@ async fn run_interactive_panel(
 
 fn authorization_has_scope(scope: &str, required: &str) -> bool {
     scope.split_whitespace().any(|scope| scope == required)
+}
+
+fn interactive_voice_availability(
+    native_voice_available: bool,
+    authorization_scope: &str,
+) -> VoiceAvailability {
+    match (
+        native_voice_available,
+        authorization_has_scope(authorization_scope, "audio:transcribe"),
+    ) {
+        (true, true) => VoiceAvailability::Ready,
+        (true, false) => VoiceAvailability::AuthorizationRequired,
+        (false, _) => VoiceAvailability::Unavailable,
+    }
 }
 
 fn render_household_panel(state: Option<&ImportedPythonState>) -> String {
@@ -2451,6 +2710,28 @@ pub trait QualifiedTurnDriver {
         ))
     }
 
+    fn start_voice(
+        &mut self,
+        _operation_id: u64,
+        _events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "voice input is unavailable in this driver",
+        ))
+    }
+
+    fn stop_voice(&mut self, _operation_id: u64) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "voice input is unavailable in this driver",
+        ))
+    }
+
+    fn cancel_voice(&mut self, operation_id: u64) -> io::Result<()> {
+        self.cancel_turn(operation_id)
+    }
+
     fn cancel_turn(&mut self, operation_id: u64) -> io::Result<()>;
 
     /// Forget process-local conversation continuity without touching persisted
@@ -2566,6 +2847,15 @@ fn route_effect(
         } => driver
             .start_household_scope(operation_id, selector, runtime_sender.clone())
             .map_err(CompositionError::Driver),
+        Effect::StartVoice { operation_id } => driver
+            .start_voice(operation_id, runtime_sender.clone())
+            .map_err(CompositionError::Driver),
+        Effect::StopVoice { operation_id } => driver
+            .stop_voice(operation_id)
+            .map_err(CompositionError::Driver),
+        Effect::CancelVoice { operation_id } => driver
+            .cancel_voice(operation_id)
+            .map_err(CompositionError::Driver),
         Effect::CancelTurn { operation_id } => driver
             .cancel_turn(operation_id)
             .map_err(CompositionError::Driver),
@@ -2582,13 +2872,14 @@ mod tests {
     use std::{
         collections::{BTreeMap, VecDeque},
         sync::Mutex as StdMutex,
+        sync::atomic::{AtomicUsize, Ordering},
         thread,
     };
 
     use heyfood_agent_runtime::CliAuthContext;
     use heyfood_application::{
-        AcceptedTurn, BoxFuture, ClockPort, CredentialCommit, CredentialPort, EventStream,
-        PortError,
+        AcceptedTurn, AudioCapture, BoxFuture, ClockPort, CredentialCommit, CredentialPort,
+        EventStream, PortError,
     };
     use heyfood_core::{
         AccountId, AgentEvent, CommitId, CredentialVersion, NetworkPolicy, RefreshOutcome,
@@ -2602,6 +2893,56 @@ mod tests {
     impl ClockPort for FixedClock {
         fn unix_timestamp(&self) -> i64 {
             0
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct FixtureAudioCapture {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl AudioCapturePort for FixtureAudioCapture {
+        fn available(&self) -> bool {
+            true
+        }
+
+        fn capture(
+            &self,
+            stop: CancellationToken,
+            cancellation: CancellationToken,
+        ) -> BoxFuture<'_, Result<AudioCapture, PortError>> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async move {
+                tokio::select! {
+                    () = stop.cancelled() => {
+                        let mut wav_bytes = vec![0_u8; 46];
+                        wav_bytes[..4].copy_from_slice(b"RIFF");
+                        wav_bytes[4..8].copy_from_slice(&38_u32.to_le_bytes());
+                        wav_bytes[8..12].copy_from_slice(b"WAVE");
+                        wav_bytes[12..16].copy_from_slice(b"fmt ");
+                        wav_bytes[16..20].copy_from_slice(&16_u32.to_le_bytes());
+                        wav_bytes[20..22].copy_from_slice(&1_u16.to_le_bytes());
+                        wav_bytes[22..24].copy_from_slice(&1_u16.to_le_bytes());
+                        wav_bytes[24..28].copy_from_slice(&16_000_u32.to_le_bytes());
+                        wav_bytes[28..32].copy_from_slice(&32_000_u32.to_le_bytes());
+                        wav_bytes[32..34].copy_from_slice(&2_u16.to_le_bytes());
+                        wav_bytes[34..36].copy_from_slice(&16_u16.to_le_bytes());
+                        wav_bytes[36..40].copy_from_slice(b"data");
+                        wav_bytes[40..44].copy_from_slice(&2_u32.to_le_bytes());
+                        Ok(AudioCapture {
+                            wav_bytes,
+                            sample_rate_hz: 16_000,
+                            duration_millis: 1,
+                            truncated: false,
+                            overflowed: false,
+                        })
+                    }
+                    () = cancellation.cancelled() => Err(PortError::new(
+                        "voice_capture_cancelled",
+                        "the fixture recording was cancelled",
+                    )),
+                }
+            })
         }
     }
 
@@ -2701,7 +3042,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn read_complete_http_request(socket: &mut TcpStream) -> String {
+    async fn read_complete_http_request_bytes(socket: &mut TcpStream) -> Vec<u8> {
         let mut request = Vec::new();
         let header_end = loop {
             let mut buffer = [0_u8; 1024];
@@ -2727,7 +3068,11 @@ mod tests {
             assert!(read > 0);
             request.extend_from_slice(&buffer[..read]);
         }
-        String::from_utf8(request).unwrap()
+        request
+    }
+
+    async fn read_complete_http_request(socket: &mut TcpStream) -> String {
+        String::from_utf8(read_complete_http_request_bytes(socket).await).unwrap()
     }
 
     async fn write_json_response(socket: &mut TcpStream, status: &str, body: Value) {
@@ -2741,6 +3086,120 @@ mod tests {
                 .as_bytes(),
             )
             .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn voice_vertical_transcribes_capture_without_submitting_an_agent_turn() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_complete_http_request_bytes(&mut socket).await;
+            let request_text = String::from_utf8_lossy(&request);
+            assert!(request_text.starts_with("POST /v1/audio/transcriptions HTTP/1.1\r\n"));
+            assert!(
+                request_text
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer channel-access")
+            );
+            assert!(request_text.contains("name=\"purpose\"\r\n\r\nask\r\n"));
+            assert!(request_text.contains("name=\"file\"; filename=\"audio.wav\""));
+            assert!(request.windows(4).any(|window| window == b"RIFF"));
+            write_json_response(
+                &mut socket,
+                "200 OK",
+                json!({
+                    "transcript": "What should I make for dinner?",
+                    "duration_seconds": 1.0,
+                    "language": "en-US",
+                    "model_version": "fixture-1"
+                }),
+            )
+            .await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(25), listener.accept())
+                    .await
+                    .is_err(),
+                "transcription must not implicitly submit an agent turn"
+            );
+        });
+        let service_url =
+            ServiceUrl::parse(&format!("http://{address}"), NetworkPolicy::DEVELOPMENT).unwrap();
+        let service = Arc::new(
+            HttpService::new(service_url, NetworkPolicy::DEVELOPMENT, Default::default())
+                .unwrap()
+                .with_cli_auth(
+                    CliAuthContext::new(
+                        "interactive-device",
+                        SensitiveString::new("channel-access"),
+                        None,
+                    )
+                    .unwrap(),
+                ),
+        );
+        let capture = Arc::new(FixtureAudioCapture::default());
+        let stop = CancellationToken::new();
+        stop.cancel();
+        let (events, _receiver) = mpsc::channel(8);
+        let event = run_interactive_voice(
+            7,
+            capture.clone(),
+            service,
+            stop,
+            CancellationToken::new(),
+            events,
+        )
+        .await;
+        assert!(matches!(
+            event,
+            RuntimeEvent::VoiceTranscriptReady {
+                operation_id: 7,
+                transcript
+            } if transcript == "What should I make for dinner?"
+        ));
+        assert_eq!(capture.calls.load(Ordering::Relaxed), 1);
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn voice_scope_preflight_never_opens_the_microphone() {
+        let service_url =
+            ServiceUrl::parse("http://127.0.0.1:1", NetworkPolicy::DEVELOPMENT).unwrap();
+        let service = Arc::new(
+            HttpService::new(service_url, NetworkPolicy::DEVELOPMENT, Default::default()).unwrap(),
+        );
+        let service_port: Arc<dyn ServicePort> = service.clone();
+        let ensure_session = Arc::new(EnsureSession::new(
+            service_port,
+            Arc::new(MemoryCredentialPort),
+            Arc::new(FixedClock),
+        ));
+        let capture = Arc::new(FixtureAudioCapture::default());
+        let mut driver = InteractiveTurnDriver::new_http(
+            service,
+            ensure_session,
+            SessionSnapshot {
+                credentials: fixture_credentials(),
+                reconciliation_required: false,
+            },
+            "profile:read",
+        )
+        .unwrap()
+        .with_audio_capture(capture.clone());
+        let (events, mut receiver) = mpsc::channel(8);
+        driver.start_voice(11, events).unwrap();
+        let event = driver.runtime.block_on(receiver.recv()).unwrap();
+        assert!(matches!(
+            event,
+            RuntimeEvent::VoiceFailed {
+                operation_id: 11,
+                message
+            } if message.contains("audio:transcribe") && message.contains("no microphone was opened")
+        ));
+        assert_eq!(capture.calls.load(Ordering::Relaxed), 0);
+        driver
+            .shutdown_and_join(QUALIFIED_SHUTDOWN_TIMEOUT)
             .unwrap();
     }
 
@@ -3596,7 +4055,10 @@ mod tests {
             ensure_session.clone(),
             session.clone(),
             "health:read",
-            None,
+            InteractivePanelEnvironment {
+                local_state: None,
+                native_voice_available: false,
+            },
             CancellationToken::new(),
         )
         .await
@@ -3609,7 +4071,10 @@ mod tests {
             ensure_session.clone(),
             session.clone(),
             "grocery:read health:read",
-            None,
+            InteractivePanelEnvironment {
+                local_state: None,
+                native_voice_available: false,
+            },
             CancellationToken::new(),
         )
         .await
@@ -3624,7 +4089,10 @@ mod tests {
             ensure_session.clone(),
             session.clone(),
             "grocery:read health:read",
-            None,
+            InteractivePanelEnvironment {
+                local_state: None,
+                native_voice_available: false,
+            },
             CancellationToken::new(),
         )
         .await
@@ -3639,7 +4107,10 @@ mod tests {
             ensure_session.clone(),
             session.clone(),
             "profile:read",
-            None,
+            InteractivePanelEnvironment {
+                local_state: None,
+                native_voice_available: false,
+            },
             CancellationToken::new(),
         )
         .await
@@ -3654,7 +4125,10 @@ mod tests {
             ensure_session.clone(),
             session.clone(),
             "profile:read grocery:read health:read audio:transcribe",
-            None,
+            InteractivePanelEnvironment {
+                local_state: None,
+                native_voice_available: true,
+            },
             CancellationToken::new(),
         )
         .await
@@ -3664,9 +4138,9 @@ mod tests {
         assert!(status.contains("Profile: authorized · sync consent granted"));
         assert!(status.contains("Grocery: available · authorized"));
         assert!(status.contains("Health: authorized"));
-        assert!(
-            status.contains("Voice: transcription authorized · native capture not yet available")
-        );
+        assert!(status.contains(
+            "Voice: native capture available · transcription authorized · permission checked on use"
+        ));
 
         let local_state = Arc::new(ImportedPythonState {
             account_user_id: Some("account-1".into()),
@@ -3699,7 +4173,10 @@ mod tests {
             ensure_session.clone(),
             session.clone(),
             "",
-            Some(local_state.clone()),
+            InteractivePanelEnvironment {
+                local_state: Some(local_state.clone()),
+                native_voice_available: false,
+            },
             CancellationToken::new(),
         )
         .await
@@ -3712,7 +4189,10 @@ mod tests {
             ensure_session,
             session,
             "",
-            Some(local_state),
+            InteractivePanelEnvironment {
+                local_state: Some(local_state),
+                native_voice_available: false,
+            },
             CancellationToken::new(),
         )
         .await

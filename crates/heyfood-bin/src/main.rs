@@ -396,7 +396,7 @@ async fn interactive(machine: bool, force_onboarding: bool) -> ExitCode {
         }
     };
     let result = tokio::task::block_in_place(move || {
-        let mut driver = heyfood_bin::InteractiveTurnDriver::new_http(
+        let driver = heyfood_bin::InteractiveTurnDriver::new_http(
             prepared.service,
             prepared.ensure_session,
             prepared.snapshot,
@@ -405,6 +405,12 @@ async fn interactive(machine: bool, force_onboarding: bool) -> ExitCode {
         .with_local_state(local_state)
         .with_startup_notice(startup_notice)
         .with_startup_onboarding(startup_onboarding);
+        #[cfg(all(
+            feature = "native-audio",
+            any(target_os = "linux", target_os = "macos", target_os = "windows")
+        ))]
+        let driver = driver.with_audio_capture(Arc::new(heyfood_voice::NativeAudioCapture));
+        let mut driver = driver;
         heyfood_bin::run_qualified_session(&mut driver)
             .map_err(|error| io::Error::other(error.to_string()))
     });

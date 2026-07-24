@@ -60,6 +60,17 @@ compatibility input. Production `sources[]` provenance is rendered as bounded,
 terminal-safe source type, reference, and detail lines; legacy singleton
 `provenance` remains a fallback.
 
+In artifacts built with `native-audio`, `/voice`, Ctrl+Space, and F8 start or
+stop native TUI recording. The client checks the `audio:transcribe` grant before
+opening the microphone, captures a mono 16-bit WAV in bounded process memory,
+uploads it once with channel authority to `/v1/audio/transcriptions`, and never
+retries that POST automatically. Audio is not written to disk. A validated
+transcript is placed in the ordinary composer for review, editing, rerecord, or
+discard; it is not sent to the agent until the user presses Enter. Esc, Ctrl+C,
+exit, capture overflow, truncation, and contract failure discard the recording
+without treating transcription as agent or mutation consent. Artifacts without
+native audio report that limitation truthfully before capture.
+
 Legacy top-level `recommend`, `location`, `search`, `household`, `profile`, and
 other hidden topology are unavailable in this cut. Recognized legacy paths fail
 closed with `command_not_available`; recognition is not a support or

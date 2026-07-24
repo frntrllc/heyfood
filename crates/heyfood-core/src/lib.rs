@@ -13,6 +13,7 @@ pub mod network;
 pub mod onboarding;
 pub mod operation;
 pub mod presentation;
+pub mod transcription;
 pub mod validation;
 pub mod wire;
 
@@ -48,6 +49,16 @@ pub use onboarding::{
 pub use operation::{CommitId, GenerationId, OperationId};
 pub use presentation::{
     NoticeLevel, PresentationBlock, PresentationDocument, PresentationError, PresentationText,
+};
+pub use transcription::{
+    TRANSCRIPTION_CHANNELS, TRANSCRIPTION_MAX_AUDIO_BYTES, TRANSCRIPTION_MAX_DURATION_SECONDS,
+    TRANSCRIPTION_MAX_LANGUAGE_CHARACTERS, TRANSCRIPTION_MAX_MODEL_VERSION_CHARACTERS,
+    TRANSCRIPTION_MAX_REQUEST_BYTES, TRANSCRIPTION_MAX_RESPONSE_DURATION_SECONDS,
+    TRANSCRIPTION_MAX_TRANSCRIPT_CHARACTERS, TRANSCRIPTION_PREFERRED_SAMPLE_RATE_HZ,
+    TRANSCRIPTION_SAMPLE_RATE_MAX_HZ, TRANSCRIPTION_SAMPLE_RATE_MIN_HZ,
+    TRANSCRIPTION_SAMPLE_WIDTH_BYTES, TRANSCRIPTION_SCHEMA_SHA256, TRANSCRIPTION_SCHEMA_VERSION,
+    TRANSCRIPTION_WAV_HEADER_BYTES, Transcription, TranscriptionContractError,
+    TranscriptionPurpose, TranscriptionWire, transcription_sample_rate_supported,
 };
 pub use validation::{
     ValidationError, bounded_integer, bounded_number, choice, coordinates, iso_date, optional_text,

@@ -4,8 +4,8 @@ use heyfood_application::{RunTurnOutcome, agent_result_text};
 use heyfood_core::{
     ActionConfirmationEnvelopeWire, AgentConfirmationCommandWire, AgentEvent,
     ConfirmationDecisionWire, GroceryEditPatch, OnboardingOption, OnboardingProfileInput,
-    activity_options, allergy_options, condition_options, cuisine_options, diet_options,
-    required_text, terminal_safe_text,
+    TRANSCRIPTION_MAX_TRANSCRIPT_CHARACTERS, activity_options, allergy_options, condition_options,
+    cuisine_options, diet_options, required_text, terminal_safe_text,
 };
 
 pub const MAX_SCROLLBACK_ENTRIES: usize = 1_000;
@@ -26,6 +26,7 @@ enum SlashCommandKind {
     Profile,
     Onboard,
     Location,
+    Voice,
     Status,
     Clear,
     Exit,
@@ -127,6 +128,13 @@ pub const SLASH_COMMAND_REGISTRY: &[SlashCommandSpec] = &[
         usage: "/location",
         description: "Open active location context",
         kind: SlashCommandKind::Location,
+    },
+    SlashCommandSpec {
+        name: "/voice",
+        aliases: &[],
+        usage: "/voice",
+        description: "Start or stop native microphone capture",
+        kind: SlashCommandKind::Voice,
     },
     SlashCommandSpec {
         name: "/status",
@@ -390,6 +398,21 @@ enum OnboardingStep {
     Saving,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VoiceAvailability {
+    Unavailable,
+    AuthorizationRequired,
+    Ready,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VoicePhase {
+    Idle,
+    Recording { operation_id: u64 },
+    Transcribing { operation_id: u64 },
+    Review,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct OnboardingFlow {
     step: OnboardingStep,
@@ -452,6 +475,9 @@ pub struct AppModel {
     pending_choice_labels: Vec<String>,
     pending_confirmation: Option<PendingActionConfirmation>,
     onboarding: Option<OnboardingFlow>,
+    voice_availability: VoiceAvailability,
+    voice_phase: VoicePhase,
+    draft_before_voice: String,
     next_operation_id: u64,
 }
 
@@ -475,6 +501,9 @@ impl Default for AppModel {
             pending_choice_labels: Vec::new(),
             pending_confirmation: None,
             onboarding: None,
+            voice_availability: VoiceAvailability::Unavailable,
+            voice_phase: VoicePhase::Idle,
+            draft_before_voice: String::new(),
             next_operation_id: 1,
         }
     }
@@ -526,6 +555,22 @@ pub enum RuntimeEvent {
         operation_id: u64,
         message: String,
     },
+    VoiceAvailability(VoiceAvailability),
+    VoiceRecordingElapsed {
+        operation_id: u64,
+        seconds: u64,
+    },
+    VoiceTranscriptReady {
+        operation_id: u64,
+        transcript: String,
+    },
+    VoiceFailed {
+        operation_id: u64,
+        message: String,
+    },
+    VoiceCancelled {
+        operation_id: u64,
+    },
     Notice {
         message: String,
     },
@@ -545,6 +590,8 @@ pub enum Action {
     CompleteSlash,
     InsertNewline,
     Submit,
+    VoiceToggle,
+    CancelVoice,
     CancelOrExit,
     Exit,
     ScrollUp(usize),
@@ -576,6 +623,15 @@ pub enum Effect {
     SelectHousehold {
         operation_id: u64,
         selector: String,
+    },
+    StartVoice {
+        operation_id: u64,
+    },
+    StopVoice {
+        operation_id: u64,
+    },
+    CancelVoice {
+        operation_id: u64,
     },
     CancelTurn {
         operation_id: u64,
@@ -618,6 +674,8 @@ pub fn dispatch(model: &mut AppModel, action: Action) -> Vec<Effect> {
             insert_at_cursor(model, "\n");
         }
         Action::Submit => return submit(model),
+        Action::VoiceToggle => return toggle_voice(model),
+        Action::CancelVoice => return cancel_voice(model),
         Action::CancelOrExit => return cancel_or_exit(model),
         Action::Exit if model.draft.is_empty() => {
             return begin_exit(model, ExitReason::Requested);
@@ -648,6 +706,9 @@ pub fn dispatch(model: &mut AppModel, action: Action) -> Vec<Effect> {
 }
 
 fn submit(model: &mut AppModel) -> Vec<Effect> {
+    if matches!(model.voice_phase, VoicePhase::Recording { .. }) {
+        return stop_voice(model);
+    }
     if model.draft.trim().is_empty() {
         return Vec::new();
     }
@@ -663,6 +724,8 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
     if model.operation.is_active() {
         return Vec::new();
     }
+    model.voice_phase = VoicePhase::Idle;
+    model.draft_before_voice.clear();
     let prompt = std::mem::take(&mut model.draft);
     model.pending_choice_labels.clear();
     remember_prompt(model, &prompt);
@@ -686,6 +749,152 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
         operation_id,
         prompt,
     }]
+}
+
+fn toggle_voice(model: &mut AppModel) -> Vec<Effect> {
+    match model.voice_phase {
+        VoicePhase::Recording { .. } => return stop_voice(model),
+        VoicePhase::Transcribing { .. } => {
+            push_notice(
+                model,
+                "The recording is already being transcribed. Esc cancels this voice operation.",
+            );
+            return Vec::new();
+        }
+        VoicePhase::Idle | VoicePhase::Review => {}
+    }
+    match model.voice_availability {
+        VoiceAvailability::Unavailable => {
+            push_notice(
+                model,
+                "Native microphone capture is unavailable in this artifact. The composer remains available for typed input.",
+            );
+            return Vec::new();
+        }
+        VoiceAvailability::AuthorizationRequired => {
+            push_notice(
+                model,
+                "Voice transcription needs `audio:transcribe` authorization. Exit the TUI, run `heyfood login`, then try again. No microphone was opened.",
+            );
+            return Vec::new();
+        }
+        VoiceAvailability::Ready => {}
+    }
+    if model.operation.is_active()
+        || model.onboarding.is_some()
+        || model.pending_confirmation.is_some()
+    {
+        push_notice(
+            model,
+            "Finish or stop the active work before starting voice capture.",
+        );
+        return Vec::new();
+    }
+    model.draft_before_voice = model.draft.clone();
+    model.draft.clear();
+    model.cursor = 0;
+    let operation_id = model.next_operation_id;
+    model.next_operation_id = model.next_operation_id.saturating_add(1);
+    model.voice_phase = VoicePhase::Recording { operation_id };
+    model.operation = OperationState::Running(operation_id);
+    model.activity =
+        Some("Opening microphone… · Enter, Ctrl+Space, or F8 to stop · Esc to cancel".into());
+    model.idle_exit_armed = false;
+    vec![Effect::StartVoice { operation_id }]
+}
+
+fn stop_voice(model: &mut AppModel) -> Vec<Effect> {
+    let VoicePhase::Recording { operation_id } = model.voice_phase else {
+        return Vec::new();
+    };
+    model.voice_phase = VoicePhase::Transcribing { operation_id };
+    model.operation = OperationState::Finishing(operation_id);
+    model.activity = Some("Transcribing securely… · Esc to cancel".into());
+    vec![Effect::StopVoice { operation_id }]
+}
+
+fn cancel_voice(model: &mut AppModel) -> Vec<Effect> {
+    match model.voice_phase {
+        VoicePhase::Recording { operation_id } | VoicePhase::Transcribing { operation_id } => {
+            model.operation = OperationState::Cancelling(operation_id);
+            model.activity = Some("Cancelling voice capture…".into());
+            vec![Effect::CancelVoice { operation_id }]
+        }
+        VoicePhase::Review => {
+            model.draft = std::mem::take(&mut model.draft_before_voice);
+            model.cursor = model.draft.chars().count();
+            model.voice_phase = VoicePhase::Idle;
+            model.activity = None;
+            model.idle_exit_armed = false;
+            push_notice(model, "Voice transcript discarded. Nothing was submitted.");
+            Vec::new()
+        }
+        VoicePhase::Idle => Vec::new(),
+    }
+}
+
+fn voice_operation_id(phase: VoicePhase) -> Option<u64> {
+    match phase {
+        VoicePhase::Recording { operation_id } | VoicePhase::Transcribing { operation_id } => {
+            Some(operation_id)
+        }
+        VoicePhase::Idle | VoicePhase::Review => None,
+    }
+}
+
+fn finish_voice_transcription(model: &mut AppModel, result: Result<String, String>) {
+    model.operation = OperationState::Idle;
+    model.idle_exit_armed = false;
+    match result {
+        Ok(transcript) => {
+            let transcript = terminal_safe_text(&transcript);
+            if transcript.trim().is_empty()
+                || transcript.chars().count() > TRANSCRIPTION_MAX_TRANSCRIPT_CHARACTERS
+            {
+                finish_voice_transcription(
+                    model,
+                    Err("The transcription response was empty or too long.".into()),
+                );
+                return;
+            }
+            model.draft = transcript.trim().to_owned();
+            model.cursor = model.draft.chars().count();
+            model.voice_phase = VoicePhase::Review;
+            model.activity = Some(
+                "Review voice transcript · edit and press Enter to submit · Esc to discard".into(),
+            );
+            push_notice(
+                model,
+                "Voice transcript ready in the composer. Edit it if needed, then press Enter to submit through the same agent path. Use `/voice` to record again or Esc to discard it.",
+            );
+        }
+        Err(message) => {
+            model.draft = std::mem::take(&mut model.draft_before_voice);
+            model.cursor = model.draft.chars().count();
+            model.voice_phase = VoicePhase::Idle;
+            model.activity = None;
+            push_notice(
+                model,
+                &format!(
+                    "Voice input was not submitted: {} Continue with typed input or try `/voice` again.",
+                    terminal_safe_text(&message)
+                ),
+            );
+        }
+    }
+}
+
+fn finish_voice_cancel(model: &mut AppModel) {
+    model.draft = std::mem::take(&mut model.draft_before_voice);
+    model.cursor = model.draft.chars().count();
+    model.voice_phase = VoicePhase::Idle;
+    model.operation = OperationState::Idle;
+    model.activity = None;
+    model.idle_exit_armed = false;
+    push_notice(
+        model,
+        "Voice capture cancelled. Audio and transcript were discarded; nothing was submitted.",
+    );
 }
 
 fn submit_confirmation_answer(model: &mut AppModel) -> Vec<Effect> {
@@ -1315,6 +1524,7 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
         | SlashCommandKind::Profile
         | SlashCommandKind::Onboard
         | SlashCommandKind::Location
+        | SlashCommandKind::Voice
             if !arguments.is_empty() =>
         {
             push_notice(model, &format!("Usage: {}", spec.usage));
@@ -1337,6 +1547,7 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
             "Dietary onboarding replaces your synced profile only after you review and save it.",
         ),
         SlashCommandKind::Location => return open_panel(model, PanelRequest::Location),
+        SlashCommandKind::Voice => return toggle_voice(model),
         SlashCommandKind::Exit => return begin_exit(model, ExitReason::Requested),
     }
     Vec::new()
@@ -1408,7 +1619,7 @@ fn show_help(model: &mut AppModel) {
         let _ = writeln!(help, "  {:<14} {}", spec.usage, spec.description);
     }
     help.push_str(
-        "\nKeys\n  Enter send · Shift+Enter/Ctrl+J newline · Up/Down history\n  Tab complete · PageUp/PageDown scroll · End follow\n  Ctrl+C stop · Ctrl+D exit",
+        "\nKeys\n  Enter send/stop recording · Shift+Enter/Ctrl+J newline · Up/Down history\n  Ctrl+Space/F8 voice · Esc cancel voice · Tab complete\n  PageUp/PageDown scroll · End follow · Ctrl+C stop · Ctrl+D exit",
     );
     push_notice(model, &help);
 }
@@ -1481,6 +1692,9 @@ fn complete_slash(model: &mut AppModel) {
 }
 
 fn cancel_or_exit(model: &mut AppModel) -> Vec<Effect> {
+    if !matches!(model.voice_phase, VoicePhase::Idle) {
+        return cancel_voice(model);
+    }
     if model.pending_confirmation.is_some() && !model.operation.is_active() {
         return submit_confirmation(model, ConfirmationDecisionWire::Cancel, None);
     }
@@ -1519,7 +1733,9 @@ fn cancel_or_exit(model: &mut AppModel) -> Vec<Effect> {
 
 fn begin_exit(model: &mut AppModel, reason: ExitReason) -> Vec<Effect> {
     let mut effects = Vec::new();
-    if let Some(operation_id) = model.operation.operation_id() {
+    if let Some(operation_id) = voice_operation_id(model.voice_phase) {
+        effects.push(Effect::CancelVoice { operation_id });
+    } else if let Some(operation_id) = model.operation.operation_id() {
         effects.push(Effect::CancelTurn { operation_id });
     }
     model.operation = OperationState::Exiting(reason);
@@ -1531,6 +1747,40 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
     match runtime {
         RuntimeEvent::ExternalSignal(reason) => return begin_exit(model, reason),
         RuntimeEvent::Notice { message } => push_notice(model, &terminal_safe_text(&message)),
+        RuntimeEvent::VoiceAvailability(availability) => {
+            model.voice_availability = availability;
+        }
+        RuntimeEvent::VoiceRecordingElapsed {
+            operation_id,
+            seconds,
+        } if matches!(
+            model.voice_phase,
+            VoicePhase::Recording {
+                operation_id: current
+            } if current == operation_id
+        ) =>
+        {
+            model.activity = Some(format!(
+                "Recording {seconds}s · Enter, Ctrl+Space, or F8 to transcribe · Esc to cancel"
+            ));
+        }
+        RuntimeEvent::VoiceTranscriptReady {
+            operation_id,
+            transcript,
+        } if voice_operation_id(model.voice_phase) == Some(operation_id) => {
+            finish_voice_transcription(model, Ok(transcript));
+        }
+        RuntimeEvent::VoiceFailed {
+            operation_id,
+            message,
+        } if voice_operation_id(model.voice_phase) == Some(operation_id) => {
+            finish_voice_transcription(model, Err(message));
+        }
+        RuntimeEvent::VoiceCancelled { operation_id }
+            if voice_operation_id(model.voice_phase) == Some(operation_id) =>
+        {
+            finish_voice_cancel(model);
+        }
         RuntimeEvent::BeginOnboarding { message }
             if model.operation == OperationState::Idle && model.onboarding.is_none() =>
         {
@@ -1617,7 +1867,11 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
         | RuntimeEvent::PanelReady { .. }
         | RuntimeEvent::PanelFailed { .. }
         | RuntimeEvent::HouseholdScopeReady { .. }
-        | RuntimeEvent::HouseholdScopeFailed { .. } => {}
+        | RuntimeEvent::HouseholdScopeFailed { .. }
+        | RuntimeEvent::VoiceRecordingElapsed { .. }
+        | RuntimeEvent::VoiceTranscriptReady { .. }
+        | RuntimeEvent::VoiceFailed { .. }
+        | RuntimeEvent::VoiceCancelled { .. } => {}
     }
     Vec::new()
 }
@@ -3173,8 +3427,99 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_voice_command_is_not_advertised() {
-        assert!(resolve_slash_command("/voice").is_none());
+    fn voice_capture_transcription_review_and_submit_share_the_typed_turn_path() {
+        let mut model = AppModel::default();
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::VoiceAvailability(VoiceAvailability::Ready)),
+        );
+        assert!(resolve_slash_command("/voice").is_some());
+        assert_eq!(
+            dispatch(&mut model, Action::VoiceToggle),
+            vec![Effect::StartVoice { operation_id: 1 }]
+        );
+        assert_eq!(model.operation, OperationState::Running(1));
+        assert!(matches!(
+            model.voice_phase,
+            VoicePhase::Recording { operation_id: 1 }
+        ));
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::VoiceRecordingElapsed {
+                operation_id: 1,
+                seconds: 3,
+            }),
+        );
+        assert!(model.activity.as_deref().unwrap().contains("Recording 3s"));
+        assert_eq!(
+            dispatch(&mut model, Action::Submit),
+            vec![Effect::StopVoice { operation_id: 1 }]
+        );
+        assert!(matches!(
+            model.voice_phase,
+            VoicePhase::Transcribing { operation_id: 1 }
+        ));
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::VoiceTranscriptReady {
+                operation_id: 1,
+                transcript: "Log oatmeal and berries".into(),
+            }),
+        );
+        assert_eq!(model.draft, "Log oatmeal and berries");
+        assert_eq!(model.voice_phase, VoicePhase::Review);
+        assert_eq!(model.operation, OperationState::Idle);
+
+        model.draft.push_str(" for breakfast");
+        model.cursor = model.draft.chars().count();
+        assert_eq!(
+            dispatch(&mut model, Action::Submit),
+            vec![Effect::SubmitTurn {
+                operation_id: 2,
+                prompt: "Log oatmeal and berries for breakfast".into(),
+            }]
+        );
+        assert_eq!(model.voice_phase, VoicePhase::Idle);
+    }
+
+    #[test]
+    fn voice_scope_preflight_and_cancel_never_open_or_submit_audio() {
+        let mut model = AppModel {
+            draft: "typed draft".into(),
+            cursor: 11,
+            voice_availability: VoiceAvailability::AuthorizationRequired,
+            ..AppModel::default()
+        };
+        assert!(dispatch(&mut model, Action::VoiceToggle).is_empty());
+        assert_eq!(model.draft, "typed draft");
+        assert_eq!(model.operation, OperationState::Idle);
+        assert!(
+            model
+                .scrollback
+                .entries()
+                .back()
+                .unwrap()
+                .text
+                .contains("No microphone was opened")
+        );
+
+        model.voice_availability = VoiceAvailability::Ready;
+        assert_eq!(
+            dispatch(&mut model, Action::VoiceToggle),
+            vec![Effect::StartVoice { operation_id: 1 }]
+        );
+        assert!(model.draft.is_empty());
+        assert_eq!(
+            dispatch(&mut model, Action::CancelVoice),
+            vec![Effect::CancelVoice { operation_id: 1 }]
+        );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::VoiceCancelled { operation_id: 1 }),
+        );
+        assert_eq!(model.draft, "typed draft");
+        assert_eq!(model.operation, OperationState::Idle);
+        assert_eq!(model.voice_phase, VoicePhase::Idle);
     }
 
     #[test]

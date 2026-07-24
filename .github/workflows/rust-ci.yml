@@ -254,13 +254,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Linux native audio requires ALSA development packages not present on
-        # every supported runner image; qualify it only in an explicit job once
-        # that system dependency and real-device evidence are defined.
-        os: [macos-latest, windows-latest]
+        os: [ubuntu-22.04, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Linux native audio and credential build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libasound2-dev libdbus-1-dev pkg-config
       - name: Lint the target-native audio backend
         run: cargo clippy --locked --package heyfood-voice --all-targets --features native-audio -- -D warnings
       - name: Test the target-native audio backend
         run: cargo test --locked --package heyfood-voice --features native-audio
+      - name: Lint the native-audio composition root
+        run: cargo clippy --locked --package heyfood-bin --all-targets --features native-audio -- -D warnings
+      - name: Test the native-audio TUI composition
+        run: cargo test --locked --package heyfood-bin --features native-audio --lib voice_
+      - name: Build the native-audio executable
+        run: cargo build --release --locked --package heyfood-bin --features native-audio

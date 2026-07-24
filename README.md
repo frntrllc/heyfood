@@ -150,9 +150,12 @@ the process.
 
 Interactive controls include Enter to send, Shift+Enter or Ctrl+J for a
 newline, Up/Down for prompt history, PageUp/PageDown for scrollback, Ctrl+C to
-stop an active turn, and Ctrl+D or `/exit` to leave. Use `/help` for the current
-command registry, `/new` for a fresh conversation, `/clear` to clear visible
-scrollback, and `/status` to inspect session readiness.
+stop an active turn, and Ctrl+D or `/exit` to leave. In native-audio builds,
+Ctrl+Space, F8, or `/voice` starts/stops memory-only capture and places the
+validated transcript in the composer for editing before submission. Use
+`/help` for the current command registry, `/new` for a fresh conversation,
+`/clear` to clear visible scrollback, and `/status` to inspect session
+readiness.
 
 Grocery, Health, profile, household, location, and status panels are connected
 on the draft branch. Grocery list cards expose stable IDs, provenance, member
@@ -160,9 +163,10 @@ screening, substitutions, and never-buy exclusions. Conversational item-list
 proposals support typed accept/cancel decisions in the TUI. `grocery export
 LIST_ID --out FILE` writes annotations through an owner-only, exclusive,
 symlink-safe file path; `--overwrite` opts into atomic replacement. Proposal
-editing, Menu Watch, and native voice capture remain incomplete release gates.
-Hidden compatibility routes continue to fail closed where a native workflow is
-not complete.
+editing and the native voice vertical are present in source. Menu Watch,
+installed-artifact showcase execution, and real-hardware voice qualification
+remain incomplete release gates. Hidden compatibility routes continue to fail
+closed where a native workflow is not complete.
 
 ## Development
 

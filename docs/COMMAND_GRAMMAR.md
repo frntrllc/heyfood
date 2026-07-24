@@ -111,20 +111,23 @@ installer remains suspended.
 /for MEMBER|everyone change household scope and reset conversation continuity
 /location            show account-bound local location context
 /status              check service, profile, optional scopes, and voice readiness
+/voice               start/stop native capture in a qualified native-audio artifact
 /new                 reset conversation continuity
 /clear               clear visible scrollback
 /help                show the active slash-command registry
 /exit                leave the TUI
 ```
 
-The panels are read-only and cancellable. Voice stays out of discovery until
-capture, transcription, review, and cancellation are connected. Dietary
-onboarding, interactive Grocery confirmation, Menu Watch, and installed-artifact
-showcase qualification remain release gates.
+The panels are read-only and cancellable. `/voice`, Ctrl+Space, and F8 use the
+same bounded capture/transcription/review state machine when the artifact
+contains native audio support; unavailable artifacts and insufficient scopes
+fail before microphone access. Dietary onboarding, interactive Grocery
+confirmation, Menu Watch, real-hardware voice qualification, and
+installed-artifact showcase qualification remain release gates.
 
 ## Unavailable compatibility topology
 
 Onboarding, profile editing, restaurant search, recommendation, menu, recipe,
-household management, voice, configuration, diagnostics, logout, and account
-management are not active Rust commands. Some names remain hidden for migration
-topology only and return `command_not_available`.
+household management, voice device configuration, diagnostics, logout, and
+account management are not active Rust commands. Some names remain hidden for
+migration topology only and return `command_not_available`.

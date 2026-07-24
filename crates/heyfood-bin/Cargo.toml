@@ -15,6 +15,7 @@ path = "src/main.rs"
 [features]
 default = ["native-credentials"]
 native-credentials = ["heyfood-platform/native-credentials"]
+native-audio = ["heyfood-voice/native-audio"]
 
 [dependencies]
 heyfood-agent-runtime = { version = "=0.5.0", path = "../heyfood-agent-runtime" }

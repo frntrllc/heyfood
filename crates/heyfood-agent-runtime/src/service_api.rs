@@ -8,9 +8,13 @@ use heyfood_core::{
     HealthContextWire, IntegrationAuthorizeRequestWire, IntegrationAuthorizeResponseWire,
     IntegrationDisconnectResponseWire, IntegrationListWire, IntegrationRedirectTargetWire,
     IntegrationSyncResponseWire, OperationId, RemoveItemsRequestWire, SessionCredentials,
-    UpdateItemStateRequestWire, terminal_safe_text,
+    TRANSCRIPTION_CHANNELS, TRANSCRIPTION_MAX_AUDIO_BYTES, TRANSCRIPTION_MAX_DURATION_SECONDS,
+    TRANSCRIPTION_MAX_LANGUAGE_CHARACTERS, TRANSCRIPTION_MAX_REQUEST_BYTES,
+    TRANSCRIPTION_SAMPLE_WIDTH_BYTES, TRANSCRIPTION_WAV_HEADER_BYTES, Transcription,
+    TranscriptionPurpose, TranscriptionWire, UpdateItemStateRequestWire, required_text,
+    terminal_safe_text, transcription_sample_rate_supported,
 };
-use reqwest::{Method, RequestBuilder, Response, StatusCode, header};
+use reqwest::{Client, Method, RequestBuilder, Response, StatusCode, header};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -20,6 +24,7 @@ use crate::{HttpService, uncertain_transport};
 
 const MAX_JSON_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EXPORT_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_TRANSCRIPTION_RESPONSE_BYTES: usize = 128 * 1024;
 
 #[derive(Clone, PartialEq)]
 pub enum GroceryExport {
@@ -54,6 +59,83 @@ impl DispatchKind {
 }
 
 impl HttpService {
+    /// Upload one bounded in-memory WAV using channel authority. This endpoint
+    /// performs transcription only; it never submits the transcript to the
+    /// agent or converts it into mutation consent.
+    pub async fn transcribe_audio(
+        &self,
+        wav_bytes: &[u8],
+        purpose: TranscriptionPurpose,
+        language: Option<&str>,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> Result<Transcription, PortError> {
+        validate_transcription_wav(wav_bytes)?;
+        let language = language
+            .map(|value| required_text(value, TRANSCRIPTION_MAX_LANGUAGE_CHARACTERS))
+            .transpose()
+            .map_err(|_| {
+                PortError::new(
+                    "transcription_language",
+                    "the transcription language tag is invalid",
+                )
+            })?;
+        let cli_auth = self.cli_auth.as_ref().ok_or_else(|| {
+            PortError::new(
+                "transcription_context",
+                "CLI channel authorization is required for transcription",
+            )
+        })?;
+        let boundary = format!("heyfood-{}", operation_id.as_uuid().simple());
+        let body = transcription_multipart(
+            &boundary,
+            wav_bytes,
+            purpose.as_contract_value(),
+            language.as_deref(),
+        )?;
+        let client = self.client_with_timeout(Some(self.deadlines.transcription))?;
+        let builder = self
+            .request_with_client(
+                &client,
+                Method::POST,
+                "/v1/audio/transcriptions",
+                None,
+                operation_id,
+            )?
+            .header(header::ACCEPT, "application/json")
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .bearer_auth(cli_auth.channel_access_token.expose_secret())
+            .body(body);
+        let response = self
+            .dispatch(builder, &cancellation, DispatchKind::Safe)
+            .await
+            .map_err(transcription_service_error)?;
+        if !is_json_media_type(&media_type(&response)) {
+            return Err(PortError::new(
+                "response_content_type",
+                "transcription response is not JSON",
+            ));
+        }
+        let bytes = read_limited(
+            response,
+            &cancellation,
+            DispatchKind::Safe,
+            MAX_TRANSCRIPTION_RESPONSE_BYTES,
+        )
+        .await?;
+        let wire: TranscriptionWire = serde_json::from_slice(&bytes).map_err(|_| {
+            PortError::new(
+                "transcription_contract_error",
+                "transcription response is invalid JSON",
+            )
+        })?;
+        Transcription::from_wire(wire)
+            .map_err(|error| PortError::new("transcription_contract_error", error.to_string()))
+    }
+
     /// Read profile consent for household-context construction. This is a
     /// safe, authenticated GET and never changes consent state.
     pub async fn profile_consent_status(
@@ -563,6 +645,17 @@ impl HttpService {
         operation_id: OperationId,
     ) -> Result<RequestBuilder, PortError> {
         let client = self.client(false)?;
+        self.request_with_client(&client, method, path, credentials, operation_id)
+    }
+
+    fn request_with_client(
+        &self,
+        client: &Client,
+        method: Method,
+        path: &str,
+        credentials: Option<&SessionCredentials>,
+        operation_id: OperationId,
+    ) -> Result<RequestBuilder, PortError> {
         let endpoint = self.endpoint(path)?;
         let mut builder = client
             .request(method, endpoint)
@@ -643,6 +736,7 @@ fn dispatch_error(kind: DispatchKind, code: &'static str, message: &'static str)
 
 fn http_status_error(status: StatusCode) -> PortError {
     let (code, message) = match status.as_u16() {
+        400 => ("invalid_request", "the service rejected the request"),
         401 => ("login_required", "authentication is required"),
         403 => ("scope_required", "the session lacks a required scope"),
         404 => ("resource_not_found", "the requested resource was not found"),
@@ -650,6 +744,7 @@ fn http_status_error(status: StatusCode) -> PortError {
             "version_conflict",
             "the resource version changed; fetch it again",
         ),
+        413 => ("payload_too_large", "the service rejected the request size"),
         422 => ("invalid_request", "the service rejected the request"),
         429 => ("rate_limited", "the service rate limit was reached"),
         503 => (
@@ -659,6 +754,128 @@ fn http_status_error(status: StatusCode) -> PortError {
         _ => ("http_status", "the service returned an unsuccessful status"),
     };
     PortError::new(code, message)
+}
+
+fn transcription_service_error(error: PortError) -> PortError {
+    let (code, message) = match error.code {
+        "invalid_request" | "payload_too_large" => (
+            "audio_rejected",
+            "the service rejected the recording size or format",
+        ),
+        "scope_required" => (
+            "insufficient_scope",
+            "voice transcription requires additional authorization",
+        ),
+        "resource_not_found" | "service_unavailable" | "request_transport" => (
+            "transcription_unavailable",
+            "the transcription service is currently unavailable",
+        ),
+        _ => return error,
+    };
+    PortError::new(code, message)
+}
+
+fn transcription_multipart(
+    boundary: &str,
+    wav_bytes: &[u8],
+    purpose: &str,
+    language: Option<&str>,
+) -> Result<Vec<u8>, PortError> {
+    let mut body = Vec::with_capacity(wav_bytes.len().saturating_add(1_024));
+    append_multipart_text(&mut body, boundary, "purpose", purpose);
+    if let Some(language) = language {
+        append_multipart_text(&mut body, boundary, "language", language);
+    }
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n",
+    );
+    body.extend_from_slice(b"Content-Type: audio/wav\r\n\r\n");
+    body.extend_from_slice(wav_bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    if body.len() > TRANSCRIPTION_MAX_REQUEST_BYTES {
+        return Err(PortError::new(
+            "audio_rejected",
+            "the multipart recording exceeds the transcription request limit",
+        ));
+    }
+    Ok(body)
+}
+
+fn validate_transcription_wav(wav_bytes: &[u8]) -> Result<(), PortError> {
+    let invalid = || {
+        PortError::new(
+            "audio_rejected",
+            "the recording is not a bounded mono PCM WAV accepted by the transcription contract",
+        )
+    };
+    if wav_bytes.len() <= TRANSCRIPTION_WAV_HEADER_BYTES
+        || wav_bytes.len() > TRANSCRIPTION_MAX_AUDIO_BYTES
+        || wav_bytes.get(..4) != Some(b"RIFF")
+        || wav_bytes.get(8..12) != Some(b"WAVE")
+        || wav_bytes.get(12..16) != Some(b"fmt ")
+        || wav_bytes.get(36..40) != Some(b"data")
+    {
+        return Err(invalid());
+    }
+    let riff_size = read_wav_u32(wav_bytes, 4);
+    let fmt_size = read_wav_u32(wav_bytes, 16);
+    let audio_format = read_wav_u16(wav_bytes, 20);
+    let channels = read_wav_u16(wav_bytes, 22);
+    let sample_rate = read_wav_u32(wav_bytes, 24);
+    let byte_rate = read_wav_u32(wav_bytes, 28);
+    let block_align = read_wav_u16(wav_bytes, 32);
+    let bits_per_sample = read_wav_u16(wav_bytes, 34);
+    let data_size = read_wav_u32(wav_bytes, 40);
+    let expected_data_size =
+        u32::try_from(wav_bytes.len() - TRANSCRIPTION_WAV_HEADER_BYTES).map_err(|_| invalid())?;
+    let expected_riff_size = u32::try_from(wav_bytes.len() - 8).map_err(|_| invalid())?;
+    let sample_width = u16::try_from(TRANSCRIPTION_SAMPLE_WIDTH_BYTES).map_err(|_| invalid())?;
+    let expected_block_align = TRANSCRIPTION_CHANNELS
+        .checked_mul(sample_width)
+        .ok_or_else(invalid)?;
+    let expected_bits_per_sample = sample_width.checked_mul(8).ok_or_else(invalid)?;
+    let expected_byte_rate = sample_rate
+        .checked_mul(u32::from(expected_block_align))
+        .ok_or_else(invalid)?;
+    let samples = u64::from(data_size) / u64::from(expected_block_align);
+    if riff_size != expected_riff_size
+        || fmt_size != 16
+        || audio_format != 1
+        || channels != TRANSCRIPTION_CHANNELS
+        || !transcription_sample_rate_supported(sample_rate)
+        || byte_rate != expected_byte_rate
+        || block_align != expected_block_align
+        || bits_per_sample != expected_bits_per_sample
+        || data_size != expected_data_size
+        || !data_size.is_multiple_of(u32::from(expected_block_align))
+        || samples > u64::from(sample_rate) * TRANSCRIPTION_MAX_DURATION_SECONDS
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn read_wav_u16(wav_bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes([wav_bytes[offset], wav_bytes[offset + 1]])
+}
+
+fn read_wav_u32(wav_bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([
+        wav_bytes[offset],
+        wav_bytes[offset + 1],
+        wav_bytes[offset + 2],
+        wav_bytes[offset + 3],
+    ])
+}
+
+fn append_multipart_text(body: &mut Vec<u8>, boundary: &str, name: &str, value: &str) {
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+    );
+    body.extend_from_slice(value.as_bytes());
+    body.extend_from_slice(b"\r\n");
 }
 
 async fn read_limited(

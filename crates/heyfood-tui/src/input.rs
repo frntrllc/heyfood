@@ -13,8 +13,11 @@ pub fn action_from_key(key: KeyEvent) -> Option<Action> {
     match key.code {
         KeyCode::Char('c') if control => Some(Action::CancelOrExit),
         KeyCode::Char('d') if control => Some(Action::Exit),
+        KeyCode::Char(' ') if control => Some(Action::VoiceToggle),
         KeyCode::Char('j') if control => Some(Action::InsertNewline),
         KeyCode::Char('r') if control => Some(Action::HistoryPrevious),
+        KeyCode::F(8) => Some(Action::VoiceToggle),
+        KeyCode::Esc => Some(Action::CancelVoice),
         KeyCode::Enter if shift || alternate => Some(Action::InsertNewline),
         KeyCode::Enter => Some(Action::Submit),
         KeyCode::Tab | KeyCode::BackTab => Some(Action::CompleteSlash),
@@ -58,6 +61,18 @@ mod tests {
         assert_eq!(
             action_from_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
             Some(Action::CompleteSlash)
+        );
+        assert_eq!(
+            action_from_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL)),
+            Some(Action::VoiceToggle)
+        );
+        assert_eq!(
+            action_from_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE)),
+            Some(Action::VoiceToggle)
+        );
+        assert_eq!(
+            action_from_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Some(Action::CancelVoice)
         );
     }
 }
