@@ -114,7 +114,10 @@ archive policy, extracts into a clean temporary user environment, performs
 device registration against a synthetic contract service, follows the
 production registration handoff into a real PTY, submits one streamed turn,
 captures raw ANSI evidence, proves the request-path sequence, rejects credential
-material in the capture, and observes terminal restoration on exit. The
+material in the capture, validates the exact channel/account/device/API-key
+bindings in memory, observes terminal restoration on exit, and requires
+root-isolated credentials and user state to be absent before PASS evidence is
+written. The
 evidence document deliberately reports `release_gate_complete: false` and
 credits none of the twelve showcase stages. It is harness foundation, not
 showcase conformance.

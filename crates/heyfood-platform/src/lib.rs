@@ -21,6 +21,8 @@ pub use credential_broker::{CredentialBrokerStore, run_credential_broker_if_requ
 #[cfg(all(not(windows), feature = "native-credentials"))]
 pub use persistence::KeyringCredentialStore;
 #[cfg(all(windows, feature = "native-credentials"))]
+pub use persistence::WindowsCredentialQualificationCleanup;
+#[cfg(all(windows, feature = "native-credentials"))]
 pub use persistence::WindowsCredentialStore;
 pub use persistence::{
     AtomicFile, AuthorizationReplacementJournal, AuthorizationReplacementPhase,

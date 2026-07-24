@@ -1759,6 +1759,39 @@ impl NativeAuthStore {
     }
 
     #[cfg(all(windows, feature = "native-credentials"))]
+    fn purge_isolated_qualification_fixture(&self) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let entries = [
+            self.windows_entry()?,
+            self.replacement_entry(
+                &self.replacement_pending_target,
+                "authorization-replacement-pending",
+            )?,
+            self.replacement_entry(
+                &self.replacement_previous_target,
+                "authorization-replacement-previous",
+            )?,
+            self.replacement_entry(&self.replacement_target, "authorization-replacement")?,
+        ];
+        for entry in &entries {
+            delete_keyring_entry(entry, "qualification_credential_delete")?;
+        }
+        clear_any_reconciliation_marker(&self.reconciliation_path)?;
+        verify_credential_delete_visibility(
+            CREDENTIAL_WRITE_VERIFY_TIMEOUT,
+            || {
+                for entry in &entries {
+                    if keyring_secret_exists(entry)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            },
+            thread::sleep,
+        )
+    }
+
+    #[cfg(all(windows, feature = "native-credentials"))]
     fn windows_entry(&self) -> Result<keyring::Entry, PortError> {
         keyring::Entry::new_with_target(&self.target, WINDOWS_CREDENTIAL_SERVICE, "authorization")
             .map_err(|error| keyring_error("credential_manager_entry", error))
@@ -2300,6 +2333,27 @@ impl WindowsCredentialStore {
         clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
+    fn purge_isolated_qualification_fixture(&self) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        let entries = [self.entry()?, self.authorization_stage_entry()?];
+        for entry in &entries {
+            delete_keyring_entry(entry, "qualification_credential_delete")?;
+        }
+        clear_any_reconciliation_marker(&self.reconciliation_path)?;
+        verify_credential_delete_visibility(
+            CREDENTIAL_WRITE_VERIFY_TIMEOUT,
+            || {
+                for entry in &entries {
+                    if keyring_secret_exists(entry)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            },
+            thread::sleep,
+        )
+    }
+
     fn entry(&self) -> Result<keyring::Entry, PortError> {
         keyring::Entry::new_with_target(&self.target, WINDOWS_CREDENTIAL_SERVICE, "session")
             .map_err(|error| keyring_error("credential_manager_entry", error))
@@ -2505,6 +2559,39 @@ impl AuthorizationSessionStore for WindowsCredentialStore {
             &self.authorization_stage_entry()?,
             "credential_manager_stage_delete",
         )
+    }
+}
+
+/// Force-clean seam for a root-isolated Windows qualification fixture.
+///
+/// Product logout deliberately refuses unresolved credential transactions.
+/// Installed-artifact tests instead use a unique temporary root and must remove
+/// every exact Credential Manager target even after a deliberately interrupted
+/// initialization or staged replacement. Cleanup verifies deletion visibility
+/// before returning success.
+#[cfg(all(windows, feature = "native-credentials"))]
+pub struct WindowsCredentialQualificationCleanup {
+    auth: NativeAuthStore,
+    session: WindowsCredentialStore,
+}
+
+#[cfg(all(windows, feature = "native-credentials"))]
+impl WindowsCredentialQualificationCleanup {
+    pub fn open(root: impl AsRef<Path>) -> Result<Self, PortError> {
+        let root = root.as_ref();
+        Ok(Self {
+            auth: NativeAuthStore::open(root)?,
+            session: WindowsCredentialStore::open(root)?,
+        })
+    }
+
+    /// Purge authorization, session, staged, journal, and reconciliation state,
+    /// then require every root-derived Credential Manager target to be absent.
+    pub fn purge_and_verify_absent(&self) -> Result<(), PortError> {
+        let session_result = self.session.purge_isolated_qualification_fixture();
+        let auth_result = self.auth.purge_isolated_qualification_fixture();
+        session_result?;
+        auth_result
     }
 }
 
@@ -4335,6 +4422,67 @@ mod windows_acl_tests {
             )
             .unwrap(),
         }
+    }
+
+    #[test]
+    #[cfg(feature = "native-credentials")]
+    fn windows_qualification_cleanup_purges_partial_state_and_verifies_absence() {
+        struct CredentialCleanup(WindowsCredentialQualificationCleanup);
+
+        impl Drop for CredentialCleanup {
+            fn drop(&mut self) {
+                let _ = self.0.purge_and_verify_absent();
+            }
+        }
+
+        let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "heyfood-windows-qualification-cleanup-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let _file_cleanup = Cleanup(root.clone());
+        let auth = NativeAuthStore::open(&root).unwrap();
+        let session = WindowsCredentialStore::open(&root).unwrap();
+        let cleanup =
+            CredentialCleanup(WindowsCredentialQualificationCleanup::open(&root).unwrap());
+
+        let auth_entries = [
+            auth.windows_entry().unwrap(),
+            auth.replacement_entry(
+                &auth.replacement_pending_target,
+                "authorization-replacement-pending",
+            )
+            .unwrap(),
+            auth.replacement_entry(
+                &auth.replacement_previous_target,
+                "authorization-replacement-previous",
+            )
+            .unwrap(),
+            auth.replacement_entry(&auth.replacement_target, "authorization-replacement")
+                .unwrap(),
+        ];
+        let session_entries = [
+            session.entry().unwrap(),
+            session.authorization_stage_entry().unwrap(),
+        ];
+        for entry in auth_entries.iter().chain(&session_entries) {
+            windows_set_keyring_secret(entry, b"partial-qualification-fixture").unwrap();
+        }
+        AtomicFile::replace(&auth.reconciliation_path, b"account_binding_pending\n").unwrap();
+        AtomicFile::replace(
+            &session.reconciliation_path,
+            b"partial-qualification-fixture\n",
+        )
+        .unwrap();
+
+        cleanup.0.purge_and_verify_absent().unwrap();
+        for entry in auth_entries.iter().chain(&session_entries) {
+            assert!(!keyring_secret_exists(entry).unwrap());
+        }
+        assert!(!auth.reconciliation_path.exists());
+        assert!(!session.reconciliation_path.exists());
+        cleanup.0.purge_and_verify_absent().unwrap();
     }
 
     #[test]

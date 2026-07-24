@@ -8,7 +8,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -17,7 +17,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(windows)]
-use heyfood_platform::{NativeAuthStore, WindowsCredentialStore};
+use heyfood_platform::WindowsCredentialQualificationCleanup;
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -68,13 +68,35 @@ impl Drop for TempRoot {
 }
 
 #[cfg(windows)]
-struct WindowsCredentialCleanup(PathBuf);
+struct WindowsCredentialCleanup {
+    cleanup: WindowsCredentialQualificationCleanup,
+    verified_absent: bool,
+}
+
+#[cfg(windows)]
+impl WindowsCredentialCleanup {
+    fn open(root: &Path) -> Self {
+        Self {
+            cleanup: WindowsCredentialQualificationCleanup::open(root)
+                .expect("open isolated Windows credential cleanup"),
+            verified_absent: false,
+        }
+    }
+
+    fn purge_and_verify_absent(&mut self) {
+        self.cleanup
+            .purge_and_verify_absent()
+            .expect("purge and verify isolated Windows credentials");
+        self.verified_absent = true;
+    }
+}
 
 #[cfg(windows)]
 impl Drop for WindowsCredentialCleanup {
     fn drop(&mut self) {
-        let _ = NativeAuthStore::open(&self.0).and_then(|store| store.delete());
-        let _ = WindowsCredentialStore::open(&self.0).and_then(|store| store.delete());
+        if !self.verified_absent {
+            let _ = self.cleanup.purge_and_verify_absent();
+        }
     }
 }
 
@@ -88,6 +110,7 @@ struct RequestEvidence {
 struct HttpRequest {
     method: String,
     path: String,
+    headers: BTreeMap<String, String>,
     body: Vec<u8>,
 }
 
@@ -192,13 +215,21 @@ async fn run_installed_archive_registration_and_first_turn() {
 
     let user = TempRoot::new("user");
     #[cfg(windows)]
-    let _credential_cleanup = WindowsCredentialCleanup(user.0.clone());
+    let mut credential_cleanup = WindowsCredentialCleanup::open(&user.0);
     let (base_url, request_receiver, server) = start_fixture_service().await;
     let terminal = run_first_user_pty(&installed_binary, &user.0, &base_url).await;
     let requests = collect_request_evidence(request_receiver).await;
     server.await.expect("join showcase fixture service");
     assert_request_sequence(&requests);
     assert_terminal_contract(&terminal);
+
+    #[cfg(windows)]
+    credential_cleanup.purge_and_verify_absent();
+    fs::remove_dir_all(&user.0).expect("remove isolated installed-user state");
+    assert!(
+        !user.0.exists(),
+        "installed-user state must be absent before PASS evidence"
+    );
 
     let terminal_digest = sha256_bytes(&terminal);
     let terminal_path = evidence_directory.join("first-run.ansi");
@@ -220,6 +251,7 @@ async fn run_installed_archive_registration_and_first_turn() {
         },
         "environment": {
             "clean_user_state": true,
+            "credentials_absent_after_run": true,
             "pty": true,
             "columns": 80,
             "rows": 30,
@@ -431,6 +463,7 @@ async fn start_fixture_service() -> (
     let verification_uri = format!("{base_url}/authorize?flow=device");
     let (request_sender, request_receiver) = mpsc::channel(16);
     let server = tokio::spawn(async move {
+        let mut expected_device_id = None;
         for _ in 0..8 {
             let (mut socket, _) = listener.accept().await.expect("accept showcase request");
             let request = read_http_request(&mut socket).await;
@@ -441,7 +474,13 @@ async fn start_fixture_service() -> (
                 })
                 .await
                 .expect("record showcase request");
-            respond_to_showcase_request(&mut socket, request, &verification_uri).await;
+            respond_to_showcase_request(
+                &mut socket,
+                request,
+                &verification_uri,
+                &mut expected_device_id,
+            )
+            .await;
         }
     });
     (base_url, request_receiver, server)
@@ -478,6 +517,12 @@ async fn read_http_request(socket: &mut TcpStream) -> HttpRequest {
         bytes.extend_from_slice(&chunk[..count]);
     }
     let request_line = headers.lines().next().expect("request line");
+    let mut request_headers = BTreeMap::new();
+    for line in headers.lines().skip(1).filter(|line| !line.is_empty()) {
+        let (name, value) = line.split_once(':').expect("valid request header");
+        let previous = request_headers.insert(name.to_ascii_lowercase(), value.trim().to_owned());
+        assert!(previous.is_none(), "duplicate request header: {name}");
+    }
     let mut fields = request_line.split_whitespace();
     let method = fields.next().expect("request method").to_owned();
     let path = fields
@@ -490,6 +535,7 @@ async fn read_http_request(socket: &mut TcpStream) -> HttpRequest {
     HttpRequest {
         method,
         path,
+        headers: request_headers,
         body: bytes[header_end..header_end + content_length].to_vec(),
     }
 }
@@ -498,9 +544,12 @@ async fn respond_to_showcase_request(
     socket: &mut TcpStream,
     request: HttpRequest,
     verification_uri: &str,
+    expected_device_id: &mut Option<String>,
 ) {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/v1/auth/capabilities") => {
+            assert_header(&request, "x-app-client-id", "heyfood-cli");
+            assert_no_protected_headers(&request);
             respond_json(
                 socket,
                 json!({
@@ -526,8 +575,11 @@ async fn respond_to_showcase_request(
             .await;
         }
         ("POST", "/v1/channel/oauth/device/authorize") => {
+            assert_no_protected_headers(&request);
+            assert_header_absent(&request, "x-app-client-id");
             let body: Value =
                 serde_json::from_slice(&request.body).expect("decode device authorization");
+            assert_eq!(body["client_id"], "hf_cid_heyfood_cli");
             assert_eq!(body["intent"], "create_account");
             assert_eq!(body["scope"], FULL_SCOPE);
             respond_json(
@@ -544,6 +596,12 @@ async fn respond_to_showcase_request(
             .await;
         }
         ("POST", "/v1/channel/oauth/device/token") => {
+            assert_no_protected_headers(&request);
+            assert_header_absent(&request, "x-app-client-id");
+            let body: Value =
+                serde_json::from_slice(&request.body).expect("decode device token request");
+            assert_eq!(body["client_id"], "hf_cid_heyfood_cli");
+            assert_eq!(body["device_code"], "hf_dc_showcase_01234567890123456789");
             respond_json(
                 socket,
                 json!({
@@ -562,6 +620,11 @@ async fn respond_to_showcase_request(
             let device_id = body["device_id"]
                 .as_str()
                 .expect("CLI session request device ID");
+            assert_header(&request, "authorization", "Bearer hf_ct_showcase");
+            assert_header(&request, "x-app-client-id", "heyfood-cli");
+            assert_header(&request, "x-device-id", device_id);
+            assert_header_absent(&request, "x-api-key");
+            *expected_device_id = Some(device_id.to_owned());
             respond_json(
                 socket,
                 json!({
@@ -579,6 +642,10 @@ async fn respond_to_showcase_request(
             .await;
         }
         ("GET", "/v1/channel/tools/profile/readiness") => {
+            assert_header(&request, "authorization", "Bearer hf_ct_showcase");
+            assert_header(&request, "x-app-client-id", "heyfood-cli");
+            assert_header_absent(&request, "x-device-id");
+            assert_header_absent(&request, "x-api-key");
             respond_json(
                 socket,
                 json!({
@@ -592,6 +659,7 @@ async fn respond_to_showcase_request(
             .await;
         }
         ("GET", "/v1/profile/consent") => {
+            assert_account_request_headers(&request, expected_device_id);
             respond_json(
                 socket,
                 json!({
@@ -603,6 +671,7 @@ async fn respond_to_showcase_request(
             .await;
         }
         ("GET", "/v1/profile/sync") => {
+            assert_account_request_headers(&request, expected_device_id);
             respond_json(
                 socket,
                 json!({
@@ -618,6 +687,7 @@ async fn respond_to_showcase_request(
             .await;
         }
         ("POST", "/v1/agent/converse") => {
+            assert_account_request_headers(&request, expected_device_id);
             let body: Value =
                 serde_json::from_slice(&request.body).expect("decode installed first turn");
             assert_eq!(body["query"], TEST_PROMPT);
@@ -629,6 +699,44 @@ async fn respond_to_showcase_request(
             request.method, request.path
         ),
     }
+}
+
+fn assert_header(request: &HttpRequest, name: &str, expected: &str) {
+    assert_eq!(
+        request.headers.get(name).map(String::as_str),
+        Some(expected),
+        "{} {} must carry exact {name}",
+        request.method,
+        request.path
+    );
+}
+
+fn assert_header_absent(request: &HttpRequest, name: &str) {
+    assert!(
+        !request.headers.contains_key(name),
+        "{} {} must not carry {name}",
+        request.method,
+        request.path
+    );
+}
+
+fn assert_no_protected_headers(request: &HttpRequest) {
+    for name in ["authorization", "x-device-id", "x-api-key"] {
+        assert_header_absent(request, name);
+    }
+}
+
+fn assert_account_request_headers(request: &HttpRequest, expected_device_id: &Option<String>) {
+    assert_header(request, "authorization", "Bearer hf_at_showcase");
+    assert_header(request, "x-app-client-id", "heyfood-cli");
+    assert_header(
+        request,
+        "x-device-id",
+        expected_device_id
+            .as_deref()
+            .expect("CLI exchange must bind the device before account requests"),
+    );
+    assert_header(request, "x-api-key", "showcase-api-key");
 }
 
 async fn respond_json(socket: &mut TcpStream, body: Value) {
