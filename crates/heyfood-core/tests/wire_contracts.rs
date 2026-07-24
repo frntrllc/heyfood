@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 
 use heyfood_core::{
-    ActionConfirmationEnvelopeWire, ApplicationCapabilitiesWire, ConfirmationDecisionWire,
-    GROCERY_WIRE_SCHEMA_SHA256, GroceryConfirmationToken, GroceryListWire,
+    ActionConfirmationEnvelopeWire, AgentConfirmationCommandWire, ApplicationCapabilitiesWire,
+    ConfirmationDecisionWire, GROCERY_WIRE_SCHEMA_SHA256, GroceryConfirmationId,
+    GroceryConfirmationToken, GroceryEditPatch, GroceryIdempotencyKey, GroceryListWire,
     GroceryMutationProposalWire, HealthContextWire,
 };
 use serde_json::{Value, json};
@@ -156,6 +157,47 @@ fn c3_action_confirmation_is_parsed_only_from_the_structured_result_member() {
             &json!({"structured": {"type": "action_confirmation"}})
         )
         .is_err()
+    );
+}
+
+#[test]
+fn c3_confirmation_edits_are_optional_bounded_and_lossless_on_the_wire() {
+    let base = AgentConfirmationCommandWire {
+        confirmation_id: GroceryConfirmationId::parse("00000000-0000-4000-8000-000000000001")
+            .unwrap(),
+        idempotency_key: GroceryIdempotencyKey::parse("00000000-0000-4000-8000-000000000002")
+            .unwrap(),
+        decision: ConfirmationDecisionWire::Accept,
+        edits: None,
+    };
+    let base_json = serde_json::to_value(&base).unwrap();
+    assert!(base_json.get("edits").is_none());
+
+    let edits = GroceryEditPatch::new(
+        serde_json::from_value(json!({
+            "items": [
+                {"name": "scallion greens", "quantity": 1, "unit": "bunch", "source_type": "manual"}
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let edited = AgentConfirmationCommandWire {
+        edits: Some(edits),
+        ..base
+    };
+    assert_eq!(
+        serde_json::to_value(edited).unwrap(),
+        json!({
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "decision": "accept",
+            "edits": {
+                "items": [
+                    {"name": "scallion greens", "quantity": 1, "unit": "bunch", "source_type": "manual"}
+                ]
+            }
+        })
     );
 }
 

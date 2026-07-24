@@ -50,6 +50,10 @@ authentication contracts are stabilized.
 - Parses the frozen C3 item-list confirmation envelope into a native TUI card;
   `y`/`n` and Ctrl+C send an explicit `confirm` decision with the original
   server confirmation and idempotency IDs, mutually exclusive with `query`.
+- Adds contract-backed Grocery proposal correction in the TUI:
+  `edit #N <replacement>` sends the complete bounded item set through C3's
+  optional `edits` field, preserving the server-minted confirmation and
+  idempotency authority while the backend revalidates and re-screens it.
 - Archives the final Python parity baseline under the non-release tag
   `archive/python-cli-73494a57` and verifies retained source bytes from Rust.
 

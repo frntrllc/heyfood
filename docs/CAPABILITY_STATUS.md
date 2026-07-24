@@ -25,7 +25,7 @@ hidden legacy command is not support: unavailable paths return
 | Conversation continuation | `heyfood reply --conversation-id …` | Hosted conversation state | Current source command |
 | Meal logging | `heyfood log` | Hosted agent and meal memory | Current source command |
 | Item evaluation | `heyfood item` | Restaurant/menu evidence and dietary evaluation | Current source command |
-| Grocery | `heyfood grocery` | Read, prepare, export, and explicitly confirm | Current source command |
+| Grocery | `heyfood grocery` plus TUI confirmation cards | Read, prepare, export, explicitly confirm/cancel, and correct pending add-item names | Current source command; production canaries pending |
 | Oura health context | `heyfood health` | Connect, sync, read, and disconnect | Current source command |
 | Apple Health | No direct CLI command | Daily summaries arrive through the hello.food app | Backend available |
 | Household context | Used by hosted turns and Grocery | Profiles and household-aware evaluation | Backend available; native roster management unavailable |

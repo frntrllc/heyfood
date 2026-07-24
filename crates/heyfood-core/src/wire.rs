@@ -12,8 +12,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 use crate::{
-    GroceryConfirmationId, GroceryEntityId, GroceryIdempotencyKey, GroceryListVersion,
-    GrocerySafetyStatus, HealthConnectionStatus, HealthFreshnessStatus, HealthProvider,
+    GroceryConfirmationId, GroceryEditPatch, GroceryEntityId, GroceryIdempotencyKey,
+    GroceryListVersion, GrocerySafetyStatus, HealthConnectionStatus, HealthFreshnessStatus,
+    HealthProvider,
 };
 
 pub const GROCERY_WIRE_CONTRACT_VERSION: u16 = 1;
@@ -125,6 +126,8 @@ pub struct AgentConfirmationCommandWire {
     pub confirmation_id: GroceryConfirmationId,
     pub idempotency_key: GroceryIdempotencyKey,
     pub decision: ConfirmationDecisionWire,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edits: Option<GroceryEditPatch>,
 }
 
 /// Additive C3 envelope carried in a terminal result's `structured` member.
@@ -177,6 +180,7 @@ impl ActionConfirmationEnvelopeWire {
             confirmation_id: self.confirmation_id,
             idempotency_key: self.idempotency_key,
             decision,
+            edits: None,
         }
     }
 }

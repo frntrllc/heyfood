@@ -3410,6 +3410,7 @@ mod tests {
                     )
                     .unwrap(),
                     decision: heyfood_core::ConfirmationDecisionWire::Cancel,
+                    edits: None,
                 },
             },
         )

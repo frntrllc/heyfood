@@ -3,8 +3,9 @@ use std::{collections::VecDeque, fmt::Write as _};
 use heyfood_application::{RunTurnOutcome, agent_result_text};
 use heyfood_core::{
     ActionConfirmationEnvelopeWire, AgentConfirmationCommandWire, AgentEvent,
-    ConfirmationDecisionWire, OnboardingOption, OnboardingProfileInput, activity_options,
-    allergy_options, condition_options, cuisine_options, diet_options, terminal_safe_text,
+    ConfirmationDecisionWire, GroceryEditPatch, OnboardingOption, OnboardingProfileInput,
+    activity_options, allergy_options, condition_options, cuisine_options, diet_options,
+    required_text, terminal_safe_text,
 };
 
 pub const MAX_SCROLLBACK_ENTRIES: usize = 1_000;
@@ -403,14 +404,20 @@ struct MultiSelection {
 struct PendingActionConfirmation {
     confirmation_id: heyfood_core::GroceryConfirmationId,
     idempotency_key: heyfood_core::GroceryIdempotencyKey,
+    editable_items: Option<Vec<serde_json::Map<String, serde_json::Value>>>,
 }
 
 impl PendingActionConfirmation {
-    const fn command(&self, decision: ConfirmationDecisionWire) -> AgentConfirmationCommandWire {
+    fn command(
+        &self,
+        decision: ConfirmationDecisionWire,
+        edits: Option<GroceryEditPatch>,
+    ) -> AgentConfirmationCommandWire {
         AgentConfirmationCommandWire {
             confirmation_id: self.confirmation_id,
             idempotency_key: self.idempotency_key,
             decision,
+            edits,
         }
     }
 }
@@ -684,36 +691,86 @@ fn submit_confirmation_answer(model: &mut AppModel) -> Vec<Effect> {
     if model.operation.is_active() {
         return Vec::new();
     }
-    let answer = model.draft.trim().to_ascii_lowercase();
-    let decision = match answer.as_str() {
+    let answer = model.draft.trim().to_owned();
+    let normalized = answer.to_ascii_lowercase();
+    let decision = match normalized.as_str() {
         "y" | "yes" | "confirm" | "accept" => ConfirmationDecisionWire::Accept,
         "n" | "no" | "cancel" => ConfirmationDecisionWire::Cancel,
+        value if value.starts_with("edit ") => return submit_confirmation_edit(model, &answer),
         _ => {
             push_notice(
                 model,
-                "A write is awaiting your decision. Type `y` to confirm or `n` to cancel.",
+                "A write is awaiting your decision. Type `y` to confirm, `n` to cancel, or use the edit instruction shown on the card.",
             );
             return Vec::new();
         }
     };
-    submit_confirmation(model, decision)
+    submit_confirmation(model, decision, None)
 }
 
-fn submit_confirmation(model: &mut AppModel, decision: ConfirmationDecisionWire) -> Vec<Effect> {
+fn submit_confirmation_edit(model: &mut AppModel, answer: &str) -> Vec<Effect> {
+    let Some(pending) = model.pending_confirmation.as_ref() else {
+        return Vec::new();
+    };
+    let Some(editable_items) = pending.editable_items.as_ref() else {
+        push_notice(
+            model,
+            "This proposal does not expose a contract-backed item edit.",
+        );
+        return Vec::new();
+    };
+    let mut words = answer.split_whitespace();
+    let command = words.next();
+    let reference = words.next();
+    let replacement = words.collect::<Vec<_>>().join(" ");
+    let index = command
+        .filter(|value| value.eq_ignore_ascii_case("edit"))
+        .and(reference)
+        .and_then(|value| value.strip_prefix('#'))
+        .and_then(|value| value.parse::<usize>().ok());
+    let replacement = required_text(&replacement, 255).ok();
+    let (Some(index), Some(replacement)) = (index, replacement) else {
+        push_notice(model, "Use `edit #N <replacement item name>`.");
+        return Vec::new();
+    };
+    if index == 0 || index > editable_items.len() {
+        push_notice(model, "That item number is outside the pending proposal.");
+        return Vec::new();
+    }
+    let mut items = editable_items.clone();
+    items[index - 1].insert("name".into(), serde_json::Value::String(replacement));
+    let edits = GroceryEditPatch::new(serde_json::Map::from_iter([(
+        "items".into(),
+        serde_json::Value::Array(items.into_iter().map(serde_json::Value::Object).collect()),
+    )]));
+    let Ok(edits) = edits else {
+        push_notice(model, "The corrected proposal is too large or invalid.");
+        return Vec::new();
+    };
+    submit_confirmation(model, ConfirmationDecisionWire::Accept, Some(edits))
+}
+
+fn submit_confirmation(
+    model: &mut AppModel,
+    decision: ConfirmationDecisionWire,
+    edits: Option<GroceryEditPatch>,
+) -> Vec<Effect> {
     if model.operation.is_active() {
         return Vec::new();
     }
     let Some(pending) = model.pending_confirmation.as_ref() else {
         return Vec::new();
     };
-    let command = pending.command(decision);
+    let editing = edits.is_some();
+    let command = pending.command(decision, edits);
     model.draft.clear();
     model.cursor = 0;
     let operation_id = model.next_operation_id;
     model.next_operation_id = model.next_operation_id.saturating_add(1);
-    let label = match decision {
-        ConfirmationDecisionWire::Accept => "Confirm",
-        ConfirmationDecisionWire::Cancel => "Cancel",
+    let label = match (decision, editing) {
+        (ConfirmationDecisionWire::Accept, true) => "Edit and confirm",
+        (ConfirmationDecisionWire::Accept, false) => "Confirm",
+        (ConfirmationDecisionWire::Cancel, _) => "Cancel",
     };
     model.scrollback.push(SemanticEntry {
         speaker: Speaker::User,
@@ -726,9 +783,10 @@ fn submit_confirmation(model: &mut AppModel, decision: ConfirmationDecisionWire)
         streaming: true,
     });
     model.operation = OperationState::Running(operation_id);
-    model.activity = Some(match decision {
-        ConfirmationDecisionWire::Accept => "Confirming…".into(),
-        ConfirmationDecisionWire::Cancel => "Cancelling proposal…".into(),
+    model.activity = Some(match (decision, editing) {
+        (ConfirmationDecisionWire::Accept, true) => "Applying correction…".into(),
+        (ConfirmationDecisionWire::Accept, false) => "Confirming…".into(),
+        (ConfirmationDecisionWire::Cancel, _) => "Cancelling proposal…".into(),
     });
     model.idle_exit_armed = false;
     follow_tail(model);
@@ -1423,7 +1481,7 @@ fn complete_slash(model: &mut AppModel) {
 
 fn cancel_or_exit(model: &mut AppModel) -> Vec<Effect> {
     if model.pending_confirmation.is_some() && !model.operation.is_active() {
-        return submit_confirmation(model, ConfirmationDecisionWire::Cancel);
+        return submit_confirmation(model, ConfirmationDecisionWire::Cancel, None);
     }
     if !model.draft.is_empty() {
         model.draft.clear();
@@ -1737,9 +1795,11 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             });
             match confirmation {
                 Ok(Some(envelope)) => {
+                    let editable_items = editable_grocery_items(&envelope);
                     model.pending_confirmation = Some(PendingActionConfirmation {
                         confirmation_id: envelope.confirmation_id,
                         idempotency_key: envelope.idempotency_key,
+                        editable_items,
                     });
                 }
                 Ok(None) | Err(_) => model.pending_confirmation = None,
@@ -1823,7 +1883,75 @@ fn render_action_confirmation(envelope: &ActionConfirmationEnvelopeWire) -> Stri
     output.push_str(
         "\nNothing has changed yet. Type `y` to confirm or `n` to cancel. Ctrl+C cancels.",
     );
+    if editable_grocery_items(envelope).is_some() {
+        output.push_str(
+            "\nTo replace one item name and confirm the correction, type `edit #N <replacement>`.",
+        );
+    }
     output
+}
+
+fn editable_grocery_items(
+    envelope: &ActionConfirmationEnvelopeWire,
+) -> Option<Vec<serde_json::Map<String, serde_json::Value>>> {
+    if !matches!(
+        envelope.action.as_str(),
+        "grocery_list_add_items" | "add_items"
+    ) {
+        return None;
+    }
+    let items = envelope
+        .structured_preview
+        .as_ref()?
+        .get("items")?
+        .as_array()?;
+    if items.is_empty() || items.len() > 25 {
+        return None;
+    }
+    items.iter().map(editable_grocery_item).collect()
+}
+
+fn editable_grocery_item(
+    item: &serde_json::Value,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let name = ["name", "requested_name"]
+        .into_iter()
+        .find_map(|key| item.get(key).and_then(serde_json::Value::as_str))
+        .and_then(|value| required_text(value, 255).ok())?;
+    let mut editable = serde_json::Map::new();
+    editable.insert("name".into(), serde_json::Value::String(name));
+
+    if let Some(quantity) = item.get("quantity").and_then(serde_json::Value::as_f64)
+        && quantity.is_finite()
+        && quantity >= 0.0
+        && let Some(quantity) = serde_json::Number::from_f64(quantity)
+    {
+        editable.insert("quantity".into(), serde_json::Value::Number(quantity));
+    }
+    if let Some(package_quantity) = item
+        .get("package_quantity")
+        .and_then(serde_json::Value::as_i64)
+        .filter(|value| *value >= 0)
+    {
+        editable.insert(
+            "package_quantity".into(),
+            serde_json::Value::Number(package_quantity.into()),
+        );
+    }
+    for (field, maximum) in [("unit", 40), ("note", 255), ("intended_for", 64)] {
+        if let Some(value) = item
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| required_text(value, maximum).ok())
+        {
+            editable.insert(field.into(), serde_json::Value::String(value));
+        }
+    }
+    editable.insert(
+        "source_type".into(),
+        serde_json::Value::String("manual".into()),
+    );
+    Some(editable)
 }
 
 fn render_confirmation_safety(
@@ -2614,6 +2742,7 @@ mod tests {
         assert!(card.contains("try: scallion greens"));
         assert!(card.contains("Screened at ingredient level — verify the product label."));
         assert!(card.contains("Type `y` to confirm or `n` to cancel"));
+        assert!(card.contains("edit #N <replacement>"));
         assert!(!card.contains("confirmation_id"));
         let _ = dispatch(
             &mut model,
@@ -2630,9 +2759,88 @@ mod tests {
             effects.as_slice(),
             [Effect::ConfirmAction { operation_id: 2, command }]
                 if command.decision == ConfirmationDecisionWire::Accept
+                    && command.edits.is_none()
                     && command.confirmation_id.as_uuid().to_string()
                         == "00000000-0000-0000-0000-000000000001"
         ));
+    }
+
+    #[test]
+    fn grocery_add_item_edit_is_bounded_explicit_and_sent_as_c3_edits() {
+        let envelope: ActionConfirmationEnvelopeWire = serde_json::from_value(serde_json::json!({
+            "type": "action_confirmation",
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "action": "grocery_list_add_items",
+            "preview": "Add two screened ingredients",
+            "card_form": "item_list",
+            "structured_preview": {
+                "items": [
+                    {
+                        "requested_name": "onion",
+                        "quantity": 1,
+                        "unit": "each",
+                        "intended_for": "maya",
+                        "safety": {"status": "risky"}
+                    },
+                    {
+                        "name": "milk",
+                        "quantity": 2,
+                        "unit": "cartons"
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+        let editable_items = editable_grocery_items(&envelope).unwrap();
+        let mut model = AppModel {
+            draft: "edit #1 scallion greens".into(),
+            cursor: 23,
+            pending_confirmation: Some(PendingActionConfirmation {
+                confirmation_id: envelope.confirmation_id,
+                idempotency_key: envelope.idempotency_key,
+                editable_items: Some(editable_items),
+            }),
+            ..AppModel::default()
+        };
+
+        let effects = dispatch(&mut model, Action::Submit);
+        let command = match effects.as_slice() {
+            [
+                Effect::ConfirmAction {
+                    operation_id: 1,
+                    command,
+                },
+            ] => command,
+            effects => panic!("expected edited confirmation, got {effects:?}"),
+        };
+        assert_eq!(command.decision, ConfirmationDecisionWire::Accept);
+        assert_eq!(
+            serde_json::to_value(command.edits.as_ref().unwrap()).unwrap(),
+            serde_json::json!({
+                "items": [
+                    {
+                        "name": "scallion greens",
+                        "quantity": 1.0,
+                        "unit": "each",
+                        "intended_for": "maya",
+                        "source_type": "manual"
+                    },
+                    {
+                        "name": "milk",
+                        "quantity": 2.0,
+                        "unit": "cartons",
+                        "source_type": "manual"
+                    }
+                ]
+            })
+        );
+        assert!(model.pending_confirmation.is_some());
+        assert!(model.draft.is_empty());
+        assert_eq!(
+            model.scrollback.entries().iter().rev().nth(1).unwrap().text,
+            "Edit and confirm"
+        );
     }
 
     #[test]
@@ -2681,6 +2889,7 @@ mod tests {
                     "00000000-0000-4000-8000-000000000002",
                 )
                 .unwrap(),
+                editable_items: None,
             }),
             ..AppModel::default()
         };
@@ -2712,6 +2921,7 @@ mod tests {
                         "00000000-0000-4000-8000-000000000002",
                     )
                     .unwrap(),
+                    editable_items: None,
                 }),
                 ..AppModel::default()
             };
@@ -2765,6 +2975,7 @@ mod tests {
                 "00000000-0000-4000-8000-000000000002",
             )
             .unwrap(),
+            editable_items: None,
         };
         let mut model = AppModel {
             operation: OperationState::Running(1),

@@ -10,8 +10,8 @@ use heyfood_application::{
 use heyfood_core::{
     AccountId, AgentConfirmationCommandWire, AgentEvent, ClientConfig, ConfigRevision,
     ConfirmationDecisionWire, CredentialVersion, GenerationId, GroceryConfirmationId,
-    GroceryIdempotencyKey, NetworkPolicy, OperationId, RefreshOutcome, RefreshRequest,
-    SensitiveString, ServiceUrl, SessionCredentials, SessionSnapshot,
+    GroceryEditPatch, GroceryIdempotencyKey, NetworkPolicy, OperationId, RefreshOutcome,
+    RefreshRequest, SensitiveString, ServiceUrl, SessionCredentials, SessionSnapshot,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -522,7 +522,12 @@ async fn conversational_confirmation_uses_the_frozen_confirm_xor_query_shape() {
             serde_json::json!({
                 "confirmation_id": "00000000-0000-4000-8000-000000000001",
                 "idempotency_key": "00000000-0000-4000-8000-000000000002",
-                "decision": "accept"
+                "decision": "accept",
+                "edits": {
+                    "items": [
+                        {"name": "scallion greens", "source_type": "manual"}
+                    ]
+                }
             })
         );
         assert_eq!(body["conversation_id"], "conversation-grocery");
@@ -548,6 +553,17 @@ async fn conversational_confirmation_uses_the_frozen_confirm_xor_query_shape() {
                         )
                         .unwrap(),
                         decision: ConfirmationDecisionWire::Accept,
+                        edits: Some(
+                            GroceryEditPatch::new(
+                                serde_json::from_value(serde_json::json!({
+                                    "items": [
+                                        {"name": "scallion greens", "source_type": "manual"}
+                                    ]
+                                }))
+                                .unwrap(),
+                            )
+                            .unwrap(),
+                        ),
                     }),
                     ..TurnContext::default()
                 },
