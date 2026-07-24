@@ -1162,6 +1162,7 @@ dependencies = [
  "tar",
  "tokio",
  "tokio-util",
+ "unicode-width",
 ]
 
 [[package]]

@@ -36,6 +36,7 @@ time = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
 tracing = { version = "0.1", default-features = false }
+unicode-width = { version = "0.2", default-features = false }
 url = { version = "2", default-features = false }
 uuid = { version = "1", default-features = false }
 webbrowser = { version = "1", default-features = false }

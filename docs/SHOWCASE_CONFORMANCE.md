@@ -46,7 +46,34 @@ Browser-only window chrome and animation timing are not runtime requirements.
 The semantic layout, information density, colors, spacing, states, and keyboard
 experience are.
 
-## Installed-artifact E2E design
+## `0.5.0` bounded recovery-release matrix
+
+The `0.5.0` release gate is intentionally narrower than the twelve-stage
+landing-page inventory. Its machine-readable contract is
+`tests/showcase/core-release-matrix.v1.json`. The installed archive must prove:
+
+- clean-user registration, missing-profile onboarding and consent, and a first
+  authenticated TUI turn;
+- complete process exit followed by a second installed process that reloads
+  credentials without registration and completes another authenticated turn;
+- an active household Grocery list with member-specific screening,
+  substitutions, provenance, proposal review/edit, non-mutating cancel, one
+  accepted mutation and one list-version advance, plus independent rejection of
+  stale list and household-context authority;
+- no blind retry after uncertain dispatch, Ctrl-C stream cancellation, Ctrl-C
+  cancellation of a pending Grocery confirmation without mutation, and
+  terminal restoration after normal, failure, and interrupt paths;
+- semantic output at 40, 80, and 120 columns, `NO_COLOR`, the exact archive
+  digest, and the real platform credential backend on the final signed
+  candidate.
+
+Native voice and Menu Watch diff are not `0.5.0` gates. Health and Menu Watch
+management require one bounded production canary or truthful deferral. Passing
+the synthetic source-archive matrix does not authorize release: production
+registration/Grocery canaries, protected signing, the same matrix against the
+signed archives, and independent exact-SHA review remain required.
+
+## Full post-`0.5.0` showcase E2E design
 
 The release test starts from the exact archive intended for publication, not a
 Cargo target directory:
@@ -78,9 +105,10 @@ real menu acquisition, Grocery non-mutation/commit behavior, connected-health
 consent, and real microphone capture without storing prompt, transcript,
 dietary, or audio content in test evidence.
 
-## Release gate
+## Full showcase-complete gate
 
-TUI completion requires all of the following:
+Longer-term landing-page TUI completion requires all of the following. These
+requirements do not broaden the bounded `0.5.0` recovery-release matrix:
 
 - 12/12 showcase stages pass from the installed artifact;
 - every negative and cancellation case passes;
@@ -102,24 +130,24 @@ does not submit the transcript until the user presses Enter. Menu Watch
 create/list/remove and a read-only TUI subscription panel are present against
 the deployed least-privilege contract. Its showcased diff stage remains blocked
 on an account-scoped backend diff-read route. Authoritative health context in
-ordinary TUI turns and meal-memory proof remain implementation work. Native voice still requires real-hardware and
-installed-artifact qualification, including denial, truncation, timeout,
-cancellation, and resource-lifecycle cases. Household targeting, consent-aware
-dietary context, and Grocery safety cards likewise still require
-installed-artifact and production-canary proof.
+ordinary TUI turns and meal-memory proof remain implementation work. Native
+voice still requires real-hardware and installed-artifact qualification,
+including denial, truncation, timeout, cancellation, and resource-lifecycle
+cases. Household targeting, consent-aware dietary context, and Grocery safety
+cards now have bounded installed-artifact proof; production-canary proof
+remains.
 
-Native CLI CI now runs the first bounded installed-artifact vertical on macOS,
-Linux, and Windows. It verifies the exact archive checksum and one-executable
-archive policy, extracts into a clean temporary user environment, performs
-device registration against a synthetic contract service, follows the
-production registration handoff into a real PTY, submits one streamed turn,
-captures raw ANSI evidence, proves the request-path sequence, rejects credential
-material in the capture, validates the exact channel/account/device/API-key
-bindings in memory, observes terminal restoration on exit, and requires
-root-isolated credentials and user state to be absent before PASS evidence is
-written. The Windows force-clean seam is available only through the
-non-default `qualification-credentials` feature used by the test target; normal
-product builds retain the fail-closed logout and reconciliation behavior. The
-evidence document deliberately reports `release_gate_complete: false` and
-credits none of the twelve showcase stages. It is harness foundation, not
-showcase conformance.
+Native CLI CI runs the bounded `0.5.0` matrix from packaged archives on macOS,
+Linux, and Windows. It verifies the checksum and one-executable archive policy,
+extracts into a clean temporary user environment, drives registration and
+onboarding through a real PTY, exits and starts a returning-user process,
+exercises household Grocery confirmation and conflict paths, checks
+cancellation and uncertain-dispatch behavior, reconstructs visible terminal
+screens at 40/80/120 columns, captures privacy-safe ANSI evidence, and requires
+isolated credentials and user state to be absent before PASS evidence is
+written. The Windows force-clean seam is available only through the non-default
+`qualification-credentials` feature used by the test target; normal product
+builds retain fail-closed logout and reconciliation behavior. Source-archive
+evidence deliberately reports `release_gate_complete: false`; it qualifies the
+bounded matrix but neither the signed candidate nor the broader twelve-stage
+showcase contract.

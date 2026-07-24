@@ -123,9 +123,9 @@ jobs:
             "HEYFOOD_SHOWCASE_TARGET=$target"
             "HEYFOOD_SHOWCASE_VERSION=$version"
           ) | Add-Content -Encoding utf8 $env:GITHUB_ENV
-      - name: Qualify clean registration and first turn from the installed archive
-        run: cargo test --locked --package heyfood-bin --test installed_showcase -- --ignored --exact installed_archive_registration_and_first_turn
-      - name: Upload installed-artifact foundation evidence
+      - name: Qualify the bounded recovery-release matrix from the installed archive
+        run: cargo test --locked --package heyfood-bin --test installed_showcase installed_archive_core_release_matrix -- --ignored --exact
+      - name: Upload installed-artifact core-matrix evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

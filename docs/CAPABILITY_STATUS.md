@@ -33,8 +33,8 @@ hidden legacy command is not support: unavailable paths return
 | Household context | Used by hosted turns and Grocery | Profiles and household-aware evaluation | Backend available; native roster management unavailable |
 | Restaurants and recipes | Via `ask` and `item` | Resolution, menu evidence, and recipe tools | Hosted through current commands |
 | Menu Watch | `heyfood watch` plus `/watch` TUI panel | Create/list/remove are deployed; scheduled execution remains operationally gated; no account-scoped diff-read route exists | Current source management command; diff view blocked on backend contract |
-| Interactive TUI | Draft branch launches authenticated chat and read panels | N/A | Source preview; packaged-archive clean registration, TUI handoff, first streamed turn, and terminal restoration run in CI, while the twelve showcase journeys remain unqualified |
-| Voice capture | TUI `/voice`, Ctrl+Space, and F8 in `native-audio` artifacts | Authenticated transcription | Source implementation; real-hardware and platform qualification pending |
+| Interactive TUI | Draft branch launches authenticated chat and read panels | N/A | Source preview; packaged archives run the bounded `0.5.0` clean/returning-user, household Grocery, failure-safety, and 40/80/120-column matrix in CI. Signed-candidate reruns and production canaries remain pending; the broader landing-page journeys are future conformance work. |
+| Voice capture | TUI `/voice`, Ctrl+Space, and F8 only in opt-in `native-audio` artifacts | Authenticated transcription | Not enabled in the default `0.5.0` build and not a recovery-release gate; real-hardware and platform qualification remain future work. |
 
 ## Process contract
 

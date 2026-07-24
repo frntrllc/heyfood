@@ -23,25 +23,45 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
+use unicode_width::UnicodeWidthChar;
 
 const TEST_PROMPT: &str = "Plan a synthetic dinner for installed-artifact qualification.";
 const TEST_RESPONSE: &str = "Installed artifact first turn complete.";
+const RETURNING_PROMPT: &str = "Give me a second authenticated installed-artifact turn.";
+const RETURNING_RESPONSE: &str = "Returning installed user turn complete.";
+const GROCERY_CANCEL_PROMPT: &str = "Prepare onion for Maya, then let me cancel it.";
+const GROCERY_EDIT_PROMPT: &str = "Prepare onion for Maya so I can edit and accept it.";
+const GROCERY_STALE_LIST_PROMPT: &str =
+    "Prepare a Grocery proposal with intentionally stale list authority.";
+const GROCERY_STALE_CONTEXT_PROMPT: &str =
+    "Prepare a Grocery proposal with intentionally stale household context.";
+const GROCERY_CTRL_C_PROMPT: &str = "Prepare a Grocery proposal that I will cancel with Ctrl+C.";
+const STREAM_CANCEL_PROMPT: &str = "Stream until I cancel this installed turn.";
+const UNCERTAIN_PROMPT: &str = "Consume this mutation-like turn and close before responding.";
+const FAILURE_PROMPT: &str = "Return a typed synthetic failure to the installed TUI.";
+const WIDTH_PROMPT: &str = "Render a width-qualified installed response.";
+const WIDTH_RESPONSE: &str = "Width-qualified installed response complete.";
 const TEST_ACCOUNT: &str = "showcase-user";
+const TEST_DEVICE_CODE: &str = "hf_dc_showcase_01234567890123456789";
+const TEST_LIST_ID: &str = "00000000-0000-4000-8000-000000000123";
+const CANCEL_CONFIRMATION_ID: &str = "00000000-0000-4000-8000-000000000011";
+const CANCEL_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-000000000012";
+const EDIT_CONFIRMATION_ID: &str = "00000000-0000-4000-8000-000000000021";
+const EDIT_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-000000000022";
+const STALE_LIST_CONFIRMATION_ID: &str = "00000000-0000-4000-8000-000000000031";
+const STALE_LIST_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-000000000032";
+const STALE_CONTEXT_CONFIRMATION_ID: &str = "00000000-0000-4000-8000-000000000033";
+const STALE_CONTEXT_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-000000000034";
+const CTRL_C_CONFIRMATION_ID: &str = "00000000-0000-4000-8000-000000000041";
+const CTRL_C_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-000000000042";
 const FULL_SCOPE: &str = "account:link account:delete knowledge:read menu:read menu:watch recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe health:read integrations:manage grocery:read grocery:write";
-const SHOWCASE_STAGES: [&str; 12] = [
-    "menu-watch.locate",
-    "menu-watch.verify",
-    "menu-watch.watch",
-    "menu-watch.diff",
-    "dinner-planner.plan",
-    "dinner-planner.compare",
-    "dinner-planner.shop",
-    "dinner-planner.remember",
-    "voice-meal-log.record",
-    "voice-meal-log.transcribe",
-    "voice-meal-log.review",
-    "voice-meal-log.log",
+const CORE_MATRIX_GROUPS: [&str; 5] = [
+    "clean-user",
+    "returning-user",
+    "household-grocery",
+    "failure-safety",
+    "artifact-behavior",
 ];
 
 struct TempRoot(PathBuf);
@@ -107,6 +127,97 @@ struct RequestEvidence {
 }
 
 #[derive(Debug)]
+struct FixtureSummary {
+    device_authorizations: usize,
+    cli_sessions: usize,
+    consent_grants: usize,
+    profile_uploads: usize,
+    proposal_cancellations: usize,
+    ctrl_c_proposal_cancellations: usize,
+    proposal_accepts: usize,
+    stale_list_rejections: usize,
+    stale_context_rejections: usize,
+    stream_cancellations: usize,
+    list_version: u64,
+    prompt_counts: BTreeMap<String, usize>,
+}
+
+struct FixtureState {
+    expected_device_id: Option<String>,
+    profile_consent: bool,
+    profile_version: Option<u64>,
+    list_version: u64,
+    device_authorizations: usize,
+    cli_sessions: usize,
+    consent_grants: usize,
+    profile_uploads: usize,
+    proposal_cancellations: usize,
+    ctrl_c_proposal_cancellations: usize,
+    proposal_accepts: usize,
+    stale_list_rejections: usize,
+    stale_context_rejections: usize,
+    stream_cancellations: usize,
+    prompt_counts: BTreeMap<String, usize>,
+}
+
+impl Default for FixtureState {
+    fn default() -> Self {
+        Self {
+            expected_device_id: None,
+            profile_consent: false,
+            profile_version: None,
+            list_version: 4,
+            device_authorizations: 0,
+            cli_sessions: 0,
+            consent_grants: 0,
+            profile_uploads: 0,
+            proposal_cancellations: 0,
+            ctrl_c_proposal_cancellations: 0,
+            proposal_accepts: 0,
+            stale_list_rejections: 0,
+            stale_context_rejections: 0,
+            stream_cancellations: 0,
+            prompt_counts: BTreeMap::new(),
+        }
+    }
+}
+
+impl FixtureState {
+    fn finish(self) -> FixtureSummary {
+        FixtureSummary {
+            device_authorizations: self.device_authorizations,
+            cli_sessions: self.cli_sessions,
+            consent_grants: self.consent_grants,
+            profile_uploads: self.profile_uploads,
+            proposal_cancellations: self.proposal_cancellations,
+            ctrl_c_proposal_cancellations: self.ctrl_c_proposal_cancellations,
+            proposal_accepts: self.proposal_accepts,
+            stale_list_rejections: self.stale_list_rejections,
+            stale_context_rejections: self.stale_context_rejections,
+            stream_cancellations: self.stream_cancellations,
+            list_version: self.list_version,
+            prompt_counts: self.prompt_counts,
+        }
+    }
+}
+
+struct FixtureService {
+    base_url: String,
+    requests: mpsc::Receiver<RequestEvidence>,
+    shutdown: oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<FixtureSummary>,
+}
+
+#[derive(Clone)]
+enum PtyAction {
+    Wait(String),
+    Submit(String),
+    CtrlC,
+    CtrlD,
+    Pause(Duration),
+}
+
+#[derive(Debug)]
 struct HttpRequest {
     method: String,
     path: String,
@@ -114,13 +225,23 @@ struct HttpRequest {
     body: Vec<u8>,
 }
 
-#[derive(Default)]
 struct TerminalCapture {
     bytes: Mutex<Vec<u8>>,
     changed: Condvar,
+    rows: usize,
+    columns: usize,
 }
 
 impl TerminalCapture {
+    fn new(rows: u16, columns: u16) -> Self {
+        Self {
+            bytes: Mutex::new(Vec::new()),
+            changed: Condvar::new(),
+            rows: usize::from(rows),
+            columns: usize::from(columns),
+        }
+    }
+
     fn append(&self, bytes: &[u8]) {
         self.bytes
             .lock()
@@ -129,19 +250,21 @@ impl TerminalCapture {
         self.changed.notify_all();
     }
 
-    fn wait_for(&self, needle: &[u8], timeout: Duration) -> Result<(), String> {
+    fn wait_for_semantic(&self, needle: &str, timeout: Duration) -> Result<(), String> {
+        let expected = compact_terminal_text(needle);
         let deadline = Instant::now() + timeout;
         let mut bytes = self.bytes.lock().map_err(|_| "terminal capture poisoned")?;
         loop {
-            if bytes.windows(needle.len()).any(|window| window == needle) {
+            let observed =
+                compact_terminal_text(&terminal_snapshot(&bytes, self.rows, self.columns));
+            if observed.contains(&expected) {
                 return Ok(());
             }
             let now = Instant::now();
             if now >= deadline {
                 return Err(format!(
                     "terminal output did not contain {:?}; observed {:?}",
-                    String::from_utf8_lossy(needle),
-                    String::from_utf8_lossy(&bytes)
+                    needle, observed
                 ));
             }
             let remaining = deadline.saturating_duration_since(now);
@@ -160,16 +283,16 @@ impl TerminalCapture {
 
 #[test]
 #[ignore = "requires an exact packaged archive supplied by Native CLI CI"]
-fn installed_archive_registration_and_first_turn() {
+fn installed_archive_core_release_matrix() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(2)
         .build()
         .expect("build showcase fixture runtime");
-    runtime.block_on(run_installed_archive_registration_and_first_turn());
+    runtime.block_on(run_installed_archive_core_release_matrix());
 }
 
-async fn run_installed_archive_registration_and_first_turn() {
+async fn run_installed_archive_core_release_matrix() {
     let archive = required_absolute_path("HEYFOOD_SHOWCASE_ARCHIVE");
     let manifest = required_absolute_path("HEYFOOD_SHOWCASE_MANIFEST");
     let evidence_directory = required_absolute_path("HEYFOOD_SHOWCASE_EVIDENCE_DIR");
@@ -214,14 +337,176 @@ async fn run_installed_archive_registration_and_first_turn() {
     assert_installed_version(&installed_binary, &expected_version);
 
     let user = TempRoot::new("user");
+    write_household_import_source(&user.0);
     #[cfg(windows)]
     let mut credential_cleanup = WindowsCredentialCleanup::open(&user.0);
-    let (base_url, request_receiver, server) = start_fixture_service().await;
-    let terminal = run_first_user_pty(&installed_binary, &user.0, &base_url).await;
+    let fixture = start_fixture_service().await;
+    let FixtureService {
+        base_url,
+        requests: request_receiver,
+        shutdown,
+        task: server,
+    } = fixture;
+
+    let clean_user = run_installed_pty(
+        &installed_binary,
+        &user.0,
+        &base_url,
+        &["register", "--device", "--no-browser", "--timeout", "10"],
+        80,
+        false,
+        vec![
+            PtyAction::Wait("Kosher".into()),
+            PtyAction::Submit("none".into()),
+            PtyAction::Wait("colorings".into()),
+            PtyAction::Submit("none".into()),
+            PtyAction::Wait("Autism".into()),
+            PtyAction::Submit("none".into()),
+            PtyAction::Wait("Ingredients to avoid".into()),
+            PtyAction::Submit("none".into()),
+            PtyAction::Wait("Activity level".into()),
+            PtyAction::Submit("none".into()),
+            PtyAction::Wait("Georgian".into()),
+            PtyAction::Submit("none".into()),
+            PtyAction::Wait("Additional notes".into()),
+            PtyAction::Submit("none".into()),
+            PtyAction::Wait("Review dietary profile".into()),
+            PtyAction::Submit("save".into()),
+            PtyAction::Wait("Dietary profile saved".into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::Submit(TEST_PROMPT.into()),
+            PtyAction::Wait(TEST_RESPONSE.into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::CtrlD,
+        ],
+    )
+    .await;
+
+    let returning_user = run_installed_pty(
+        &installed_binary,
+        &user.0,
+        &base_url,
+        &[],
+        80,
+        false,
+        vec![
+            PtyAction::Wait("hey.food".into()),
+            PtyAction::Submit(RETURNING_PROMPT.into()),
+            PtyAction::Wait(RETURNING_RESPONSE.into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::Submit("/for Maya".into()),
+            PtyAction::Wait("Future turns will consider Maya.".into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::Submit("/grocery".into()),
+            PtyAction::Wait("Onion is high-FODMAP.".into()),
+            PtyAction::Wait("green parts of scallion".into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::Submit(GROCERY_CANCEL_PROMPT.into()),
+            PtyAction::Wait("Cancel proposal for Maya".into()),
+            PtyAction::Submit("n".into()),
+            PtyAction::Wait("cancelled without mutation".into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::Submit(GROCERY_EDIT_PROMPT.into()),
+            PtyAction::Wait("Edit proposal for Maya".into()),
+            PtyAction::Wait("scallion greens".into()),
+            PtyAction::Submit("edit #1 scallion greens".into()),
+            PtyAction::Wait("advanced exactly once to version 5".into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::Submit(GROCERY_STALE_LIST_PROMPT.into()),
+            PtyAction::Wait("Stale list proposal for Maya".into()),
+            PtyAction::Submit("y".into()),
+            PtyAction::Wait("Stale Grocery list authority rejected".into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::Submit(GROCERY_STALE_CONTEXT_PROMPT.into()),
+            PtyAction::Wait("Stale context proposal for Maya".into()),
+            PtyAction::Submit("y".into()),
+            PtyAction::Wait("Stale household context authority rejected".into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::Submit(GROCERY_CTRL_C_PROMPT.into()),
+            PtyAction::Wait("Ctrl+C proposal for Maya".into()),
+            PtyAction::CtrlC,
+            PtyAction::Wait("Ctrl+C Grocery cancellation completed".into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::Submit(STREAM_CANCEL_PROMPT.into()),
+            PtyAction::Wait("Streaming response in progress".into()),
+            PtyAction::CtrlC,
+            PtyAction::Wait("Turn cancelled after server acceptance".into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::Submit(UNCERTAIN_PROMPT.into()),
+            PtyAction::Wait("server outcome is unknown".into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::Submit(FAILURE_PROMPT.into()),
+            PtyAction::Wait("synthetic installed failure".into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::CtrlD,
+        ],
+    )
+    .await;
+
+    let width_40 = run_installed_pty(
+        &installed_binary,
+        &user.0,
+        &base_url,
+        &[],
+        40,
+        false,
+        vec![
+            PtyAction::Wait("hey.food".into()),
+            PtyAction::Submit("/grocery".into()),
+            PtyAction::Wait("Onion is high-FODMAP.".into()),
+            PtyAction::Wait("green parts of scallion".into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::CtrlD,
+        ],
+    )
+    .await;
+
+    let width_120_no_color = run_installed_pty(
+        &installed_binary,
+        &user.0,
+        &base_url,
+        &[],
+        120,
+        true,
+        vec![
+            PtyAction::Wait("hey.food".into()),
+            PtyAction::Submit(WIDTH_PROMPT.into()),
+            PtyAction::Wait(WIDTH_RESPONSE.into()),
+            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::CtrlD,
+        ],
+    )
+    .await;
+
+    let interrupt_exit = run_installed_pty(
+        &installed_binary,
+        &user.0,
+        &base_url,
+        &[],
+        80,
+        false,
+        vec![
+            PtyAction::Wait("hey.food".into()),
+            PtyAction::CtrlC,
+            PtyAction::Wait("Press Ctrl+C again to exit".into()),
+            PtyAction::CtrlC,
+        ],
+    )
+    .await;
+
+    shutdown
+        .send(())
+        .expect("stop installed showcase fixture service");
+    let summary = server.await.expect("join showcase fixture service");
     let requests = collect_request_evidence(request_receiver).await;
-    server.await.expect("join showcase fixture service");
-    assert_request_sequence(&requests);
-    assert_terminal_contract(&terminal);
+    assert_fixture_summary(&summary);
+    assert_core_terminal_contract(
+        &clean_user,
+        &returning_user,
+        &width_40,
+        &width_120_no_color,
+        &interrupt_exit,
+    );
 
     #[cfg(windows)]
     credential_cleanup.purge_and_verify_absent();
@@ -231,12 +516,20 @@ async fn run_installed_archive_registration_and_first_turn() {
         "installed-user state must be absent before PASS evidence"
     );
 
-    let terminal_digest = sha256_bytes(&terminal);
-    let terminal_path = evidence_directory.join("first-run.ansi");
-    fs::write(&terminal_path, &terminal).expect("write privacy-safe ANSI evidence");
+    let captures = [
+        ("clean-user.ansi", &clean_user),
+        ("returning-user.ansi", &returning_user),
+        ("width-40.ansi", &width_40),
+        ("width-120-no-color.ansi", &width_120_no_color),
+        ("interrupt-exit.ansi", &interrupt_exit),
+    ];
+    for (name, bytes) in &captures {
+        fs::write(evidence_directory.join(name), bytes)
+            .expect("write privacy-safe installed terminal evidence");
+    }
     let evidence = json!({
-        "schema_version": 1,
-        "qualification": "installed-artifact-foundation",
+        "schema_version": 2,
+        "qualification": "installed-artifact-core-matrix",
         "release_gate_complete": false,
         "archive": {
             "file_name": expected_archive_name,
@@ -253,27 +546,73 @@ async fn run_installed_archive_registration_and_first_turn() {
             "clean_user_state": true,
             "credentials_absent_after_run": true,
             "pty": true,
-            "columns": 80,
+            "columns": [40, 80, 120],
             "rows": 30,
-            "synthetic_backend": true
+            "no_color": true,
+            "synthetic_backend": true,
+            "credential_backend": if cfg!(windows) { "native" } else { "isolated_file" },
+            "signed_candidate_native_backend_required": true,
+            "signed_candidate_native_backend_proven": false
         },
-        "foundation_stages": [
+        "core_matrix": [
             {
-                "id": "clean-user-registration",
+                "id": "clean-user",
                 "status": "passed",
                 "assertions": [
                     "device_registration_executed",
                     "account_bound_credentials_persisted",
-                    "registration_handed_off_to_tui"
+                    "missing_profile_onboarding_completed",
+                    "profile_sync_consent_granted",
+                    "profile_uploaded_once",
+                    "first_authenticated_tui_turn_completed"
                 ]
             },
             {
-                "id": "first-streamed-turn",
+                "id": "returning-user",
                 "status": "passed",
                 "assertions": [
-                    "prompt_dispatched_from_installed_tui",
-                    "streamed_result_rendered",
-                    "terminal_restored_on_exit"
+                    "first_process_exited",
+                    "second_installed_process_reloaded_credentials",
+                    "registration_not_repeated",
+                    "second_authenticated_turn_completed"
+                ]
+            },
+            {
+                "id": "household-grocery",
+                "status": "passed",
+                "assertions": [
+                    "maya_household_scope_bound",
+                    "active_list_and_member_screening_rendered",
+                    "substitutions_and_provenance_rendered",
+                    "proposal_cancelled_without_mutation",
+                    "proposal_edited_and_accepted_once",
+                    "list_advanced_once",
+                    "stale_list_authority_rejected",
+                    "stale_household_context_authority_rejected"
+                ]
+            },
+            {
+                "id": "failure-safety",
+                "status": "passed",
+                "assertions": [
+                    "uncertain_dispatch_not_retried",
+                    "ctrl_c_cancelled_stream",
+                    "ctrl_c_cancelled_pending_confirmation_without_mutation",
+                    "terminal_restored_after_normal_failure_and_interrupt_paths"
+                ]
+            },
+            {
+                "id": "artifact-behavior",
+                "status": "source-qualified",
+                "assertions": [
+                    "semantic_output_at_40_80_120_columns",
+                    "no_color_has_no_color_sgr",
+                    "archive_digest_exact",
+                    "packaged_executable_only"
+                ],
+                "remaining": [
+                    "rerun_exact_matrix_against_signed_archives",
+                    "real_platform_credential_backend_on_every_signed_candidate"
                 ]
             }
         ],
@@ -281,22 +620,79 @@ async fn run_installed_archive_registration_and_first_turn() {
             "method": request.method,
             "path": request.path
         })).collect::<Vec<_>>(),
-        "terminal": {
-            "file_name": "first-run.ansi",
-            "sha256": terminal_digest,
-            "contains_credentials": false
+        "fixture_state": {
+            "device_authorizations": summary.device_authorizations,
+            "cli_sessions": summary.cli_sessions,
+            "consent_grants": summary.consent_grants,
+            "profile_uploads": summary.profile_uploads,
+            "proposal_cancellations": summary.proposal_cancellations,
+            "proposal_accepts": summary.proposal_accepts,
+            "stale_list_rejections": summary.stale_list_rejections,
+            "stale_context_rejections": summary.stale_context_rejections,
+            "stream_cancellations": summary.stream_cancellations,
+            "final_list_version": summary.list_version
         },
-        "showcase": {
-            "passed_stage_ids": [],
-            "remaining_stage_ids": SHOWCASE_STAGES,
-            "note": "Foundation evidence does not close any landing-page showcase stage."
-        }
+        "terminal": captures.iter().map(|(name, bytes)| json!({
+            "file_name": name,
+            "sha256": sha256_bytes(bytes),
+            "contains_credentials": false
+        })).collect::<Vec<_>>(),
+        "deferred": {
+            "native_voice": "not enabled in the default 0.5.0 artifact",
+            "menu_watch_diff": "not a 0.5.0 gate",
+            "health_and_menu_watch_management": "require a bounded live canary or truthful deferral"
+        },
+        "remaining_release_gates": [
+            "production_registration_and_grocery_canaries",
+            "protected_signing_environment",
+            "signed_candidate_core_matrix_rerun",
+            "exact_sha_release_review"
+        ]
     });
     fs::write(
-        evidence_directory.join("installed-foundation.json"),
+        evidence_directory.join("installed-core-matrix.json"),
         serde_json::to_vec_pretty(&evidence).expect("serialize installed evidence"),
     )
     .expect("write installed evidence");
+}
+
+fn write_household_import_source(user_root: &Path) {
+    let source = user_root.join("heyfood").join("config.json");
+    fs::create_dir_all(source.parent().expect("household import parent"))
+        .expect("create household import parent");
+    let document = json!({
+        "account_user_id": TEST_ACCOUNT,
+        "first_name": "Showcase",
+        "household": {
+            "version": 1,
+            "active_scope": "_self",
+            "members": [
+                {
+                    "id": "_self",
+                    "name": "Showcase",
+                    "relationship": "self",
+                    "archived": false
+                },
+                {
+                    "id": "maya-uuid",
+                    "name": "Maya",
+                    "relationship": "child",
+                    "archived": false
+                }
+            ]
+        },
+        "household_local_profiles": {
+            "maya-uuid": {
+                "restrictions": ["low_fodmap"],
+                "avoid_ingredients": ["onion", "garlic"]
+            }
+        }
+    });
+    fs::write(
+        source,
+        serde_json::to_vec_pretty(&document).expect("encode household import source"),
+    )
+    .expect("write household import source");
 }
 
 fn required_env(name: &str) -> String {
@@ -446,11 +842,7 @@ fn assert_installed_version(binary: &Path, expected_version: &str) {
     assert!(output.stderr.is_empty());
 }
 
-async fn start_fixture_service() -> (
-    String,
-    mpsc::Receiver<RequestEvidence>,
-    tokio::task::JoinHandle<()>,
-) {
+async fn start_fixture_service() -> FixtureService {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind installed showcase fixture service");
@@ -461,11 +853,17 @@ async fn start_fixture_service() -> (
             .expect("resolve showcase fixture address")
     );
     let verification_uri = format!("{base_url}/authorize?flow=device");
-    let (request_sender, request_receiver) = mpsc::channel(16);
+    let (request_sender, request_receiver) = mpsc::channel(256);
+    let (shutdown_sender, mut shutdown_receiver) = oneshot::channel();
     let server = tokio::spawn(async move {
-        let mut expected_device_id = None;
-        for _ in 0..8 {
-            let (mut socket, _) = listener.accept().await.expect("accept showcase request");
+        let mut state = FixtureState::default();
+        loop {
+            let accepted = tokio::select! {
+                biased;
+                _ = &mut shutdown_receiver => break,
+                accepted = listener.accept() => accepted,
+            };
+            let (mut socket, _) = accepted.expect("accept showcase request");
             let request = read_http_request(&mut socket).await;
             request_sender
                 .send(RequestEvidence {
@@ -474,16 +872,16 @@ async fn start_fixture_service() -> (
                 })
                 .await
                 .expect("record showcase request");
-            respond_to_showcase_request(
-                &mut socket,
-                request,
-                &verification_uri,
-                &mut expected_device_id,
-            )
-            .await;
+            respond_to_showcase_request(&mut socket, request, &verification_uri, &mut state).await;
         }
+        state.finish()
     });
-    (base_url, request_receiver, server)
+    FixtureService {
+        base_url,
+        requests: request_receiver,
+        shutdown: shutdown_sender,
+        task: server,
+    }
 }
 
 async fn read_http_request(socket: &mut TcpStream) -> HttpRequest {
@@ -544,12 +942,19 @@ async fn respond_to_showcase_request(
     socket: &mut TcpStream,
     request: HttpRequest,
     verification_uri: &str,
-    expected_device_id: &mut Option<String>,
+    state: &mut FixtureState,
 ) {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/v1/auth/capabilities") => {
             assert_header(&request, "x-app-client-id", "heyfood-cli");
-            assert_no_protected_headers(&request);
+            assert_header_absent(&request, "authorization");
+            if let Some(device_id) = state.expected_device_id.as_deref() {
+                assert_header(&request, "x-device-id", device_id);
+                assert_header(&request, "x-api-key", "showcase-api-key");
+            } else {
+                assert_header_absent(&request, "x-device-id");
+                assert_header_absent(&request, "x-api-key");
+            }
             respond_json(
                 socket,
                 json!({
@@ -577,6 +982,7 @@ async fn respond_to_showcase_request(
         ("POST", "/v1/channel/oauth/device/authorize") => {
             assert_no_protected_headers(&request);
             assert_header_absent(&request, "x-app-client-id");
+            state.device_authorizations += 1;
             let body: Value =
                 serde_json::from_slice(&request.body).expect("decode device authorization");
             assert_eq!(body["client_id"], "hf_cid_heyfood_cli");
@@ -585,7 +991,7 @@ async fn respond_to_showcase_request(
             respond_json(
                 socket,
                 json!({
-                    "device_code": "hf_dc_showcase_01234567890123456789",
+                    "device_code": TEST_DEVICE_CODE,
                     "user_code": "SHOW-CASE",
                     "verification_uri": verification_uri,
                     "verification_uri_complete": null,
@@ -601,7 +1007,7 @@ async fn respond_to_showcase_request(
             let body: Value =
                 serde_json::from_slice(&request.body).expect("decode device token request");
             assert_eq!(body["client_id"], "hf_cid_heyfood_cli");
-            assert_eq!(body["device_code"], "hf_dc_showcase_01234567890123456789");
+            assert_eq!(body["device_code"], TEST_DEVICE_CODE);
             respond_json(
                 socket,
                 json!({
@@ -615,6 +1021,7 @@ async fn respond_to_showcase_request(
             .await;
         }
         ("POST", "/v1/channel/oauth/cli/session") => {
+            state.cli_sessions += 1;
             let body: Value =
                 serde_json::from_slice(&request.body).expect("decode CLI session request");
             let device_id = body["device_id"]
@@ -624,7 +1031,7 @@ async fn respond_to_showcase_request(
             assert_header(&request, "x-app-client-id", "heyfood-cli");
             assert_header(&request, "x-device-id", device_id);
             assert_header_absent(&request, "x-api-key");
-            *expected_device_id = Some(device_id.to_owned());
+            state.expected_device_id = Some(device_id.to_owned());
             respond_json(
                 socket,
                 json!({
@@ -650,16 +1057,33 @@ async fn respond_to_showcase_request(
                 socket,
                 json!({
                     "schema_version": 1,
-                    "status": "ready",
+                    "status": "missing",
                     "member_id": "_self",
-                    "has_profile_sync_consent": true,
-                    "profile_version": 1
+                    "has_profile_sync_consent": false,
+                    "profile_version": null
                 }),
             )
             .await;
         }
         ("GET", "/v1/profile/consent") => {
-            assert_account_request_headers(&request, expected_device_id);
+            assert_account_request_headers(&request, &state.expected_device_id);
+            respond_json(
+                socket,
+                json!({
+                    "schema_version": 1,
+                    "has_consent": state.profile_consent,
+                    "consent_version": state.profile_consent.then_some(1)
+                }),
+            )
+            .await;
+        }
+        ("POST", "/v1/profile/consent") => {
+            assert_account_request_headers(&request, &state.expected_device_id);
+            let body: Value =
+                serde_json::from_slice(&request.body).expect("decode profile consent mutation");
+            assert_eq!(body, json!({"consent_version": 1}));
+            state.profile_consent = true;
+            state.consent_grants += 1;
             respond_json(
                 socket,
                 json!({
@@ -671,34 +1095,397 @@ async fn respond_to_showcase_request(
             .await;
         }
         ("GET", "/v1/profile/sync") => {
-            assert_account_request_headers(&request, expected_device_id);
+            assert_account_request_headers(&request, &state.expected_device_id);
+            if let Some(version) = state.profile_version {
+                respond_json(
+                    socket,
+                    json!({
+                        "schema_version": 1,
+                        "member_id": "_self",
+                        "version": version,
+                        "profile_data": {
+                            "preferences": [],
+                            "restrictions": [],
+                            "avoid_ingredients": [],
+                            "activity_level": null,
+                            "cuisine_preferences": []
+                        }
+                    }),
+                )
+                .await;
+            } else {
+                respond_status(socket, "404 Not Found", "application/json", b"{}").await;
+            }
+        }
+        ("PUT", "/v1/profile/sync") => {
+            assert_account_request_headers(&request, &state.expected_device_id);
+            let body: Value = serde_json::from_slice(&request.body).expect("decode profile upload");
+            assert_eq!(body["member_id"], "_self");
+            assert!(body["profile_data"].is_object());
+            assert!(body.get("expected_version").is_none());
+            state.profile_version = Some(1);
+            state.profile_uploads += 1;
             respond_json(
                 socket,
                 json!({
                     "schema_version": 1,
                     "member_id": "_self",
-                    "profile_version": 1,
-                    "profile_data": {
-                        "dietary_preferences": ["vegetarian"],
-                        "allergens": []
-                    }
+                    "version": 1
                 }),
             )
             .await;
         }
+        ("GET", "/v1/grocery/list") => {
+            assert_account_request_headers(&request, &state.expected_device_id);
+            respond_json(socket, grocery_list_document(state.list_version)).await;
+        }
+        ("GET", "/v1/grocery/exclusions") => {
+            assert_account_request_headers(&request, &state.expected_device_id);
+            respond_json(socket, json!({"exclusions": ["shellfish"]})).await;
+        }
         ("POST", "/v1/agent/converse") => {
-            assert_account_request_headers(&request, expected_device_id);
-            let body: Value =
-                serde_json::from_slice(&request.body).expect("decode installed first turn");
-            assert_eq!(body["query"], TEST_PROMPT);
-            assert!(body.get("confirm").is_none());
-            respond_sse(socket).await;
+            assert_account_request_headers(&request, &state.expected_device_id);
+            let body: Value = serde_json::from_slice(&request.body)
+                .expect("decode installed conversational turn");
+            respond_to_conversation(socket, &body, state).await;
         }
         _ => panic!(
             "unexpected installed showcase request: {} {}",
             request.method, request.path
         ),
     }
+}
+
+fn grocery_list_document(version: u64) -> Value {
+    let accepted_item = (version >= 5).then(|| {
+        json!({
+            "id": "item-scallion",
+            "requested_name": "scallion greens",
+            "canonical_name": "scallion greens",
+            "quantity": 1.0,
+            "unit": null,
+            "package_quantity": null,
+            "note": "Edited before confirmation",
+            "state": "active",
+            "intended_for": "maya-uuid",
+            "sources": [{
+                "source_type": "manual",
+                "source_ref": null,
+                "source_detail": "Edited confirmation"
+            }],
+            "safety": null,
+            "created_at": "2026-07-19T12:00:00+00:00",
+            "updated_at": "2026-07-19T12:00:00+00:00"
+        })
+    });
+    let mut items = vec![
+        json!({
+            "id": "item-lentils",
+            "requested_name": "red lentils",
+            "canonical_name": "red lentils",
+            "quantity": 1.0,
+            "unit": "cup",
+            "package_quantity": null,
+            "note": null,
+            "state": "active",
+            "intended_for": "maya-uuid",
+            "sources": [{
+                "source_type": "recipe",
+                "source_ref": "dahl-001",
+                "source_detail": "Red Lentil Dahl"
+            }],
+            "safety": {
+                "basis": "ingredient",
+                "status": "generally_safer",
+                "member_flags": [{
+                    "member_id": "maya-uuid",
+                    "status": "generally_safer",
+                    "reason": null,
+                    "substitutions": []
+                }],
+                "model_version": "test-model",
+                "rules_version": "dietary-rules-1",
+                "confidence": 0.9,
+                "context_hash": "abc123",
+                "context_hash_version": 1,
+                "label_hint": "Screened at ingredient level — verify the product label."
+            },
+            "created_at": "2026-07-19T12:00:00+00:00",
+            "updated_at": "2026-07-19T12:00:00+00:00"
+        }),
+        json!({
+            "id": "item-onion",
+            "requested_name": "onion",
+            "canonical_name": "onion",
+            "quantity": 1.0,
+            "unit": null,
+            "package_quantity": null,
+            "note": null,
+            "state": "active",
+            "intended_for": "maya-uuid",
+            "sources": [{
+                "source_type": "recipe",
+                "source_ref": "dahl-001",
+                "source_detail": "Red Lentil Dahl"
+            }],
+            "safety": {
+                "basis": "ingredient",
+                "status": "risky",
+                "member_flags": [{
+                    "member_id": "maya-uuid",
+                    "status": "risky",
+                    "reason": "Onion is high-FODMAP.",
+                    "substitutions": ["green parts of scallion", "garlic-infused oil"]
+                }],
+                "model_version": "test-model",
+                "rules_version": "dietary-rules-1",
+                "confidence": 0.9,
+                "context_hash": "abc123",
+                "context_hash_version": 1,
+                "label_hint": "Screened at ingredient level — verify the product label."
+            },
+            "created_at": "2026-07-19T12:00:00+00:00",
+            "updated_at": "2026-07-19T12:00:00+00:00"
+        }),
+    ];
+    if let Some(accepted_item) = accepted_item {
+        items.push(accepted_item);
+    }
+    json!({
+        "id": TEST_LIST_ID,
+        "title": "Maya household groceries",
+        "state": "active",
+        "version": version,
+        "items": items,
+        "created_at": "2026-07-19T12:00:00+00:00",
+        "updated_at": "2026-07-19T12:00:00+00:00"
+    })
+}
+
+async fn respond_to_conversation(socket: &mut TcpStream, body: &Value, state: &mut FixtureState) {
+    if let Some(prompt) = body.get("query").and_then(Value::as_str) {
+        *state.prompt_counts.entry(prompt.to_owned()).or_default() += 1;
+        match prompt {
+            TEST_PROMPT => respond_sse_message(socket, TEST_RESPONSE).await,
+            RETURNING_PROMPT => respond_sse_message(socket, RETURNING_RESPONSE).await,
+            WIDTH_PROMPT => respond_sse_message(socket, WIDTH_RESPONSE).await,
+            GROCERY_CANCEL_PROMPT => {
+                assert_household_agent_context(body);
+                respond_confirmation(
+                    socket,
+                    CANCEL_CONFIRMATION_ID,
+                    CANCEL_IDEMPOTENCY_KEY,
+                    "Cancel proposal for Maya",
+                    state.list_version,
+                )
+                .await;
+            }
+            GROCERY_EDIT_PROMPT => {
+                assert_household_agent_context(body);
+                respond_confirmation(
+                    socket,
+                    EDIT_CONFIRMATION_ID,
+                    EDIT_IDEMPOTENCY_KEY,
+                    "Edit proposal for Maya",
+                    state.list_version,
+                )
+                .await;
+            }
+            GROCERY_STALE_LIST_PROMPT => {
+                assert_household_agent_context(body);
+                respond_confirmation(
+                    socket,
+                    STALE_LIST_CONFIRMATION_ID,
+                    STALE_LIST_IDEMPOTENCY_KEY,
+                    "Stale list proposal for Maya",
+                    state.list_version.saturating_sub(1),
+                )
+                .await;
+            }
+            GROCERY_STALE_CONTEXT_PROMPT => {
+                assert_household_agent_context(body);
+                respond_confirmation(
+                    socket,
+                    STALE_CONTEXT_CONFIRMATION_ID,
+                    STALE_CONTEXT_IDEMPOTENCY_KEY,
+                    "Stale context proposal for Maya",
+                    state.list_version,
+                )
+                .await;
+            }
+            GROCERY_CTRL_C_PROMPT => {
+                assert_household_agent_context(body);
+                respond_confirmation(
+                    socket,
+                    CTRL_C_CONFIRMATION_ID,
+                    CTRL_C_IDEMPOTENCY_KEY,
+                    "Ctrl+C proposal for Maya",
+                    state.list_version,
+                )
+                .await;
+            }
+            STREAM_CANCEL_PROMPT => {
+                assert_household_agent_context(body);
+                respond_cancellable_stream(socket).await;
+                state.stream_cancellations += 1;
+            }
+            UNCERTAIN_PROMPT => {
+                socket
+                    .shutdown()
+                    .await
+                    .expect("close uncertain-dispatch fixture response");
+            }
+            FAILURE_PROMPT => {
+                respond_sse_error(socket, "synthetic_failure", "synthetic installed failure").await;
+            }
+            _ => panic!("unexpected installed conversational prompt: {prompt}"),
+        }
+        return;
+    }
+
+    let confirmation = body
+        .get("confirm")
+        .and_then(Value::as_object)
+        .expect("conversational request must carry query or confirmation");
+    assert!(body.get("query").is_none());
+    assert_household_agent_context(body);
+    let confirmation_id = confirmation["confirmation_id"]
+        .as_str()
+        .expect("confirmation ID");
+    let decision = confirmation["decision"]
+        .as_str()
+        .expect("confirmation decision");
+    match (confirmation_id, decision) {
+        (CANCEL_CONFIRMATION_ID, "cancel") => {
+            assert!(confirmation.get("edits").is_none());
+            state.proposal_cancellations += 1;
+            respond_sse_message(socket, "Grocery proposal cancelled without mutation.").await;
+        }
+        (CTRL_C_CONFIRMATION_ID, "cancel") => {
+            assert!(confirmation.get("edits").is_none());
+            state.proposal_cancellations += 1;
+            state.ctrl_c_proposal_cancellations += 1;
+            respond_sse_message(
+                socket,
+                "Ctrl+C Grocery cancellation completed without mutation.",
+            )
+            .await;
+        }
+        (EDIT_CONFIRMATION_ID, "accept") => {
+            assert_eq!(
+                state.list_version, 4,
+                "accept must start from list version 4"
+            );
+            let edited_name = confirmation
+                .get("edits")
+                .and_then(|value| value.get("items"))
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("name"))
+                .and_then(Value::as_str);
+            assert_eq!(edited_name, Some("scallion greens"));
+            state.list_version += 1;
+            state.proposal_accepts += 1;
+            respond_sse_message(socket, "Grocery list advanced exactly once to version 5.").await;
+        }
+        (STALE_LIST_CONFIRMATION_ID, "accept") => {
+            state.stale_list_rejections += 1;
+            respond_sse_error(
+                socket,
+                "list_version_conflict",
+                "Stale Grocery list authority rejected; fetch the active list again.",
+            )
+            .await;
+        }
+        (STALE_CONTEXT_CONFIRMATION_ID, "accept") => {
+            state.stale_context_rejections += 1;
+            respond_sse_error(
+                socket,
+                "household_context_conflict",
+                "Stale household context authority rejected; refresh the household snapshot.",
+            )
+            .await;
+        }
+        _ => panic!("unexpected installed confirmation: {confirmation_id} {decision}"),
+    }
+}
+
+fn assert_household_agent_context(body: &Value) {
+    assert_eq!(body["meal_context"]["active_member_id"], "maya-uuid");
+    assert_eq!(body["meal_context"]["active_member_name"], "Maya");
+    assert_eq!(body["meal_context"]["is_cook_mode"], false);
+    assert!(
+        body["dietary_context"]["restrictions"]
+            .as_array()
+            .is_some_and(|values| values.contains(&Value::String("low_fodmap".into()))),
+        "Maya low-FODMAP context must reach the conversational request"
+    );
+    assert!(
+        body["device_context"]["household"]["members"]
+            .as_array()
+            .is_some_and(|members| members.iter().any(|member| member["id"] == "maya-uuid")),
+        "authoritative household members must reach the conversational request"
+    );
+}
+
+async fn respond_confirmation(
+    socket: &mut TcpStream,
+    confirmation_id: &str,
+    idempotency_key: &str,
+    preview: &str,
+    expected_version: u64,
+) {
+    respond_sse_document(
+        socket,
+        json!({
+            "message": "I prepared a Grocery proposal.",
+            "conversation_id": format!("conversation-{confirmation_id}"),
+            "structured": {
+                "type": "action_confirmation",
+                "confirmation_id": confirmation_id,
+                "idempotency_key": idempotency_key,
+                "action": "grocery_list_add_items",
+                "preview": preview,
+                "expires_at": "2999-01-01T00:00:00Z",
+                "card_form": "item_list",
+                "structured_preview": {
+                    "action": "add_items",
+                    "list_id": TEST_LIST_ID,
+                    "expected_version": expected_version,
+                    "items": [{
+                        "name": "onion",
+                        "quantity": 1.0,
+                        "unit": null,
+                        "note": "For red lentil dahl",
+                        "intended_for": "maya-uuid",
+                        "provenance": "recipe:dahl-001",
+                        "sources": [{
+                            "source_type": "recipe",
+                            "source_ref": "dahl-001",
+                            "source_detail": "Red Lentil Dahl"
+                        }],
+                        "safety": {
+                            "basis": "ingredient",
+                            "status": "risky",
+                            "member_flags": [{
+                                "member_id": "maya-uuid",
+                                "status": "risky",
+                                "reason": "Onion is high-FODMAP.",
+                                "substitutions": ["scallion greens"]
+                            }],
+                            "model_version": "test-model",
+                            "rules_version": "dietary-rules-1",
+                            "confidence": 0.9,
+                            "context_hash": "f5c4ef0eec2f500b3ab4fe579bfae80d8c72d1199f0032a08f9a40273d4ca8b6",
+                            "context_hash_version": 1,
+                            "label_hint": "Screened at ingredient level — verify the product label."
+                        }
+                    }]
+                }
+            }
+        }),
+    )
+    .await;
 }
 
 fn assert_header(request: &HttpRequest, name: &str, expected: &str) {
@@ -744,18 +1531,67 @@ async fn respond_json(socket: &mut TcpStream, body: Value) {
     respond(socket, "application/json", &body).await;
 }
 
-async fn respond_sse(socket: &mut TcpStream) {
-    let body = format!(
-        "event: partial\ndata: {{\"text\":\"{TEST_RESPONSE}\"}}\n\nevent: result\ndata: {{\"message\":\"{TEST_RESPONSE}\",\"conversation_id\":\"showcase-conversation\"}}\n\n"
-    );
+async fn respond_sse_message(socket: &mut TcpStream, message: &str) {
+    let partial = serde_json::to_string(&json!({"text": message})).expect("encode SSE partial");
+    let result = serde_json::to_string(&json!({
+        "message": message,
+        "conversation_id": "showcase-conversation"
+    }))
+    .expect("encode SSE result");
+    let body = format!("event: partial\ndata: {partial}\n\nevent: result\ndata: {result}\n\n");
     respond(socket, "text/event-stream", body.as_bytes()).await;
 }
 
+async fn respond_sse_document(socket: &mut TcpStream, document: Value) {
+    let document = serde_json::to_string(&document).expect("encode SSE document");
+    let body = format!("event: result\ndata: {document}\n\n");
+    respond(socket, "text/event-stream", body.as_bytes()).await;
+}
+
+async fn respond_sse_error(socket: &mut TcpStream, code: &str, message: &str) {
+    let error = serde_json::to_string(&json!({
+        "code": code,
+        "message": message,
+        "retryable": false
+    }))
+    .expect("encode SSE error");
+    let body = format!("event: error\ndata: {error}\n\n");
+    respond(socket, "text/event-stream", body.as_bytes()).await;
+}
+
+async fn respond_cancellable_stream(socket: &mut TcpStream) {
+    socket
+        .write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\nevent: partial\ndata: {\"text\":\"Streaming response in progress\"}\n\n",
+        )
+        .await
+        .expect("write cancellable stream fixture");
+    socket.flush().await.expect("flush cancellable stream");
+    let observed_close = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut byte = [0_u8; 1];
+        loop {
+            match socket.read(&mut byte).await {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+        }
+    })
+    .await;
+    assert!(
+        observed_close.is_ok(),
+        "installed client did not close the cancelled response stream"
+    );
+}
+
 async fn respond(socket: &mut TcpStream, content_type: &str, body: &[u8]) {
+    respond_status(socket, "200 OK", content_type, body).await;
+}
+
+async fn respond_status(socket: &mut TcpStream, status: &str, content_type: &str, body: &[u8]) {
     socket
         .write_all(
             format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             )
             .as_bytes(),
@@ -769,33 +1605,57 @@ async fn respond(socket: &mut TcpStream, content_type: &str, body: &[u8]) {
     socket.shutdown().await.expect("close fixture response");
 }
 
-async fn run_first_user_pty(installed_binary: &Path, user_root: &Path, base_url: &str) -> Vec<u8> {
+async fn run_installed_pty(
+    installed_binary: &Path,
+    user_root: &Path,
+    base_url: &str,
+    arguments: &[&str],
+    columns: u16,
+    no_color: bool,
+    actions: Vec<PtyAction>,
+) -> Vec<u8> {
     let installed_binary = installed_binary.to_owned();
     let user_root = user_root.to_owned();
     let base_url = base_url.to_owned();
+    let arguments = arguments
+        .iter()
+        .map(|argument| (*argument).to_owned())
+        .collect::<Vec<_>>();
     tokio::task::spawn_blocking(move || {
-        run_first_user_pty_blocking(&installed_binary, &user_root, &base_url)
+        run_installed_pty_blocking(
+            &installed_binary,
+            &user_root,
+            &base_url,
+            &arguments,
+            columns,
+            no_color,
+            actions,
+        )
     })
     .await
     .expect("join installed PTY driver")
 }
 
-fn run_first_user_pty_blocking(
+fn run_installed_pty_blocking(
     installed_binary: &Path,
     user_root: &Path,
     base_url: &str,
+    arguments: &[String],
+    columns: u16,
+    no_color: bool,
+    actions: Vec<PtyAction>,
 ) -> Vec<u8> {
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
             rows: 30,
-            cols: 80,
+            cols: columns,
             pixel_width: 0,
             pixel_height: 0,
         })
         .expect("open installed showcase PTY");
     let mut command = CommandBuilder::new(installed_binary);
-    command.args(["register", "--device", "--no-browser", "--timeout", "10"]);
+    command.args(arguments);
     for name in [
         "HEYFOOD_API_KEY",
         "HEYFOOD_API_URL",
@@ -824,6 +1684,9 @@ fn run_first_user_pty_blocking(
     command.env("LOCALAPPDATA", user_root.join("local-appdata"));
     command.env("NO_PROXY", "127.0.0.1,localhost");
     command.env("TERM", "xterm-256color");
+    if no_color {
+        command.env("NO_COLOR", "1");
+    }
 
     let mut child = pair
         .slave
@@ -834,7 +1697,7 @@ fn run_first_user_pty_blocking(
     let writer = Arc::new(Mutex::new(
         pair.master.take_writer().expect("take PTY writer"),
     ));
-    let capture = Arc::new(TerminalCapture::default());
+    let capture = Arc::new(TerminalCapture::new(30, columns));
     let reader_capture = Arc::clone(&capture);
     let cursor_writer = Arc::clone(&writer);
     let reader_task = std::thread::spawn(move || {
@@ -862,25 +1725,32 @@ fn run_first_user_pty_blocking(
         }
     });
 
-    capture
-        .wait_for(b"hey.food", Duration::from_secs(20))
-        .unwrap_or_else(|message| terminate_and_panic(&mut *child, message));
-    {
-        let mut writer = writer.lock().expect("lock installed PTY input");
-        writer
-            .write_all(format!("{TEST_PROMPT}\r").as_bytes())
-            .expect("submit installed first turn");
-        writer.flush().expect("flush installed first turn");
+    for action in actions {
+        match action {
+            PtyAction::Wait(needle) => capture
+                .wait_for_semantic(&needle, Duration::from_secs(30))
+                .unwrap_or_else(|message| terminate_and_panic(&mut *child, message)),
+            PtyAction::Submit(value) => {
+                let mut writer = writer.lock().expect("lock installed PTY input");
+                writer
+                    .write_all(format!("{value}\r").as_bytes())
+                    .expect("submit installed PTY input");
+                writer.flush().expect("flush installed PTY input");
+            }
+            PtyAction::CtrlC => {
+                let mut writer = writer.lock().expect("lock installed PTY Ctrl+C");
+                writer.write_all(&[3]).expect("send Ctrl+C");
+                writer.flush().expect("flush Ctrl+C");
+            }
+            PtyAction::CtrlD => {
+                let mut writer = writer.lock().expect("lock installed PTY Ctrl+D");
+                writer.write_all(&[4]).expect("send Ctrl+D");
+                writer.flush().expect("flush Ctrl+D");
+            }
+            PtyAction::Pause(duration) => std::thread::sleep(duration),
+        }
     }
-    capture
-        .wait_for(b"complete.", Duration::from_secs(20))
-        .unwrap_or_else(|message| terminate_and_panic(&mut *child, message));
-    {
-        let mut writer = writer.lock().expect("lock installed PTY exit");
-        writer.write_all(&[4]).expect("send Ctrl+D");
-        writer.flush().expect("flush Ctrl+D");
-    }
-    let status = wait_for_child(&mut *child, Duration::from_secs(15));
+    let status = wait_for_child(&mut *child, Duration::from_secs(20));
     drop(pair.master);
     let _ = reader_task.join();
     assert!(
@@ -921,48 +1791,108 @@ async fn collect_request_evidence(
     requests
 }
 
-fn assert_request_sequence(requests: &[RequestEvidence]) {
-    let observed = requests
-        .iter()
-        .map(|request| (request.method.as_str(), request.path.as_str()))
-        .collect::<Vec<_>>();
+fn assert_fixture_summary(summary: &FixtureSummary) {
     assert_eq!(
-        observed,
-        [
-            ("GET", "/v1/auth/capabilities"),
-            ("POST", "/v1/channel/oauth/device/authorize"),
-            ("POST", "/v1/channel/oauth/device/token"),
-            ("POST", "/v1/channel/oauth/cli/session"),
-            ("GET", "/v1/channel/tools/profile/readiness"),
-            ("GET", "/v1/profile/consent"),
-            ("GET", "/v1/profile/sync"),
-            ("POST", "/v1/agent/converse"),
-        ],
-        "installed first-user request sequence changed"
+        summary.device_authorizations, 1,
+        "returning installed processes must not repeat registration"
+    );
+    assert_eq!(
+        summary.cli_sessions, 1,
+        "returning installed processes must reload the account-bound session"
+    );
+    assert_eq!(summary.consent_grants, 1);
+    assert_eq!(summary.profile_uploads, 1);
+    assert_eq!(summary.proposal_cancellations, 2);
+    assert_eq!(summary.ctrl_c_proposal_cancellations, 1);
+    assert_eq!(summary.proposal_accepts, 1);
+    assert_eq!(summary.stale_list_rejections, 1);
+    assert_eq!(summary.stale_context_rejections, 1);
+    assert_eq!(summary.stream_cancellations, 1);
+    assert_eq!(
+        summary.list_version, 5,
+        "one accepted proposal must advance the Grocery list exactly once"
+    );
+    for prompt in [
+        TEST_PROMPT,
+        RETURNING_PROMPT,
+        GROCERY_CANCEL_PROMPT,
+        GROCERY_EDIT_PROMPT,
+        GROCERY_STALE_LIST_PROMPT,
+        GROCERY_STALE_CONTEXT_PROMPT,
+        GROCERY_CTRL_C_PROMPT,
+        STREAM_CANCEL_PROMPT,
+        UNCERTAIN_PROMPT,
+        FAILURE_PROMPT,
+        WIDTH_PROMPT,
+    ] {
+        assert_eq!(
+            summary.prompt_counts.get(prompt),
+            Some(&1),
+            "installed prompt must be dispatched exactly once: {prompt}"
+        );
+    }
+    assert_eq!(
+        summary.prompt_counts.len(),
+        11,
+        "fixture must observe only the bounded core-matrix turns"
     );
 }
 
-fn assert_terminal_contract(terminal: &[u8]) {
+fn assert_core_terminal_contract(
+    clean_user: &[u8],
+    returning_user: &[u8],
+    width_40: &[u8],
+    width_120_no_color: &[u8],
+    interrupt_exit: &[u8],
+) {
     for expected in [
-        b"Open this URL to continue:".as_slice(),
-        b"Approval code: SHOW-CASE".as_slice(),
-        b"Your hello.food account is connected.".as_slice(),
-        b"hey.food".as_slice(),
-        b"\x1b[?1049h".as_slice(),
-        b"\x1b[?1049l".as_slice(),
+        "Open this URL to continue:",
+        "Approval code: SHOW-CASE",
+        "Your hello.food account is connected.",
     ] {
-        assert!(
-            terminal
-                .windows(expected.len())
-                .any(|window| window == expected),
-            "installed terminal evidence omitted {:?}",
-            String::from_utf8_lossy(expected)
-        );
+        assert_raw_terminal_text(clean_user, expected);
     }
-    assert_semantic_terminal_text(terminal, TEST_PROMPT);
-    assert_semantic_terminal_text(terminal, TEST_RESPONSE);
+    assert_no_color_sgr(width_120_no_color);
+
+    for terminal in [
+        clean_user,
+        returning_user,
+        width_40,
+        width_120_no_color,
+        interrupt_exit,
+    ] {
+        assert_terminal_restored(terminal);
+        assert_terminal_redacted(terminal);
+    }
+}
+
+fn assert_raw_terminal_text(terminal: &[u8], expected: &str) {
+    assert!(
+        terminal
+            .windows(expected.len())
+            .any(|window| window == expected.as_bytes()),
+        "installed terminal evidence omitted raw text {expected:?}"
+    );
+}
+
+fn assert_terminal_restored(terminal: &[u8]) {
+    let entered = terminal
+        .windows(b"\x1b[?1049h".len())
+        .rposition(|window| window == b"\x1b[?1049h")
+        .expect("installed TUI must enter the alternate screen");
+    let restored = terminal
+        .windows(b"\x1b[?1049l".len())
+        .rposition(|window| window == b"\x1b[?1049l")
+        .expect("installed TUI must restore the primary screen");
+    assert!(
+        restored > entered,
+        "terminal restoration must follow alternate-screen entry"
+    );
+}
+
+fn assert_terminal_redacted(terminal: &[u8]) {
     for forbidden in [
-        b"hf_dc_showcase".as_slice(),
+        TEST_DEVICE_CODE.as_bytes(),
         b"hf_ct_showcase".as_slice(),
         b"hf_cr_showcase".as_slice(),
         b"hf_at_showcase".as_slice(),
@@ -978,13 +1908,35 @@ fn assert_terminal_contract(terminal: &[u8]) {
     }
 }
 
-fn assert_semantic_terminal_text(terminal: &[u8], expected: &str) {
-    let observed = compact_terminal_text(&strip_ansi_sequences(terminal));
-    let expected = compact_terminal_text(expected);
-    assert!(
-        observed.contains(&expected),
-        "installed terminal evidence omitted semantic text {expected:?}; observed {observed:?}"
-    );
+fn assert_no_color_sgr(terminal: &[u8]) {
+    let mut index = 0;
+    while index + 2 < terminal.len() {
+        if terminal[index] != 0x1b || terminal[index + 1] != b'[' {
+            index += 1;
+            continue;
+        }
+        let parameters_start = index + 2;
+        let mut end = parameters_start;
+        while end < terminal.len() && !(0x40..=0x7e).contains(&terminal[end]) {
+            end += 1;
+        }
+        if end >= terminal.len() {
+            break;
+        }
+        if terminal[end] == b'm' {
+            let parameters = String::from_utf8_lossy(&terminal[parameters_start..end]);
+            for value in parameters
+                .split(';')
+                .filter_map(|part| part.parse::<u16>().ok())
+            {
+                assert!(
+                    !matches!(value, 30..=38 | 40..=48 | 90..=97 | 100..=107),
+                    "NO_COLOR terminal emitted color SGR {value} in {parameters:?}"
+                );
+            }
+        }
+        index = end + 1;
+    }
 }
 
 fn compact_terminal_text(value: &str) -> String {
@@ -994,74 +1946,390 @@ fn compact_terminal_text(value: &str) -> String {
         .collect()
 }
 
-fn strip_ansi_sequences(value: &[u8]) -> String {
-    let mut plain = Vec::with_capacity(value.len());
-    let mut index = 0;
-    while index < value.len() {
-        if value[index] != 0x1b {
-            plain.push(value[index]);
-            index += 1;
-            continue;
-        }
-        index += 1;
-        match value.get(index).copied() {
-            Some(b'[') => {
-                index += 1;
-                while index < value.len() {
-                    let byte = value[index];
-                    index += 1;
-                    if (0x40..=0x7e).contains(&byte) {
-                        break;
-                    }
-                }
-            }
-            Some(b']') => {
-                index += 1;
-                while index < value.len() {
-                    if value[index] == 0x07 {
-                        index += 1;
-                        break;
-                    }
-                    if value[index] == 0x1b && value.get(index + 1) == Some(&b'\\') {
-                        index += 2;
-                        break;
-                    }
-                    index += 1;
-                }
-            }
-            Some(_) => index += 1,
-            None => {}
+struct VirtualScreen {
+    cells: Vec<Vec<char>>,
+    row: usize,
+    column: usize,
+    saved_row: usize,
+    saved_column: usize,
+}
+
+impl VirtualScreen {
+    fn new(rows: usize, columns: usize) -> Self {
+        Self {
+            cells: vec![vec![' '; columns]; rows],
+            row: 0,
+            column: 0,
+            saved_row: 0,
+            saved_column: 0,
         }
     }
-    String::from_utf8_lossy(&plain).into_owned()
+
+    fn clear(&mut self) {
+        for row in &mut self.cells {
+            row.fill(' ');
+        }
+        self.row = 0;
+        self.column = 0;
+    }
+
+    fn columns(&self) -> usize {
+        self.cells.first().map_or(0, Vec::len)
+    }
+
+    fn scroll_up(&mut self, count: usize) {
+        if self.cells.is_empty() {
+            return;
+        }
+        let count = count.min(self.cells.len());
+        self.cells.rotate_left(count);
+        for row in self.cells.iter_mut().rev().take(count) {
+            row.fill(' ');
+        }
+    }
+
+    fn scroll_down(&mut self, count: usize) {
+        if self.cells.is_empty() {
+            return;
+        }
+        let count = count.min(self.cells.len());
+        self.cells.rotate_right(count);
+        for row in self.cells.iter_mut().take(count) {
+            row.fill(' ');
+        }
+    }
+
+    fn normalize_cursor(&mut self) {
+        if self.cells.is_empty() {
+            self.row = 0;
+            self.column = 0;
+            return;
+        }
+        if self.row >= self.cells.len() {
+            let overflow = self.row - self.cells.len() + 1;
+            self.scroll_up(overflow);
+            self.row = self.cells.len() - 1;
+        }
+        self.column = self.column.min(self.columns().saturating_sub(1));
+    }
+
+    fn newline(&mut self) {
+        self.row = self.row.saturating_add(1);
+        self.normalize_cursor();
+    }
+
+    fn put(&mut self, character: char) {
+        let columns = self.columns();
+        if self.cells.is_empty() || columns == 0 {
+            return;
+        }
+        if self.column >= columns {
+            self.column = 0;
+            self.newline();
+        }
+        let width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if width == 0 {
+            return;
+        }
+        self.cells[self.row][self.column] = character;
+        for offset in 1..width {
+            if self.column + offset < columns {
+                self.cells[self.row][self.column + offset] = ' ';
+            }
+        }
+        self.column = self.column.saturating_add(width);
+    }
+
+    fn erase_display(&mut self, mode: usize) {
+        match mode {
+            0 => {
+                self.erase_line(0);
+                for row in self.cells.iter_mut().skip(self.row.saturating_add(1)) {
+                    row.fill(' ');
+                }
+            }
+            1 => {
+                self.erase_line(1);
+                for row in self.cells.iter_mut().take(self.row) {
+                    row.fill(' ');
+                }
+            }
+            2 | 3 => {
+                for row in &mut self.cells {
+                    row.fill(' ');
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn erase_line(&mut self, mode: usize) {
+        let columns = self.columns();
+        if self.cells.is_empty() || columns == 0 {
+            return;
+        }
+        match mode {
+            0 => self.cells[self.row][self.column.min(columns)..].fill(' '),
+            1 => self.cells[self.row][..=self.column.min(columns - 1)].fill(' '),
+            2 => self.cells[self.row].fill(' '),
+            _ => {}
+        }
+    }
+
+    fn apply_csi(&mut self, parameters: &[u8], final_byte: u8) {
+        let parameters = parameters.strip_prefix(b"?").unwrap_or(parameters);
+        let values = parameters
+            .split(|byte| *byte == b';')
+            .map(|value| {
+                std::str::from_utf8(value)
+                    .ok()
+                    .and_then(|value| value.split(':').next())
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(0)
+            })
+            .collect::<Vec<_>>();
+        let value = |index: usize, default: usize| {
+            values
+                .get(index)
+                .copied()
+                .filter(|value| *value != 0)
+                .unwrap_or(default)
+        };
+        match final_byte {
+            b'A' => self.row = self.row.saturating_sub(value(0, 1)),
+            b'B' => {
+                self.row = self
+                    .row
+                    .saturating_add(value(0, 1))
+                    .min(self.cells.len().saturating_sub(1));
+            }
+            b'C' => {
+                self.column = self
+                    .column
+                    .saturating_add(value(0, 1))
+                    .min(self.columns().saturating_sub(1));
+            }
+            b'D' => self.column = self.column.saturating_sub(value(0, 1)),
+            b'E' => {
+                self.row = self
+                    .row
+                    .saturating_add(value(0, 1))
+                    .min(self.cells.len().saturating_sub(1));
+                self.column = 0;
+            }
+            b'F' => {
+                self.row = self.row.saturating_sub(value(0, 1));
+                self.column = 0;
+            }
+            b'G' | b'`' => self.column = value(0, 1).saturating_sub(1),
+            b'H' | b'f' => {
+                self.row = value(0, 1).saturating_sub(1);
+                self.column = value(1, 1).saturating_sub(1);
+                self.normalize_cursor();
+            }
+            b'J' => self.erase_display(values.first().copied().unwrap_or(0)),
+            b'K' => self.erase_line(values.first().copied().unwrap_or(0)),
+            b'P' => {
+                let count = value(0, 1).min(self.columns().saturating_sub(self.column));
+                if let Some(row) = self.cells.get_mut(self.row) {
+                    row[self.column..].rotate_left(count);
+                    row.iter_mut()
+                        .rev()
+                        .take(count)
+                        .for_each(|cell| *cell = ' ');
+                }
+            }
+            b'S' => self.scroll_up(value(0, 1)),
+            b'T' => self.scroll_down(value(0, 1)),
+            b'X' => {
+                let end = self.column.saturating_add(value(0, 1)).min(self.columns());
+                if let Some(row) = self.cells.get_mut(self.row) {
+                    row[self.column..end].fill(' ');
+                }
+            }
+            b'd' => {
+                self.row = value(0, 1)
+                    .saturating_sub(1)
+                    .min(self.cells.len().saturating_sub(1));
+            }
+            b's' => {
+                self.saved_row = self.row;
+                self.saved_column = self.column;
+            }
+            b'u' => {
+                self.row = self.saved_row.min(self.cells.len().saturating_sub(1));
+                self.column = self.saved_column.min(self.columns().saturating_sub(1));
+            }
+            _ => {}
+        }
+    }
+
+    fn text(&self) -> String {
+        self.cells
+            .iter()
+            .map(|row| row.iter().collect::<String>().trim_end().to_owned())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+fn terminal_snapshot(value: &[u8], rows: usize, columns: usize) -> String {
+    let mut primary = VirtualScreen::new(rows, columns);
+    let mut alternate = VirtualScreen::new(rows, columns);
+    let mut in_alternate_screen = false;
+    let mut index = 0;
+    while index < value.len() {
+        let screen = if in_alternate_screen {
+            &mut alternate
+        } else {
+            &mut primary
+        };
+        match value[index] {
+            b'\r' => {
+                screen.column = 0;
+                index += 1;
+            }
+            b'\n' => {
+                screen.newline();
+                index += 1;
+            }
+            0x08 => {
+                screen.column = screen.column.saturating_sub(1);
+                index += 1;
+            }
+            b'\t' => {
+                screen.column = ((screen.column / 8) + 1)
+                    .saturating_mul(8)
+                    .min(screen.columns().saturating_sub(1));
+                index += 1;
+            }
+            0x1b => {
+                index += 1;
+                match value.get(index).copied() {
+                    Some(b'[') => {
+                        index += 1;
+                        let parameters_start = index;
+                        while index < value.len() && !(0x40..=0x7e).contains(&value[index]) {
+                            index += 1;
+                        }
+                        if index >= value.len() {
+                            break;
+                        }
+                        let final_byte = value[index];
+                        let parameters = &value[parameters_start..index];
+                        if matches!(final_byte, b'h' | b'l')
+                            && parameters.strip_prefix(b"?") == Some(b"1049")
+                        {
+                            in_alternate_screen = final_byte == b'h';
+                            if in_alternate_screen {
+                                alternate.clear();
+                            }
+                        } else {
+                            let screen = if in_alternate_screen {
+                                &mut alternate
+                            } else {
+                                &mut primary
+                            };
+                            screen.apply_csi(parameters, final_byte);
+                        }
+                        index += 1;
+                    }
+                    Some(b']') => {
+                        index += 1;
+                        while index < value.len() {
+                            if value[index] == 0x07 {
+                                index += 1;
+                                break;
+                            }
+                            if value[index] == 0x1b && value.get(index + 1) == Some(&b'\\') {
+                                index += 2;
+                                break;
+                            }
+                            index += 1;
+                        }
+                    }
+                    Some(b'7') => {
+                        screen.saved_row = screen.row;
+                        screen.saved_column = screen.column;
+                        index += 1;
+                    }
+                    Some(b'8') => {
+                        screen.row = screen.saved_row.min(screen.cells.len().saturating_sub(1));
+                        screen.column = screen.saved_column.min(screen.columns().saturating_sub(1));
+                        index += 1;
+                    }
+                    Some(_) => index += 1,
+                    None => {}
+                }
+            }
+            byte if byte < 0x20 || byte == 0x7f => index += 1,
+            _ => {
+                let width = (1..=4)
+                    .find(|width| {
+                        index + width <= value.len()
+                            && std::str::from_utf8(&value[index..index + width])
+                                .ok()
+                                .is_some_and(|text| text.chars().count() == 1)
+                    })
+                    .unwrap_or(1);
+                if let Ok(text) = std::str::from_utf8(&value[index..index + width])
+                    && let Some(character) = text.chars().next()
+                {
+                    screen.put(character);
+                }
+                index += width;
+            }
+        }
+    }
+    if in_alternate_screen {
+        alternate.text()
+    } else {
+        primary.text()
+    }
 }
 
 #[test]
-fn installed_harness_inventory_matches_showcase_contract() {
+fn terminal_snapshot_reconstructs_differential_updates() {
+    let bytes = concat!(
+        "\u{1b}[?1049h",
+        "\u{1b}[2J",
+        "\u{1b}[1;1Hhello",
+        "\u{1b}[2;1Hworld",
+        "\u{1b}[1;1Hj",
+        "\u{1b}[2;3H\u{1b}[2X",
+        "\u{1b}[2;3Hrl"
+    );
+    let snapshot = terminal_snapshot(bytes.as_bytes(), 3, 12);
+    assert_eq!(snapshot, "jello\nworld\n");
+}
+
+#[test]
+fn installed_harness_inventory_matches_core_release_contract() {
     let contract: Value = serde_json::from_str(include_str!(
-        "../../../tests/showcase/showcase-contract.v1.json"
+        "../../../tests/showcase/core-release-matrix.v1.json"
     ))
-    .expect("decode showcase contract");
-    let observed = contract["journeys"]
+    .expect("decode installed core release contract");
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(contract["release"], "0.5.0");
+    let observed = contract["groups"]
         .as_array()
-        .expect("showcase journeys")
+        .expect("core release groups")
         .iter()
-        .flat_map(|journey| {
-            let journey_id = journey["id"].as_str().expect("journey ID");
-            journey["stages"]
-                .as_array()
-                .expect("journey stages")
-                .iter()
-                .map(move |stage| {
-                    format!("{journey_id}.{}", stage["id"].as_str().expect("stage ID"))
-                })
-        })
+        .map(|group| group["id"].as_str().expect("core group ID").to_owned())
         .collect::<BTreeSet<_>>();
     assert_eq!(
         observed,
-        SHOWCASE_STAGES
+        CORE_MATRIX_GROUPS
             .into_iter()
             .map(str::to_owned)
             .collect::<BTreeSet<_>>()
+    );
+    assert_eq!(
+        contract["explicit_non_gates"],
+        json!(["native_voice", "menu_watch_diff"])
+    );
+    assert_eq!(
+        contract["canary_or_defer"],
+        json!(["health", "menu_watch_management"])
     );
 }
