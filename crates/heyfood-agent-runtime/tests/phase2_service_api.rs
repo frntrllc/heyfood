@@ -175,6 +175,20 @@ fn list_id() -> GroceryEntityId {
     GroceryEntityId::parse("00000000-0000-4000-8000-000000000123").unwrap()
 }
 
+fn menu_watch_create_request() -> MenuWatchCreateRequestWire {
+    MenuWatchCreateRequestWire {
+        restaurant_id: RestaurantId::parse("00000000-0000-4000-8000-000000000456").unwrap(),
+        cadence: WatchCadenceWire {
+            weekday: WatchWeekday::new(3).unwrap(),
+            hour: WatchHour::new(9).unwrap(),
+        },
+        notify: true,
+        menu_url: None,
+        confirm_menu_url: false,
+        tz: None,
+    }
+}
+
 #[tokio::test]
 async fn capability_discovery_gates_typed_grocery_reads() {
     let (listener, service) = fixture_service().await;
@@ -315,6 +329,11 @@ async fn menu_watch_conflicts_preserve_distinct_safe_recovery_guidance() {
             let (mut socket, _) = listener.accept().await.unwrap();
             let request = read_request(&mut socket).await;
             assert!(request.starts_with("POST /v1/menu/watch "));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer session-access")
+            );
             assert_eq!(
                 request_body(&request),
                 json!({
@@ -336,18 +355,7 @@ async fn menu_watch_conflicts_preserve_distinct_safe_recovery_guidance() {
             .menu_watch_create(
                 &credentials(),
                 OperationId::new(),
-                &MenuWatchCreateRequestWire {
-                    restaurant_id: RestaurantId::parse("00000000-0000-4000-8000-000000000456")
-                        .unwrap(),
-                    cadence: WatchCadenceWire {
-                        weekday: WatchWeekday::new(3).unwrap(),
-                        hour: WatchHour::new(9).unwrap(),
-                    },
-                    notify: true,
-                    menu_url: None,
-                    confirm_menu_url: false,
-                    tz: None,
-                },
+                &menu_watch_create_request(),
                 CancellationToken::new(),
             )
             .await
@@ -378,20 +386,7 @@ async fn unknown_or_unreadable_menu_watch_conflicts_remain_truthful() {
             .menu_watch_create(
                 &credentials(),
                 OperationId::new(),
-                &MenuWatchCreateRequestWire {
-                    restaurant_id: RestaurantId::parse(
-                        "00000000-0000-4000-8000-000000000456",
-                    )
-                    .unwrap(),
-                    cadence: WatchCadenceWire {
-                        weekday: WatchWeekday::new(3).unwrap(),
-                        hour: WatchHour::new(9).unwrap(),
-                    },
-                    notify: false,
-                    menu_url: None,
-                    confirm_menu_url: false,
-                    tz: None,
-                },
+                &menu_watch_create_request(),
                 CancellationToken::new(),
             )
             .await
@@ -399,6 +394,123 @@ async fn unknown_or_unreadable_menu_watch_conflicts_remain_truthful() {
         assert_eq!(error.code, "menu_watch_conflict");
         assert!(!error.message.contains("confirm"));
         assert!(!error.outcome_uncertain);
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn menu_watch_cancellation_after_dispatch_is_uncertain_and_never_retried() {
+    let (listener, service) = fixture_service().await;
+    let (dispatched, dispatched_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/menu/watch "));
+        dispatched.send(()).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        drop(socket);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(250), listener.accept())
+                .await
+                .is_err(),
+            "cancelled Menu Watch mutation was retried"
+        );
+    });
+    let cancellation = CancellationToken::new();
+    let task_cancellation = cancellation.clone();
+    let task = tokio::spawn(async move {
+        service
+            .menu_watch_create(
+                &credentials(),
+                OperationId::new(),
+                &menu_watch_create_request(),
+                task_cancellation,
+            )
+            .await
+    });
+    dispatched_rx.await.unwrap();
+    cancellation.cancel();
+    let error = task.await.unwrap().unwrap_err();
+    assert_eq!(error.code, "request_cancelled_after_dispatch");
+    assert!(error.outcome_uncertain);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn menu_watch_transport_loss_after_dispatch_is_uncertain_and_never_retried() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/menu/watch "));
+        drop(socket);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(250), listener.accept())
+                .await
+                .is_err(),
+            "disconnected Menu Watch mutation was retried"
+        );
+    });
+    let error = service
+        .menu_watch_create(
+            &credentials(),
+            OperationId::new(),
+            &menu_watch_create_request(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "request_transport");
+    assert!(error.outcome_uncertain);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn invalid_menu_watch_success_bodies_are_uncertain_and_never_retried() {
+    for (response, expected_code) in [
+        (
+            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: 1\r\nConnection: close\r\n\r\n{"
+                .to_owned(),
+            "response_json",
+        ),
+        (
+            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{"
+                .to_owned(),
+            "response_transport",
+        ),
+        (
+            format!(
+                "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                4 * 1024 * 1024 + 1
+            ),
+            "response_too_large",
+        ),
+    ] {
+        let (listener, service) = fixture_service().await;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            assert!(request.starts_with("POST /v1/menu/watch "));
+            socket.write_all(response.as_bytes()).await.unwrap();
+            drop(socket);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                    .await
+                    .is_err(),
+                "invalid-success Menu Watch mutation was retried"
+            );
+        });
+        let error = service
+            .menu_watch_create(
+                &credentials(),
+                OperationId::new(),
+                &menu_watch_create_request(),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, expected_code);
+        assert!(error.outcome_uncertain);
         server.await.unwrap();
     }
 }
