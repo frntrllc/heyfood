@@ -63,6 +63,8 @@ const CORE_MATRIX_GROUPS: [&str; 5] = [
     "failure-safety",
     "artifact-behavior",
 ];
+const TERMINAL_ENTER_SEQUENCE: &[u8] = b"\x1b[?1049h\x1b[?2004h\x1b[?25l";
+const TERMINAL_RESTORE_SEQUENCE: &[u8] = b"\x1b[?2004l\x1b[?25h\x1b[?1049l";
 
 struct TempRoot(PathBuf);
 
@@ -265,6 +267,28 @@ impl TerminalCapture {
                 return Err(format!(
                     "terminal output did not contain {:?}; observed {:?}",
                     needle, observed
+                ));
+            }
+            let remaining = deadline.saturating_duration_since(now);
+            let (next, _) = self
+                .changed
+                .wait_timeout(bytes, remaining.min(Duration::from_millis(100)))
+                .map_err(|_| "terminal capture poisoned")?;
+            bytes = next;
+        }
+    }
+
+    fn wait_for_bytes(&self, needle: &[u8], timeout: Duration) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
+        let mut bytes = self.bytes.lock().map_err(|_| "terminal capture poisoned")?;
+        loop {
+            if bytes.windows(needle.len()).any(|window| window == needle) {
+                return Ok(());
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(format!(
+                    "terminal output did not contain required byte sequence {needle:?}"
                 ));
             }
             let remaining = deadline.saturating_duration_since(now);
@@ -1783,6 +1807,11 @@ fn run_installed_pty_blocking(
         }
     }
     let status = wait_for_child(&mut *child, Duration::from_secs(20));
+    if status.success() {
+        capture
+            .wait_for_bytes(TERMINAL_RESTORE_SEQUENCE, Duration::from_secs(2))
+            .unwrap_or_else(|message| panic!("{message}"));
+    }
     drop(pair.master);
     let _ = reader_task.join();
     assert!(
@@ -1908,15 +1937,13 @@ fn assert_raw_terminal_text(terminal: &[u8], expected: &str) {
 }
 
 fn assert_terminal_restored(terminal: &[u8]) {
-    const ENTER_SEQUENCE: &[u8] = b"\x1b[?1049h\x1b[?2004h\x1b[?25l";
-    const RESTORE_SEQUENCE: &[u8] = b"\x1b[?2004l\x1b[?25h\x1b[?1049l";
     let entered = terminal
-        .windows(ENTER_SEQUENCE.len())
-        .rposition(|window| window == ENTER_SEQUENCE)
+        .windows(TERMINAL_ENTER_SEQUENCE.len())
+        .rposition(|window| window == TERMINAL_ENTER_SEQUENCE)
         .expect("installed TUI must enter alternate screen, enable paste, and hide the cursor");
     let restored = terminal
-        .windows(RESTORE_SEQUENCE.len())
-        .rposition(|window| window == RESTORE_SEQUENCE)
+        .windows(TERMINAL_RESTORE_SEQUENCE.len())
+        .rposition(|window| window == TERMINAL_RESTORE_SEQUENCE)
         .expect("installed TUI must disable paste, show the cursor, and restore primary screen");
     assert!(
         restored > entered,
