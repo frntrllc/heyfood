@@ -50,6 +50,12 @@ Keychain, Secret Service, or Credential Manager. macOS uses a disposable
 qualification Keychain and records its destruction as separate evidence so
 credentials are not left in the runner's login Keychain.
 
+Each protected build job runs the per-archive smoke gate because it owns
+exactly one target archive. The publication and public-download jobs separately
+run the strict complete-set verifier, which requires all five archives and the
+canonical `SHA256SUMS` manifest. A per-target job therefore cannot weaken or
+accidentally invoke the complete publication-set assertion.
+
 Candidate evidence remains incomplete until all five protected jobs pass and
 an independent reviewer approves the exact product SHA and archive digests.
 Release evidence remains incomplete until the subsequently published,

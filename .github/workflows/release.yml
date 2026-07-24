@@ -164,7 +164,7 @@ jobs:
           HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
           TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.validate.outputs.version }}
-        run: scripts/release/smoke.sh dist "$VERSION" "$TARGET"
+        run: scripts/release/smoke-archive.sh dist "$VERSION" "$TARGET"
       - name: Package the exact Windows executable
         if: runner.os == 'Windows'
         shell: pwsh

@@ -416,7 +416,7 @@ jobs:
         env:
           HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
           TARGET: ${{ matrix.target }}
-        run: scripts/release/smoke.sh candidate-dist "$HEYFOOD_SHOWCASE_VERSION" "$TARGET"
+        run: scripts/release/smoke-archive.sh candidate-dist "$HEYFOOD_SHOWCASE_VERSION" "$TARGET"
       - name: Create an ephemeral macOS qualification keychain
         if: runner.os == 'macOS'
         shell: bash
