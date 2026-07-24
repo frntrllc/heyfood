@@ -63,8 +63,12 @@ const CORE_MATRIX_GROUPS: [&str; 5] = [
     "failure-safety",
     "artifact-behavior",
 ];
-const TERMINAL_ENTER_SEQUENCE: &[u8] = b"\x1b[?1049h\x1b[?2004h\x1b[?25l";
-const TERMINAL_RESTORE_SEQUENCE: &[u8] = b"\x1b[?2004l\x1b[?25h\x1b[?1049l";
+const ENTER_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049h";
+const LEAVE_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049l";
+const ENABLE_BRACKETED_PASTE: &[u8] = b"\x1b[?2004h";
+const DISABLE_BRACKETED_PASTE: &[u8] = b"\x1b[?2004l";
+const HIDE_CURSOR: &[u8] = b"\x1b[?25l";
+const SHOW_CURSOR: &[u8] = b"\x1b[?25h";
 
 struct TempRoot(PathBuf);
 
@@ -278,25 +282,33 @@ impl TerminalCapture {
         }
     }
 
-    fn wait_for_bytes(&self, needle: &[u8], timeout: Duration) -> Result<(), String> {
+    fn wait_for_final_terminal_state(
+        &self,
+        timeout: Duration,
+        settle: Duration,
+    ) -> Result<(), String> {
         let deadline = Instant::now() + timeout;
         let mut bytes = self.bytes.lock().map_err(|_| "terminal capture poisoned")?;
         loop {
-            if bytes.windows(needle.len()).any(|window| window == needle) {
-                return Ok(());
-            }
             let now = Instant::now();
             if now >= deadline {
-                return Err(format!(
-                    "terminal output did not contain required byte sequence {needle:?}"
-                ));
+                return Err("terminal output did not settle in the restored final state".into());
             }
             let remaining = deadline.saturating_duration_since(now);
-            let (next, _) = self
+            let observed_length = bytes.len();
+            let stable_for = if terminal_final_state(&bytes) {
+                settle.min(remaining)
+            } else {
+                Duration::from_millis(100).min(remaining)
+            };
+            let (next, wait) = self
                 .changed
-                .wait_timeout(bytes, remaining.min(Duration::from_millis(100)))
+                .wait_timeout(bytes, stable_for)
                 .map_err(|_| "terminal capture poisoned")?;
             bytes = next;
+            if wait.timed_out() && bytes.len() == observed_length && terminal_final_state(&bytes) {
+                return Ok(());
+            }
         }
     }
 
@@ -1809,7 +1821,7 @@ fn run_installed_pty_blocking(
     let status = wait_for_child(&mut *child, Duration::from_secs(20));
     if status.success() {
         capture
-            .wait_for_bytes(TERMINAL_RESTORE_SEQUENCE, Duration::from_secs(2))
+            .wait_for_final_terminal_state(Duration::from_secs(2), Duration::from_millis(200))
             .unwrap_or_else(|message| panic!("{message}"));
     }
     drop(pair.master);
@@ -1937,18 +1949,27 @@ fn assert_raw_terminal_text(terminal: &[u8], expected: &str) {
 }
 
 fn assert_terminal_restored(terminal: &[u8]) {
-    let entered = terminal
-        .windows(TERMINAL_ENTER_SEQUENCE.len())
-        .rposition(|window| window == TERMINAL_ENTER_SEQUENCE)
-        .expect("installed TUI must enter alternate screen, enable paste, and hide the cursor");
-    let restored = terminal
-        .windows(TERMINAL_RESTORE_SEQUENCE.len())
-        .rposition(|window| window == TERMINAL_RESTORE_SEQUENCE)
-        .expect("installed TUI must disable paste, show the cursor, and restore primary screen");
     assert!(
-        restored > entered,
-        "complete presentation restoration must follow terminal entry"
+        terminal_final_state(terminal),
+        "installed TUI must finish on the primary screen with paste disabled and cursor visible"
     );
+}
+
+fn terminal_final_state(terminal: &[u8]) -> bool {
+    let after = |restored: &[u8], entered: &[u8]| {
+        terminal
+            .windows(restored.len())
+            .rposition(|window| window == restored)
+            .zip(
+                terminal
+                    .windows(entered.len())
+                    .rposition(|window| window == entered),
+            )
+            .is_some_and(|(restored, entered)| restored > entered)
+    };
+    after(LEAVE_ALTERNATE_SCREEN, ENTER_ALTERNATE_SCREEN)
+        && after(DISABLE_BRACKETED_PASTE, ENABLE_BRACKETED_PASTE)
+        && after(SHOW_CURSOR, HIDE_CURSOR)
 }
 
 fn assert_terminal_redacted(terminal: &[u8]) {
@@ -2362,6 +2383,25 @@ fn terminal_snapshot_reconstructs_differential_updates() {
     );
     let snapshot = terminal_snapshot(bytes.as_bytes(), 3, 12);
     assert_eq!(snapshot, "jello\nworld\n");
+}
+
+#[test]
+fn terminal_final_state_accepts_conpty_interleaving() {
+    let restored = concat!(
+        "\u{1b}[?1049h",
+        "\u{1b}[?2004h",
+        "\u{1b}[?25l",
+        "\u{1b}[?25h",
+        "\u{1b}[?2004l",
+        "\u{1b}[?1049l",
+        "\u{1b}[?25l",
+        "conpty bookkeeping",
+        "\u{1b}[?25h"
+    );
+    assert!(terminal_final_state(restored.as_bytes()));
+    assert!(!terminal_final_state(
+        format!("{restored}\u{1b}[?25l").as_bytes()
+    ));
 }
 
 #[test]
