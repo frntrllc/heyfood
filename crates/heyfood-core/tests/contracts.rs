@@ -239,6 +239,31 @@ fn frozen_c3_drives_lossless_grocery_confirmation_semantics() {
         ),
         Err(GroceryErrorCode::EditInvalid)
     );
+    let complete_item = serde_json::json!({
+        "name": "💚".repeat(255),
+        "quantity": 1.0,
+        "package_quantity": 1,
+        "unit": "💚".repeat(40),
+        "note": "💚".repeat(255),
+        "intended_for": "💚".repeat(64),
+        "source_type": "manual",
+        "source_ref": "💚".repeat(255),
+        "source_detail": "💚".repeat(255)
+    });
+    assert!(
+        GroceryEditPatch::new(
+            serde_json::from_value(serde_json::json!({"items": vec![complete_item.clone(); 25]}))
+                .unwrap()
+        )
+        .is_ok(),
+        "the frozen maximum of 25 complete GroceryItemInput values must fit"
+    );
+    assert_eq!(
+        GroceryEditPatch::new(
+            serde_json::from_value(serde_json::json!({"items": vec![complete_item; 26]})).unwrap()
+        ),
+        Err(GroceryErrorCode::EditInvalid)
+    );
     assert!(
         proposed
             .command(GroceryConfirmationDecision::from_contract_fields(None, None).unwrap())

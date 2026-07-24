@@ -13,6 +13,8 @@ hidden legacy command is not support: unavailable paths return
 | Native v0.4.1 | Unsupported | Do not install or use. Published before release authorization. |
 | Hosted installer | Suspended | Prints the incident notice and exits `1` without installing anything. |
 | Source | Available | Public for inspection and contributor evaluation under Apache 2.0. |
+| Windows x86-64 archive | Source/CI qualification | Deterministic zip packaging, installed-executable smoke, and mandatory release Authenticode verification are wired; protected signing credentials, first signed execution, and the public per-user installer remain release blockers. |
+| macOS native archives | Source/CI qualification | Mandatory Developer ID hardened-runtime signing and Apple notarization are wired into the protected release environment; protected credentials and first notarized execution remain release blockers. |
 | Replacement native release | Unavailable | Not available until testing and release approval are complete. |
 
 ## Product capabilities
@@ -25,14 +27,14 @@ hidden legacy command is not support: unavailable paths return
 | Conversation continuation | `heyfood reply --conversation-id …` | Hosted conversation state | Current source command |
 | Meal logging | `heyfood log` | Hosted agent and meal memory | Current source command |
 | Item evaluation | `heyfood item` | Restaurant/menu evidence and dietary evaluation | Current source command |
-| Grocery | `heyfood grocery` | Read, prepare, export, and explicitly confirm | Current source command |
+| Grocery | `heyfood grocery` plus TUI confirmation cards | Read, prepare, export, explicitly confirm/cancel, and correct pending add-item names | Current source command; production canaries pending |
 | Oura health context | `heyfood health` | Connect, sync, read, and disconnect | Current source command |
 | Apple Health | No direct CLI command | Daily summaries arrive through the hello.food app | Backend available |
 | Household context | Used by hosted turns and Grocery | Profiles and household-aware evaluation | Backend available; native roster management unavailable |
 | Restaurants and recipes | Via `ask` and `item` | Resolution, menu evidence, and recipe tools | Hosted through current commands |
-| Menu Watch | No native command | Watch creation and diff service behind operational gates | Backend available / gated |
-| Interactive TUI | Bare `heyfood` remains informational | N/A | Preview / in testing |
-| Voice capture | No native command | Transcription contract exists | Preview / in testing |
+| Menu Watch | `heyfood watch` plus `/watch` TUI panel | Create/list/remove are deployed; scheduled execution remains operationally gated; no account-scoped diff-read route exists | Current source management command; diff view blocked on backend contract |
+| Interactive TUI | Draft branch launches authenticated chat and read panels | N/A | Source preview; packaged archives run the bounded `0.5.0` clean/returning-user, household Grocery, failure-safety, and 40/80/120-column matrix in CI. Signed-candidate reruns and production canaries remain pending; the broader landing-page journeys are future conformance work. |
+| Voice capture | TUI `/voice`, Ctrl+Space, and F8 only in opt-in `native-audio` artifacts | Authenticated transcription | Not enabled in the default `0.5.0` build and not a recovery-release gate; real-hardware and platform qualification remain future work. |
 
 ## Process contract
 

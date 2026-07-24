@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "release": "0.5.0",
+  "description": "Bounded installed-artifact recovery-release matrix. This contract does not import the twelve landing-page marketing stages.",
+  "groups": [
+    {
+      "id": "clean-user",
+      "requirements": [
+        "registration",
+        "missing-profile onboarding and consent",
+        "first authenticated TUI turn"
+      ]
+    },
+    {
+      "id": "returning-user",
+      "requirements": [
+        "first process exits completely",
+        "second installed process reloads credentials without registration",
+        "second authenticated TUI turn"
+      ]
+    },
+    {
+      "id": "household-grocery",
+      "requirements": [
+        "active list read",
+        "member screening, substitutions, and provenance render",
+        "proposal review and edit",
+        "cancel without mutation",
+        "accept once and advance once",
+        "stale list or context authority rejection"
+      ]
+    },
+    {
+      "id": "failure-safety",
+      "requirements": [
+        "no blind retry after uncertain dispatch",
+        "Ctrl-C stream cancellation",
+        "Ctrl-C pending-confirmation cancellation without mutation",
+        "typed runtime failure remains usable and restores on subsequent clean exit",
+        "full presentation restoration after normal and application-interrupt exits",
+        "native-signal canonical-mode and body-error or panic restoration remain required companion CI gates"
+      ]
+    },
+    {
+      "id": "artifact-behavior",
+      "requirements": [
+        "40, 80, and 120 column semantic checks",
+        "NO_COLOR",
+        "exact archive digest",
+        "real platform credential backend on the final signed candidate"
+      ]
+    }
+  ],
+  "explicit_non_gates": [
+    "native_voice",
+    "menu_watch_diff"
+  ],
+  "canary_or_defer": [
+    "health",
+    "menu_watch_management"
+  ]
+}

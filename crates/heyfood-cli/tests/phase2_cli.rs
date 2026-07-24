@@ -2,10 +2,14 @@ use std::collections::BTreeSet;
 
 use clap::{CommandFactory, Parser};
 use heyfood_cli::{
-    Command, CommandLine, GroceryCommand, GroceryDecisionArgument, OutputMode, render_grocery_list,
-    render_json,
+    Command, CommandLine, GroceryCommand, GroceryDecisionArgument, MenuWatchCommand, OutputMode,
+    WatchWeekdayArgument, render_grocery_exclusions, render_grocery_list, render_grocery_proposal,
+    render_json, render_menu_watch_list,
 };
-use heyfood_core::GroceryListWire;
+use heyfood_core::{
+    ExclusionListResponseWire, GroceryListWire, GroceryMutationProposalWire,
+    MenuWatchListResponseWire,
+};
 use serde_json::json;
 
 #[test]
@@ -45,11 +49,97 @@ fn command_tree_contains_python_parity_and_authorized_phase2_families() {
         "search",
         "status",
         "voice",
+        "watch",
     ])
     .into_iter()
     .map(str::to_owned)
     .collect();
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn menu_watch_commands_are_typed_and_bounded() {
+    let parsed = CommandLine::try_parse_from(["heyfood", "watch"]).unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(Command::Watch { command: None })
+    ));
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "watch",
+        "add",
+        "0c1cb790-0000-4000-8000-000000000000",
+        "--weekday",
+        "thursday",
+        "--hour",
+        "9",
+        "--notify",
+        "--tz",
+        "America/Chicago",
+    ])
+    .unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(Command::Watch {
+            command: Some(MenuWatchCommand::Add(ref arguments)),
+        }) if arguments.weekday == WatchWeekdayArgument::Thursday
+            && arguments.hour == 9
+            && arguments.notify
+    ));
+    assert!(
+        CommandLine::try_parse_from([
+            "heyfood",
+            "watch",
+            "add",
+            "0c1cb790-0000-4000-8000-000000000000",
+            "--weekday",
+            "thursday",
+            "--hour",
+            "24",
+        ])
+        .is_err()
+    );
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "watch",
+        "rm",
+        "00000000-0000-4000-8000-000000000010",
+    ])
+    .unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(Command::Watch {
+            command: Some(MenuWatchCommand::Remove(_)),
+        })
+    ));
+}
+
+#[test]
+fn menu_watch_renderer_surfaces_schedule_baseline_and_identity_evidence() {
+    let response: MenuWatchListResponseWire = serde_json::from_value(json!({
+        "watches": [{
+            "id": "00000000-0000-4000-8000-000000000010",
+            "restaurant_id": "0c1cb790-0000-4000-8000-000000000000",
+            "cadence": {"weekday": 3, "hour": 9},
+            "tz": "America/Chicago\u{1b}[2J",
+            "active": true,
+            "notify": true,
+            "next_run_at": "2026-07-30T14:00:00Z",
+            "last_run_at": null,
+            "last_snapshot_id": null,
+            "created_at": "2026-07-23T12:00:00Z",
+            "identity_verdict": "verified",
+            "identity_confidence": 0.92
+        }],
+        "count": 1
+    }))
+    .unwrap();
+    let output = render_menu_watch_list(&response, OutputMode::HumanPlain);
+    assert!(output.contains("Thursday 09:00 · active"));
+    assert!(output.contains("awaiting first successful baseline"));
+    assert!(output.contains("identity: verified · confidence 0.920"));
+    assert!(output.contains("America/Chicago[2J"));
+    assert!(!output.contains('\u{1b}'));
 }
 
 #[test]
@@ -60,7 +150,7 @@ fn confirmation_token_is_never_accepted_as_a_command_line_argument() {
     assert!(matches!(
         parsed.command,
         Some(Command::Grocery {
-            command: GroceryCommand::Confirm(ref args),
+            command: Some(GroceryCommand::Confirm(ref args)),
         }) if args.decision == GroceryDecisionArgument::Cancel && args.proposal_stdin
     ));
     assert!(
@@ -71,6 +161,79 @@ fn confirmation_token_is_never_accepted_as_a_command_line_argument() {
             "--decision",
             "accept",
             "secret-token"
+        ])
+        .is_err()
+    );
+}
+
+#[test]
+fn grocery_show_exclusions_and_never_commands_are_typed() {
+    let parsed = CommandLine::try_parse_from(["heyfood", "grocery"]).unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(Command::Grocery { command: None })
+    ));
+    for alias in ["list", "show"] {
+        let parsed = CommandLine::try_parse_from(["heyfood", "grocery", alias]).unwrap();
+        assert!(matches!(
+            parsed.command,
+            Some(Command::Grocery {
+                command: Some(GroceryCommand::List),
+            })
+        ));
+    }
+    let parsed = CommandLine::try_parse_from(["heyfood", "grocery", "exclusions"]).unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(Command::Grocery {
+            command: Some(GroceryCommand::Exclusions),
+        })
+    ));
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "grocery",
+        "never",
+        "--list-id",
+        "00000000-0000-4000-8000-000000000123",
+        "--version",
+        "4",
+        "--remove",
+        "raw onion",
+    ])
+    .unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(Command::Grocery {
+            command: Some(GroceryCommand::Never(ref arguments)),
+        }) if arguments.remove && arguments.item == "raw onion"
+    ));
+
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "grocery",
+        "export",
+        "00000000-0000-4000-8000-000000000123",
+        "--format",
+        "json",
+        "--out",
+        "grocery.json",
+        "--overwrite",
+    ])
+    .unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(Command::Grocery {
+            command: Some(GroceryCommand::Export(ref arguments)),
+        }) if arguments.out.as_deref() == Some(std::path::Path::new("grocery.json"))
+            && arguments.overwrite
+    ));
+    assert!(
+        CommandLine::try_parse_from([
+            "heyfood",
+            "grocery",
+            "export",
+            "00000000-0000-4000-8000-000000000123",
+            "--overwrite",
         ])
         .is_err()
     );
@@ -118,8 +281,99 @@ fn human_grocery_renderer_removes_terminal_controls() {
 }
 
 #[test]
+fn grocery_renderer_surfaces_stable_ids_provenance_member_flags_and_substitutions() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/contracts/grocery-backend/phase-a/fixtures/grocery/founding_scenario_maya.json"
+    ))
+    .unwrap();
+    let list: GroceryListWire = serde_json::from_value(fixture["list"].clone()).unwrap();
+    let output = render_grocery_list(&list, OutputMode::HumanPlain);
+    assert!(output.contains("id:i2"));
+    assert!(output.contains("source: recipe:dahl-001"));
+    assert!(output.contains("maya-uuid: risky"));
+    assert!(output.contains("try: green parts of scallion, garlic-infused oil"));
+    assert!(output.contains("Screened at ingredient level — verify the product label."));
+
+    let exclusions = ExclusionListResponseWire {
+        exclusions: vec!["pork\u{1b}[2J".into(), "raw onion".into()],
+    };
+    let rendered = render_grocery_exclusions(&exclusions, OutputMode::HumanPlain);
+    assert!(!rendered.contains('\u{1b}'));
+    assert!(rendered.contains("pork[2J"));
+}
+
+#[test]
+fn human_grocery_proposal_is_a_reviewable_non_mutating_card() {
+    let proposal: GroceryMutationProposalWire = serde_json::from_value(json!({
+        "confirmation_id": "00000000-0000-4000-8000-000000000001",
+        "idempotency_key": "00000000-0000-4000-8000-000000000002",
+        "operation": "add_items",
+        "expires_at": "2026-07-22T12:05:00Z",
+        "structured_preview": {
+            "items": [{
+                "requested_name": "onion",
+                "intended_for": "maya",
+                "safety": {
+                    "status": "risky",
+                    "member_flags": [{
+                        "member_id": "maya",
+                        "status": "risky",
+                        "substitutions": ["green parts of scallion"]
+                    }],
+                    "label_hint": "Screened at ingredient level — verify the product label."
+                }
+            }]
+        },
+        "preconditions": [{"type": "list_version", "expected_version": 4}],
+        "confirmation_token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }))
+    .unwrap();
+    let output = render_grocery_proposal(&proposal, OutputMode::HumanPlain);
+    assert!(output.contains("Review add_items"));
+    assert!(output.contains("1. onion for maya"));
+    assert!(output.contains("maya: risky"));
+    assert!(output.contains("try: green parts of scallion"));
+    assert!(output.contains("Nothing has changed"));
+    assert!(!output.contains("aaaaaaaa"));
+}
+
+#[test]
 fn raw_alias_selects_json_but_conflicts_with_json() {
     let parsed = CommandLine::try_parse_from(["heyfood", "--raw", "status"]).unwrap();
     assert_eq!(parsed.output_mode(true), OutputMode::Json);
     assert!(CommandLine::try_parse_from(["heyfood", "--raw", "--json", "status"]).is_err());
+}
+
+#[test]
+fn coordinates_preserve_short_names_aliases_and_validate_domains() {
+    for arguments in [
+        [
+            "heyfood", "ask", "lunch", "--lat", "34.1", "--lng", "-118.2",
+        ],
+        [
+            "heyfood",
+            "ask",
+            "lunch",
+            "--latitude",
+            "34.1",
+            "--longitude",
+            "-118.2",
+        ],
+    ] {
+        let parsed = CommandLine::try_parse_from(arguments).unwrap();
+        assert!(matches!(
+            parsed.command,
+            Some(Command::Ask(ref ask))
+                if ask.latitude == Some(34.1) && ask.longitude == Some(-118.2)
+        ));
+    }
+
+    for arguments in [
+        vec!["heyfood", "ask", "lunch", "--lat", "91", "--lng", "0"],
+        vec!["heyfood", "ask", "lunch", "--lat", "0", "--lng", "181"],
+        vec!["heyfood", "ask", "lunch", "--lat", "NaN", "--lng", "0"],
+        vec!["heyfood", "ask", "lunch", "--lat", "0", "--lng", "inf"],
+    ] {
+        assert!(CommandLine::try_parse_from(arguments).is_err());
+    }
 }

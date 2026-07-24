@@ -2,4 +2,5 @@
 # bytes identical on every platform; in particular, Windows must not rewrite LF
 # line endings to CRLF before the Rust hash validators read them.
 /fixtures/contracts/**/*.json text eol=lf
+/fixtures/contracts/**/*.py text eol=lf
 /schemas/**/*.json text eol=lf

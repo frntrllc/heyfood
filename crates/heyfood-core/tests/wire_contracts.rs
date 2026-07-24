@@ -1,8 +1,10 @@
 use std::collections::BTreeSet;
 
 use heyfood_core::{
-    ApplicationCapabilitiesWire, GROCERY_WIRE_SCHEMA_SHA256, GroceryConfirmationToken,
-    GroceryListWire, GroceryMutationProposalWire, HealthContextWire,
+    ActionConfirmationEnvelopeWire, AgentConfirmationCommandWire, ApplicationCapabilitiesWire,
+    ConfirmationDecisionWire, GROCERY_WIRE_SCHEMA_SHA256, GroceryConfirmationId,
+    GroceryConfirmationToken, GroceryEditPatch, GroceryIdempotencyKey, GroceryListWire,
+    GroceryMutationProposalWire, HealthContextWire,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -113,6 +115,90 @@ fn confirmation_authority_is_redacted_and_bounded() {
     assert!(!debug.contains("onion"));
     assert!(!debug.contains("aaaaaaaa"));
     assert!(GroceryConfirmationToken::parse("short".into()).is_err());
+}
+
+#[test]
+fn c3_action_confirmation_is_parsed_only_from_the_structured_result_member() {
+    let document = json!({
+        "text": "review",
+        "structured": {
+            "type": "action_confirmation",
+            "envelope_version": 1,
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "action": "grocery_list_add_items",
+            "preview": "Add onion",
+            "card_form": "item_list",
+            "structured_preview": {"items": [{"name": "onion"}]},
+            "additive_future_field": true
+        }
+    });
+    let envelope = ActionConfirmationEnvelopeWire::from_result_document(&document)
+        .unwrap()
+        .unwrap();
+    let command = envelope.command(ConfirmationDecisionWire::Cancel);
+    assert_eq!(
+        serde_json::to_value(command).unwrap(),
+        json!({
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "decision": "cancel"
+        })
+    );
+    assert!(
+        ActionConfirmationEnvelopeWire::from_result_document(
+            &json!({"structured": {"type": "general_response"}})
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        ActionConfirmationEnvelopeWire::from_result_document(
+            &json!({"structured": {"type": "action_confirmation"}})
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn c3_confirmation_edits_are_optional_bounded_and_lossless_on_the_wire() {
+    let base = AgentConfirmationCommandWire {
+        confirmation_id: GroceryConfirmationId::parse("00000000-0000-4000-8000-000000000001")
+            .unwrap(),
+        idempotency_key: GroceryIdempotencyKey::parse("00000000-0000-4000-8000-000000000002")
+            .unwrap(),
+        decision: ConfirmationDecisionWire::Accept,
+        edits: None,
+    };
+    let base_json = serde_json::to_value(&base).unwrap();
+    assert!(base_json.get("edits").is_none());
+
+    let edits = GroceryEditPatch::new(
+        serde_json::from_value(json!({
+            "items": [
+                {"name": "scallion greens", "quantity": 1, "unit": "bunch", "source_type": "manual"}
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let edited = AgentConfirmationCommandWire {
+        edits: Some(edits),
+        ..base
+    };
+    assert_eq!(
+        serde_json::to_value(edited).unwrap(),
+        json!({
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "decision": "accept",
+            "edits": {
+                "items": [
+                    {"name": "scallion greens", "quantity": 1, "unit": "bunch", "source_type": "manual"}
+                ]
+            }
+        })
+    );
 }
 
 #[test]

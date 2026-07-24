@@ -6,6 +6,8 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 readonly ROOT
 readonly INSTALLER="$ROOT/install.sh"
 readonly CHECKSUM="$ROOT/install.sh.sha256"
+readonly RELEASE_WORKFLOW="$ROOT/.github/workflows/release.yml"
+readonly SUSPENSION_SENTINEL='# HEYFOOD_NATIVE_INSTALLATION_SUSPENDED=1'
 CASE_DIR=$(mktemp -d)
 readonly CASE_DIR
 
@@ -47,5 +49,9 @@ grep -Fq "installation is suspended" "$stderr" ||
   fail "suspended installer must explain the release state"
 grep -Fq "do not install or use" "$stderr" ||
   fail "suspended installer must give an explicit safety instruction"
+grep -Fqx "$SUSPENSION_SENTINEL" "$INSTALLER" ||
+  fail "suspended installer must retain the release-workflow sentinel"
+grep -Fq "grep -Fqx '$SUSPENSION_SENTINEL' install.sh" "$RELEASE_WORKFLOW" ||
+  fail "release workflow must fail on the exact installer suspension sentinel"
 
 printf 'installer contract: suspended and fail-closed\n'

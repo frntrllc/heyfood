@@ -13,8 +13,10 @@ default = []
 native-audio = ["dep:cpal", "dep:hound"]
 
 [dependencies]
-heyfood-application = { version = "=0.4.1", path = "../heyfood-application" }
-heyfood-core = { version = "=0.4.1", path = "../heyfood-core" }
+heyfood-application = { version = "=0.5.0", path = "../heyfood-application" }
+heyfood-core = { version = "=0.5.0", path = "../heyfood-core" }
+tokio = { workspace = true, features = ["rt"] }
+tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true, features = ["attributes", "std"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
@@ -23,6 +25,8 @@ hound = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2 = { workspace = true, features = ["std"] }
 
 [lints]
 workspace = true

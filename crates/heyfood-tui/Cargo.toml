@@ -10,9 +10,10 @@ publish.workspace = true
 
 [dependencies]
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
-heyfood-application = { version = "=0.4.1", path = "../heyfood-application" }
-heyfood-core = { version = "=0.4.1", path = "../heyfood-core" }
+heyfood-application = { version = "=0.5.0", path = "../heyfood-application" }
+heyfood-core = { version = "=0.5.0", path = "../heyfood-core" }
 ratatui = { workspace = true, features = ["crossterm"] }
+serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["sync", "time"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]

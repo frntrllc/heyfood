@@ -13,6 +13,7 @@ reply         continue an explicit conversation id
 log           log a meal through the hosted agent
 item          assess a food or menu item
 grocery       read, prepare, export, and confirm Grocery operations
+watch         create, list, and remove recurring Menu Watch subscriptions
 health        read health context and manage the Oura integration
 completion    print shell completion syntax
 ```
@@ -39,7 +40,7 @@ An optional location requires a complete coordinate pair. Half-specified pairs
 fail during argument parsing:
 
 ```bash
-heyfood ask --latitude 35.28 --longitude -120.66 "What can I order nearby?"
+heyfood ask --lat 35.28 --lng -120.66 "What can I order nearby?"
 ```
 
 ## Registration and login
@@ -62,7 +63,7 @@ heyfood grocery list
 heyfood grocery add --list-id UUID --version VERSION "red lentils" "onion"
 heyfood grocery remove --list-id UUID --version VERSION ITEM_OR_INDEX
 heyfood grocery state --list-id UUID --version VERSION ITEM purchased
-heyfood grocery export UUID --format markdown
+heyfood grocery export UUID --format markdown [--out FILE [--overwrite]]
 heyfood grocery confirm --decision accept --proposal-stdin < proposal.json
 ```
 
@@ -84,6 +85,24 @@ Oura is the current direct CLI provider. Apple Health summaries are acquired by
 the hello.food app and exposed only as provider-labeled hosted context; the CLI
 does not access HealthKit.
 
+## Menu Watch
+
+```bash
+heyfood watch list
+heyfood watch add RESTAURANT_UUID --weekday thursday --hour 9 --notify
+heyfood watch add RESTAURANT_UUID --weekday thursday --hour 9 \
+  --menu-url https://restaurant.example/menu --confirm-menu-url \
+  --tz America/Chicago
+heyfood watch remove WATCH_UUID
+```
+
+Watch creation, listing, and removal use the deployed `menu:watch` scope.
+Creation freezes the restaurant-local cadence, resolved timezone, notification
+preference, and activation state. Identity-gate evidence is returned with the
+create response but is not persisted by the deployed contract. The backend does
+not yet expose its persisted snapshot diff through an account-scoped read
+endpoint, so the Rust client does not simulate or claim a watch-diff view.
+
 ## Global process controls
 
 ```text
@@ -96,13 +115,39 @@ does not access HealthKit.
 
 `--raw` is a deprecated alias for `--json`.
 
+## Interactive TUI preview
+
+The draft Rust branch launches the TUI from an authenticated bare `heyfood`.
+On a clean machine it can complete device registration and continue into the
+same TUI process. This surface is not published or supported while the hosted
+installer remains suspended.
+
+```text
+/grocery             open the capability-gated active Grocery list
+/watch               open recurring Menu Watch subscriptions
+/health              open provider-neutral integration and health context
+/profile             read consent and synchronized dietary profile state
+/household           show account-bound local household context
+/for MEMBER|everyone change household scope and reset conversation continuity
+/location            show account-bound local location context
+/status              check service, profile, optional scopes, and voice readiness
+/voice               start/stop native capture in a qualified native-audio artifact
+/new                 reset conversation continuity
+/clear               clear visible scrollback
+/help                show the active slash-command registry
+/exit                leave the TUI
+```
+
+The panels are read-only and cancellable. `/voice`, Ctrl+Space, and F8 use the
+same bounded capture/transcription/review state machine when the artifact
+contains native audio support; unavailable artifacts and insufficient scopes
+fail before microphone access. Dietary onboarding, interactive Grocery
+confirmation, Menu Watch diff reading, real-hardware voice qualification, and
+installed-artifact showcase qualification remain release gates.
+
 ## Unavailable compatibility topology
 
-Interactive chat/TUI, onboarding, profile management, restaurant search,
-saved location, recommendation, menu, recipe, household management, voice,
-configuration, diagnostics, logout, and account management are not active Rust
-commands. Some names remain hidden for migration topology only and return
-`command_not_available`.
-
-Bare `heyfood` prints informational next steps and exits. It does not launch a
-TUI, browser, registration flow, onboarding, or network request.
+Onboarding, profile editing, restaurant search, recommendation, menu, recipe,
+household management, voice device configuration, diagnostics, logout, and
+account management are not active Rust commands. Some names remain hidden for
+migration topology only and return `command_not_available`.

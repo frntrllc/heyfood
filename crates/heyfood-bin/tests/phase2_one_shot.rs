@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+use std::io::{Cursor, ErrorKind, Read};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -8,12 +10,13 @@ use heyfood_application::{
     PortError,
 };
 use heyfood_bin::{OneShotError, OneShotExecutor, execute_qualified_one_shot};
-use heyfood_cli::{CommandLine, OutputMode};
+use heyfood_cli::{CommandLine, OutputMode, render_agent_result, render_item_result};
 use heyfood_core::{
-    AccountId, CredentialVersion, NetworkPolicy, SensitiveString, ServiceUrl, SessionCredentials,
-    SessionSnapshot,
+    AccountId, CredentialVersion, ImportedPythonState, NetworkPolicy, SensitiveString, ServiceUrl,
+    SessionCredentials, SessionSnapshot,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
@@ -27,6 +30,63 @@ fn credentials() -> SessionCredentials {
         4_102_444_800,
     )
     .unwrap()
+}
+
+fn python_oracle() -> Value {
+    serde_json::from_str(include_str!(
+        "fixtures/python-phase2-command-parity.v1.json"
+    ))
+    .unwrap()
+}
+
+#[test]
+fn legacy_oracle_keeps_its_reviewed_provenance_manifest() {
+    let oracle = python_oracle();
+    let commit = oracle["provenance"]["repository_commit"].as_str().unwrap();
+    assert_eq!(commit, "73494a57468dac83b4904ce6c390e36926f5c6fe");
+    assert_eq!(
+        oracle["provenance"]["archive_tag"],
+        "archive/python-cli-73494a57"
+    );
+
+    let archive_bytes = include_bytes!("../../../tests/fixtures/python-cli-73494a57.tar");
+    let archive_digest = format!("{:x}", Sha256::digest(archive_bytes));
+    assert_eq!(
+        archive_digest,
+        oracle["provenance"]["source_archive"]["sha256"]
+    );
+
+    let expected = oracle["provenance"]["sources"].as_object().unwrap();
+    assert_eq!(expected.len(), 4);
+
+    let mut archive = tar::Archive::new(Cursor::new(archive_bytes));
+    let mut actual = BTreeMap::new();
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let path = entry.path().unwrap().to_string_lossy().into_owned();
+        if expected.contains_key(&path) {
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            let previous = actual.insert(path, format!("{:x}", Sha256::digest(bytes)));
+            assert!(previous.is_none(), "duplicate archived source path");
+        }
+    }
+
+    assert_eq!(actual.len(), expected.len());
+    for (path, expected_digest) in expected {
+        assert_eq!(actual.get(path).unwrap(), expected_digest.as_str().unwrap());
+    }
+}
+
+fn imported_state(fields: impl IntoIterator<Item = (&'static str, Value)>) -> ImportedPythonState {
+    ImportedPythonState {
+        account_user_id: Some("one-shot-account".into()),
+        global: BTreeMap::new(),
+        account_scoped: fields
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect(),
+    }
 }
 
 #[test]
@@ -66,6 +126,7 @@ async fn fixture_service() -> (TcpListener, HttpService) {
         HttpDeadlines {
             connect: Duration::from_secs(1),
             request: Duration::from_secs(2),
+            transcription: Duration::from_secs(2),
             pool_idle: Duration::from_secs(1),
             sse_inactivity: Duration::from_secs(2),
         },
@@ -158,7 +219,18 @@ async fn respond_stream_chunks(socket: &mut TcpStream, chunks: &[Vec<u8>]) {
         socket.flush().await.unwrap();
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    socket.write_all(b"0\r\n\r\n").await.unwrap();
+    if let Err(error) = socket.write_all(b"0\r\n\r\n").await {
+        assert!(
+            matches!(
+                error.kind(),
+                ErrorKind::BrokenPipe
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::ConnectionReset
+                    | ErrorKind::NotConnected
+            ),
+            "chunked fixture terminator failed unexpectedly: {error}"
+        );
+    }
 }
 
 async fn respond_capabilities(socket: &mut TcpStream) {
@@ -355,6 +427,411 @@ async fn one_shot_ask_collects_sse_into_exactly_one_json_value() {
         serde_json::from_str::<Value>(&output).unwrap()["message"],
         "Try soup."
     );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn streamed_choices_match_the_frozen_python_json_and_human_oracle() {
+    let oracle = python_oracle();
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _ = read_request(&mut socket).await;
+        respond_stream(
+            &mut socket,
+            b"event: partial\ndata: {\"text\":\"Try soup.\"}\n\nevent: choices\ndata: {\"choices\":[\"First\",\"Second\"],\"allow_multiple\":false}\n\nevent: result\ndata: {}\n\nevent: done\ndata: {}\n\n",
+        )
+        .await;
+    });
+    let parsed = CommandLine::try_parse_from(["heyfood", "--json", "ask", "lunch"]).unwrap();
+    let output = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    let document: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(document["text"], oracle["stream"]["partial_text"]);
+    assert_eq!(document["choices"]["choices"], oracle["stream"]["choices"]);
+    assert_eq!(
+        document["choices"]["allow_multiple"],
+        oracle["stream"]["allow_multiple"]
+    );
+    let rendered = render_agent_result(&document, OutputMode::HumanPlain);
+    for expected in oracle["stream"]["human_lines"].as_array().unwrap() {
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line == expected.as_str().unwrap())
+        );
+    }
+    server.await.unwrap();
+
+    let expected = &oracle["stream"]["normalized_detailed_choice_extension"];
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _ = read_request(&mut socket).await;
+        respond_stream(
+            &mut socket,
+            b"event: choices\ndata: {\"choices\":[{\"label\":\"First\",\"value\":\"1\"}],\"allow_multiple\":false}\n\nevent: result\ndata: {\"message\":\"Choose.\"}\n\nevent: done\ndata: {}\n\n",
+        )
+        .await;
+    });
+    let parsed = CommandLine::try_parse_from(["heyfood", "--json", "ask", "choose"]).unwrap();
+    let output = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    let document: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(document["choices"]["choices"], expected["choices"]);
+    assert_eq!(
+        document["choices"]["choice_details"],
+        expected["choice_details"]
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn log_preserves_the_frozen_meal_prompt_and_type_semantics() {
+    let oracle = python_oracle();
+    let expected_query = oracle["log"]["query"].as_str().unwrap().to_owned();
+    let state = imported_state([
+        ("first_name", json!("Justin")),
+        (
+            "household",
+            json!({
+                "active_scope": oracle["log"]["default_scope"]["active_scope"],
+                "members": [
+                    {"id": "_self", "name": "Justin", "relationship": "self", "archived": false},
+                    {"id": "member-sarah", "name": "Sarah", "relationship": "partner", "archived": false}
+                ]
+            }),
+        ),
+    ]);
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("GET /v1/profile/consent "));
+        respond(&mut socket, json!({"has_consent": false})).await;
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/agent/converse "));
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["query"], expected_query);
+        assert_eq!(body["dietary_context"]["name"], "Sarah");
+        assert_eq!(body["meal_context"]["active_member_id"], "member-sarah");
+        assert!(body.get("device_context").is_none());
+        respond_stream(
+            &mut socket,
+            b"event: result\ndata: {\"message\":\"Logged.\"}\n\nevent: done\ndata: {}\n\n",
+        )
+        .await;
+    });
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "--json",
+        "log",
+        "--type",
+        "breakfast",
+        oracle["log"]["meal_input"].as_str().unwrap(),
+    ])
+    .unwrap();
+    let output = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .with_imported_state(Some(&state))
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&output).unwrap()["message"],
+        "Logged."
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn item_uses_the_channel_tool_and_preserves_restaurant_context() {
+    let oracle = python_oracle();
+    let expected = oracle["item"]["request"].clone();
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/channel/tools/explain_item "));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer channel")
+        );
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body, expected);
+        respond(
+            &mut socket,
+            json!({
+                "item_name": "veggie burger",
+                "status": "compatible",
+                "summary": "This item fits the profile."
+            }),
+        )
+        .await;
+    });
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "--json",
+        "item",
+        "--restaurant",
+        oracle["item"]["restaurant_input"].as_str().unwrap(),
+        oracle["item"]["item_input"].as_str().unwrap(),
+    ])
+    .unwrap();
+    let output = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&output).unwrap()["status"],
+        "compatible"
+    );
+    let human = render_item_result(
+        &json!({
+            "item_name": "veggie burger",
+            "status": "compatible",
+            "summary": "This item fits the profile.",
+            "confidence": 0.95,
+            "member_name": "Sarah"
+        }),
+        OutputMode::HumanPlain,
+    );
+    for expected in oracle["item"]["human_lines"].as_array().unwrap() {
+        assert!(human.lines().any(|line| line == expected.as_str().unwrap()));
+    }
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn item_at_resolves_the_account_bound_imported_search() {
+    let state = imported_state([(
+        "last_restaurant_search",
+        json!({"restaurants": [{"id": "restaurant-1", "name": "Cafe One"}]}),
+    )]);
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["restaurant_name"], "Cafe One");
+        respond(
+            &mut socket,
+            json!({
+                "item_name": "soup",
+                "status": "compatible",
+                "summary": "Fits."
+            }),
+        )
+        .await;
+    });
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "--json",
+        "item",
+        "--at",
+        "1",
+        "--restaurant",
+        "Ignored Cafe",
+        "soup",
+    ])
+    .unwrap();
+    OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .with_imported_state(Some(&state))
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn item_nonnumeric_at_preserves_the_explicit_restaurant_like_python() {
+    let oracle = python_oracle();
+    let selector = &oracle["item"]["selectors"][1];
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["restaurant_name"], "Cafe One");
+        respond(
+            &mut socket,
+            json!({"item_name": "soup", "status": "compatible", "summary": "Fits."}),
+        )
+        .await;
+    });
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "--json",
+        "item",
+        "--at",
+        selector["at"].as_str().unwrap(),
+        "--restaurant",
+        selector["explicit_restaurant"].as_str().unwrap(),
+        "soup",
+    ])
+    .unwrap();
+    OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn log_for_builds_consent_aware_household_context() {
+    let state = imported_state([
+        ("first_name", json!("Justin")),
+        (
+            "household",
+            json!({
+                "members": [
+                    {"id": "_self", "name": "Justin", "relationship": "self", "archived": false},
+                    {"id": "member-sarah", "name": "Sarah", "relationship": "partner", "archived": false}
+                ]
+            }),
+        ),
+        (
+            "household_profile_outbox",
+            json!({"_self": {"local_context": {"preferences": ["omnivore"]}}}),
+        ),
+    ]);
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("GET /v1/profile/consent "));
+        respond(&mut socket, json!({"has_consent": true})).await;
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("GET /v1/profile/sync?member_id=member-sarah "));
+        respond(
+            &mut socket,
+            json!({"profile_data": {"preferences": ["vegetarian"]}}),
+        )
+        .await;
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["dietary_context"]["name"], "Sarah");
+        assert_eq!(body["dietary_context"]["owner_name"], "Justin");
+        assert_eq!(body["dietary_context"]["preferences"][0], "vegetarian");
+        assert_eq!(body["meal_context"]["active_member_id"], "member-sarah");
+        assert_eq!(
+            body["device_context"]["household"]["members"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        respond_stream(
+            &mut socket,
+            b"event: result\ndata: {\"message\":\"Logged.\"}\n\nevent: done\ndata: {}\n\n",
+        )
+        .await;
+    });
+    let parsed =
+        CommandLine::try_parse_from(["heyfood", "--json", "log", "--for", "Sarah", "oatmeal"])
+            .unwrap();
+    OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .with_imported_state(Some(&state))
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn selected_household_outbox_uses_the_python_fallback_context_without_blocking() {
+    let oracle = python_oracle();
+    let outbox = &oracle["log"]["outbox_scope"];
+    let state = imported_state([
+        ("first_name", json!("Justin")),
+        (
+            "household",
+            json!({
+                "members": [
+                    {"id": "_self", "name": "Justin", "relationship": "self", "archived": false},
+                    {"id": "member-sarah", "name": "Sarah", "relationship": "partner", "archived": false}
+                ]
+            }),
+        ),
+        (
+            "household_profile_outbox",
+            json!({"member-sarah": {"local_context": outbox["local_context"].clone()}}),
+        ),
+    ]);
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("GET /v1/profile/consent "));
+        respond(&mut socket, json!({"has_consent": true})).await;
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/agent/converse "));
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["dietary_context"]["preferences"][0], "vegetarian");
+        respond_stream(
+            &mut socket,
+            b"event: result\ndata: {\"message\":\"Logged.\"}\n\nevent: done\ndata: {}\n\n",
+        )
+        .await;
+    });
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "--json",
+        "log",
+        "--for",
+        outbox["selector"].as_str().unwrap(),
+        "oatmeal",
+    ])
+    .unwrap();
+    OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .with_imported_state(Some(&state))
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn oracle_text_limits_trim_and_count_unicode_characters() {
+    let (listener, service) = fixture_service().await;
+    let over_query = "x".repeat(501);
+    let parsed = CommandLine::try_parse_from(["heyfood", "ask", over_query.as_str()]).unwrap();
+    let error = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_argument");
+
+    let valid_unicode_item = "é".repeat(200);
+    let parsed =
+        CommandLine::try_parse_from(["heyfood", "item", valid_unicode_item.as_str()]).unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["item_name"].as_str().unwrap().chars().count(), 200);
+        respond(
+            &mut socket,
+            json!({"item_name": "unicode", "status": "unknown", "summary": "ok"}),
+        )
+        .await;
+    });
+    OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap();
     server.await.unwrap();
 }
 

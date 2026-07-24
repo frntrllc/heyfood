@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      qualify_signed_candidate:
+        description: Build and qualify protected, non-publishing release-candidate archives
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,6 +22,7 @@ concurrency:
 jobs:
   installer-contract:
     name: Installer / ${{ matrix.context }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.qualify_signed_candidate) }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -42,13 +49,14 @@ jobs:
           fi
       - name: Lint distribution scripts
         shell: bash
-        run: shellcheck install.sh tests/installer_contract.sh scripts/release/*.sh
+        run: shellcheck install.sh tests/installer_contract.sh scripts/release/*.sh packaging/macos/*.sh
       - name: Test the hosted-installer contract
         shell: bash
         run: bash tests/installer_contract.sh
 
   native-cli-smoke:
     name: Native CLI / ${{ matrix.os }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.qualify_signed_candidate) }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -56,6 +64,11 @@ jobs:
         os: [ubuntu-22.04, macos-15, windows-2025]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the Linux Secret Service fixture
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dbus-x11 gnome-keyring libdbus-1-dev pkg-config
       - name: Build the native release binary
         run: cargo build --release --locked --package heyfood-bin
       - name: Locate the native executable
@@ -66,6 +79,85 @@ jobs:
           else
             echo "HEYFOOD_BIN=target/release/heyfood" >> "$GITHUB_ENV"
           fi
+      - name: Install deterministic archive tooling
+        if: runner.os == 'macOS'
+        run: brew install gnu-tar
+      - name: Package the exact macOS or Linux showcase archive
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --locked --no-deps --format-version 1 |
+            jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
+          target=$(rustc -vV | sed -n 's/^host: //p')
+          mkdir -p showcase-dist showcase-evidence
+          scripts/release/package.sh "$HEYFOOD_BIN" "$version" "$target" showcase-dist
+          archive="heyfood-v$version-$target.tar.gz"
+          (
+            cd showcase-dist
+            shasum -a 256 "$archive" >SHA256SUMS
+          )
+          {
+            echo "HEYFOOD_SHOWCASE_ARCHIVE=$GITHUB_WORKSPACE/showcase-dist/$archive"
+            echo "HEYFOOD_SHOWCASE_MANIFEST=$GITHUB_WORKSPACE/showcase-dist/SHA256SUMS"
+            echo "HEYFOOD_SHOWCASE_EVIDENCE_DIR=$GITHUB_WORKSPACE/showcase-evidence"
+            echo "HEYFOOD_SHOWCASE_TARGET=$target"
+            echo "HEYFOOD_SHOWCASE_VERSION=$version"
+          } >>"$GITHUB_ENV"
+      - name: Package the exact Windows showcase archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = cargo metadata --locked --no-deps --format-version 1 |
+            ConvertFrom-Json |
+            Select-Object -ExpandProperty packages |
+            Where-Object { $_.name -eq "heyfood-bin" } |
+            Select-Object -ExpandProperty version
+          $target = (rustc -vV | Select-String '^host: ').Line.Substring(6)
+          New-Item -ItemType Directory -Force showcase-dist, showcase-evidence | Out-Null
+          ./packaging/windows/package.ps1 `
+            -Binary $env:HEYFOOD_BIN `
+            -Version $version `
+            -Target $target `
+            -OutputDirectory showcase-dist
+          $archive = "heyfood-v$version-$target.zip"
+          $digest = (Get-FileHash -Algorithm SHA256 "showcase-dist/$archive").Hash.ToLowerInvariant()
+          "$digest  $archive" | Set-Content -Encoding ascii showcase-dist/SHA256SUMS
+          $root = (Get-Location).Path
+          @(
+            "HEYFOOD_SHOWCASE_ARCHIVE=$root\showcase-dist\$archive"
+            "HEYFOOD_SHOWCASE_MANIFEST=$root\showcase-dist\SHA256SUMS"
+            "HEYFOOD_SHOWCASE_EVIDENCE_DIR=$root\showcase-evidence"
+            "HEYFOOD_SHOWCASE_TARGET=$target"
+            "HEYFOOD_SHOWCASE_VERSION=$version"
+          ) | Add-Content -Encoding utf8 $env:GITHUB_ENV
+      - name: Qualify the bounded recovery-release matrix from the installed archive
+        run: cargo test --locked --package heyfood-bin --test installed_showcase installed_archive_core_release_matrix -- --ignored --exact
+      - name: Upload installed-artifact core-matrix evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installed-showcase-${{ matrix.os }}
+          path: showcase-evidence
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Parse every Windows release script
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($script in Get-ChildItem packaging/windows/*.ps1) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $script.FullName,
+              [ref] $tokens,
+              [ref] $errors
+            ) | Out-Null
+            if ($errors.Count -ne 0) {
+              $errors | ForEach-Object { Write-Error $_ }
+              throw "PowerShell parser rejected $($script.FullName)"
+            }
+          }
       - name: Verify the active native command surface
         shell: bash
         run: |
@@ -78,15 +170,54 @@ jobs:
           "$HEYFOOD_BIN" health --help
           "$HEYFOOD_BIN" completion bash > completion.bash
           test -s completion.bash
+      - name: Package, smoke, and reproduce the Windows release archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = cargo metadata --locked --no-deps --format-version 1 |
+            ConvertFrom-Json |
+            Select-Object -ExpandProperty packages |
+            Where-Object { $_.name -eq "heyfood-bin" } |
+            Select-Object -ExpandProperty version
+          ./packaging/windows/package.ps1 `
+            -Binary target/release/heyfood.exe `
+            -Version $version `
+            -Target x86_64-pc-windows-msvc `
+            -OutputDirectory dist
+          ./packaging/windows/smoke.ps1 `
+            -ReleaseDirectory dist `
+            -Version $version
+          ./packaging/windows/package.ps1 `
+            -Binary target/release/heyfood.exe `
+            -Version $version `
+            -Target x86_64-pc-windows-msvc `
+            -OutputDirectory dist-repeat
+          $archive = "heyfood-v$version-x86_64-pc-windows-msvc.zip"
+          $first = (Get-FileHash -Algorithm SHA256 "dist/$archive").Hash
+          $second = (Get-FileHash -Algorithm SHA256 "dist-repeat/$archive").Hash
+          if ($first -ne $second) {
+            throw "Windows release archive is not reproducible"
+          }
       - name: Run native CLI and composition-root tests
+        if: runner.os != 'Linux'
         run: cargo test --locked --package heyfood-cli --package heyfood-bin
+      - name: Run Linux native CLI and composition-root tests
+        if: runner.os == 'Linux'
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "\n" | gnome-keyring-daemon --unlock
+            cargo test --locked --package heyfood-cli --package heyfood-bin
+          '
 
   native-release-contract:
     name: Build and verify distribution
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.qualify_signed_candidate) }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Build and package the host executable as the four-file fixture set
+      - name: Install Linux native credential build dependencies
+        run: sudo apt-get update && sudo apt-get install --yes libdbus-1-dev pkg-config
+      - name: Build and package the host executable as the five-archive fixture set
         shell: bash
         run: |
           set -euo pipefail
@@ -101,6 +232,11 @@ jobs:
             x86_64-unknown-linux-gnu; do
             scripts/release/package.sh "$binary" "$version" "$target" dist
           done
+          pwsh -NoProfile -File packaging/windows/package.ps1 \
+            -Binary "$binary" \
+            -Version "$version" \
+            -Target x86_64-pc-windows-msvc \
+            -OutputDirectory dist
           scripts/release/checksums.sh dist "$version"
           scripts/release/verify-assets.sh dist "$version"
           scripts/release/smoke.sh dist "$version" x86_64-unknown-linux-gnu
@@ -112,6 +248,273 @@ jobs:
             jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
           scripts/release/package.sh \
             target/release/heyfood "$version" x86_64-unknown-linux-gnu dist-repeat
+          pwsh -NoProfile -File packaging/windows/package.ps1 \
+            -Binary target/release/heyfood \
+            -Version "$version" \
+            -Target x86_64-pc-windows-msvc \
+            -OutputDirectory dist-repeat
           cmp \
             "dist/heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz" \
             "dist-repeat/heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz"
+          cmp \
+            "dist/heyfood-v$version-x86_64-pc-windows-msvc.zip" \
+            "dist-repeat/heyfood-v$version-x86_64-pc-windows-msvc.zip"
+
+  protected-candidate-preflight:
+    name: Protected candidate signing preflight
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.qualify_signed_candidate }}
+    runs-on: ubuntu-22.04
+    environment: native-release
+    steps:
+      - name: Require every protected signing input
+        shell: bash
+        env:
+          MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_NOTARY_ACCOUNT: ${{ secrets.APPLE_NOTARY_ACCOUNT }}
+          APPLE_NOTARY_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+          APPLE_DEVELOPER_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
+          WINDOWS_CODESIGN_SUBJECT: ${{ vars.WINDOWS_CODESIGN_SUBJECT }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          set -euo pipefail
+          for name in \
+            MACOS_DEVELOPER_ID_P12_BASE64 \
+            MACOS_DEVELOPER_ID_P12_PASSWORD \
+            APPLE_NOTARY_ACCOUNT \
+            APPLE_NOTARY_APP_PASSWORD \
+            WINDOWS_CODESIGN_PFX_BASE64 \
+            WINDOWS_CODESIGN_PFX_PASSWORD \
+            APPLE_DEVELOPER_TEAM_ID \
+            WINDOWS_CODESIGN_SUBJECT \
+            WINDOWS_TIMESTAMP_URL; do
+            test -n "${!name:-}" || {
+              echo "missing protected native-release input: $name" >&2
+              exit 78
+            }
+          done
+
+  protected-release-candidate:
+    name: Protected candidate / ${{ matrix.target }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.qualify_signed_candidate }}
+    needs: protected-candidate-preflight
+    runs-on: ${{ matrix.runner }}
+    environment: native-release
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            archive: tar
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar
+          - runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: tar
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            archive: tar
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Linux native credential build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dbus-x11 gnome-keyring libdbus-1-dev pkg-config
+      - name: Install deterministic macOS archive tooling
+        if: runner.os == 'macOS'
+        run: brew install gnu-tar
+      - name: Verify the pinned native toolchain
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.94.0 --profile minimal --no-self-update
+          rustup target add "$TARGET" --toolchain 1.94.0
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "$TARGET"
+      - name: Build the exact protected candidate executable
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          export CARGO_INCREMENTAL=0
+          export SOURCE_DATE_EPOCH
+          SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
+          cargo build --locked --release --package heyfood-bin --target "$TARGET"
+      - name: Sign and notarize the macOS executable
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          HEYFOOD_MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          HEYFOOD_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          HEYFOOD_APPLE_ID: ${{ secrets.APPLE_NOTARY_ACCOUNT }}
+          HEYFOOD_APPLE_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
+          HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
+        run: packaging/macos/sign-and-notarize.sh "target/$TARGET/release/heyfood"
+      - name: Authenticode-sign the Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+          WINDOWS_CODESIGN_SUBJECT: ${{ vars.WINDOWS_CODESIGN_SUBJECT }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          ./packaging/windows/sign.ps1 `
+            -Binary "target/$env:TARGET/release/heyfood.exe" `
+            -CertificateBase64 $env:WINDOWS_CODESIGN_PFX_BASE64 `
+            -CertificatePassword $env:WINDOWS_CODESIGN_PFX_PASSWORD `
+            -PublisherSubject $env:WINDOWS_CODESIGN_SUBJECT `
+            -TimestampUrl $env:WINDOWS_TIMESTAMP_URL
+      - name: Package the protected macOS or Linux candidate
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --locked --no-deps --format-version 1 |
+            jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
+          mkdir -p candidate-dist candidate-evidence
+          scripts/release/package.sh \
+            "target/$TARGET/release/heyfood" "$version" "$TARGET" candidate-dist
+          archive="heyfood-v$version-$TARGET.tar.gz"
+          (
+            cd candidate-dist
+            shasum -a 256 "$archive" >SHA256SUMS
+          )
+          {
+            echo "HEYFOOD_SHOWCASE_ARCHIVE=$GITHUB_WORKSPACE/candidate-dist/$archive"
+            echo "HEYFOOD_SHOWCASE_MANIFEST=$GITHUB_WORKSPACE/candidate-dist/SHA256SUMS"
+            echo "HEYFOOD_SHOWCASE_EVIDENCE_DIR=$GITHUB_WORKSPACE/candidate-evidence"
+            echo "HEYFOOD_SHOWCASE_TARGET=$TARGET"
+            echo "HEYFOOD_SHOWCASE_VERSION=$version"
+            echo "HEYFOOD_SHOWCASE_CREDENTIAL_BACKEND=native"
+            echo "HEYFOOD_SHOWCASE_SIGNED_CANDIDATE=true"
+            echo "HEYFOOD_CANDIDATE_ARCHIVE=$GITHUB_WORKSPACE/candidate-dist/$archive"
+          } >>"$GITHUB_ENV"
+      - name: Verify the protected macOS or Linux candidate
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
+          TARGET: ${{ matrix.target }}
+        run: scripts/release/smoke-archive.sh candidate-dist "$HEYFOOD_SHOWCASE_VERSION" "$TARGET"
+      - name: Create an ephemeral macOS qualification keychain
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/heyfood-native-qualification.keychain-db"
+          keychain_password=$(openssl rand -hex 32)
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security default-keychain -d user -s "$keychain"
+          security list-keychains -d user -s "$keychain"
+          {
+            echo "HEYFOOD_QUALIFICATION_KEYCHAIN=$keychain"
+            echo "HEYFOOD_SHOWCASE_EXTERNAL_CREDENTIAL_CLEANUP=true"
+          } >>"$GITHUB_ENV"
+      - name: Package and verify the protected Windows candidate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          $version = cargo metadata --locked --no-deps --format-version 1 |
+            ConvertFrom-Json |
+            Select-Object -ExpandProperty packages |
+            Where-Object { $_.name -eq "heyfood-bin" } |
+            Select-Object -ExpandProperty version
+          New-Item -ItemType Directory -Force candidate-dist, candidate-evidence | Out-Null
+          ./packaging/windows/package.ps1 `
+            -Binary "target/$env:TARGET/release/heyfood.exe" `
+            -Version $version `
+            -Target $env:TARGET `
+            -OutputDirectory candidate-dist
+          ./packaging/windows/smoke.ps1 `
+            -ReleaseDirectory candidate-dist `
+            -Version $version `
+            -RequireAuthenticode `
+            -PublisherSubject "${{ vars.WINDOWS_CODESIGN_SUBJECT }}"
+          $archive = "heyfood-v$version-$env:TARGET.zip"
+          $digest = (Get-FileHash -Algorithm SHA256 "candidate-dist/$archive").Hash.ToLowerInvariant()
+          "$digest  $archive" | Set-Content -Encoding ascii candidate-dist/SHA256SUMS
+          $root = (Get-Location).Path
+          @(
+            "HEYFOOD_SHOWCASE_ARCHIVE=$root\candidate-dist\$archive"
+            "HEYFOOD_SHOWCASE_MANIFEST=$root\candidate-dist\SHA256SUMS"
+            "HEYFOOD_SHOWCASE_EVIDENCE_DIR=$root\candidate-evidence"
+            "HEYFOOD_SHOWCASE_TARGET=$env:TARGET"
+            "HEYFOOD_SHOWCASE_VERSION=$version"
+            "HEYFOOD_SHOWCASE_CREDENTIAL_BACKEND=native"
+            "HEYFOOD_SHOWCASE_SIGNED_CANDIDATE=true"
+            "HEYFOOD_CANDIDATE_ARCHIVE=$root\candidate-dist\$archive"
+          ) | Add-Content -Encoding utf8 $env:GITHUB_ENV
+      - name: Run the protected candidate matrix with native credentials
+        if: runner.os != 'Linux'
+        run: >-
+          cargo test --locked --package heyfood-bin --test installed_showcase
+          installed_archive_core_release_matrix -- --ignored --exact
+      - name: Run the protected Linux candidate matrix with Secret Service
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "\n" | gnome-keyring-daemon --unlock
+            cargo test --locked --package heyfood-bin --test installed_showcase \
+              installed_archive_core_release_matrix -- --ignored --exact
+          '
+      - name: Destroy the ephemeral macOS qualification keychain
+        if: ${{ always() && runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${HEYFOOD_QUALIFICATION_KEYCHAIN:-}"
+          security delete-keychain "$HEYFOOD_QUALIFICATION_KEYCHAIN"
+          test ! -e "$HEYFOOD_QUALIFICATION_KEYCHAIN"
+          mkdir -p candidate-evidence
+          jq -n \
+            --arg target "$HEYFOOD_SHOWCASE_TARGET" \
+            --arg head "$GITHUB_SHA" \
+            '{
+              schema_version: 1,
+              qualification: "native-credential-container-cleanup",
+              target: $target,
+              product_sha: $head,
+              backend: "macos-keychain",
+              status: "passed",
+              credentials_absent_after_container_destruction: true
+            }' >candidate-evidence/native-credential-cleanup.json
+      - name: Attest the exact protected candidate archive
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: ${{ env.HEYFOOD_CANDIDATE_ARCHIVE }}
+      - name: Upload protected candidate archive and qualification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: protected-candidate-${{ matrix.target }}
+          path: |
+            candidate-dist
+            candidate-evidence
+          if-no-files-found: error
+          retention-days: 14

@@ -3,7 +3,7 @@
 **Status:** Draft v3 — two review rounds folded in; execution requires independent approval
 **Baseline:** `frntrllc/heyfood` `main` at `9c6b91929143180252ad1b644aea273729a1f1b9` (`heyfood 0.3.2`)
 **Primary user:** a developer running bare `heyfood` in an interactive terminal
-**Release target:** `0.4.0` after all gates pass
+**Release target:** `0.5.0` after all gates pass; `v0.4.0` and `v0.4.1` are unsupported incident releases
 **License:** Apache-2.0
 
 ## Executive decision

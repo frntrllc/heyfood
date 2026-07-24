@@ -1,12 +1,208 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, fmt::Write as _};
 
-use heyfood_application::RunTurnOutcome;
-use heyfood_core::{AgentEvent, terminal_safe_text};
+use heyfood_application::{RunTurnOutcome, agent_result_text};
+use heyfood_core::{
+    ActionConfirmationEnvelopeWire, AgentConfirmationCommandWire, AgentEvent,
+    ConfirmationDecisionWire, GroceryEditPatch, OnboardingOption, OnboardingProfileInput,
+    TRANSCRIPTION_MAX_TRANSCRIPT_CHARACTERS, activity_options, allergy_options, condition_options,
+    cuisine_options, diet_options, required_text, terminal_safe_text,
+};
 
 pub const MAX_SCROLLBACK_ENTRIES: usize = 1_000;
 pub const MAX_RENDERED_LINES: usize = 20_000;
 pub const MAX_SCROLLBACK_BYTES: usize = 4 * 1024 * 1024;
 const TRUNCATION_NOTICE: &str = "[… earlier content truncated …]\n";
+const MAX_PROMPT_HISTORY: usize = 100;
+const MAX_CONFIRMATION_SOURCES_PER_ITEM: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SlashCommandKind {
+    Help,
+    New,
+    Grocery,
+    Watch,
+    Health,
+    Household,
+    For,
+    Profile,
+    Onboard,
+    Location,
+    Voice,
+    Status,
+    Clear,
+    Exit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PanelRequest {
+    Status,
+    Grocery,
+    Watch,
+    Health,
+    Household,
+    Profile,
+    Location,
+}
+
+impl PanelRequest {
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Status => "Status",
+            Self::Grocery => "Grocery",
+            Self::Watch => "Menu Watch",
+            Self::Health => "Health",
+            Self::Household => "Household",
+            Self::Profile => "Dietary profile",
+            Self::Location => "Location",
+        }
+    }
+
+    #[must_use]
+    pub const fn command(self) -> &'static str {
+        match self {
+            Self::Status => "/status",
+            Self::Grocery => "/grocery",
+            Self::Watch => "/watch",
+            Self::Health => "/health",
+            Self::Household => "/household",
+            Self::Profile => "/profile",
+            Self::Location => "/location",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SlashCommandSpec {
+    pub name: &'static str,
+    pub aliases: &'static [&'static str],
+    pub usage: &'static str,
+    pub description: &'static str,
+    kind: SlashCommandKind,
+}
+
+pub const SLASH_COMMAND_REGISTRY: &[SlashCommandSpec] = &[
+    SlashCommandSpec {
+        name: "/help",
+        aliases: &["/?"],
+        usage: "/help",
+        description: "Show commands and keyboard help",
+        kind: SlashCommandKind::Help,
+    },
+    SlashCommandSpec {
+        name: "/new",
+        aliases: &[],
+        usage: "/new",
+        description: "Start a fresh conversation",
+        kind: SlashCommandKind::New,
+    },
+    SlashCommandSpec {
+        name: "/grocery",
+        aliases: &[],
+        usage: "/grocery",
+        description: "Open the screened active Grocery list",
+        kind: SlashCommandKind::Grocery,
+    },
+    SlashCommandSpec {
+        name: "/watch",
+        aliases: &[],
+        usage: "/watch",
+        description: "Open recurring Menu Watch subscriptions",
+        kind: SlashCommandKind::Watch,
+    },
+    SlashCommandSpec {
+        name: "/health",
+        aliases: &[],
+        usage: "/health",
+        description: "Open connected health context",
+        kind: SlashCommandKind::Health,
+    },
+    SlashCommandSpec {
+        name: "/household",
+        aliases: &[],
+        usage: "/household",
+        description: "Open household targeting",
+        kind: SlashCommandKind::Household,
+    },
+    SlashCommandSpec {
+        name: "/for",
+        aliases: &[],
+        usage: "/for MEMBER|everyone",
+        description: "Target future turns to a household scope",
+        kind: SlashCommandKind::For,
+    },
+    SlashCommandSpec {
+        name: "/profile",
+        aliases: &[],
+        usage: "/profile",
+        description: "Open dietary profile readiness",
+        kind: SlashCommandKind::Profile,
+    },
+    SlashCommandSpec {
+        name: "/onboard",
+        aliases: &[],
+        usage: "/onboard",
+        description: "Build or replace your synced dietary profile",
+        kind: SlashCommandKind::Onboard,
+    },
+    SlashCommandSpec {
+        name: "/location",
+        aliases: &[],
+        usage: "/location",
+        description: "Open active location context",
+        kind: SlashCommandKind::Location,
+    },
+    SlashCommandSpec {
+        name: "/voice",
+        aliases: &[],
+        usage: "/voice",
+        description: "Start or stop native microphone capture",
+        kind: SlashCommandKind::Voice,
+    },
+    SlashCommandSpec {
+        name: "/status",
+        aliases: &[],
+        usage: "/status",
+        description: "Show session readiness",
+        kind: SlashCommandKind::Status,
+    },
+    SlashCommandSpec {
+        name: "/clear",
+        aliases: &[],
+        usage: "/clear",
+        description: "Clear visible scrollback",
+        kind: SlashCommandKind::Clear,
+    },
+    SlashCommandSpec {
+        name: "/exit",
+        aliases: &["/quit"],
+        usage: "/exit",
+        description: "Close hey.food",
+        kind: SlashCommandKind::Exit,
+    },
+];
+
+#[must_use]
+pub fn slash_suggestions(model: &AppModel, limit: usize) -> Vec<&'static SlashCommandSpec> {
+    let query = model.draft.trim();
+    if !query.starts_with('/') || query.contains(char::is_whitespace) {
+        return Vec::new();
+    }
+    SLASH_COMMAND_REGISTRY
+        .iter()
+        .filter(|spec| {
+            spec.name.starts_with(query)
+                || spec.aliases.iter().any(|alias| alias.starts_with(query))
+        })
+        .take(limit)
+        .collect()
+}
+
+fn resolve_slash_command(name: &str) -> Option<&'static SlashCommandSpec> {
+    SLASH_COMMAND_REGISTRY
+        .iter()
+        .find(|spec| spec.name == name || spec.aliases.contains(&name))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Speaker {
@@ -81,6 +277,12 @@ impl Scrollback {
     #[must_use]
     pub const fn rendered_bytes(&self) -> usize {
         self.rendered_bytes
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.rendered_lines = 0;
+        self.rendered_bytes = 0;
     }
 
     fn mutate_last_assistant(&mut self, mutate: impl FnOnce(&mut SemanticEntry)) {
@@ -205,6 +407,77 @@ impl OperationState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OnboardingStep {
+    Diets,
+    Allergies,
+    Conditions,
+    Severity,
+    AvoidIngredients,
+    Activity,
+    Cuisines,
+    Notes,
+    Review,
+    Saving,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VoiceAvailability {
+    Unavailable,
+    AuthorizationRequired,
+    Ready,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VoicePhase {
+    Idle,
+    Recording { operation_id: u64 },
+    Transcribing { operation_id: u64 },
+    Review,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OnboardingFlow {
+    step: OnboardingStep,
+    profile: OnboardingProfileInput,
+}
+
+struct MultiSelection {
+    ids: Vec<String>,
+    custom: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingActionConfirmation {
+    confirmation_id: heyfood_core::GroceryConfirmationId,
+    idempotency_key: heyfood_core::GroceryIdempotencyKey,
+    editable_items: Option<Vec<serde_json::Map<String, serde_json::Value>>>,
+}
+
+impl PendingActionConfirmation {
+    fn command(
+        &self,
+        decision: ConfirmationDecisionWire,
+        edits: Option<GroceryEditPatch>,
+    ) -> AgentConfirmationCommandWire {
+        AgentConfirmationCommandWire {
+            confirmation_id: self.confirmation_id,
+            idempotency_key: self.idempotency_key,
+            decision,
+            edits,
+        }
+    }
+}
+
+impl Default for OnboardingFlow {
+    fn default() -> Self {
+        Self {
+            step: OnboardingStep::Diets,
+            profile: OnboardingProfileInput::default(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppModel {
     pub scrollback: Scrollback,
@@ -219,6 +492,15 @@ pub struct AppModel {
     pub scroll_from_tail: usize,
     pub unseen_lines: usize,
     pub idle_exit_armed: bool,
+    prompt_history: VecDeque<String>,
+    history_index: Option<usize>,
+    history_draft: String,
+    pending_choice_labels: Vec<String>,
+    pending_confirmation: Option<PendingActionConfirmation>,
+    onboarding: Option<OnboardingFlow>,
+    voice_availability: VoiceAvailability,
+    voice_phase: VoicePhase,
+    draft_before_voice: String,
     next_operation_id: u64,
 }
 
@@ -236,6 +518,15 @@ impl Default for AppModel {
             scroll_from_tail: 0,
             unseen_lines: 0,
             idle_exit_armed: false,
+            prompt_history: VecDeque::new(),
+            history_index: None,
+            history_draft: String::new(),
+            pending_choice_labels: Vec::new(),
+            pending_confirmation: None,
+            onboarding: None,
+            voice_availability: VoiceAvailability::Unavailable,
+            voice_phase: VoicePhase::Idle,
+            draft_before_voice: String::new(),
             next_operation_id: 1,
         }
     }
@@ -243,6 +534,20 @@ impl Default for AppModel {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RuntimeEvent {
+    BeginOnboarding {
+        message: String,
+    },
+    OnboardingSaved {
+        operation_id: u64,
+    },
+    OnboardingFailed {
+        operation_id: u64,
+        message: String,
+    },
+    OnboardingCancelled {
+        operation_id: u64,
+        outcome: RunTurnOutcome,
+    },
     TurnEvent {
         operation_id: u64,
         event: AgentEvent,
@@ -253,6 +558,43 @@ pub enum RuntimeEvent {
     },
     TurnFailed {
         operation_id: u64,
+        message: String,
+    },
+    PanelReady {
+        operation_id: u64,
+        panel: PanelRequest,
+        body: String,
+    },
+    PanelFailed {
+        operation_id: u64,
+        panel: PanelRequest,
+        message: String,
+    },
+    HouseholdScopeReady {
+        operation_id: u64,
+        label: String,
+    },
+    HouseholdScopeFailed {
+        operation_id: u64,
+        message: String,
+    },
+    VoiceAvailability(VoiceAvailability),
+    VoiceRecordingElapsed {
+        operation_id: u64,
+        seconds: u64,
+    },
+    VoiceTranscriptReady {
+        operation_id: u64,
+        transcript: String,
+    },
+    VoiceFailed {
+        operation_id: u64,
+        message: String,
+    },
+    VoiceCancelled {
+        operation_id: u64,
+    },
+    Notice {
         message: String,
     },
     ExternalSignal(ExitReason),
@@ -266,8 +608,13 @@ pub enum Action {
     Delete,
     MoveLeft,
     MoveRight,
+    HistoryPrevious,
+    HistoryNext,
+    CompleteSlash,
     InsertNewline,
     Submit,
+    VoiceToggle,
+    CancelVoice,
     CancelOrExit,
     Exit,
     ScrollUp(usize),
@@ -280,28 +627,106 @@ pub enum Action {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Effect {
-    SubmitTurn { operation_id: u64, prompt: String },
-    CancelTurn { operation_id: u64 },
+    SaveOnboarding {
+        operation_id: u64,
+        profile: Box<OnboardingProfileInput>,
+    },
+    SubmitTurn {
+        operation_id: u64,
+        prompt: String,
+    },
+    ConfirmAction {
+        operation_id: u64,
+        command: AgentConfirmationCommandWire,
+    },
+    OpenPanel {
+        operation_id: u64,
+        panel: PanelRequest,
+    },
+    SelectHousehold {
+        operation_id: u64,
+        selector: String,
+    },
+    StartVoice {
+        operation_id: u64,
+    },
+    StopVoice {
+        operation_id: u64,
+    },
+    CancelVoice {
+        operation_id: u64,
+    },
+    CancelTurn {
+        operation_id: u64,
+    },
+    ResetConversation,
     Exit(ExitReason),
 }
 
 #[must_use]
 pub fn dispatch(model: &mut AppModel, action: Action) -> Vec<Effect> {
+    if matches!(
+        model.voice_phase,
+        VoicePhase::Recording { .. } | VoicePhase::Transcribing { .. }
+    ) && matches!(
+        &action,
+        Action::Insert(_)
+            | Action::InsertText(_)
+            | Action::Backspace
+            | Action::Delete
+            | Action::MoveLeft
+            | Action::MoveRight
+            | Action::HistoryPrevious
+            | Action::HistoryNext
+            | Action::CompleteSlash
+            | Action::InsertNewline
+    ) {
+        model.activity = Some(match model.voice_phase {
+            VoicePhase::Recording { .. } => {
+                "Recording · composer editing is paused · stop or cancel voice first".into()
+            }
+            VoicePhase::Transcribing { .. } => {
+                "Transcribing securely… · composer editing is paused · Esc to cancel".into()
+            }
+            VoicePhase::Idle | VoicePhase::Review => unreachable!(),
+        });
+        model.idle_exit_armed = false;
+        return Vec::new();
+    }
     match action {
+        Action::Insert('?') if model.draft.is_empty() && model.onboarding.is_none() => {
+            show_help(model)
+        }
         Action::Insert(character) => {
+            reset_history_navigation(model);
             insert_at_cursor(model, &character.to_string());
             model.idle_exit_armed = false;
         }
         Action::InsertText(text) => {
+            reset_history_navigation(model);
             insert_at_cursor(model, &text);
             model.idle_exit_armed = false;
         }
-        Action::Backspace => backspace(model),
-        Action::Delete => delete(model),
+        Action::Backspace => {
+            reset_history_navigation(model);
+            backspace(model);
+        }
+        Action::Delete => {
+            reset_history_navigation(model);
+            delete(model);
+        }
         Action::MoveLeft => model.cursor = model.cursor.saturating_sub(1),
         Action::MoveRight => model.cursor = (model.cursor + 1).min(model.draft.chars().count()),
-        Action::InsertNewline => insert_at_cursor(model, "\n"),
+        Action::HistoryPrevious => history_previous(model),
+        Action::HistoryNext => history_next(model),
+        Action::CompleteSlash => complete_slash(model),
+        Action::InsertNewline => {
+            reset_history_navigation(model);
+            insert_at_cursor(model, "\n");
+        }
         Action::Submit => return submit(model),
+        Action::VoiceToggle => return toggle_voice(model),
+        Action::CancelVoice => return cancel_voice(model),
         Action::CancelOrExit => return cancel_or_exit(model),
         Action::Exit if model.draft.is_empty() => {
             return begin_exit(model, ExitReason::Requested);
@@ -332,10 +757,29 @@ pub fn dispatch(model: &mut AppModel, action: Action) -> Vec<Effect> {
 }
 
 fn submit(model: &mut AppModel) -> Vec<Effect> {
-    if model.operation.is_active() || model.draft.trim().is_empty() {
+    if matches!(model.voice_phase, VoicePhase::Recording { .. }) {
+        return stop_voice(model);
+    }
+    if model.draft.trim().is_empty() {
         return Vec::new();
     }
+    if model.onboarding.is_some() {
+        return submit_onboarding(model);
+    }
+    if model.pending_confirmation.is_some() {
+        return submit_confirmation_answer(model);
+    }
+    if model.draft.trim_start().starts_with('/') {
+        return submit_slash_command(model);
+    }
+    if model.operation.is_active() {
+        return Vec::new();
+    }
+    model.voice_phase = VoicePhase::Idle;
+    model.draft_before_voice.clear();
     let prompt = std::mem::take(&mut model.draft);
+    model.pending_choice_labels.clear();
+    remember_prompt(model, &prompt);
     model.cursor = 0;
     let operation_id = model.next_operation_id;
     model.next_operation_id = model.next_operation_id.saturating_add(1);
@@ -358,11 +802,969 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
     }]
 }
 
+fn toggle_voice(model: &mut AppModel) -> Vec<Effect> {
+    match model.voice_phase {
+        VoicePhase::Recording { .. } => return stop_voice(model),
+        VoicePhase::Transcribing { .. } => {
+            push_notice(
+                model,
+                "The recording is already being transcribed. Esc cancels this voice operation.",
+            );
+            return Vec::new();
+        }
+        VoicePhase::Idle | VoicePhase::Review => {}
+    }
+    match model.voice_availability {
+        VoiceAvailability::Unavailable => {
+            push_notice(
+                model,
+                "Native microphone capture is unavailable in this artifact. The composer remains available for typed input.",
+            );
+            return Vec::new();
+        }
+        VoiceAvailability::AuthorizationRequired => {
+            push_notice(
+                model,
+                "Voice transcription needs `audio:transcribe` authorization. Exit the TUI, run `heyfood login`, then try again. No microphone was opened.",
+            );
+            return Vec::new();
+        }
+        VoiceAvailability::Ready => {}
+    }
+    if model.operation.is_active()
+        || model.onboarding.is_some()
+        || model.pending_confirmation.is_some()
+    {
+        push_notice(
+            model,
+            "Finish or stop the active work before starting voice capture.",
+        );
+        return Vec::new();
+    }
+    model.draft_before_voice = model.draft.clone();
+    model.draft.clear();
+    model.cursor = 0;
+    let operation_id = model.next_operation_id;
+    model.next_operation_id = model.next_operation_id.saturating_add(1);
+    model.voice_phase = VoicePhase::Recording { operation_id };
+    model.operation = OperationState::Running(operation_id);
+    model.activity =
+        Some("Opening microphone… · Enter, Ctrl+Space, or F8 to stop · Esc to cancel".into());
+    model.idle_exit_armed = false;
+    vec![Effect::StartVoice { operation_id }]
+}
+
+fn stop_voice(model: &mut AppModel) -> Vec<Effect> {
+    let VoicePhase::Recording { operation_id } = model.voice_phase else {
+        return Vec::new();
+    };
+    model.voice_phase = VoicePhase::Transcribing { operation_id };
+    model.operation = OperationState::Finishing(operation_id);
+    model.activity = Some("Transcribing securely… · Esc to cancel".into());
+    vec![Effect::StopVoice { operation_id }]
+}
+
+fn cancel_voice(model: &mut AppModel) -> Vec<Effect> {
+    match model.voice_phase {
+        VoicePhase::Recording { operation_id } | VoicePhase::Transcribing { operation_id } => {
+            model.operation = OperationState::Cancelling(operation_id);
+            model.activity = Some("Cancelling voice capture…".into());
+            vec![Effect::CancelVoice { operation_id }]
+        }
+        VoicePhase::Review => {
+            model.draft = std::mem::take(&mut model.draft_before_voice);
+            model.cursor = model.draft.chars().count();
+            model.voice_phase = VoicePhase::Idle;
+            model.activity = None;
+            model.idle_exit_armed = false;
+            push_notice(model, "Voice transcript discarded. Nothing was submitted.");
+            Vec::new()
+        }
+        VoicePhase::Idle => Vec::new(),
+    }
+}
+
+fn voice_operation_id(phase: VoicePhase) -> Option<u64> {
+    match phase {
+        VoicePhase::Recording { operation_id } | VoicePhase::Transcribing { operation_id } => {
+            Some(operation_id)
+        }
+        VoicePhase::Idle | VoicePhase::Review => None,
+    }
+}
+
+fn finish_voice_transcription(model: &mut AppModel, result: Result<String, String>) {
+    model.operation = OperationState::Idle;
+    model.idle_exit_armed = false;
+    match result {
+        Ok(transcript) => {
+            let transcript = terminal_safe_text(&transcript);
+            if transcript.trim().is_empty()
+                || transcript.chars().count() > TRANSCRIPTION_MAX_TRANSCRIPT_CHARACTERS
+            {
+                finish_voice_transcription(
+                    model,
+                    Err("The transcription response was empty or too long.".into()),
+                );
+                return;
+            }
+            model.draft = transcript.trim().to_owned();
+            model.cursor = model.draft.chars().count();
+            model.voice_phase = VoicePhase::Review;
+            model.activity = Some(
+                "Review voice transcript · edit and press Enter to submit · Esc to discard".into(),
+            );
+            push_notice(
+                model,
+                "Voice transcript ready in the composer. Edit it if needed, then press Enter to submit through the same agent path. Use `/voice` to record again or Esc to discard it.",
+            );
+        }
+        Err(message) => {
+            model.draft = std::mem::take(&mut model.draft_before_voice);
+            model.cursor = model.draft.chars().count();
+            model.voice_phase = VoicePhase::Idle;
+            model.activity = None;
+            push_notice(
+                model,
+                &format!(
+                    "Voice input was not submitted: {} Continue with typed input or try `/voice` again.",
+                    terminal_safe_text(&message)
+                ),
+            );
+        }
+    }
+}
+
+fn finish_voice_cancel(model: &mut AppModel) {
+    model.draft = std::mem::take(&mut model.draft_before_voice);
+    model.cursor = model.draft.chars().count();
+    model.voice_phase = VoicePhase::Idle;
+    model.operation = OperationState::Idle;
+    model.activity = None;
+    model.idle_exit_armed = false;
+    push_notice(
+        model,
+        "Voice capture cancelled. Audio and transcript were discarded; nothing was submitted.",
+    );
+}
+
+fn submit_confirmation_answer(model: &mut AppModel) -> Vec<Effect> {
+    if model.operation.is_active() {
+        return Vec::new();
+    }
+    let answer = model.draft.trim().to_owned();
+    let normalized = answer.to_ascii_lowercase();
+    let decision = match normalized.as_str() {
+        "y" | "yes" | "confirm" | "accept" => ConfirmationDecisionWire::Accept,
+        "n" | "no" | "cancel" => ConfirmationDecisionWire::Cancel,
+        value if value.starts_with("edit ") => return submit_confirmation_edit(model, &answer),
+        _ => {
+            push_notice(
+                model,
+                "A write is awaiting your decision. Type `y` to confirm, `n` to cancel, or use the edit instruction shown on the card.",
+            );
+            return Vec::new();
+        }
+    };
+    submit_confirmation(model, decision, None)
+}
+
+fn submit_confirmation_edit(model: &mut AppModel, answer: &str) -> Vec<Effect> {
+    let Some(pending) = model.pending_confirmation.as_ref() else {
+        return Vec::new();
+    };
+    let Some(editable_items) = pending.editable_items.as_ref() else {
+        push_notice(
+            model,
+            "This proposal does not expose a contract-backed item edit.",
+        );
+        return Vec::new();
+    };
+    let mut words = answer.split_whitespace();
+    let command = words.next();
+    let reference = words.next();
+    let replacement = words.collect::<Vec<_>>().join(" ");
+    let index = command
+        .filter(|value| value.eq_ignore_ascii_case("edit"))
+        .and(reference)
+        .and_then(|value| value.strip_prefix('#'))
+        .and_then(|value| value.parse::<usize>().ok());
+    let replacement = required_text(&replacement, 255).ok();
+    let (Some(index), Some(replacement)) = (index, replacement) else {
+        push_notice(model, "Use `edit #N <replacement item name>`.");
+        return Vec::new();
+    };
+    if index == 0 || index > editable_items.len() {
+        push_notice(model, "That item number is outside the pending proposal.");
+        return Vec::new();
+    }
+    let mut items = editable_items.clone();
+    items[index - 1].insert("name".into(), serde_json::Value::String(replacement));
+    let edits = GroceryEditPatch::new(serde_json::Map::from_iter([(
+        "items".into(),
+        serde_json::Value::Array(items.into_iter().map(serde_json::Value::Object).collect()),
+    )]));
+    let Ok(edits) = edits else {
+        push_notice(model, "The corrected proposal is too large or invalid.");
+        return Vec::new();
+    };
+    submit_confirmation(model, ConfirmationDecisionWire::Accept, Some(edits))
+}
+
+fn submit_confirmation(
+    model: &mut AppModel,
+    decision: ConfirmationDecisionWire,
+    edits: Option<GroceryEditPatch>,
+) -> Vec<Effect> {
+    if model.operation.is_active() {
+        return Vec::new();
+    }
+    let Some(pending) = model.pending_confirmation.as_ref() else {
+        return Vec::new();
+    };
+    let editing = edits.is_some();
+    let command = pending.command(decision, edits);
+    model.draft.clear();
+    model.cursor = 0;
+    let operation_id = model.next_operation_id;
+    model.next_operation_id = model.next_operation_id.saturating_add(1);
+    let label = match (decision, editing) {
+        (ConfirmationDecisionWire::Accept, true) => "Edit and confirm",
+        (ConfirmationDecisionWire::Accept, false) => "Confirm",
+        (ConfirmationDecisionWire::Cancel, _) => "Cancel",
+    };
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::User,
+        text: label.into(),
+        streaming: false,
+    });
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::Assistant,
+        text: String::new(),
+        streaming: true,
+    });
+    model.operation = OperationState::Running(operation_id);
+    model.activity = Some(match (decision, editing) {
+        (ConfirmationDecisionWire::Accept, true) => "Applying correction…".into(),
+        (ConfirmationDecisionWire::Accept, false) => "Confirming…".into(),
+        (ConfirmationDecisionWire::Cancel, _) => "Cancelling proposal…".into(),
+    });
+    model.idle_exit_armed = false;
+    follow_tail(model);
+    vec![Effect::ConfirmAction {
+        operation_id,
+        command,
+    }]
+}
+
+fn begin_onboarding(model: &mut AppModel, message: &str) {
+    if model.onboarding.is_some() {
+        push_notice(model, "Dietary onboarding is already in progress.");
+        return;
+    }
+    model.onboarding = Some(OnboardingFlow::default());
+    model.idle_exit_armed = false;
+    push_notice(model, message);
+    push_onboarding_prompt(model);
+}
+
+fn submit_onboarding(model: &mut AppModel) -> Vec<Effect> {
+    if model.operation.is_active() {
+        return Vec::new();
+    }
+    let answer = std::mem::take(&mut model.draft);
+    model.cursor = 0;
+    let answer = answer.trim();
+    if matches!(answer.to_ascii_lowercase().as_str(), "cancel" | "/cancel") {
+        model.onboarding = None;
+        push_notice(
+            model,
+            "Dietary onboarding cancelled. Nothing was sent or saved.",
+        );
+        return Vec::new();
+    }
+
+    let mut flow = model
+        .onboarding
+        .take()
+        .expect("onboarding submission requires an active flow");
+    if answer.eq_ignore_ascii_case("back") {
+        flow.step = previous_onboarding_step(flow.step, &flow.profile);
+        model.onboarding = Some(flow);
+        push_onboarding_prompt(model);
+        return Vec::new();
+    }
+
+    let result = apply_onboarding_answer(&mut flow, answer);
+    if let Err(message) = result {
+        model.onboarding = Some(flow);
+        push_notice(model, &message);
+        push_onboarding_prompt(model);
+        return Vec::new();
+    }
+
+    if flow.step == OnboardingStep::Saving {
+        let profile = flow.profile.clone();
+        if let Err(message) = profile.profile_data() {
+            flow.step = OnboardingStep::Review;
+            model.onboarding = Some(flow);
+            push_notice(model, &format!("Unable to review this profile: {message}"));
+            return Vec::new();
+        }
+        let operation_id = model.next_operation_id;
+        model.next_operation_id = model.next_operation_id.saturating_add(1);
+        model.scrollback.push(SemanticEntry {
+            speaker: Speaker::User,
+            text: "Save dietary profile".into(),
+            streaming: false,
+        });
+        model.scrollback.push(SemanticEntry {
+            speaker: Speaker::Assistant,
+            text: String::new(),
+            streaming: true,
+        });
+        model.onboarding = Some(flow);
+        model.operation = OperationState::Running(operation_id);
+        model.activity = Some("Saving dietary profile…".into());
+        follow_tail(model);
+        return vec![Effect::SaveOnboarding {
+            operation_id,
+            profile: Box::new(profile),
+        }];
+    }
+
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::User,
+        text: terminal_safe_text(answer),
+        streaming: false,
+    });
+    model.onboarding = Some(flow);
+    push_onboarding_prompt(model);
+    Vec::new()
+}
+
+fn apply_onboarding_answer(flow: &mut OnboardingFlow, answer: &str) -> Result<(), String> {
+    match flow.step {
+        OnboardingStep::Diets => {
+            let selected = parse_multi_options(answer, diet_options(), 10, 40)?;
+            flow.profile.diet_style_ids = selected.ids;
+            flow.profile.custom_diet_styles = selected.custom;
+            flow.step = OnboardingStep::Allergies;
+        }
+        OnboardingStep::Allergies => {
+            let selected = parse_multi_options(answer, allergy_options(), 10, 60)?;
+            flow.profile.allergy_ids = selected.ids;
+            flow.profile.custom_restrictions = selected.custom;
+            flow.step = OnboardingStep::Conditions;
+        }
+        OnboardingStep::Conditions => {
+            let selected = parse_multi_options(answer, condition_options(), 10, 60)?;
+            flow.profile.health_condition_ids = selected.ids;
+            flow.profile.custom_health_conditions = selected.custom;
+            flow.step = if flow.profile.health_condition_ids.is_empty() {
+                flow.profile.severity_level = None;
+                OnboardingStep::AvoidIngredients
+            } else {
+                OnboardingStep::Severity
+            };
+        }
+        OnboardingStep::Severity => {
+            let severity = answer
+                .parse::<u8>()
+                .ok()
+                .filter(|value| (1..=5).contains(value))
+                .ok_or_else(|| "Enter a condition severity from 1 to 5.".to_owned())?;
+            flow.profile.severity_level = Some(severity);
+            flow.step = OnboardingStep::AvoidIngredients;
+        }
+        OnboardingStep::AvoidIngredients => {
+            flow.profile.avoid_ingredients = parse_free_text_list(answer, 20, 40)?;
+            flow.step = OnboardingStep::Activity;
+        }
+        OnboardingStep::Activity => {
+            flow.profile.activity_level = parse_single_option(answer, activity_options())?;
+            flow.step = OnboardingStep::Cuisines;
+        }
+        OnboardingStep::Cuisines => {
+            let selected = parse_multi_options(answer, cuisine_options(), 10, 40)?;
+            flow.profile.cuisine_preferences = selected.ids;
+            flow.profile.custom_cuisines = selected.custom;
+            flow.step = OnboardingStep::Notes;
+        }
+        OnboardingStep::Notes => {
+            flow.profile.notes = parse_optional_text(answer, 280)?;
+            flow.step = OnboardingStep::Review;
+        }
+        OnboardingStep::Review if answer.eq_ignore_ascii_case("save") => {
+            flow.step = OnboardingStep::Saving;
+        }
+        OnboardingStep::Review => {
+            return Err(
+                "Type `save` to confirm, `back` to edit, or `cancel` to discard it.".into(),
+            );
+        }
+        OnboardingStep::Saving => return Err("The dietary profile is already being saved.".into()),
+    }
+    Ok(())
+}
+
+fn previous_onboarding_step(
+    step: OnboardingStep,
+    profile: &OnboardingProfileInput,
+) -> OnboardingStep {
+    match step {
+        OnboardingStep::Diets => OnboardingStep::Diets,
+        OnboardingStep::Allergies => OnboardingStep::Diets,
+        OnboardingStep::Conditions => OnboardingStep::Allergies,
+        OnboardingStep::Severity => OnboardingStep::Conditions,
+        OnboardingStep::AvoidIngredients if profile.health_condition_ids.is_empty() => {
+            OnboardingStep::Conditions
+        }
+        OnboardingStep::AvoidIngredients => OnboardingStep::Severity,
+        OnboardingStep::Activity => OnboardingStep::AvoidIngredients,
+        OnboardingStep::Cuisines => OnboardingStep::Activity,
+        OnboardingStep::Notes => OnboardingStep::Cuisines,
+        OnboardingStep::Review | OnboardingStep::Saving => OnboardingStep::Notes,
+    }
+}
+
+fn parse_multi_options(
+    answer: &str,
+    options: &[OnboardingOption],
+    custom_maximum: usize,
+    custom_max_length: usize,
+) -> Result<MultiSelection, String> {
+    if is_none_answer(answer) {
+        return Ok(MultiSelection {
+            ids: Vec::new(),
+            custom: Vec::new(),
+        });
+    }
+    if let Some(option) = resolve_onboarding_option(answer.trim(), options) {
+        return Ok(MultiSelection {
+            ids: vec![option.id.clone()],
+            custom: Vec::new(),
+        });
+    }
+    let mut selected = MultiSelection {
+        ids: Vec::new(),
+        custom: Vec::new(),
+    };
+    for token in answer
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if is_none_answer(token) {
+            return Err("Use `none` by itself to clear this section.".into());
+        }
+        if let Some((start, end)) = numeric_range(token)? {
+            if start == 0 || start > end || end > options.len() {
+                return Err(
+                    "A numeric range must refer to listed options in ascending order.".into(),
+                );
+            }
+            for index in start..=end {
+                let id = &options[index - 1].id;
+                if !selected.ids.contains(id) {
+                    selected.ids.push(id.clone());
+                }
+            }
+            continue;
+        }
+        if let Some(option) = resolve_onboarding_option(token, options) {
+            if !selected.ids.contains(&option.id) {
+                selected.ids.push(option.id.clone());
+            }
+            continue;
+        }
+        if token.parse::<usize>().is_ok() {
+            return Err("A numeric choice must refer to one of the listed options.".into());
+        }
+        if token.chars().count() > custom_max_length || token.chars().any(char::is_control) {
+            return Err(format!(
+                "Custom entries must be at most {custom_max_length} characters."
+            ));
+        }
+        if !selected.custom.iter().any(|value| value == token) {
+            selected.custom.push(token.to_owned());
+        }
+    }
+    if selected.ids.is_empty() && selected.custom.is_empty() {
+        return Err("Choose at least one option, or type `none`.".into());
+    }
+    if selected.custom.len() > custom_maximum {
+        return Err(format!("Enter at most {custom_maximum} custom selections."));
+    }
+    Ok(selected)
+}
+
+fn numeric_range(token: &str) -> Result<Option<(usize, usize)>, String> {
+    let Some((start, end)) = token.split_once('-') else {
+        return Ok(None);
+    };
+    if start.trim().chars().all(|value| value.is_ascii_digit())
+        && end.trim().chars().all(|value| value.is_ascii_digit())
+    {
+        let start = start
+            .trim()
+            .parse()
+            .map_err(|_| "The numeric range is too large.".to_owned())?;
+        let end = end
+            .trim()
+            .parse()
+            .map_err(|_| "The numeric range is too large.".to_owned())?;
+        Ok(Some((start, end)))
+    } else {
+        Ok(None)
+    }
+}
+
+fn parse_single_option(
+    answer: &str,
+    options: &[OnboardingOption],
+) -> Result<Option<String>, String> {
+    if is_none_answer(answer) {
+        return Ok(None);
+    }
+    if answer.contains(',') {
+        return Err("Choose one activity level, or type `none`.".into());
+    }
+    resolve_onboarding_option(answer.trim(), options)
+        .map(|option| Some(option.id.clone()))
+        .ok_or_else(|| "Choose an activity by number, exact label, or canonical ID.".into())
+}
+
+fn resolve_onboarding_option<'a>(
+    token: &str,
+    options: &'a [OnboardingOption],
+) -> Option<&'a OnboardingOption> {
+    if let Ok(number) = token.parse::<usize>() {
+        return number.checked_sub(1).and_then(|index| options.get(index));
+    }
+    let normalized = normalize_choice(token);
+    options.iter().find(|option| {
+        normalize_choice(&option.id) == normalized || normalize_choice(&option.label) == normalized
+    })
+}
+
+fn normalize_choice(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn parse_free_text_list(
+    answer: &str,
+    maximum: usize,
+    max_length: usize,
+) -> Result<Vec<String>, String> {
+    if is_none_answer(answer) {
+        return Ok(Vec::new());
+    }
+    let mut values = Vec::new();
+    for value in answer
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if value.chars().count() > max_length || value.chars().any(char::is_control) {
+            return Err(format!(
+                "Each entry must be at most {max_length} characters."
+            ));
+        }
+        if !values.iter().any(|current| current == value) {
+            values.push(value.to_owned());
+        }
+    }
+    if values.is_empty() {
+        return Err("Enter comma-separated ingredients, or type `none`.".into());
+    }
+    if values.len() > maximum {
+        return Err(format!("Enter at most {maximum} ingredients."));
+    }
+    Ok(values)
+}
+
+fn parse_optional_text(answer: &str, maximum: usize) -> Result<Option<String>, String> {
+    if is_none_answer(answer) {
+        return Ok(None);
+    }
+    if answer.chars().count() > maximum || answer.chars().any(char::is_control) {
+        return Err(format!("Notes must be at most {maximum} characters."));
+    }
+    Ok(Some(answer.to_owned()))
+}
+
+fn is_none_answer(answer: &str) -> bool {
+    matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "none" | "0" | "skip"
+    )
+}
+
+fn push_onboarding_prompt(model: &mut AppModel) {
+    let Some(flow) = model.onboarding.as_ref() else {
+        return;
+    };
+    let prompt = onboarding_prompt(flow);
+    push_notice(model, &prompt);
+}
+
+fn onboarding_prompt(flow: &OnboardingFlow) -> String {
+    match flow.step {
+        OnboardingStep::Diets => option_prompt(
+            "Diet styles · 1/8",
+            "Choose any that apply by number, range, ID, label, or custom text. Separate choices with commas; type `none` for no restrictions.",
+            diet_options(),
+        ),
+        OnboardingStep::Allergies => option_prompt(
+            "Allergies & restrictions · 2/8",
+            "Choose every option that must be avoided by number, range, ID, label, or custom text; type `none` if there are none.",
+            allergy_options(),
+        ),
+        OnboardingStep::Conditions => option_prompt(
+            "Health conditions · 3/8",
+            "Choose conditions by number, range, ID, label, or custom text; type `none` if there are none.",
+            condition_options(),
+        ),
+        OnboardingStep::Severity => {
+            "Condition severity · 4/8\nChoose a shared severity from 1 (mild) to 5 (critical).".into()
+        }
+        OnboardingStep::AvoidIngredients => "Ingredients to avoid · 5/8\nEnter up to 20 ingredients separated by commas, or type `none`.".into(),
+        OnboardingStep::Activity => option_prompt(
+            "Activity level · 6/8",
+            "Choose one option by number, ID, or label; type `none` to leave it unset.",
+            activity_options(),
+        ),
+        OnboardingStep::Cuisines => option_prompt(
+            "Cuisines you love · 7/8",
+            "Choose favorites by number, range, ID, label, or custom text; type `none` to skip.",
+            cuisine_options(),
+        ),
+        OnboardingStep::Notes => "Additional notes · 8/8\nAdd anything else the food guide should know (280 characters maximum), or type `none`.".into(),
+        OnboardingStep::Review => onboarding_review(&flow.profile),
+        OnboardingStep::Saving => "Saving your dietary profile…".into(),
+    }
+}
+
+fn option_prompt(title: &str, instructions: &str, options: &[OnboardingOption]) -> String {
+    let mut output = format!("{title}\n{instructions}\n\n");
+    for (index, option) in options.iter().enumerate() {
+        let _ = writeln!(output, "{:>2}. {}", index + 1, option.label);
+    }
+    output
+        .push_str("\nType `back` to revisit the previous step or `cancel` to discard onboarding.");
+    output
+}
+
+fn onboarding_review(profile: &OnboardingProfileInput) -> String {
+    format!(
+        "Review dietary profile\n\nDiet styles: {}\nAllergies: {}\nHealth conditions: {}\nCondition severity: {}\nAvoid ingredients: {}\nActivity: {}\nCuisines: {}\nNotes: {}\n\nNo profile data has been sent yet. Type `save` to grant profile-sync consent and replace the synced profile, `back` to edit, or `cancel` to discard it.",
+        labels_and_custom(
+            &profile.diet_style_ids,
+            &profile.custom_diet_styles,
+            diet_options()
+        ),
+        labels_and_custom(
+            &profile.allergy_ids,
+            &profile.custom_restrictions,
+            allergy_options()
+        ),
+        labels_and_custom(
+            &profile.health_condition_ids,
+            &profile.custom_health_conditions,
+            condition_options()
+        ),
+        profile
+            .severity_level
+            .map_or_else(|| "None".into(), |value| value.to_string()),
+        display_values(&profile.avoid_ingredients),
+        profile.activity_level.as_deref().map_or_else(
+            || "None".into(),
+            |value| labels_for(&[value.to_owned()], activity_options())
+        ),
+        labels_and_custom(
+            &profile.cuisine_preferences,
+            &profile.custom_cuisines,
+            cuisine_options()
+        ),
+        profile.notes.clone().unwrap_or_else(|| "None".into()),
+    )
+}
+
+fn labels_for(values: &[String], options: &[OnboardingOption]) -> String {
+    if values.is_empty() {
+        return "None".into();
+    }
+    values
+        .iter()
+        .map(|value| {
+            options
+                .iter()
+                .find(|option| option.id == *value)
+                .map_or(value.as_str(), |option| option.label.as_str())
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn labels_and_custom(values: &[String], custom: &[String], options: &[OnboardingOption]) -> String {
+    let canonical = labels_for(values, options);
+    match (canonical.as_str(), custom.is_empty()) {
+        ("None", true) => canonical,
+        ("None", false) => custom.join(", "),
+        (_, true) => canonical,
+        (_, false) => format!("{canonical}, {}", custom.join(", ")),
+    }
+}
+
+fn display_values(values: &[String]) -> String {
+    if values.is_empty() {
+        "None".into()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
+    let command = model.draft.trim().to_owned();
+    remember_prompt(model, &command);
+    model.draft.clear();
+    model.cursor = 0;
+    let (name, arguments) = command
+        .split_once(char::is_whitespace)
+        .map_or((command.as_str(), ""), |(name, arguments)| {
+            (name, arguments.trim())
+        });
+    let Some(spec) = resolve_slash_command(name) else {
+        push_notice(
+            model,
+            "Unknown command. Use /help to see the interactive command registry.",
+        );
+        return Vec::new();
+    };
+    match spec.kind {
+        SlashCommandKind::Help => show_help(model),
+        SlashCommandKind::Clear if model.operation.is_active() => push_notice(
+            model,
+            "Finish or stop the active turn before clearing the visible transcript.",
+        ),
+        SlashCommandKind::Clear => {
+            model.scrollback.clear();
+            model.activity = None;
+            follow_tail(model);
+        }
+        SlashCommandKind::New if !arguments.is_empty() => {
+            push_notice(model, &format!("Usage: {}", spec.usage));
+        }
+        SlashCommandKind::New if model.operation.is_active() => push_notice(
+            model,
+            "Stop the active turn with Ctrl+C, then run /new again.",
+        ),
+        SlashCommandKind::New => {
+            push_notice(model, "Started a fresh conversation.");
+            return vec![Effect::ResetConversation];
+        }
+        SlashCommandKind::Status
+        | SlashCommandKind::Grocery
+        | SlashCommandKind::Watch
+        | SlashCommandKind::Health
+        | SlashCommandKind::Household
+        | SlashCommandKind::Profile
+        | SlashCommandKind::Onboard
+        | SlashCommandKind::Location
+        | SlashCommandKind::Voice
+            if !arguments.is_empty() =>
+        {
+            push_notice(model, &format!("Usage: {}", spec.usage));
+        }
+        SlashCommandKind::Status => return open_panel(model, PanelRequest::Status),
+        SlashCommandKind::Grocery => return open_panel(model, PanelRequest::Grocery),
+        SlashCommandKind::Watch => return open_panel(model, PanelRequest::Watch),
+        SlashCommandKind::Health => return open_panel(model, PanelRequest::Health),
+        SlashCommandKind::Household => return open_panel(model, PanelRequest::Household),
+        SlashCommandKind::For if arguments.is_empty() => {
+            push_notice(model, &format!("Usage: {}", spec.usage));
+        }
+        SlashCommandKind::For => return select_household(model, arguments),
+        SlashCommandKind::Profile => return open_panel(model, PanelRequest::Profile),
+        SlashCommandKind::Onboard if model.operation.is_active() => push_notice(
+            model,
+            "Finish or stop the active work before starting dietary onboarding.",
+        ),
+        SlashCommandKind::Onboard => begin_onboarding(
+            model,
+            "Dietary onboarding replaces your synced profile only after you review and save it.",
+        ),
+        SlashCommandKind::Location => return open_panel(model, PanelRequest::Location),
+        SlashCommandKind::Voice => return toggle_voice(model),
+        SlashCommandKind::Exit => return begin_exit(model, ExitReason::Requested),
+    }
+    Vec::new()
+}
+
+fn select_household(model: &mut AppModel, selector: &str) -> Vec<Effect> {
+    if model.operation.is_active() {
+        push_notice(
+            model,
+            "Finish or stop the active work before changing the household target.",
+        );
+        return Vec::new();
+    }
+    let operation_id = model.next_operation_id;
+    model.next_operation_id = model.next_operation_id.saturating_add(1);
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::User,
+        text: format!("/for {selector}"),
+        streaming: false,
+    });
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::Assistant,
+        text: String::new(),
+        streaming: true,
+    });
+    model.operation = OperationState::Running(operation_id);
+    model.activity = Some("Changing household target…".into());
+    model.idle_exit_armed = false;
+    follow_tail(model);
+    vec![Effect::SelectHousehold {
+        operation_id,
+        selector: selector.to_owned(),
+    }]
+}
+
+fn open_panel(model: &mut AppModel, panel: PanelRequest) -> Vec<Effect> {
+    if model.operation.is_active() {
+        push_notice(
+            model,
+            "Finish or stop the active work before opening another panel.",
+        );
+        return Vec::new();
+    }
+    let operation_id = model.next_operation_id;
+    model.next_operation_id = model.next_operation_id.saturating_add(1);
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::User,
+        text: panel.command().into(),
+        streaming: false,
+    });
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::Assistant,
+        text: String::new(),
+        streaming: true,
+    });
+    model.operation = OperationState::Running(operation_id);
+    model.activity = Some(format!("Loading {}…", panel.title()));
+    model.idle_exit_armed = false;
+    follow_tail(model);
+    vec![Effect::OpenPanel {
+        operation_id,
+        panel,
+    }]
+}
+
+fn show_help(model: &mut AppModel) {
+    let mut help = String::from("Commands\n");
+    for spec in SLASH_COMMAND_REGISTRY {
+        let _ = writeln!(help, "  {:<14} {}", spec.usage, spec.description);
+    }
+    help.push_str(
+        "\nKeys\n  Enter send/stop recording · Shift+Enter/Ctrl+J newline · Up/Down history\n  Ctrl+Space/F8 voice · Esc cancel voice · Tab complete\n  PageUp/PageDown scroll · End follow · Ctrl+C stop · Ctrl+D exit",
+    );
+    push_notice(model, &help);
+}
+
+fn push_notice(model: &mut AppModel, text: &str) {
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::Notice,
+        text: text.into(),
+        streaming: false,
+    });
+    follow_tail(model);
+}
+
+fn remember_prompt(model: &mut AppModel, prompt: &str) {
+    if model
+        .prompt_history
+        .back()
+        .is_none_or(|last| last != prompt)
+    {
+        model.prompt_history.push_back(prompt.to_owned());
+        while model.prompt_history.len() > MAX_PROMPT_HISTORY {
+            model.prompt_history.pop_front();
+        }
+    }
+    reset_history_navigation(model);
+}
+
+fn reset_history_navigation(model: &mut AppModel) {
+    model.history_index = None;
+    model.history_draft.clear();
+}
+
+fn history_previous(model: &mut AppModel) {
+    if model.prompt_history.is_empty() {
+        return;
+    }
+    let next = match model.history_index {
+        None => {
+            model.history_draft = model.draft.clone();
+            model.prompt_history.len() - 1
+        }
+        Some(index) => index.saturating_sub(1),
+    };
+    model.history_index = Some(next);
+    model.draft = model.prompt_history[next].clone();
+    model.cursor = model.draft.chars().count();
+}
+
+fn history_next(model: &mut AppModel) {
+    let Some(index) = model.history_index else {
+        return;
+    };
+    if index + 1 < model.prompt_history.len() {
+        let next = index + 1;
+        model.history_index = Some(next);
+        model.draft = model.prompt_history[next].clone();
+    } else {
+        model.history_index = None;
+        model.draft = std::mem::take(&mut model.history_draft);
+    }
+    model.cursor = model.draft.chars().count();
+}
+
+fn complete_slash(model: &mut AppModel) {
+    let suggestions = slash_suggestions(model, 2);
+    if let [spec] = suggestions.as_slice() {
+        model.draft = spec.name.to_owned();
+        model.cursor = model.draft.chars().count();
+    }
+}
+
 fn cancel_or_exit(model: &mut AppModel) -> Vec<Effect> {
+    if !matches!(model.voice_phase, VoicePhase::Idle) {
+        return cancel_voice(model);
+    }
+    if model.pending_confirmation.is_some() && !model.operation.is_active() {
+        return submit_confirmation(model, ConfirmationDecisionWire::Cancel, None);
+    }
     if !model.draft.is_empty() {
         model.draft.clear();
         model.cursor = 0;
         model.idle_exit_armed = false;
+        return Vec::new();
+    }
+    if model.onboarding.is_some() && !model.operation.is_active() {
+        model.onboarding = None;
+        model.idle_exit_armed = false;
+        model.activity = None;
+        push_notice(
+            model,
+            "Dietary onboarding cancelled. Nothing was sent or saved.",
+        );
         return Vec::new();
     }
     match model.operation {
@@ -384,7 +1786,9 @@ fn cancel_or_exit(model: &mut AppModel) -> Vec<Effect> {
 
 fn begin_exit(model: &mut AppModel, reason: ExitReason) -> Vec<Effect> {
     let mut effects = Vec::new();
-    if let Some(operation_id) = model.operation.operation_id() {
+    if let Some(operation_id) = voice_operation_id(model.voice_phase) {
+        effects.push(Effect::CancelVoice { operation_id });
+    } else if let Some(operation_id) = model.operation.operation_id() {
         effects.push(Effect::CancelTurn { operation_id });
     }
     model.operation = OperationState::Exiting(reason);
@@ -395,6 +1799,64 @@ fn begin_exit(model: &mut AppModel, reason: ExitReason) -> Vec<Effect> {
 fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
     match runtime {
         RuntimeEvent::ExternalSignal(reason) => return begin_exit(model, reason),
+        RuntimeEvent::Notice { message } => push_notice(model, &terminal_safe_text(&message)),
+        RuntimeEvent::VoiceAvailability(availability) => {
+            model.voice_availability = availability;
+        }
+        RuntimeEvent::VoiceRecordingElapsed {
+            operation_id,
+            seconds,
+        } if matches!(
+            model.voice_phase,
+            VoicePhase::Recording {
+                operation_id: current
+            } if current == operation_id
+        ) =>
+        {
+            model.activity = Some(format!(
+                "Recording {seconds}s · Enter, Ctrl+Space, or F8 to transcribe · Esc to cancel"
+            ));
+        }
+        RuntimeEvent::VoiceTranscriptReady {
+            operation_id,
+            transcript,
+        } if voice_operation_id(model.voice_phase) == Some(operation_id) => {
+            finish_voice_transcription(model, Ok(transcript));
+        }
+        RuntimeEvent::VoiceFailed {
+            operation_id,
+            message,
+        } if voice_operation_id(model.voice_phase) == Some(operation_id) => {
+            finish_voice_transcription(model, Err(message));
+        }
+        RuntimeEvent::VoiceCancelled { operation_id }
+            if voice_operation_id(model.voice_phase) == Some(operation_id) =>
+        {
+            finish_voice_cancel(model);
+        }
+        RuntimeEvent::BeginOnboarding { message }
+            if model.operation == OperationState::Idle && model.onboarding.is_none() =>
+        {
+            begin_onboarding(model, &terminal_safe_text(&message));
+        }
+        RuntimeEvent::OnboardingSaved { operation_id }
+            if model.operation.operation_id() == Some(operation_id) =>
+        {
+            finish_onboarding(model, Ok(()));
+        }
+        RuntimeEvent::OnboardingFailed {
+            operation_id,
+            message,
+        } if model.operation.operation_id() == Some(operation_id) => {
+            finish_onboarding(model, Err(message));
+        }
+        RuntimeEvent::OnboardingCancelled {
+            operation_id,
+            outcome,
+        } if model.operation.operation_id() == Some(operation_id) => {
+            model.onboarding = None;
+            finish_onboarding_cancel(model, outcome);
+        }
         RuntimeEvent::TurnEvent {
             operation_id,
             event,
@@ -422,11 +1884,149 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
             });
             finish_stream(model, RunTurnOutcome::Completed);
         }
-        RuntimeEvent::TurnEvent { .. }
+        RuntimeEvent::PanelReady {
+            operation_id,
+            panel,
+            body,
+        } if model.operation.operation_id() == Some(operation_id) => {
+            finish_panel(model, panel, Ok(body));
+        }
+        RuntimeEvent::PanelFailed {
+            operation_id,
+            panel,
+            message,
+        } if model.operation.operation_id() == Some(operation_id) => {
+            finish_panel(model, panel, Err(message));
+        }
+        RuntimeEvent::HouseholdScopeReady {
+            operation_id,
+            label,
+        } if model.operation.operation_id() == Some(operation_id) => {
+            finish_household_scope(model, Ok(label));
+        }
+        RuntimeEvent::HouseholdScopeFailed {
+            operation_id,
+            message,
+        } if model.operation.operation_id() == Some(operation_id) => {
+            finish_household_scope(model, Err(message));
+        }
+        RuntimeEvent::BeginOnboarding { .. }
+        | RuntimeEvent::OnboardingSaved { .. }
+        | RuntimeEvent::OnboardingFailed { .. }
+        | RuntimeEvent::OnboardingCancelled { .. }
+        | RuntimeEvent::TurnEvent { .. }
         | RuntimeEvent::TurnFinished { .. }
-        | RuntimeEvent::TurnFailed { .. } => {}
+        | RuntimeEvent::TurnFailed { .. }
+        | RuntimeEvent::PanelReady { .. }
+        | RuntimeEvent::PanelFailed { .. }
+        | RuntimeEvent::HouseholdScopeReady { .. }
+        | RuntimeEvent::HouseholdScopeFailed { .. }
+        | RuntimeEvent::VoiceRecordingElapsed { .. }
+        | RuntimeEvent::VoiceTranscriptReady { .. }
+        | RuntimeEvent::VoiceFailed { .. }
+        | RuntimeEvent::VoiceCancelled { .. } => {}
     }
     Vec::new()
+}
+
+fn finish_onboarding(model: &mut AppModel, result: Result<(), String>) {
+    let old_lines = model.scrollback.rendered_lines();
+    match result {
+        Ok(()) => {
+            model.scrollback.mutate_last_assistant(|entry| {
+                entry.text = "Dietary profile saved\n\nYour hello.food guidance now uses this synced profile across supported experiences.".into();
+                entry.streaming = false;
+            });
+            model.onboarding = None;
+        }
+        Err(message) => {
+            if let Some(flow) = model.onboarding.as_mut() {
+                flow.step = OnboardingStep::Review;
+            }
+            let review = model
+                .onboarding
+                .as_ref()
+                .map(|flow| onboarding_review(&flow.profile))
+                .unwrap_or_default();
+            model.scrollback.mutate_last_assistant(|entry| {
+                entry.text = format!(
+                    "Dietary profile was not saved: {}\n\n{}",
+                    terminal_safe_text(&message),
+                    review
+                );
+                entry.streaming = false;
+            });
+        }
+    }
+    model.operation = OperationState::Idle;
+    model.activity = None;
+    model.idle_exit_armed = false;
+    account_for_new_lines(model, old_lines);
+}
+
+fn finish_onboarding_cancel(model: &mut AppModel, outcome: RunTurnOutcome) {
+    let old_lines = model.scrollback.rendered_lines();
+    model.scrollback.mutate_last_assistant(|entry| {
+        entry.text = match outcome {
+            RunTurnOutcome::CancelledAfterDispatchOutcomeUnknown => "Dietary profile save stopped after dispatch, and the server outcome is unknown. Open `/profile` to inspect current state before starting onboarding again.".into(),
+            RunTurnOutcome::CancelledBeforeServerAcceptance
+            | RunTurnOutcome::CancelledAfterServerAcceptance
+            | RunTurnOutcome::StaleGeneration
+            | RunTurnOutcome::Completed => "Dietary profile save cancelled. The profile upload was not dispatched; profile-sync consent may already have been granted.".into(),
+        };
+        entry.streaming = false;
+    });
+    model.operation = OperationState::Idle;
+    model.activity = None;
+    model.idle_exit_armed = false;
+    account_for_new_lines(model, old_lines);
+}
+
+fn finish_household_scope(model: &mut AppModel, result: Result<String, String>) {
+    let old_lines = model.scrollback.rendered_lines();
+    model.scrollback.mutate_last_assistant(|entry| {
+        entry.text = match result {
+            Ok(label) => format!(
+                "Household target\n\nFuture turns will consider {}.",
+                terminal_safe_text(&label)
+            ),
+            Err(message) => format!(
+                "Unable to change the household target: {}",
+                terminal_safe_text(&message)
+            ),
+        };
+        entry.streaming = false;
+    });
+    model.operation = OperationState::Idle;
+    model.activity = None;
+    model.idle_exit_armed = false;
+    account_for_new_lines(model, old_lines);
+}
+
+fn finish_panel(model: &mut AppModel, panel: PanelRequest, result: Result<String, String>) {
+    let old_lines = model.scrollback.rendered_lines();
+    model.scrollback.mutate_last_assistant(|entry| {
+        entry.text = match result {
+            Ok(body) => {
+                let body = terminal_safe_text(&body);
+                if body.trim().is_empty() {
+                    format!("{}\n\nNo information is available.", panel.title())
+                } else {
+                    format!("{}\n\n{}", panel.title(), body.trim_end())
+                }
+            }
+            Err(message) => format!(
+                "Unable to open {}: {}",
+                panel.title(),
+                terminal_safe_text(&message)
+            ),
+        };
+        entry.streaming = false;
+    });
+    model.operation = OperationState::Idle;
+    model.activity = None;
+    model.idle_exit_armed = false;
+    account_for_new_lines(model, old_lines);
 }
 
 fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
@@ -457,6 +2057,10 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             model.activity = Some("Responding…".into());
         }
         AgentEvent::Choices { choices, .. } => {
+            model.pending_choice_labels = choices
+                .iter()
+                .map(|choice| terminal_safe_text(&choice.label))
+                .collect();
             model.scrollback.mutate_last_assistant(|entry| {
                 if !entry.text.is_empty() {
                     entry.text.push('\n');
@@ -470,21 +2074,53 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             model.activity = Some("Choose an option".into());
         }
         AgentEvent::Result { document, .. } => {
-            let result = document
-                .as_str()
-                .or_else(|| document.get("text").and_then(|value| value.as_str()))
-                .map(str::to_owned)
-                .unwrap_or_else(|| document.to_string());
-            let result = terminal_safe_text(&result);
+            let confirmation = ActionConfirmationEnvelopeWire::from_result_document(&document);
+            let result = agent_result_text(&document).map(terminal_safe_text);
+            let choice_labels = std::mem::take(&mut model.pending_choice_labels);
             model.scrollback.mutate_last_assistant(|entry| {
-                entry.text = result;
+                match confirmation.as_ref() {
+                    Ok(Some(envelope)) => {
+                        entry.text = render_action_confirmation(envelope);
+                    }
+                    Err(message) => {
+                        entry.text = format!(
+                            "Unable to present this confirmation safely: {}",
+                            terminal_safe_text(message)
+                        );
+                    }
+                    Ok(None) => {
+                        if let Some(result) = result {
+                            if !result.is_empty() {
+                                entry.text = result;
+                                append_choice_labels(&mut entry.text, &choice_labels);
+                            }
+                        } else if entry.text.is_empty() {
+                            entry.text = terminal_safe_text(&document.to_string());
+                        }
+                    }
+                }
                 entry.streaming = false;
             });
+            match confirmation {
+                Ok(Some(envelope)) => {
+                    let editable_items = editable_grocery_items(&envelope);
+                    model.pending_confirmation = Some(PendingActionConfirmation {
+                        confirmation_id: envelope.confirmation_id,
+                        idempotency_key: envelope.idempotency_key,
+                        editable_items,
+                    });
+                }
+                Ok(None) | Err(_) => model.pending_confirmation = None,
+            }
             mark_finishing(model);
             model.activity = Some("Finishing…".into());
             model.idle_exit_armed = false;
         }
         AgentEvent::Error { error } => {
+            model.pending_choice_labels.clear();
+            if !confirmation_error_preserves_pending(&error.code) {
+                model.pending_confirmation = None;
+            }
             let code = terminal_safe_text(&error.code);
             let message = terminal_safe_text(&error.message);
             model.scrollback.mutate_last_assistant(|entry| {
@@ -501,6 +2137,275 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
     account_for_new_lines(model, old_lines);
 }
 
+fn confirmation_error_preserves_pending(code: &str) -> bool {
+    matches!(code, "edit_invalid" | "temporarily_unavailable")
+}
+
+fn render_action_confirmation(envelope: &ActionConfirmationEnvelopeWire) -> String {
+    let mut output = format!(
+        "Review before changing anything\n\n{}\n",
+        terminal_safe_text(&envelope.preview)
+    );
+    if let Some(items) = envelope
+        .structured_preview
+        .as_ref()
+        .and_then(|preview| preview.get("items"))
+        .and_then(serde_json::Value::as_array)
+    {
+        for (index, item) in items.iter().enumerate() {
+            let name = ["name", "requested_name", "canonical_name"]
+                .into_iter()
+                .find_map(|key| item.get(key).and_then(serde_json::Value::as_str))
+                .map(terminal_safe_text)
+                .unwrap_or_else(|| "item".into());
+            let intended_for = item.get("intended_for").and_then(serde_json::Value::as_str);
+            let intended = intended_for
+                .map(terminal_safe_text)
+                .map(|member| format!(" for {member}"))
+                .unwrap_or_default();
+            let quantity = item.get("quantity").and_then(|value| {
+                value
+                    .as_str()
+                    .map(terminal_safe_text)
+                    .or_else(|| value.as_f64().map(|value| value.to_string()))
+            });
+            let unit = item
+                .get("unit")
+                .and_then(serde_json::Value::as_str)
+                .map(terminal_safe_text);
+            let amount = match (quantity, unit) {
+                (Some(quantity), Some(unit)) => format!(" · {quantity} {unit}"),
+                (Some(quantity), None) => format!(" · {quantity}"),
+                _ => String::new(),
+            };
+            let _ = writeln!(output, "{}. {name}{intended}{amount}", index + 1);
+            render_confirmation_sources(&mut output, item);
+            render_confirmation_safety(&mut output, item, intended_for);
+        }
+    }
+    if let Some(expires_at) = envelope.expires_at.as_deref() {
+        let _ = writeln!(output, "\nExpires: {}", terminal_safe_text(expires_at));
+    }
+    output.push_str(
+        "\nNothing has changed yet. Type `y` to confirm or `n` to cancel. Ctrl+C cancels.",
+    );
+    if editable_grocery_items(envelope).is_some() {
+        output.push_str(
+            "\nTo replace one item name and confirm the correction, type `edit #N <replacement>`.",
+        );
+    }
+    output
+}
+
+fn editable_grocery_items(
+    envelope: &ActionConfirmationEnvelopeWire,
+) -> Option<Vec<serde_json::Map<String, serde_json::Value>>> {
+    if !matches!(
+        envelope.action.as_str(),
+        "grocery_list_add_items" | "add_items"
+    ) {
+        return None;
+    }
+    let items = envelope
+        .structured_preview
+        .as_ref()?
+        .get("items")?
+        .as_array()?;
+    if items.is_empty() || items.len() > 25 {
+        return None;
+    }
+    let editable_items = items
+        .iter()
+        .map(editable_grocery_item)
+        .collect::<Option<Vec<_>>>()?;
+    let mut patch = serde_json::Map::new();
+    patch.insert(
+        "items".into(),
+        serde_json::Value::Array(
+            editable_items
+                .iter()
+                .cloned()
+                .map(serde_json::Value::Object)
+                .collect(),
+        ),
+    );
+    GroceryEditPatch::new(patch).ok()?;
+    Some(editable_items)
+}
+
+fn editable_grocery_item(
+    item: &serde_json::Value,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let name = ["name", "requested_name"]
+        .into_iter()
+        .find_map(|key| item.get(key).and_then(serde_json::Value::as_str))
+        .and_then(|value| required_text(value, 255).ok())?;
+    let mut editable = serde_json::Map::new();
+    editable.insert("name".into(), serde_json::Value::String(name));
+
+    if let Some(quantity) = item.get("quantity").and_then(serde_json::Value::as_f64)
+        && quantity.is_finite()
+        && quantity >= 0.0
+        && let Some(quantity) = serde_json::Number::from_f64(quantity)
+    {
+        editable.insert("quantity".into(), serde_json::Value::Number(quantity));
+    }
+    if let Some(package_quantity) = item
+        .get("package_quantity")
+        .and_then(serde_json::Value::as_i64)
+        .filter(|value| *value >= 0)
+    {
+        editable.insert(
+            "package_quantity".into(),
+            serde_json::Value::Number(package_quantity.into()),
+        );
+    }
+    for (field, maximum) in [("unit", 40), ("note", 255), ("intended_for", 64)] {
+        if let Some(value) = item
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| required_text(value, maximum).ok())
+        {
+            editable.insert(field.into(), serde_json::Value::String(value));
+        }
+    }
+    editable.insert(
+        "source_type".into(),
+        serde_json::Value::String("manual".into()),
+    );
+    Some(editable)
+}
+
+fn render_confirmation_sources(output: &mut String, item: &serde_json::Value) {
+    let sources = item.get("sources").and_then(serde_json::Value::as_array);
+    let mut rendered_sources = 0;
+    if let Some(sources) = sources {
+        for source in sources.iter().take(MAX_CONFIRMATION_SOURCES_PER_ITEM) {
+            let Some(source_type) = source
+                .get("source_type")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| required_text(value, 64).ok())
+            else {
+                continue;
+            };
+            let mut provenance = terminal_safe_text(&source_type);
+            if let Some(source_ref) = source
+                .get("source_ref")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| required_text(value, 255).ok())
+            {
+                provenance.push(':');
+                provenance.push_str(&terminal_safe_text(&source_ref));
+            }
+            if let Some(source_detail) = source
+                .get("source_detail")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| required_text(value, 255).ok())
+            {
+                provenance.push_str(" · ");
+                provenance.push_str(&terminal_safe_text(&source_detail));
+            }
+            let _ = writeln!(output, "   source: {provenance}");
+            rendered_sources += 1;
+        }
+        if rendered_sources > 0 && sources.len() > MAX_CONFIRMATION_SOURCES_PER_ITEM {
+            let hidden = sources.len() - MAX_CONFIRMATION_SOURCES_PER_ITEM;
+            let _ = writeln!(output, "   source: … and {hidden} more");
+        }
+    }
+    if rendered_sources == 0
+        && let Some(provenance) = item
+            .get("provenance")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| required_text(value, 255).ok())
+    {
+        let _ = writeln!(output, "   source: {}", terminal_safe_text(&provenance));
+    }
+}
+
+fn render_confirmation_safety(
+    output: &mut String,
+    item: &serde_json::Value,
+    intended_for: Option<&str>,
+) {
+    // The generic C3 v1 item card placed flags at `item.safety_flags`.
+    // Grocery Phase A's frozen production fixture specializes that shape as
+    // `item.safety.{status,member_flags,label_hint}`. Prefer the production
+    // Grocery shape while retaining the additive generic-C3 compatibility.
+    let nested_safety = item.get("safety");
+    if let Some(status) = nested_safety
+        .and_then(|safety| safety.get("status"))
+        .and_then(serde_json::Value::as_str)
+    {
+        let status = terminal_safe_text(status).replace('_', " ");
+        let _ = writeln!(output, "   ingredient screening: {status}");
+    }
+    let flags = nested_safety
+        .and_then(|safety| safety.get("member_flags"))
+        .and_then(serde_json::Value::as_array)
+        .or_else(|| {
+            item.get("safety_flags")
+                .and_then(serde_json::Value::as_array)
+        });
+    if let Some(flags) = flags {
+        for flag in flags {
+            let member_id = flag.get("member_id").and_then(serde_json::Value::as_str);
+            let member = member_id
+                .map(terminal_safe_text)
+                .unwrap_or_else(|| "member".into());
+            let status = flag
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .map(terminal_safe_text)
+                .map(|value| value.replace('_', " "))
+                .unwrap_or_else(|| "unable to evaluate".into());
+            let intended = member_id
+                .filter(|member| Some(*member) == intended_for)
+                .map_or("", |_| " · intended");
+            let _ = writeln!(output, "   • {member}: {status}{intended}");
+            if let Some(reason) = flag.get("reason").and_then(serde_json::Value::as_str) {
+                let _ = writeln!(output, "     {}", terminal_safe_text(reason));
+            }
+            if let Some(substitutions) = flag
+                .get("substitutions")
+                .and_then(serde_json::Value::as_array)
+            {
+                let substitutions = substitutions
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(terminal_safe_text)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if !substitutions.is_empty() {
+                    let _ = writeln!(output, "     try: {substitutions}");
+                }
+            }
+        }
+    }
+    if let Some(label_hint) = nested_safety
+        .and_then(|safety| safety.get("label_hint"))
+        .and_then(serde_json::Value::as_str)
+    {
+        let _ = writeln!(output, "   {}", terminal_safe_text(label_hint));
+    }
+}
+
+fn append_choice_labels(output: &mut String, choices: &[String]) {
+    if choices.is_empty() {
+        return;
+    }
+    if !output.is_empty() {
+        output.push_str("\n\n");
+    }
+    output.push_str("Options\n");
+    for choice in choices {
+        output.push_str("• ");
+        output.push_str(choice);
+        output.push('\n');
+    }
+    output.pop();
+}
+
 fn mark_finishing(model: &mut AppModel) {
     if let Some(operation_id) = model.operation.operation_id() {
         model.operation = OperationState::Finishing(operation_id);
@@ -508,6 +2413,7 @@ fn mark_finishing(model: &mut AppModel) {
 }
 
 fn finish_stream(model: &mut AppModel, outcome: RunTurnOutcome) {
+    model.pending_choice_labels.clear();
     let old_lines = model.scrollback.rendered_lines();
     model.scrollback.mutate_last_assistant(|entry| {
         let notice = match outcome {
@@ -594,6 +2500,145 @@ fn byte_index(text: &str, character_index: usize) -> usize {
 mod tests {
     use super::*;
     use heyfood_core::AgentFailure;
+
+    fn submit_text(model: &mut AppModel, value: &str) -> Vec<Effect> {
+        model.draft = value.into();
+        model.cursor = value.chars().count();
+        dispatch(model, Action::Submit)
+    }
+
+    fn advance_to_onboarding_review(model: &mut AppModel) {
+        assert!(submit_text(model, "1, vegan").is_empty());
+        assert!(submit_text(model, "none").is_empty());
+        assert!(submit_text(model, "celiac").is_empty());
+        assert!(submit_text(model, "5").is_empty());
+        assert!(submit_text(model, "raw onion").is_empty());
+        assert!(submit_text(model, "2").is_empty());
+        assert!(submit_text(model, "Mexican, 2").is_empty());
+        assert!(submit_text(model, "none").is_empty());
+        assert_eq!(
+            model.onboarding.as_ref().map(|flow| flow.step),
+            Some(OnboardingStep::Review)
+        );
+    }
+
+    #[test]
+    fn onboarding_is_local_until_explicit_review_and_save() {
+        let mut model = AppModel::default();
+        assert!(
+            dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::BeginOnboarding {
+                    message: "Complete your dietary profile.".into(),
+                })
+            )
+            .is_empty()
+        );
+        advance_to_onboarding_review(&mut model);
+
+        let effects = submit_text(&mut model, "save");
+        assert_eq!(effects.len(), 1);
+        let Effect::SaveOnboarding {
+            operation_id,
+            profile,
+        } = &effects[0]
+        else {
+            panic!("expected an onboarding save effect");
+        };
+        assert_eq!(*operation_id, 1);
+        assert_eq!(profile.diet_style_ids, ["gluten_free", "vegan"]);
+        assert_eq!(profile.health_condition_ids, ["celiac"]);
+        assert_eq!(profile.severity_level, Some(5));
+        assert_eq!(profile.avoid_ingredients, ["raw onion"]);
+        assert_eq!(profile.activity_level.as_deref(), Some("moderate"));
+        assert_eq!(profile.cuisine_preferences, ["mexican", "italian"]);
+        assert_eq!(model.operation, OperationState::Running(1));
+    }
+
+    #[test]
+    fn onboarding_cancel_discards_local_answers_without_a_mutation_effect() {
+        let mut model = AppModel::default();
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::BeginOnboarding {
+                message: "Complete your dietary profile.".into(),
+            }),
+        );
+        assert!(submit_text(&mut model, "vegan").is_empty());
+        assert!(submit_text(&mut model, "cancel").is_empty());
+        assert!(model.onboarding.is_none());
+        assert_eq!(model.operation, OperationState::Idle);
+        assert!(
+            model
+                .scrollback
+                .entries()
+                .back()
+                .is_some_and(|entry| entry.text.contains("Nothing was sent or saved"))
+        );
+    }
+
+    #[test]
+    fn failed_onboarding_save_returns_to_the_review_for_an_explicit_retry() {
+        let mut model = AppModel::default();
+        begin_onboarding(&mut model, "Complete your dietary profile.");
+        advance_to_onboarding_review(&mut model);
+        let _ = submit_text(&mut model, "save");
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::OnboardingFailed {
+                operation_id: 1,
+                message: "profile version changed".into(),
+            }),
+        );
+        assert_eq!(model.operation, OperationState::Idle);
+        assert_eq!(
+            model.onboarding.as_ref().map(|flow| flow.step),
+            Some(OnboardingStep::Review)
+        );
+        assert!(
+            model
+                .scrollback
+                .entries()
+                .back()
+                .unwrap()
+                .text
+                .contains("profile version changed")
+        );
+        assert!(matches!(
+            submit_text(&mut model, "save").as_slice(),
+            [Effect::SaveOnboarding {
+                operation_id: 2,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn invalid_onboarding_selection_stays_on_the_same_step() {
+        let mut model = AppModel::default();
+        begin_onboarding(&mut model, "Complete your dietary profile.");
+        assert!(submit_text(&mut model, "99").is_empty());
+        assert_eq!(
+            model.onboarding.as_ref().map(|flow| flow.step),
+            Some(OnboardingStep::Diets)
+        );
+        assert!(
+            model
+                .scrollback
+                .entries()
+                .iter()
+                .rev()
+                .any(|entry| entry.text.contains("numeric choice"))
+        );
+    }
+
+    #[test]
+    fn onboarding_accepts_numeric_ranges_and_bounded_custom_entries() {
+        let selected = parse_multi_options("1-3, family recipe diet", diet_options(), 10, 40)
+            .expect("valid range and custom diet");
+        assert_eq!(selected.ids, ["gluten_free", "dairy_free", "vegetarian"]);
+        assert_eq!(selected.custom, ["family recipe diet"]);
+    }
 
     #[test]
     fn draft_remains_editable_while_streaming_and_is_not_auto_submitted() {
@@ -825,6 +2870,875 @@ mod tests {
             ]
         );
         assert_eq!(ExitReason::Terminate.exit_code(), 143);
+    }
+
+    #[test]
+    fn slash_commands_are_local_and_new_resets_conversation() {
+        let mut model = AppModel {
+            draft: "/help".into(),
+            cursor: 5,
+            ..AppModel::default()
+        };
+        assert!(dispatch(&mut model, Action::Submit).is_empty());
+        assert!(model.draft.is_empty());
+        assert!(
+            model
+                .scrollback
+                .entries()
+                .back()
+                .unwrap()
+                .text
+                .contains("/new")
+        );
+
+        model.draft = "/new".into();
+        model.cursor = 4;
+        assert_eq!(
+            dispatch(&mut model, Action::Submit),
+            vec![Effect::ResetConversation]
+        );
+    }
+
+    #[test]
+    fn prompt_history_restores_the_unsent_draft() {
+        let mut model = AppModel {
+            draft: "first".into(),
+            cursor: 5,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFinished {
+                operation_id: 1,
+                outcome: RunTurnOutcome::Completed,
+            }),
+        );
+        model.draft = "working draft".into();
+        model.cursor = model.draft.chars().count();
+        let _ = dispatch(&mut model, Action::HistoryPrevious);
+        assert_eq!(model.draft, "first");
+        let _ = dispatch(&mut model, Action::HistoryNext);
+        assert_eq!(model.draft, "working draft");
+    }
+
+    #[test]
+    fn tab_completes_a_unique_slash_prefix() {
+        let mut model = AppModel {
+            draft: "/sta".into(),
+            cursor: 4,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::CompleteSlash);
+        assert_eq!(model.draft, "/status");
+        assert_eq!(model.cursor, 7);
+    }
+
+    #[test]
+    fn command_registry_drives_aliases_help_and_discovery() {
+        let mut model = AppModel {
+            draft: "/".into(),
+            cursor: 1,
+            ..AppModel::default()
+        };
+        assert_eq!(slash_suggestions(&model, 3).len(), 3);
+        let _ = dispatch(&mut model, Action::CompleteSlash);
+        assert_eq!(model.draft, "/", "ambiguous prefixes must remain editable");
+
+        model.draft = "/quit".into();
+        model.cursor = 5;
+        assert_eq!(
+            dispatch(&mut model, Action::Submit),
+            vec![Effect::Exit(ExitReason::Requested)]
+        );
+    }
+
+    #[test]
+    fn terminal_message_and_response_fields_use_normalized_result_text() {
+        for (document, expected) in [
+            (
+                serde_json::json!({"message": "final message"}),
+                "final message",
+            ),
+            (
+                serde_json::json!({"response": "final response"}),
+                "final response",
+            ),
+        ] {
+            let mut model = AppModel {
+                draft: "question".into(),
+                cursor: 8,
+                ..AppModel::default()
+            };
+            let _ = dispatch(&mut model, Action::Submit);
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Partial {
+                        text: "streamed draft".into(),
+                    },
+                }),
+            );
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Result {
+                        document,
+                        conversation_id: None,
+                    },
+                }),
+            );
+            let entry = model.scrollback.entries().back().unwrap();
+            assert_eq!(entry.text, expected);
+            assert!(!entry.text.contains('{'));
+            assert!(!entry.streaming);
+        }
+    }
+
+    #[test]
+    fn terminal_result_preserves_choices_after_partial_content() {
+        for field in ["message", "text", "response"] {
+            let mut model = AppModel {
+                draft: "question".into(),
+                cursor: 8,
+                ..AppModel::default()
+            };
+            let _ = dispatch(&mut model, Action::Submit);
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Partial {
+                        text: "Review the available paths.".into(),
+                    },
+                }),
+            );
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Choices {
+                        choices: vec![
+                            heyfood_core::AgentChoice::from_untrusted(
+                                "Cook at home".into(),
+                                Some("cook".into()),
+                            )
+                            .unwrap(),
+                            heyfood_core::AgentChoice::from_untrusted(
+                                "Eat out".into(),
+                                Some("restaurant".into()),
+                            )
+                            .unwrap(),
+                        ],
+                        allow_multiple: false,
+                    },
+                }),
+            );
+            let mut document = serde_json::json!({});
+            document[field] = serde_json::Value::String("Which path works for you?".into());
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Result {
+                        document,
+                        conversation_id: Some("conversation-choices".into()),
+                    },
+                }),
+            );
+            let entry = model.scrollback.entries().back().unwrap();
+            assert_eq!(
+                entry.text,
+                "Which path works for you?\n\nOptions\n• Cook at home\n• Eat out"
+            );
+            assert!(!entry.streaming);
+        }
+    }
+
+    #[test]
+    fn production_grocery_confirmation_renders_safety_and_requires_typed_accept_or_cancel() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fixtures/contracts/grocery-backend/phase-a/fixtures/grocery/confirmation_round_trip.json"
+        ))
+        .unwrap();
+        let mut structured = fixture["card"].clone();
+        let structured = structured.as_object_mut().unwrap();
+        structured.insert(
+            "confirmation_id".into(),
+            fixture["accept_payload"]["confirmation_id"].clone(),
+        );
+        structured.insert(
+            "idempotency_key".into(),
+            fixture["accept_payload"]["idempotency_key"].clone(),
+        );
+        structured.insert(
+            "preview".into(),
+            serde_json::json!("Add one screened ingredient"),
+        );
+        structured.insert(
+            "expires_at".into(),
+            serde_json::json!("2026-07-22T12:05:00Z"),
+        );
+        let confirmation_document = serde_json::json!({
+            "text": "I prepared a grocery update.",
+            "structured": structured
+        });
+        let mut model = AppModel {
+            draft: "add ingredients".into(),
+            cursor: 15,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: confirmation_document,
+                    conversation_id: Some("conversation-grocery".into()),
+                },
+            }),
+        );
+        let card = &model.scrollback.entries().back().unwrap().text;
+        assert!(card.contains("Review before changing anything"));
+        assert!(card.contains("1. onion · 1"));
+        assert!(card.contains("source: manual"));
+        assert!(card.contains("ingredient screening: risky"));
+        assert!(card.contains("maya-uuid: risky"));
+        assert!(card.contains("Onion is high-FODMAP."));
+        assert!(card.contains("try: scallion greens"));
+        assert!(card.contains("Screened at ingredient level — verify the product label."));
+        assert!(card.contains("Type `y` to confirm or `n` to cancel"));
+        assert!(card.contains("edit #N <replacement>"));
+        assert!(!card.contains("confirmation_id"));
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFinished {
+                operation_id: 1,
+                outcome: RunTurnOutcome::Completed,
+            }),
+        );
+
+        model.draft = "y".into();
+        model.cursor = 1;
+        let effects = dispatch(&mut model, Action::Submit);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::ConfirmAction { operation_id: 2, command }]
+                if command.decision == ConfirmationDecisionWire::Accept
+                    && command.edits.is_none()
+                    && command.confirmation_id.as_uuid().to_string()
+                        == "00000000-0000-0000-0000-000000000001"
+        ));
+    }
+
+    #[test]
+    fn grocery_add_item_edit_is_bounded_explicit_and_sent_as_c3_edits() {
+        let envelope: ActionConfirmationEnvelopeWire = serde_json::from_value(serde_json::json!({
+            "type": "action_confirmation",
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "action": "grocery_list_add_items",
+            "preview": "Add two screened ingredients",
+            "card_form": "item_list",
+            "structured_preview": {
+                "items": [
+                    {
+                        "requested_name": "onion",
+                        "quantity": 1,
+                        "unit": "each",
+                        "intended_for": "maya",
+                        "safety": {"status": "risky"}
+                    },
+                    {
+                        "name": "milk",
+                        "quantity": 2,
+                        "unit": "cartons"
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+        let editable_items = editable_grocery_items(&envelope).unwrap();
+        let mut model = AppModel {
+            draft: "edit #1 scallion greens".into(),
+            cursor: 23,
+            pending_confirmation: Some(PendingActionConfirmation {
+                confirmation_id: envelope.confirmation_id,
+                idempotency_key: envelope.idempotency_key,
+                editable_items: Some(editable_items),
+            }),
+            ..AppModel::default()
+        };
+
+        let effects = dispatch(&mut model, Action::Submit);
+        let command = match effects.as_slice() {
+            [
+                Effect::ConfirmAction {
+                    operation_id: 1,
+                    command,
+                },
+            ] => command,
+            effects => panic!("expected edited confirmation, got {effects:?}"),
+        };
+        assert_eq!(command.decision, ConfirmationDecisionWire::Accept);
+        assert_eq!(
+            serde_json::to_value(command.edits.as_ref().unwrap()).unwrap(),
+            serde_json::json!({
+                "items": [
+                    {
+                        "name": "scallion greens",
+                        "quantity": 1.0,
+                        "unit": "each",
+                        "intended_for": "maya",
+                        "source_type": "manual"
+                    },
+                    {
+                        "name": "milk",
+                        "quantity": 2.0,
+                        "unit": "cartons",
+                        "source_type": "manual"
+                    }
+                ]
+            })
+        );
+        assert!(model.pending_confirmation.is_some());
+        assert!(model.draft.is_empty());
+        assert_eq!(
+            model.scrollback.entries().iter().rev().nth(1).unwrap().text,
+            "Edit and confirm"
+        );
+    }
+
+    #[test]
+    fn grocery_edit_eligibility_matches_the_frozen_twenty_five_item_limit() {
+        let item = serde_json::json!({
+            "requested_name": "oats",
+            "quantity": 1,
+            "unit": "bag",
+            "note": "rolled",
+            "intended_for": "maya"
+        });
+        let make_envelope = |count| {
+            serde_json::from_value::<ActionConfirmationEnvelopeWire>(serde_json::json!({
+                "type": "action_confirmation",
+                "confirmation_id": "00000000-0000-4000-8000-000000000001",
+                "idempotency_key": "00000000-0000-4000-8000-000000000002",
+                "action": "grocery_list_add_items",
+                "preview": "Add screened ingredients",
+                "card_form": "item_list",
+                "structured_preview": {
+                    "items": vec![item.clone(); count]
+                }
+            }))
+            .unwrap()
+        };
+
+        assert_eq!(
+            editable_grocery_items(&make_envelope(25)).unwrap().len(),
+            25
+        );
+        assert!(editable_grocery_items(&make_envelope(26)).is_none());
+    }
+
+    #[test]
+    fn phase_a_source_provenance_is_visible_and_bounded() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/contracts/grocery-backend/phase-a/fixtures/grocery/export_json.json"
+        )))
+        .unwrap();
+        let production_item = fixture["list"]["items"][0].clone();
+        let envelope: ActionConfirmationEnvelopeWire = serde_json::from_value(serde_json::json!({
+            "type": "action_confirmation",
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "action": "grocery_list_add_items",
+            "preview": "Add a recipe ingredient",
+            "card_form": "item_list",
+            "structured_preview": {"items": [production_item]}
+        }))
+        .unwrap();
+
+        let card = render_action_confirmation(&envelope);
+        assert!(card.contains("source: recipe:dahl-001 · Red Lentil Dahl"));
+
+        let mut over_limit_item = fixture["list"]["items"][0].clone();
+        over_limit_item["sources"] = serde_json::Value::Array(
+            (0..=MAX_CONFIRMATION_SOURCES_PER_ITEM)
+                .map(|index| {
+                    serde_json::json!({
+                        "source_type": "recipe",
+                        "source_ref": format!("recipe-{index}")
+                    })
+                })
+                .collect(),
+        );
+        let envelope: ActionConfirmationEnvelopeWire = serde_json::from_value(serde_json::json!({
+            "type": "action_confirmation",
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "action": "grocery_list_add_items",
+            "preview": "Add a recipe ingredient",
+            "card_form": "item_list",
+            "structured_preview": {"items": [over_limit_item]}
+        }))
+        .unwrap();
+        let card = render_action_confirmation(&envelope);
+        assert!(card.contains("source: recipe:recipe-7"));
+        assert!(!card.contains("source: recipe:recipe-8"));
+        assert!(card.contains("source: … and 1 more"));
+    }
+
+    #[test]
+    fn generic_c3_safety_flags_and_targeting_remain_visible() {
+        let envelope: ActionConfirmationEnvelopeWire = serde_json::from_value(serde_json::json!({
+            "type": "action_confirmation",
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "action": "grocery_list_add_items",
+            "preview": "Add a targeted ingredient",
+            "card_form": "item_list",
+            "structured_preview": {
+                "items": [{
+                    "name": "tomato",
+                    "quantity": 2,
+                    "unit": "each",
+                    "intended_for": "maya",
+                    "provenance": "menu",
+                    "safety_flags": [{
+                        "member_id": "maya",
+                        "status": "avoid",
+                        "reason": "Member-specific conflict"
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+        let card = render_action_confirmation(&envelope);
+        assert!(card.contains("1. tomato for maya · 2 each"));
+        assert!(card.contains("source: menu"));
+        assert!(card.contains("maya: avoid · intended"));
+        assert!(card.contains("Member-specific conflict"));
+    }
+
+    #[test]
+    fn ctrl_c_cancels_a_pending_action_confirmation_through_the_server() {
+        let mut model = AppModel {
+            draft: "an unsubmitted answer".into(),
+            cursor: 21,
+            pending_confirmation: Some(PendingActionConfirmation {
+                confirmation_id: heyfood_core::GroceryConfirmationId::parse(
+                    "00000000-0000-4000-8000-000000000001",
+                )
+                .unwrap(),
+                idempotency_key: heyfood_core::GroceryIdempotencyKey::parse(
+                    "00000000-0000-4000-8000-000000000002",
+                )
+                .unwrap(),
+                editable_items: None,
+            }),
+            ..AppModel::default()
+        };
+        let effects = dispatch(&mut model, Action::CancelOrExit);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::ConfirmAction { operation_id: 1, command }]
+                if command.decision == ConfirmationDecisionWire::Cancel
+        ));
+        assert!(model.draft.is_empty());
+        assert!(!model.idle_exit_armed);
+    }
+
+    #[test]
+    fn confirmation_store_outage_preserves_exact_ids_for_accept_and_cancel_replay() {
+        for (answer, decision) in [
+            ("y", ConfirmationDecisionWire::Accept),
+            ("n", ConfirmationDecisionWire::Cancel),
+        ] {
+            let mut model = AppModel {
+                draft: answer.into(),
+                cursor: 1,
+                pending_confirmation: Some(PendingActionConfirmation {
+                    confirmation_id: heyfood_core::GroceryConfirmationId::parse(
+                        "00000000-0000-4000-8000-000000000001",
+                    )
+                    .unwrap(),
+                    idempotency_key: heyfood_core::GroceryIdempotencyKey::parse(
+                        "00000000-0000-4000-8000-000000000002",
+                    )
+                    .unwrap(),
+                    editable_items: None,
+                }),
+                ..AppModel::default()
+            };
+            let first = dispatch(&mut model, Action::Submit);
+            let first_command = match first.as_slice() {
+                [Effect::ConfirmAction { command, .. }] => command.clone(),
+                effects => panic!("expected confirmation effect, got {effects:?}"),
+            };
+            assert_eq!(first_command.decision, decision);
+
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Error {
+                        error: AgentFailure {
+                            code: "temporarily_unavailable".into(),
+                            message: "confirmation store unavailable".into(),
+                            retryable: true,
+                        },
+                    },
+                }),
+            );
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnFinished {
+                    operation_id: 1,
+                    outcome: RunTurnOutcome::Completed,
+                }),
+            );
+
+            model.draft = answer.into();
+            model.cursor = 1;
+            let replay = dispatch(&mut model, Action::Submit);
+            assert!(matches!(
+                replay.as_slice(),
+                [Effect::ConfirmAction { operation_id: 2, command }]
+                    if command == &first_command
+            ));
+        }
+    }
+
+    #[test]
+    fn edit_invalid_keeps_pending_confirmation_authority() {
+        let pending = PendingActionConfirmation {
+            confirmation_id: heyfood_core::GroceryConfirmationId::parse(
+                "00000000-0000-4000-8000-000000000001",
+            )
+            .unwrap(),
+            idempotency_key: heyfood_core::GroceryIdempotencyKey::parse(
+                "00000000-0000-4000-8000-000000000002",
+            )
+            .unwrap(),
+            editable_items: None,
+        };
+        let mut model = AppModel {
+            operation: OperationState::Running(1),
+            pending_confirmation: Some(pending.clone()),
+            ..AppModel::default()
+        };
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Error {
+                    error: AgentFailure {
+                        code: "edit_invalid".into(),
+                        message: "invalid edit".into(),
+                        retryable: false,
+                    },
+                },
+            }),
+        );
+        assert_eq!(model.pending_confirmation, Some(pending));
+    }
+
+    #[test]
+    fn partial_only_terminal_document_preserves_the_streamed_answer() {
+        let mut model = AppModel {
+            draft: "question".into(),
+            cursor: 8,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Partial {
+                    text: "complete streamed answer".into(),
+                },
+            }),
+        );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({"conversation_id": "conversation-1"}),
+                    conversation_id: Some("conversation-1".into()),
+                },
+            }),
+        );
+        let entry = model.scrollback.entries().back().unwrap();
+        assert_eq!(entry.text, "complete streamed answer");
+        assert!(!entry.streaming);
+    }
+
+    #[test]
+    fn voice_capture_transcription_review_and_submit_share_the_typed_turn_path() {
+        let mut model = AppModel::default();
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::VoiceAvailability(VoiceAvailability::Ready)),
+        );
+        assert!(resolve_slash_command("/voice").is_some());
+        assert_eq!(
+            dispatch(&mut model, Action::VoiceToggle),
+            vec![Effect::StartVoice { operation_id: 1 }]
+        );
+        assert_eq!(model.operation, OperationState::Running(1));
+        assert!(matches!(
+            model.voice_phase,
+            VoicePhase::Recording { operation_id: 1 }
+        ));
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::VoiceRecordingElapsed {
+                operation_id: 1,
+                seconds: 3,
+            }),
+        );
+        assert!(model.activity.as_deref().unwrap().contains("Recording 3s"));
+        assert_eq!(
+            dispatch(&mut model, Action::Submit),
+            vec![Effect::StopVoice { operation_id: 1 }]
+        );
+        assert!(matches!(
+            model.voice_phase,
+            VoicePhase::Transcribing { operation_id: 1 }
+        ));
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::VoiceTranscriptReady {
+                operation_id: 1,
+                transcript: "Log oatmeal and berries".into(),
+            }),
+        );
+        assert_eq!(model.draft, "Log oatmeal and berries");
+        assert_eq!(model.voice_phase, VoicePhase::Review);
+        assert_eq!(model.operation, OperationState::Idle);
+
+        model.draft.push_str(" for breakfast");
+        model.cursor = model.draft.chars().count();
+        assert_eq!(
+            dispatch(&mut model, Action::Submit),
+            vec![Effect::SubmitTurn {
+                operation_id: 2,
+                prompt: "Log oatmeal and berries for breakfast".into(),
+            }]
+        );
+        assert_eq!(model.voice_phase, VoicePhase::Idle);
+    }
+
+    #[test]
+    fn voice_scope_preflight_and_cancel_never_open_or_submit_audio() {
+        let mut model = AppModel {
+            draft: "typed draft".into(),
+            cursor: 11,
+            voice_availability: VoiceAvailability::AuthorizationRequired,
+            ..AppModel::default()
+        };
+        assert!(dispatch(&mut model, Action::VoiceToggle).is_empty());
+        assert_eq!(model.draft, "typed draft");
+        assert_eq!(model.operation, OperationState::Idle);
+        assert!(
+            model
+                .scrollback
+                .entries()
+                .back()
+                .unwrap()
+                .text
+                .contains("No microphone was opened")
+        );
+
+        model.voice_availability = VoiceAvailability::Ready;
+        assert_eq!(
+            dispatch(&mut model, Action::VoiceToggle),
+            vec![Effect::StartVoice { operation_id: 1 }]
+        );
+        assert!(model.draft.is_empty());
+        assert_eq!(
+            dispatch(&mut model, Action::CancelVoice),
+            vec![Effect::CancelVoice { operation_id: 1 }]
+        );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::VoiceCancelled { operation_id: 1 }),
+        );
+        assert_eq!(model.draft, "typed draft");
+        assert_eq!(model.operation, OperationState::Idle);
+        assert_eq!(model.voice_phase, VoicePhase::Idle);
+    }
+
+    #[test]
+    fn active_voice_rejects_composer_edits_and_preserves_drafts_deterministically() {
+        fn recording_model() -> AppModel {
+            let mut model = AppModel {
+                draft: "original typed draft".into(),
+                cursor: 20,
+                voice_availability: VoiceAvailability::Ready,
+                ..AppModel::default()
+            };
+            assert_eq!(
+                dispatch(&mut model, Action::VoiceToggle),
+                vec![Effect::StartVoice { operation_id: 1 }]
+            );
+            model
+        }
+
+        let mut success = recording_model();
+        assert!(dispatch(&mut success, Action::InsertText("fallback".into())).is_empty());
+        assert!(success.draft.is_empty());
+        assert!(
+            success
+                .activity
+                .as_deref()
+                .unwrap()
+                .contains("composer editing is paused")
+        );
+        assert_eq!(
+            dispatch(&mut success, Action::Submit),
+            vec![Effect::StopVoice { operation_id: 1 }]
+        );
+        assert!(dispatch(&mut success, Action::Insert('x')).is_empty());
+        let _ = dispatch(
+            &mut success,
+            Action::Runtime(RuntimeEvent::VoiceTranscriptReady {
+                operation_id: 1,
+                transcript: "recognized transcript".into(),
+            }),
+        );
+        assert_eq!(success.draft, "recognized transcript");
+        assert_eq!(success.voice_phase, VoicePhase::Review);
+
+        let mut failure = recording_model();
+        let _ = dispatch(&mut failure, Action::InsertText("fallback".into()));
+        let _ = dispatch(&mut failure, Action::Submit);
+        let _ = dispatch(
+            &mut failure,
+            Action::Runtime(RuntimeEvent::VoiceFailed {
+                operation_id: 1,
+                message: "offline".into(),
+            }),
+        );
+        assert_eq!(failure.draft, "original typed draft");
+        assert_eq!(failure.voice_phase, VoicePhase::Idle);
+
+        let mut cancelled = recording_model();
+        let _ = dispatch(&mut cancelled, Action::InsertText("fallback".into()));
+        assert_eq!(
+            dispatch(&mut cancelled, Action::CancelVoice),
+            vec![Effect::CancelVoice { operation_id: 1 }]
+        );
+        let _ = dispatch(
+            &mut cancelled,
+            Action::Runtime(RuntimeEvent::VoiceCancelled { operation_id: 1 }),
+        );
+        assert_eq!(cancelled.draft, "original typed draft");
+        assert_eq!(cancelled.voice_phase, VoicePhase::Idle);
+    }
+
+    #[test]
+    fn household_target_dispatches_and_reports_the_resolved_scope() {
+        let mut model = AppModel {
+            draft: "/for Sarah".into(),
+            cursor: 10,
+            ..AppModel::default()
+        };
+        assert_eq!(
+            dispatch(&mut model, Action::Submit),
+            vec![Effect::SelectHousehold {
+                operation_id: 1,
+                selector: "Sarah".into(),
+            }]
+        );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::HouseholdScopeReady {
+                operation_id: 1,
+                label: "Sarah".into(),
+            }),
+        );
+        assert_eq!(model.operation, OperationState::Idle);
+        assert_eq!(
+            model.scrollback.entries().back().unwrap().text,
+            "Household target\n\nFuture turns will consider Sarah."
+        );
+    }
+
+    #[test]
+    fn runtime_notices_are_visible_and_terminal_safe() {
+        let mut model = AppModel::default();
+        assert!(
+            dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::Notice {
+                    message: "Account connected.\u{1b}[31m hidden".into(),
+                }),
+            )
+            .is_empty()
+        );
+        let entry = model.scrollback.entries().back().unwrap();
+        assert_eq!(entry.speaker, Speaker::Notice);
+        assert_eq!(entry.text, "Account connected.[31m hidden");
+    }
+
+    #[test]
+    fn available_panel_commands_dispatch_typed_effects() {
+        for (command, panel) in [
+            ("/status", PanelRequest::Status),
+            ("/grocery", PanelRequest::Grocery),
+            ("/watch", PanelRequest::Watch),
+            ("/health", PanelRequest::Health),
+            ("/household", PanelRequest::Household),
+            ("/profile", PanelRequest::Profile),
+            ("/location", PanelRequest::Location),
+        ] {
+            let mut model = AppModel {
+                draft: command.into(),
+                cursor: command.len(),
+                ..AppModel::default()
+            };
+            assert_eq!(
+                dispatch(&mut model, Action::Submit),
+                vec![Effect::OpenPanel {
+                    operation_id: 1,
+                    panel,
+                }]
+            );
+            assert_eq!(model.operation, OperationState::Running(1));
+            let user_entry = model
+                .scrollback
+                .entries()
+                .iter()
+                .rev()
+                .find(|entry| entry.speaker == Speaker::User)
+                .unwrap();
+            assert_eq!(user_entry.text, command);
+            assert_eq!(
+                model.scrollback.entries().back().unwrap().speaker,
+                Speaker::Assistant
+            );
+
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::PanelReady {
+                    operation_id: 1,
+                    panel,
+                    body: "Live service result".into(),
+                }),
+            );
+            let result = model.scrollback.entries().back().unwrap();
+            assert!(result.text.starts_with(panel.title()));
+            assert!(result.text.contains("Live service result"));
+            assert!(!result.streaming);
+            assert_eq!(model.operation, OperationState::Idle);
+        }
     }
 
     #[test]

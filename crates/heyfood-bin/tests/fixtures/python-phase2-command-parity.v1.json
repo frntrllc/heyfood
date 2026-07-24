@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "client_version": "0.4.0",
+    "repository_commit": "73494a57468dac83b4904ce6c390e36926f5c6fe",
+    "archive_tag": "archive/python-cli-73494a57",
+    "source_archive": {
+      "path": "tests/fixtures/python-cli-73494a57.tar",
+      "sha256": "1005ffb723bde29df409cfb016365c1f61bb04462590fa6758f57001b8b7bf7a"
+    },
+    "sources": {
+      "src/heyfood_cli/commands/agent.py": "737ace81bd270087eaf961d4da483911098a1d5452add185f5c0e7180b93b25b",
+      "src/heyfood_cli/client.py": "4f8bbc831924c272b8a44e4bf6195cc4856a254be88bb780d0186ae13620ead7",
+      "src/heyfood_cli/validation.py": "4453f1705e367cf7e67a28f9a814f029da69de3231603fb9d937c7daf47cfce0",
+      "src/heyfood_cli/render.py": "447ba77203e19bb192650c197c9e00289d682df4e8683287485717430803c36e"
+    },
+    "derivation": "Source-derived deterministic transformations from required_text, restaurant_from_selector, agent_household_context, agent_choices, and explain_item. Dynamic network values are supplied by test fixtures."
+  },
+  "log": {
+    "meal_input": "  oatmeal and berries  ",
+    "meal_type": "breakfast",
+    "query": "Log this meal: oatmeal and berries. Meal type: breakfast.",
+    "default_scope": {
+      "active_scope": "member-sarah",
+      "expected_member_id": "member-sarah",
+      "expected_member_name": "Sarah"
+    },
+    "outbox_scope": {
+      "selector": "Sarah",
+      "member_id": "member-sarah",
+      "local_context": {"preferences": ["vegetarian"]}
+    }
+  },
+  "item": {
+    "item_input": "  veggie burger  ",
+    "restaurant_input": "  Cafe One  ",
+    "request": {
+      "item_name": "veggie burger",
+      "restaurant_name": "Cafe One"
+    },
+    "selectors": [
+      {
+        "at": "1",
+        "explicit_restaurant": "Ignored Cafe",
+        "last_search_name": "Cafe One",
+        "expected_restaurant": "Cafe One"
+      },
+      {
+        "at": "not-an-index",
+        "explicit_restaurant": "Cafe One",
+        "expected_restaurant": "Cafe One"
+      }
+    ],
+    "human_lines": [
+      "veggie burger  Compatible",
+      "This item fits the profile.",
+      "Confidence: 0.95",
+      "Applies to: Sarah"
+    ]
+  },
+  "stream": {
+    "partial_text": "Try soup.",
+    "choices": ["First", "Second"],
+    "allow_multiple": false,
+    "human_lines": [
+      "Try soup.",
+      "Choose one",
+      "1  First",
+      "2  Second",
+      "In chat, enter a number. With ask/reply, send the choice text in the next turn."
+    ],
+    "normalized_detailed_choice_extension": {
+      "choices": ["First"],
+      "choice_details": [{"label": "First", "value": "1"}]
+    }
+  },
+  "limits": {
+    "query_characters": 500,
+    "item_characters": 200,
+    "restaurant_characters": 200
+  }
+}

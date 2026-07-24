@@ -2135,9 +2135,9 @@ fn validate_metadata(metadata: &Metadata) -> Result<(), String> {
         .iter()
         .filter(|package| workspace_ids.contains(&package.id))
     {
-        if package.version.to_string() != "0.4.1" {
+        if package.version.to_string() != "0.5.0" {
             return Err(format!(
-                "{} has internal version {}; expected exact workspace version 0.4.1",
+                "{} has internal version {}; expected exact workspace version 0.5.0",
                 package.name, package.version
             ));
         }
@@ -2172,9 +2172,9 @@ fn validate_metadata(metadata: &Metadata) -> Result<(), String> {
             .iter()
             .filter(|dependency| workspace_names.contains(dependency.name.as_str()))
         {
-            if dependency.req.to_string() != "=0.4.1" {
+            if dependency.req.to_string() != "=0.5.0" {
                 return Err(format!(
-                    "{} -> {} must use exact internal version =0.4.1; found {}",
+                    "{} -> {} must use exact internal version =0.5.0; found {}",
                     package.name, dependency.name, dependency.req
                 ));
             }
@@ -2213,7 +2213,11 @@ fn expected_workspace_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static
         ),
         (
             "heyfood-platform",
-            BTreeSet::from(["heyfood-application", "heyfood-core"]),
+            BTreeSet::from([
+                "heyfood-application",
+                "heyfood-core",
+                "heyfood-windows-file",
+            ]),
         ),
         (
             "heyfood-voice",
@@ -2228,6 +2232,7 @@ fn expected_workspace_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static
             BTreeSet::from(["heyfood-application", "heyfood-core"]),
         ),
         ("heyfood-installer", BTreeSet::from(["heyfood-core"])),
+        ("heyfood-windows-file", BTreeSet::new()),
         (
             "heyfood-bin",
             BTreeSet::from([

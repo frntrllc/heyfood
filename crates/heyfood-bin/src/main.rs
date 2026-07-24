@@ -5,6 +5,8 @@
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
+#[cfg(feature = "native-credentials")]
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use heyfood_agent_runtime::{
@@ -12,21 +14,226 @@ use heyfood_agent_runtime::{
     ReauthorizationStageStatus, ReauthorizationStatus, RegistrationClient, RegistrationError,
     StagedReauthorization,
 };
-use heyfood_application::{BrowserPort, CredentialPort, EnsureSession};
+#[cfg(feature = "native-credentials")]
+use heyfood_application::{BoxFuture, CredentialCommit, CredentialPort, PortError};
+use heyfood_application::{BrowserPort, EnsureSession, EnsureSessionOutcome};
 use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
 use heyfood_core::{
     BrowserUrl, NetworkPolicy, OperationId, ProfileStatus, SensitiveString, ServiceUrl,
     SessionSnapshot, terminal_safe_text,
 };
-#[cfg(not(windows))]
+#[cfg(feature = "native-credentials")]
+use heyfood_core::{CommitId, SessionCredentials};
+#[cfg(feature = "native-credentials")]
+use heyfood_platform::AuthorizationSessionStore;
+#[cfg(feature = "native-credentials")]
+use heyfood_platform::CredentialBrokerStore;
+#[cfg(all(not(windows), not(feature = "native-credentials")))]
 use heyfood_platform::FileCredentialStore as NativeSessionStore;
-#[cfg(windows)]
+#[cfg(all(not(windows), feature = "native-credentials"))]
+use heyfood_platform::FileCredentialStore;
+#[cfg(all(windows, not(feature = "native-credentials")))]
 use heyfood_platform::WindowsCredentialStore as NativeSessionStore;
 use heyfood_platform::{
     AuthorizationReplacementJournal, AuthorizationReplacementPhase, NativeAuthStore, NativeBrowser,
-    NativeClock, NativePaths,
+    NativeClock, NativePaths, PythonStateImporter,
 };
 use tokio_util::sync::CancellationToken;
+
+#[cfg(feature = "native-credentials")]
+enum NativeSessionStore {
+    Platform(CredentialBrokerStore),
+    #[cfg(not(windows))]
+    OwnerOnlyFile(FileCredentialStore),
+}
+
+#[cfg(feature = "native-credentials")]
+impl NativeSessionStore {
+    #[cfg(not(windows))]
+    fn open(root: impl AsRef<std::path::Path>) -> Result<Self, PortError> {
+        let root = root.as_ref();
+        match std::env::var("HEYFOOD_CREDENTIAL_STORE").as_deref() {
+            Ok("file") => {
+                eprintln!(
+                    "heyfood: using explicitly requested owner-only file credential storage; unset HEYFOOD_CREDENTIAL_STORE to use the operating-system credential store"
+                );
+                FileCredentialStore::open(root).map(Self::OwnerOnlyFile)
+            }
+            Ok("native") => {
+                CredentialBrokerStore::open(root, Duration::from_secs(15)).map(Self::Platform)
+            }
+            Err(std::env::VarError::NotPresent) => {
+                let legacy = FileCredentialStore::open(root)?;
+                let legacy_state_exists = match legacy.load_authorized_session() {
+                    Ok(Some(_)) | Err(_) => true,
+                    Ok(None) => legacy.reconciliation_required()?,
+                };
+                if legacy_state_exists {
+                    eprintln!(
+                        "heyfood: continuing with disclosed owner-only legacy credential storage; set HEYFOOD_CREDENTIAL_STORE=native after completing credential migration"
+                    );
+                    Ok(Self::OwnerOnlyFile(legacy))
+                } else {
+                    CredentialBrokerStore::open(root, Duration::from_secs(15)).map(Self::Platform)
+                }
+            }
+            Ok(_) | Err(std::env::VarError::NotUnicode(_)) => Err(PortError::new(
+                "credential_store_selection",
+                "HEYFOOD_CREDENTIAL_STORE must be `native` or the explicit `file` fallback",
+            )),
+        }
+    }
+
+    #[cfg(windows)]
+    fn open(root: impl AsRef<std::path::Path>) -> Result<Self, PortError> {
+        match std::env::var("HEYFOOD_CREDENTIAL_STORE").as_deref() {
+            Ok("native") | Err(std::env::VarError::NotPresent) => {
+                CredentialBrokerStore::open(root.as_ref(), Duration::from_secs(15))
+                    .map(Self::Platform)
+            }
+            Ok("file") => Err(PortError::new(
+                "credential_store_selection",
+                "owner-only file credential fallback is not supported on Windows",
+            )),
+            Ok(_) | Err(std::env::VarError::NotUnicode(_)) => Err(PortError::new(
+                "credential_store_selection",
+                "HEYFOOD_CREDENTIAL_STORE must be `native` on Windows",
+            )),
+        }
+    }
+
+    fn reconciliation_required(&self) -> Result<bool, PortError> {
+        match self {
+            Self::Platform(store) => store.reconciliation_required(),
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => store.reconciliation_required(),
+        }
+    }
+}
+
+#[cfg(feature = "native-credentials")]
+impl CredentialPort for NativeSessionStore {
+    fn load(&self) -> BoxFuture<'_, Result<Option<SessionCredentials>, PortError>> {
+        match self {
+            Self::Platform(store) => store.load(),
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => store.load(),
+        }
+    }
+
+    fn commit(&self, commit: CredentialCommit) -> BoxFuture<'_, Result<(), PortError>> {
+        match self {
+            Self::Platform(store) => store.commit(commit),
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => store.commit(commit),
+        }
+    }
+
+    fn mark_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        match self {
+            Self::Platform(store) => store.mark_reconciliation_required(commit_id),
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => store.mark_reconciliation_required(commit_id),
+        }
+    }
+
+    fn clear_reconciliation_required(
+        &self,
+        commit_id: CommitId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        match self {
+            Self::Platform(store) => store.clear_reconciliation_required(commit_id),
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => store.clear_reconciliation_required(commit_id),
+        }
+    }
+}
+
+#[cfg(feature = "native-credentials")]
+impl AuthorizationSessionStore for NativeSessionStore {
+    fn initialize_authorized_session(
+        &self,
+        credentials: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        match self {
+            Self::Platform(store) => store.initialize_authorized_session(credentials),
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => store.initialize_authorized_session(credentials),
+        }
+    }
+
+    fn load_authorized_session(&self) -> Result<Option<SessionCredentials>, PortError> {
+        match self {
+            Self::Platform(store) => store.load_authorized_session(),
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => store.load_authorized_session(),
+        }
+    }
+
+    fn replace_authorized_session(
+        &self,
+        credentials: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        match self {
+            Self::Platform(store) => store.replace_authorized_session(credentials),
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => store.replace_authorized_session(credentials),
+        }
+    }
+
+    fn stage_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        match self {
+            Self::Platform(store) => {
+                store.stage_authorized_session(client_transaction_id, previous, replacement)
+            }
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => {
+                store.stage_authorized_session(client_transaction_id, previous, replacement)
+            }
+        }
+    }
+
+    fn verify_staged_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        previous: &SessionCredentials,
+        replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        match self {
+            Self::Platform(store) => {
+                store.verify_staged_authorized_session(client_transaction_id, previous, replacement)
+            }
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => {
+                store.verify_staged_authorized_session(client_transaction_id, previous, replacement)
+            }
+        }
+    }
+
+    fn clear_staged_authorized_session(
+        &self,
+        client_transaction_id: &str,
+        expected_replacement: &SessionCredentials,
+    ) -> Result<(), PortError> {
+        match self {
+            Self::Platform(store) => {
+                store.clear_staged_authorized_session(client_transaction_id, expected_replacement)
+            }
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => {
+                store.clear_staged_authorized_session(client_transaction_id, expected_replacement)
+            }
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -34,26 +241,94 @@ async fn main() -> ExitCode {
     if let Some(outcome) = heyfood_platform::run_credential_broker_if_requested() {
         return outcome;
     }
+    #[cfg(all(debug_assertions, feature = "native-credentials"))]
+    if std::env::var_os("HEYFOOD_TEST_DELETE_NATIVE_CREDENTIALS").as_deref()
+        == Some(std::ffi::OsStr::new("1"))
+    {
+        let result = NativePaths::discover().and_then(|paths| {
+            CredentialBrokerStore::open(paths.config_dir(), Duration::from_secs(15))
+        });
+        return match result {
+            Ok(store) if store.delete().await.is_ok() => ExitCode::SUCCESS,
+            Ok(_) | Err(_) => ExitCode::FAILURE,
+        };
+    }
 
     let cli = Cli::parse_env();
     let machine = cli.machine_output();
+    let no_input = cli.no_input;
     let output_mode = cli.output_mode(io::stdout().is_terminal());
     if cli.raw {
         eprintln!("--raw is deprecated; use --json.");
     }
     match cli.command {
         Some(Command::Completion { shell }) => {
+            if machine {
+                return failure(
+                    "completion_json_unsupported",
+                    "Shell completion source cannot be emitted as JSON.",
+                    Some("Run `heyfood completion <shell>` without --json."),
+                    true,
+                    false,
+                );
+            }
             heyfood_cli::write_completions(shell, &mut io::stdout());
             ExitCode::SUCCESS
         }
-        Some(Command::Register(arguments)) => register(arguments, machine).await,
+        Some(Command::Register(arguments)) => register(arguments, machine, no_input).await,
         Some(Command::Login(arguments)) => login(arguments, machine).await,
+        Some(Command::Chat(_)) => chat(machine).await,
+        Some(Command::Onboard(_)) => onboard(machine).await,
         Some(command) if is_native_one_shot(&command) => {
             one_shot(command, output_mode, machine).await
         }
         Some(_) => pending_command(machine),
-        None => bare(machine),
+        None => bare(machine).await,
     }
+}
+
+async fn chat(machine: bool) -> ExitCode {
+    if machine {
+        return failure(
+            "interactive_json_unsupported",
+            "The interactive terminal cannot emit the one-value JSON contract.",
+            Some("Use `heyfood ask --json \"your question\"` for automation."),
+            true,
+            false,
+        );
+    }
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return failure(
+            "interactive_terminal_required",
+            "The interactive terminal requires terminal input and output.",
+            Some("Use `heyfood ask \"your question\"` in a redirected environment."),
+            false,
+            false,
+        );
+    }
+    bare(false).await
+}
+
+async fn onboard(machine: bool) -> ExitCode {
+    if machine {
+        return failure(
+            "onboarding_json_unsupported",
+            "Guided dietary onboarding requires the interactive terminal.",
+            Some("Run `heyfood` in a terminal and use `/onboard`."),
+            true,
+            false,
+        );
+    }
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return failure(
+            "interactive_terminal_required",
+            "Guided dietary onboarding requires terminal input and output.",
+            Some("Run `heyfood onboard` from an interactive terminal."),
+            false,
+            false,
+        );
+    }
+    interactive(false, true).await
 }
 
 const fn is_native_one_shot(command: &Command) -> bool {
@@ -65,20 +340,209 @@ const fn is_native_one_shot(command: &Command) -> bool {
             | Command::Item(_)
             | Command::Grocery { .. }
             | Command::Health { .. }
+            | Command::Watch { .. }
     )
 }
 
-fn bare(machine: bool) -> ExitCode {
+async fn bare(machine: bool) -> ExitCode {
     if machine {
         println!(
             "{{\"ok\":true,\"message\":\"Run an explicit native command.\",\"next_command\":\"heyfood register\"}}"
         );
-    } else {
+        return ExitCode::SUCCESS;
+    }
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         println!(
             "hello.food for your terminal.\n\nStart: heyfood register\nAsk:   heyfood ask \"What can I eat?\"\nHelp:  heyfood --help"
         );
+        return ExitCode::SUCCESS;
     }
-    ExitCode::SUCCESS
+
+    interactive(false, false).await
+}
+
+async fn interactive(machine: bool, force_onboarding: bool) -> ExitCode {
+    debug_assert!(!machine, "interactive entry rejects machine mode");
+    let (prepared, mut startup_notice, mut startup_onboarding) = match prepare_bare_session().await
+    {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            return failure(
+                error.code,
+                &terminal_safe_text(&error.message),
+                one_shot_hint(error.code),
+                false,
+                error.outcome_uncertain,
+            );
+        }
+    };
+    if force_onboarding {
+        startup_onboarding = true;
+        startup_notice =
+            Some("Review and replace your synced dietary profile through the guided setup.".into());
+    }
+    let local_state = match load_interactive_state(
+        &prepared.paths,
+        prepared.snapshot.credentials.account_id.as_str(),
+    ) {
+        Ok(state) => state,
+        Err(error) => {
+            return failure(
+                error.code,
+                &terminal_safe_text(&error.message),
+                None,
+                false,
+                error.outcome_uncertain,
+            );
+        }
+    };
+    let result = tokio::task::block_in_place(move || {
+        let driver = heyfood_bin::InteractiveTurnDriver::new_http(
+            prepared.service,
+            prepared.ensure_session,
+            prepared.snapshot,
+            prepared.authorization_scope,
+        )?
+        .with_local_state(local_state)
+        .with_startup_notice(startup_notice)
+        .with_startup_onboarding(startup_onboarding);
+        #[cfg(all(
+            feature = "native-audio",
+            any(target_os = "linux", target_os = "macos", target_os = "windows")
+        ))]
+        let driver = driver.with_audio_capture(Arc::new(heyfood_voice::NativeAudioCapture));
+        let mut driver = driver;
+        heyfood_bin::run_qualified_session(&mut driver)
+            .map_err(|error| io::Error::other(error.to_string()))
+    });
+    match result {
+        Ok(reason) => ExitCode::from(u8::try_from(reason.exit_code()).unwrap_or(1)),
+        Err(error) => failure(
+            "interactive_session",
+            &terminal_safe_text(&error.to_string()),
+            Some("Run `heyfood ask \"your question\"` if this terminal cannot host the TUI."),
+            false,
+            false,
+        ),
+    }
+}
+
+async fn prepare_bare_session()
+-> Result<(PreparedNativeSession, Option<String>, bool), heyfood_bin::OneShotError> {
+    match prepare_native_session(None, CancellationToken::new()).await {
+        Ok(mut prepared) => {
+            let startup_onboarding = profile_needs_onboarding(&mut prepared)
+                .await
+                .unwrap_or(false);
+            let startup_notice = startup_onboarding.then(|| {
+                "Your connected account has no synced dietary profile. Complete the guided setup before your first personalized request.".into()
+            });
+            Ok((prepared, startup_notice, startup_onboarding))
+        }
+        Err(error) if error.code == "login_required" => {
+            eprintln!("Welcome to heyfood. Connect your hello.food account to continue.");
+            let registration = register_inner(
+                heyfood_cli::RegisterArgs {
+                    device: true,
+                    no_browser: false,
+                    timeout: 600,
+                    no_onboard: false,
+                },
+                false,
+            )
+            .await
+            .map_err(registration_to_one_shot)?;
+            let prepared = prepare_native_session(None, CancellationToken::new()).await?;
+            Ok((
+                prepared,
+                Some(registration_startup_notice(registration.profile_status)),
+                registration.profile_status == ProfileStatus::Missing,
+            ))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+async fn profile_needs_onboarding(prepared: &mut PreparedNativeSession) -> Option<bool> {
+    if !["profile:read", "profile:write"].iter().all(|required| {
+        prepared
+            .authorization_scope
+            .split_whitespace()
+            .any(|scope| scope == *required)
+    }) {
+        return None;
+    }
+    let credentials = match prepared
+        .ensure_session
+        .execute(prepared.snapshot.clone(), CancellationToken::new())
+        .await
+        .ok()?
+    {
+        EnsureSessionOutcome::Current(credentials) => credentials,
+        EnsureSessionOutcome::Refreshed(credentials) => {
+            prepared.snapshot.credentials = credentials.clone();
+            prepared.snapshot.reconciliation_required = false;
+            credentials
+        }
+        EnsureSessionOutcome::CancelledBeforeDispatch => return None,
+    };
+    let consent = prepared
+        .service
+        .profile_consent_status(&credentials, OperationId::new(), CancellationToken::new())
+        .await
+        .ok()?;
+    match consent
+        .get("has_consent")
+        .and_then(serde_json::Value::as_bool)
+    {
+        Some(false) => Some(true),
+        Some(true) => match prepared
+            .service
+            .download_profile(
+                &credentials,
+                "_self",
+                OperationId::new(),
+                CancellationToken::new(),
+            )
+            .await
+        {
+            Ok(_) => Some(false),
+            Err(error) if error.code == "resource_not_found" => Some(true),
+            Err(_) => None,
+        },
+        None => None,
+    }
+}
+
+fn registration_startup_notice(status: ProfileStatus) -> String {
+    match status {
+        ProfileStatus::Ready => {
+            "Account connected. Your dietary profile is ready; ask your first question.".into()
+        }
+        ProfileStatus::Missing => "Account connected. Complete the guided dietary profile before your first personalized request.".into(),
+        ProfileStatus::Unknown => "Account connected. Dietary profile readiness could not be confirmed; personalized guidance may be limited.".into(),
+    }
+}
+
+fn load_interactive_state(
+    paths: &NativePaths,
+    account_id: &str,
+) -> Result<Option<heyfood_core::ImportedPythonState>, heyfood_bin::OneShotError> {
+    let importer = PythonStateImporter::discover(paths).map_err(heyfood_bin::OneShotError::from)?;
+    importer.import().map_err(heyfood_bin::OneShotError::from)?;
+    let state = importer
+        .load_state()
+        .map_err(heyfood_bin::OneShotError::from)?;
+    if state
+        .as_ref()
+        .is_some_and(|state| state.account_user_id.as_deref() != Some(account_id))
+    {
+        return Err(heyfood_bin::OneShotError::new(
+            "local_state_account_mismatch",
+            "Saved local context belongs to a different account.",
+        ));
+    }
+    Ok(state)
 }
 
 fn pending_command(machine: bool) -> ExitCode {
@@ -119,11 +583,18 @@ async fn one_shot(command: Command, output_mode: OutputMode, machine: bool) -> E
     }
 }
 
-async fn one_shot_inner(
-    command: Command,
-    output_mode: OutputMode,
+struct PreparedNativeSession {
+    paths: NativePaths,
+    service: Arc<HttpService>,
+    ensure_session: Arc<EnsureSession>,
+    snapshot: SessionSnapshot,
+    authorization_scope: String,
+}
+
+async fn prepare_native_session(
+    command: Option<&Command>,
     cancellation: CancellationToken,
-) -> Result<String, heyfood_bin::OneShotError> {
+) -> Result<PreparedNativeSession, heyfood_bin::OneShotError> {
     let paths = NativePaths::discover().map_err(heyfood_bin::OneShotError::from)?;
     let auth_store =
         NativeAuthStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?;
@@ -140,11 +611,11 @@ async fn one_shot_inner(
     {
         return Err(heyfood_bin::OneShotError::new(
             "reauthorization_reconciliation_required",
-            "A staged login must be reconciled before any command can run. Run `heyfood login`.",
+            "A staged login must be reconciled before continuing. Run `heyfood login`.",
         ));
     }
     let mut auth = auth_store
-        .load()
+        .load_account_bound(credential_store.as_ref())
         .map_err(heyfood_bin::OneShotError::from)?
         .ok_or_else(|| {
             heyfood_bin::OneShotError::new(
@@ -152,16 +623,15 @@ async fn one_shot_inner(
                 "No hello.food account is connected. Run `heyfood register` first.",
             )
         })?;
-    ensure_command_scopes(&command, &auth.channel.scope)?;
+    if let Some(command) = command {
+        ensure_command_scopes(command, &auth.channel.scope)?;
+    }
 
     let (service_url, policy) = service_url().map_err(registration_to_one_shot)?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |value| value.as_secs());
     if auth.channel.expires_at_unix() <= i64::try_from(now).unwrap_or(i64::MAX) {
-        // Refresh tokens rotate. Serialize the reload, remote consumption, and
-        // durable replacement across CLI processes so a stale process cannot
-        // consume and then overwrite another process's grant.
         let refresh = auth_store
             .begin_refresh()
             .map_err(heyfood_bin::OneShotError::from)?;
@@ -185,9 +655,6 @@ async fn one_shot_inner(
                     "Channel refresh was cancelled before dispatch.",
                 ));
             }
-            // Write ahead before the consuming POST. A hard process exit or
-            // Ctrl-C after dispatch therefore leaves durable evidence that the
-            // old grant must not be retried.
             refresh.mark_reconciliation_required().map_err(|_| {
                 uncertain_one_shot(
                     "channel_refresh_reconciliation_write",
@@ -209,8 +676,6 @@ async fn one_shot_inner(
                     return Err(registration_to_one_shot(error));
                 }
             };
-            // A rotated refresh token is server-accepted state. Persist the whole
-            // bundle before allowing session re-exchange to consume it.
             if refresh.replace(&auth).is_err() {
                 return Err(uncertain_one_shot(
                     "channel_refresh_persistence_outcome_uncertain",
@@ -220,25 +685,20 @@ async fn one_shot_inner(
         }
     }
 
-    let credentials = match credential_store
-        .load()
-        .await
+    auth = auth_store
+        .load_account_bound(credential_store.as_ref())
         .map_err(heyfood_bin::OneShotError::from)?
-    {
-        Some(credentials) => credentials,
-        None => {
-            // Registration predates the rotating-session store. Seed it once
-            // from the complete authorization bundle, then rotate only here.
-            credential_store
-                .initialize(&auth.session)
-                .map_err(heyfood_bin::OneShotError::from)?;
-            auth.session.clone()
-        }
-    };
+        .ok_or_else(|| {
+            heyfood_bin::OneShotError::new(
+                "login_required",
+                "No hello.food account is connected. Run `heyfood register` first.",
+            )
+        })?;
+    let credentials = auth.session.clone();
+    let authorization_scope = auth.channel.scope.clone();
     let reconciliation_required = credential_store
         .reconciliation_required()
         .map_err(heyfood_bin::OneShotError::from)?;
-
     let api_key = std::env::var("HEYFOOD_API_KEY")
         .ok()
         .filter(|value| !value.is_empty())
@@ -254,22 +714,73 @@ async fn one_shot_inner(
             .map_err(heyfood_bin::OneShotError::from)?
             .with_cli_auth(cli_auth),
     );
-    let ensure_session =
-        EnsureSession::new(service.clone(), credential_store, Arc::new(NativeClock));
-    let stdin = read_command_stdin(&command)?;
-    heyfood_bin::execute_qualified_one_shot(
-        service.as_ref(),
-        &ensure_session,
-        SessionSnapshot {
+    let ensure_session = Arc::new(EnsureSession::new(
+        service.clone(),
+        credential_store,
+        Arc::new(NativeClock),
+    ));
+    Ok(PreparedNativeSession {
+        paths,
+        service,
+        ensure_session,
+        snapshot: SessionSnapshot {
             credentials,
             reconciliation_required,
         },
+        authorization_scope,
+    })
+}
+
+async fn one_shot_inner(
+    command: Command,
+    output_mode: OutputMode,
+    cancellation: CancellationToken,
+) -> Result<String, heyfood_bin::OneShotError> {
+    let prepared = prepare_native_session(Some(&command), cancellation.child_token()).await?;
+    let imported_state = load_selector_state(
+        &prepared.paths,
+        &command,
+        prepared.snapshot.credentials.account_id.as_str(),
+    )?;
+    let stdin = read_command_stdin(&command)?;
+    heyfood_bin::execute_qualified_one_shot_with_state(
+        prepared.service.as_ref(),
+        prepared.ensure_session.as_ref(),
+        prepared.snapshot,
         output_mode,
         command,
         &stdin,
         cancellation,
+        imported_state.as_ref(),
     )
     .await
+}
+
+fn load_selector_state(
+    paths: &NativePaths,
+    command: &Command,
+    account_id: &str,
+) -> Result<Option<heyfood_core::ImportedPythonState>, heyfood_bin::OneShotError> {
+    let required = matches!(
+        command,
+        Command::Log(_) | Command::Item(heyfood_cli::ItemArgs { at: Some(_), .. })
+    );
+    if !required {
+        return Ok(None);
+    }
+    let importer = PythonStateImporter::discover(paths).map_err(heyfood_bin::OneShotError::from)?;
+    importer.import().map_err(heyfood_bin::OneShotError::from)?;
+    let imported = importer
+        .load_state()
+        .map_err(heyfood_bin::OneShotError::from)?;
+    if imported.is_some() || !matches!(command, Command::Log(_)) {
+        return Ok(imported);
+    }
+    Ok(Some(heyfood_core::ImportedPythonState {
+        account_user_id: Some(account_id.to_owned()),
+        global: std::collections::BTreeMap::new(),
+        account_scoped: std::collections::BTreeMap::new(),
+    }))
 }
 
 fn registration_to_one_shot(error: RegistrationError) -> heyfood_bin::OneShotError {
@@ -290,12 +801,10 @@ fn uncertain_one_shot(code: &'static str, message: impl Into<String>) -> heyfood
 
 fn read_command_stdin(command: &Command) -> Result<Vec<u8>, heyfood_bin::OneShotError> {
     let should_read = match command {
-        Command::Ask(arguments)
-        | Command::Reply(arguments)
-        | Command::Log(arguments)
-        | Command::Item(arguments) => arguments.text.is_empty(),
+        Command::Ask(arguments) | Command::Reply(arguments) => arguments.text.is_empty(),
+        Command::Log(arguments) => arguments.meal.is_empty(),
         Command::Grocery {
-            command: heyfood_cli::GroceryCommand::Confirm(_),
+            command: Some(heyfood_cli::GroceryCommand::Confirm(_)),
         } => true,
         _ => false,
     };
@@ -330,13 +839,20 @@ fn ensure_command_scopes(
 ) -> Result<(), heyfood_bin::OneShotError> {
     let required: &[&str] = match command {
         Command::Grocery {
-            command: heyfood_cli::GroceryCommand::List | heyfood_cli::GroceryCommand::Export(_),
+            command:
+                None
+                | Some(
+                    heyfood_cli::GroceryCommand::List
+                    | heyfood_cli::GroceryCommand::Exclusions
+                    | heyfood_cli::GroceryCommand::Export(_),
+                ),
         } => &["grocery:read"],
         Command::Grocery { .. } => &["grocery:read", "grocery:write"],
         Command::Health {
             command: heyfood_cli::HealthCommand::Status | heyfood_cli::HealthCommand::Show,
         } => &["health:read"],
         Command::Health { .. } => &["integrations:manage"],
+        Command::Watch { .. } => &["menu:watch"],
         _ => &[],
     };
     let granted = granted_scope.split_whitespace().collect::<Vec<_>>();
@@ -405,7 +921,7 @@ async fn login_inner(
     }
 
     auth_store
-        .load()
+        .load_account_bound(&session_store)
         .map_err(platform_error)?
         .ok_or_else(|| RegistrationError {
             code: "login_required",
@@ -808,13 +1324,25 @@ fn reconciliation_error() -> RegistrationError {
     }
 }
 
-async fn register(arguments: heyfood_cli::RegisterArgs, machine: bool) -> ExitCode {
+async fn register(arguments: heyfood_cli::RegisterArgs, machine: bool, no_input: bool) -> ExitCode {
+    let continue_to_tui = registration_continues_to_tui(
+        &arguments,
+        machine,
+        no_input,
+        io::stdin().is_terminal(),
+        io::stdout().is_terminal(),
+    );
     let result = register_inner(arguments, machine).await;
     match result {
         Ok(document) => match heyfood_cli::render_registration_success(&document, machine) {
             Ok(output) => {
                 print!("{output}");
-                ExitCode::SUCCESS
+                if continue_to_tui {
+                    io::stdout().flush().ok();
+                    interactive(false, document.profile_status == ProfileStatus::Missing).await
+                } else {
+                    ExitCode::SUCCESS
+                }
             }
             Err(_) => failure(
                 "internal_error",
@@ -834,13 +1362,28 @@ async fn register(arguments: heyfood_cli::RegisterArgs, machine: bool) -> ExitCo
     }
 }
 
+const fn registration_continues_to_tui(
+    arguments: &heyfood_cli::RegisterArgs,
+    machine: bool,
+    no_input: bool,
+    stdin_is_terminal: bool,
+    stdout_is_terminal: bool,
+) -> bool {
+    !arguments.no_onboard && !machine && !no_input && stdin_is_terminal && stdout_is_terminal
+}
+
 async fn register_inner(
     arguments: heyfood_cli::RegisterArgs,
     machine: bool,
 ) -> Result<RegistrationResultDocument, RegistrationError> {
     let paths = NativePaths::discover().map_err(platform_error)?;
     let auth_store = NativeAuthStore::open(paths.config_dir()).map_err(platform_error)?;
-    if auth_store.load().map_err(platform_error)?.is_some() {
+    let session_store = NativeSessionStore::open(paths.config_dir()).map_err(platform_error)?;
+    if auth_store
+        .load_account_bound(&session_store)
+        .map_err(platform_error)?
+        .is_some()
+    {
         return Err(RegistrationError {
             code: "account_already_connected",
             public_message: "A hello.food account is already connected.".into(),
@@ -884,18 +1427,12 @@ async fn register_inner(
     let outcome = outcome?;
 
     // Persist only after OAuth, app-session exchange, and contract validation
-    // all succeed. The owner-only atomic store retains both grants together.
-    auth_store.initialize(&outcome.credentials).map_err(|_| RegistrationError {
-        code: "registration_persistence_outcome_uncertain",
-        public_message: "The account was connected, but native credentials could not be saved. Do not retry registration until account state is reconciled.".into(),
-        retryable: false,
-        outcome_uncertain: true,
-    })?;
-    NativeSessionStore::open(paths.config_dir())
-        .and_then(|store| store.initialize(&outcome.credentials.session))
+    // all succeed. A durable cross-store marker blocks any split outcome.
+    auth_store
+        .initialize_account_bound(&outcome.credentials, &session_store)
         .map_err(|_| RegistrationError {
             code: "registration_persistence_outcome_uncertain",
-            public_message: "The account was connected, but its rotating session could not be initialized. Do not retry registration until account state is reconciled.".into(),
+            public_message: "The account was connected, but its account-bound native credentials could not be initialized. Do not retry registration until account state is reconciled.".into(),
             retryable: false,
             outcome_uncertain: true,
         })?;
@@ -986,4 +1523,65 @@ fn failure(
         eprint!("{output}");
     }
     ExitCode::FAILURE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn registration_arguments(no_onboard: bool) -> heyfood_cli::RegisterArgs {
+        heyfood_cli::RegisterArgs {
+            device: true,
+            no_browser: true,
+            timeout: 600,
+            no_onboard,
+        }
+    }
+
+    #[test]
+    fn explicit_interactive_registration_continues_into_the_tui_by_default() {
+        assert!(registration_continues_to_tui(
+            &registration_arguments(false),
+            false,
+            false,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn no_onboard_is_the_explicit_registration_handoff_opt_out() {
+        assert!(!registration_continues_to_tui(
+            &registration_arguments(true),
+            false,
+            false,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn registration_never_starts_a_tui_for_json_or_redirected_output() {
+        let arguments = registration_arguments(false);
+        assert!(!registration_continues_to_tui(
+            &arguments, true, false, true, true
+        ));
+        assert!(!registration_continues_to_tui(
+            &arguments, false, false, false, true
+        ));
+        assert!(!registration_continues_to_tui(
+            &arguments, false, false, true, false
+        ));
+    }
+
+    #[test]
+    fn no_input_never_hands_registration_into_the_questionnaire_tui() {
+        assert!(!registration_continues_to_tui(
+            &registration_arguments(false),
+            false,
+            true,
+            true,
+            true,
+        ));
+    }
 }

@@ -4,11 +4,78 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
-## Unreleased
+## 0.5.0 - Unreleased
 
-_Nothing yet._
+- Adds deterministic Windows x86-64 zip packaging and installed-executable
+  smoke coverage to the native distribution matrix. Publication remains gated
+  on the first protected signing pass and the public Windows installer.
+- Requires protected tag builds to Authenticode-sign and timestamp Windows
+  executables and to Developer ID-sign, harden, and notarize both macOS
+  executables before packaging. Public artifact smoke re-verifies the platform
+  trust result.
+- Replaces the unsupported `v0.4.0` and `v0.4.1` incident artifacts with the
+  fully qualified Rust CLI and interactive TUI recovery release.
+- Preserves terminal stream content when a terminal SSE document omits final
+  text and recognizes the frozen `message`, `text`, and `response` result forms.
+- Keeps unfinished interactive commands out of slash-command discovery until
+  their typed effects and functional panels are complete.
+- Adds cancellable, authenticated `/grocery` and `/health` TUI panels backed by
+  live capability/list and provider-neutral integration/context reads.
+- Adds a live `/profile` consent/profile view plus account-bound local
+  `/household` and `/location` panels; mismatched local state fails closed.
+- Adds a functional `/for MEMBER|everyone` context switch and threads the
+  resolved consent-aware household context through subsequent TUI turns while
+  atomically clearing conversation continuity across household boundaries.
+- Preserves streamed choices when a final SSE result supplies replacement text,
+  and adds a typed `/status` panel backed by live service, consent, scope, and
+  capability checks without overstating native voice readiness.
+- Adds the contract-derived native voice vertical for `native-audio` artifacts:
+  `/voice`, Ctrl+Space, and F8 drive bounded memory-only microphone capture,
+  authenticated no-retry transcription, editable composer review, rerecord,
+  cancellation/discard, and the same typed turn path after explicit Enter.
+  Scope and artifact availability are checked before microphone access.
+- Adds contract-derived `heyfood watch` create/list/remove commands and a
+  read-only `/watch` TUI panel using the deployed `menu:watch` scope. Cadence,
+  timezone, baseline state, notification preference, and identity evidence are
+  rendered without inventing the still-missing account-scoped diff-read route.
+- Serializes Windows Credential Manager calls within the process, verifies
+  journal deletion before subsequent reads, and uses a bounded process-table
+  observation after broker kill-and-reap.
+- Lets an unauthenticated bare `heyfood` session complete device registration
+  and continue into the TUI in the same process.
+- Adds an eight-step first-run and `/onboard` TUI journey backed by the frozen
+  v2 dietary catalog. All answers remain local through review; explicit save
+  grants versioned profile-sync consent and performs one optimistic profile
+  upload without blind mutation retries.
+- Continues an explicit interactive `heyfood register` into the TUI by default;
+  `--no-onboard`, global `--no-input`, JSON mode, and redirected environments
+  remain explicit non-TUI handoffs.
+- Classifies onboarding cancellation from the adapter's observed dispatch stage
+  so a late Ctrl-C cannot relabel a determinate service response, while an
+  unobserved profile-upload response remains outcome-unknown.
+- Verifies Rust onboarding payload parity against the frozen Python derivation
+  tables for every v2 diet, allergy, condition, activity, and cuisine option.
+- Adds contract-derived Grocery exclusion reads and add/remove proposals, and
+  shows the never-buy list in the authenticated Grocery TUI panel.
+- Renders stable item IDs, quantities, provenance, member-specific ingredient
+  screening, reasons, and substitutions in Grocery list and proposal views.
+- Adds owner-only `grocery export --out FILE` writes with exclusive creation,
+  explicit atomic overwrite, symlink/reparse-point rejection, and cleanup on
+  failure. Windows creation installs the protected owner DACL atomically and
+  publishes by open handle before independently verifying the final ACL.
+- Parses the frozen C3 item-list confirmation envelope into a native TUI card;
+  `y`/`n` and Ctrl+C send an explicit `confirm` decision with the original
+  server confirmation and idempotency IDs, mutually exclusive with `query`.
+- Adds contract-backed Grocery proposal correction in the TUI:
+  `edit #N <replacement>` sends the complete bounded item set through C3's
+  optional `edits` field, preserving the server-minted confirmation and
+  idempotency authority while the backend revalidates and re-screens it. The
+  client accepts the frozen maximum of 25 complete inputs and renders bounded
+  production `sources[]` provenance before confirmation.
+- Archives the final Python parity baseline under the non-release tag
+  `archive/python-cli-73494a57` and verifies retained source bytes from Rust.
 
-## 0.4.1 - 2026-07-21
+## 0.4.1 - 2026-07-21 — unsupported, do not install
 
 ### Fixed
 
@@ -23,7 +90,7 @@ _Nothing yet._
   the old grant remains authoritative until the full channel and app-session
   replacement is validated and committed.
 
-## 0.4.0 - 2026-07-19
+## 0.4.0 - 2026-07-19 — unsupported, do not install
 
 ### Added
 

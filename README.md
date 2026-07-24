@@ -9,11 +9,11 @@
 Native command-line access to personalized food and dietary guidance from
 [hello.food](https://hello.food).
 
-This repository is moving the CLI to Rust. The current public native cut is
-deliberately bounded: registration, hosted-agent turns, Grocery, and
-provider-neutral Health are active. Guidance comes from the hosted hello.food
-service and is not a substitute for professional medical advice or emergency
-care.
+This repository is moving the CLI and interactive terminal experience to Rust.
+The recovery release target is `0.5.0`. Publication is suspended while the
+installed-artifact journeys, native distribution, and exact-SHA release gates
+are completed. The immutable `v0.4.0` and `v0.4.1` releases are unsupported and
+must not be installed.
 
 See the [current capability and distribution status](docs/CAPABILITY_STATUS.md)
 before evaluating the client.
@@ -97,7 +97,11 @@ heyfood ask "What can I eat?"
 heyfood reply --conversation-id CONVERSATION_ID "The second option"
 heyfood log "I ate the first option"
 heyfood item "pad thai at Pismo's"
-heyfood grocery list
+heyfood grocery show
+heyfood grocery exclusions
+heyfood grocery never --list-id UUID --version 4 "raw onion"
+heyfood watch list
+heyfood watch add RESTAURANT_UUID --weekday thursday --hour 9 --notify
 heyfood health status
 heyfood health show
 ```
@@ -108,7 +112,7 @@ conversation persistence is not active. `ask`, `log`, and `item` may also use
 an optional coordinate pair:
 
 ```bash
-heyfood ask --latitude 35.28 --longitude -120.66 "What can I order nearby?"
+heyfood ask --lat 35.28 --lng -120.66 "What can I order nearby?"
 ```
 
 If command text is omitted and stdin is not a terminal, the client reads the
@@ -137,18 +141,37 @@ uncertain server-side outcome include `error.outcome_uncertain: true` so callers
 do not retry a potentially committed operation blindly. See the
 [CLI process contract](docs/CLI_CONTRACT.md).
 
-## What is not active yet
+## Interactive terminal
 
-The native Rust binary does not currently provide the legacy Python CLI's
-interactive chat/TUI, onboarding, profile, account-management, restaurant
-search, saved location, recommendation, menu, recipe, household, voice,
-context, configuration, or diagnostic workflows. Hidden
-compatibility topology may recognize some old command names, but those paths
-return `command_not_available`; they are not supported commands.
+On this draft branch, registration continues into the native Rust TUI and an
+authenticated bare `heyfood` launches it directly. This is source-level preview
+work, not a supported release; the hosted installer remains suspended. The
+composer remains editable while responses stream, keeps bounded process-local
+prompt history, and preserves conversation continuity only for the lifetime of
+the process.
 
-The bare `heyfood` invocation is informational only. It prints runnable next
-steps and never starts a TUI, browser, registration, onboarding, or network
-request.
+Interactive controls include Enter to send, Shift+Enter or Ctrl+J for a
+newline, Up/Down for prompt history, PageUp/PageDown for scrollback, Ctrl+C to
+stop an active turn, and Ctrl+D or `/exit` to leave. In native-audio builds,
+Ctrl+Space, F8, or `/voice` starts/stops memory-only capture and places the
+validated transcript in the composer for editing before submission. Use
+`/help` for the current command registry, `/new` for a fresh conversation,
+`/clear` to clear visible scrollback, and `/status` to inspect session
+readiness.
+
+Grocery, Menu Watch, Health, profile, household, location, and status panels are connected
+on the draft branch. Grocery list cards expose stable IDs, provenance, member
+screening, substitutions, and never-buy exclusions. Conversational item-list
+proposals support typed accept/cancel decisions in the TUI. `grocery export
+LIST_ID --out FILE` writes annotations through an owner-only, exclusive,
+symlink-safe file path; `--overwrite` opts into atomic replacement. Proposal
+editing and the native voice vertical are present in source. `heyfood watch`
+and `/watch` create/list/remove or display subscriptions using the deployed
+`menu:watch` contract; the showcased diff view remains blocked on a backend
+account-scoped diff-read route. Installed-artifact showcase execution and
+real-hardware voice qualification remain incomplete release gates. Hidden
+compatibility routes continue to fail closed where a native workflow is not
+complete.
 
 ## Development
 

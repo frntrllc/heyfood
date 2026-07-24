@@ -226,7 +226,7 @@ async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratat
         assert_eq!(request.path, "/v1/auth/session/refresh");
         let headers = request.headers.to_ascii_lowercase();
         assert!(headers.contains("accept: application/json"));
-        assert!(headers.contains("user-agent: heyfood-cli/0.4.1"));
+        assert!(headers.contains("user-agent: heyfood-cli/0.5.0"));
         assert!(headers.contains("x-app-client-id: heyfood-cli"));
         assert!(headers.contains("x-device-id: hellofood-cli-fixture-device"));
         assert!(headers.contains("x-api-key: fixture-api-key"));
@@ -271,6 +271,7 @@ async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratat
             HttpDeadlines {
                 connect: Duration::from_secs(1),
                 request: Duration::from_secs(2),
+                transcription: Duration::from_secs(2),
                 pool_idle: Duration::from_secs(1),
                 sse_inactivity: Duration::from_secs(2),
             },
@@ -312,6 +313,7 @@ async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratat
                     meal: Some(fixture["request"]["body"]["meal_context"].clone()),
                     latitude: fixture["request"]["body"]["lat"].as_f64(),
                     longitude: fixture["request"]["body"]["lng"].as_f64(),
+                    confirmation: None,
                 },
                 refresh: RefreshPolicy::Required,
             },

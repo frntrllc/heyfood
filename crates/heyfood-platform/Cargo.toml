@@ -11,12 +11,13 @@ publish.workspace = true
 [features]
 default = []
 native-credentials = ["dep:keyring", "dep:sysinfo"]
+qualification-credentials = ["native-credentials"]
 
 [dependencies]
 directories.workspace = true
 fs2.workspace = true
-heyfood-application = { version = "=0.4.1", path = "../heyfood-application" }
-heyfood-core = { version = "=0.4.1", path = "../heyfood-core" }
+heyfood-application = { version = "=0.5.0", path = "../heyfood-application" }
+heyfood-core = { version = "=0.5.0", path = "../heyfood-core" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
 sha2 = { workspace = true, features = ["std"] }
@@ -32,6 +33,7 @@ keyring = { workspace = true, optional = true, features = ["apple-native"] }
 keyring = { workspace = true, optional = true, features = ["crypto-rust", "linux-native-sync-persistent"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+heyfood-windows-file = { version = "=0.5.0", path = "../heyfood-windows-file" }
 keyring = { workspace = true, optional = true, features = ["windows-native"] }
 
 [dev-dependencies]

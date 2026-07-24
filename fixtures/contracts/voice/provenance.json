@@ -1,0 +1,9 @@
+{
+  "contract": "schemas/v1/transcription.schema.json",
+  "source_commit": "73494a57468dac83b4904ce6c390e36926f5c6fe",
+  "source_tag": "archive/python-cli-73494a57",
+  "source_sha256": "b32ebbc5860c6b11e6fb6bfd29c3296449f6583ce7900d461764c91b6eab093f",
+  "imported_path": "fixtures/contracts/voice/transcription.schema.json",
+  "runtime_module": "crates/heyfood-core/src/transcription.rs",
+  "status": "frozen"
+}

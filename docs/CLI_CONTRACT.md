@@ -1,8 +1,9 @@
 # heyfood native CLI contract
 
 This document defines the process interface for the current Rust public cut.
-Its active product commands are `register`, `login`, `ask`, `reply`, `log`,
-`item`, `grocery`, and `health`.
+Its active product commands are `register`, `login`, `chat`, `onboard`, `ask`,
+`reply`, `log`, `item`, `grocery`, and `health`. An interactive bare `heyfood`
+invocation opens the same native TUI as `heyfood chat`.
 Human rendering may improve between compatible releases; machine-facing changes
 follow the compatibility policy below.
 
@@ -14,6 +15,8 @@ The following commands perform native product work:
 |---|---|
 | `register` | Starts device authorization, exchanges the approved grant, validates the response contract, and persists the complete native session. |
 | `login` | Explicitly signs in again and atomically expands an existing native grant; refresh is never used for scope widening. |
+| `chat` | Opens the authenticated interactive Rust TUI. |
+| `onboard` | Opens the Rust TUI directly in guided dietary-profile onboarding. |
 | `ask` | Runs one hosted-agent turn. |
 | `reply` | Runs one hosted-agent turn and requires `--conversation-id`. |
 | `log` | Sends meal-log text through the hosted-agent turn endpoint. |
@@ -32,18 +35,59 @@ The old channel and app-session credentials remain authoritative through the
 new browser/device grant and session exchange. A durable reconciliation marker
 blocks use if the final two-store replacement cannot complete.
 
-Legacy `recommend`, `location`, `search`, `household`, `chat`, `onboard`,
-`profile`, and other hidden topology are unavailable in this cut. Recognized
-legacy paths fail closed with `command_not_available`; recognition is not a
-support or compatibility promise. The bare `heyfood` invocation is an
-informational, network-free next-step message, not a TUI or workflow.
+Grocery reads include `grocery show` (compatibility alias `list`) and
+`grocery exclusions`.
+`grocery never --list-id UUID --version N ITEM` prepares an exclusion addition;
+`--remove` prepares its removal. Preparation never mutates server state. REST
+proposals are confirmed only from a JSON proposal read on stdin. `grocery
+export LIST_ID --out FILE` creates an owner-only file exclusively by default;
+`--overwrite` opts into same-directory atomic replacement. Targets and direct
+parent directories that are symlinks or Windows reparse points are rejected,
+temporary files are removed on pre-commit failure, and export contents never
+enter diagnostics. Windows installs the protected single-owner DACL in the
+creation call, publishes by the still-open file handle without delete sharing,
+and verifies the final ACL and non-reparse identity before success.
+Conversational Grocery proposals use the C3 item-list card in the TUI: `y`
+accepts, `n` cancels, and Ctrl+C sends a structured cancel. The confirmation
+request echoes the server IDs and idempotency key and never converts natural
+language into consent. The generic C3 v1 schema describes per-member screening
+as top-level `item.safety_flags`, while the frozen Grocery Phase-A production
+fixture carries the authoritative Grocery annotation under
+`item.safety.{status,member_flags,label_hint}`. The TUI prefers and fully renders
+the nested Grocery shape—including intended member, provenance, reasons, and
+substitutions—while retaining top-level `safety_flags` as an additive
+compatibility input. Production `sources[]` provenance is rendered as bounded,
+terminal-safe source type, reference, and detail lines; legacy singleton
+`provenance` remains a fallback.
+
+In artifacts built with `native-audio`, `/voice`, Ctrl+Space, and F8 start or
+stop native TUI recording. The client checks the `audio:transcribe` grant before
+opening the microphone, captures a mono 16-bit WAV in bounded process memory,
+uploads it once with channel authority to `/v1/audio/transcriptions`, and never
+retries that POST automatically. Audio is not written to disk. A validated
+transcript is placed in the ordinary composer for review, editing, rerecord, or
+discard; it is not sent to the agent until the user presses Enter. Esc, Ctrl+C,
+exit, capture overflow, truncation, and contract failure discard the recording
+without treating transcription as agent or mutation consent. Artifacts without
+native audio report that limitation truthfully before capture.
+
+Legacy top-level `recommend`, `location`, `search`, `household`, `profile`, and
+other hidden topology are unavailable in this cut. Recognized legacy paths fail
+closed with `command_not_available`; recognition is not a support or
+compatibility promise. In a terminal, bare `heyfood` opens the authenticated
+TUI, performs first-run device registration when necessary, and starts guided
+onboarding for a missing synchronized profile. Outside a terminal, bare
+`heyfood` prints network-free next steps instead of attempting an interactive
+session.
 
 ## Streams
 
 ### Standard output
 
-In human mode, stdout contains a completed command result. In `--json` mode,
-stdout contains exactly one UTF-8 JSON value followed by one newline.
+For one-shot commands in human mode, stdout contains a completed command
+result. The TUI owns the interactive terminal until exit. In `--json` mode,
+stdout contains exactly one UTF-8 JSON value followed by one newline; JSON mode
+never starts the TUI.
 
 JSON stdout never contains:
 
@@ -95,7 +139,7 @@ decision and emits one terminal result. A successful result has this shape:
   "authenticated": true,
   "account_outcome": null,
   "profile_status": "missing",
-  "next_command": "heyfood ask \"What can I eat?\""
+  "next_command": "heyfood"
 }
 ```
 
@@ -115,6 +159,14 @@ Registration uses the device-authorization transport. `--device` is accepted
 as the explicit spelling, `--no-browser` suppresses best-effort browser launch,
 and `--timeout SECONDS` accepts `1..=1800` with a default of 600. JSON mode also
 suppresses browser launch regardless of `--no-browser`.
+
+After successful `heyfood register` in an interactive terminal, the client
+continues into the TUI and starts guided onboarding when the service reports a
+missing profile. `--no-onboard` is the explicit opt-out: it persists the
+connected account and exits without opening the TUI. JSON mode and redirected
+input or output also return the registration document without attempting an
+interactive handoff. Global `--no-input` likewise suppresses the questionnaire
+handoff while preserving the hosted device-authorization flow.
 
 Native account state is written only after OAuth approval, application-session
 exchange, and response validation succeed. A complete authorization grant and
@@ -137,7 +189,7 @@ hosted approval page.
 
 | Code | Meaning |
 |---:|---|
-| `0` | The requested operation completed successfully, or bare `heyfood` printed its informational next steps. |
+| `0` | The requested operation or interactive session completed successfully, or noninteractive bare `heyfood` printed its informational next steps. |
 | `1` | Authentication, authorization, service, cancellation, unavailable-command, uncertain-outcome, or other runtime failure. |
 | `2` | Command-line parsing or argument validation failed before execution. |
 

@@ -912,6 +912,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1106,7 +1116,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "heyfood-agent-runtime"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "eventsource-stream",
  "heyfood-application",
@@ -1123,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-application"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "heyfood-core",
  "proptest",
@@ -1135,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-bin"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "clap",
  "heyfood-agent-runtime",
@@ -1149,13 +1159,15 @@ dependencies = [
  "ratatui",
  "serde_json",
  "sha2",
+ "tar",
  "tokio",
  "tokio-util",
+ "unicode-width",
 ]
 
 [[package]]
 name = "heyfood-cli"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1168,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-core"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "insta",
  "proptest",
@@ -1184,19 +1196,20 @@ dependencies = [
 
 [[package]]
 name = "heyfood-installer"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "heyfood-core",
 ]
 
 [[package]]
 name = "heyfood-platform"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "directories",
  "fs2",
  "heyfood-application",
  "heyfood-core",
+ "heyfood-windows-file",
  "keyring",
  "proptest",
  "serde",
@@ -1210,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-tui"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "crossterm",
  "heyfood-application",
@@ -1219,19 +1232,31 @@ dependencies = [
  "portable-pty",
  "proptest",
  "ratatui",
+ "serde_json",
  "tokio",
 ]
 
 [[package]]
 name = "heyfood-voice"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "cpal",
  "heyfood-application",
  "heyfood-core",
  "hound",
  "proptest",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "heyfood-windows-file"
+version = "0.5.0"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3113,6 +3138,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4073,7 +4108,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "cargo_metadata",
 ]

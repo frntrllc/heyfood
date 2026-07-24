@@ -34,6 +34,7 @@ pub const VERSION: &str = heyfood_core::VERSION;
 pub struct HttpDeadlines {
     pub connect: Duration,
     pub request: Duration,
+    pub transcription: Duration,
     pub pool_idle: Duration,
     pub sse_inactivity: Duration,
 }
@@ -43,6 +44,7 @@ impl Default for HttpDeadlines {
         Self {
             connect: Duration::from_secs(5),
             request: Duration::from_secs(15),
+            transcription: Duration::from_secs(60),
             pool_idle: Duration::from_secs(15),
             sse_inactivity: Duration::from_secs(30),
         }
@@ -54,6 +56,7 @@ impl HttpDeadlines {
         if [
             self.connect,
             self.request,
+            self.transcription,
             self.pool_idle,
             self.sse_inactivity,
         ]
@@ -154,6 +157,10 @@ impl HttpService {
     }
 
     fn client(&self, streaming: bool) -> Result<Client, PortError> {
+        self.client_with_timeout((!streaming).then_some(self.deadlines.request))
+    }
+
+    fn client_with_timeout(&self, timeout: Option<Duration>) -> Result<Client, PortError> {
         let mut builder = Client::builder()
             .use_rustls_tls()
             .https_only(!self.policy.allow_plaintext_loopback)
@@ -162,8 +169,8 @@ impl HttpService {
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
             .user_agent(format!("heyfood-cli/{}", VERSION));
-        if !streaming {
-            builder = builder.timeout(self.deadlines.request);
+        if let Some(timeout) = timeout {
+            builder = builder.timeout(timeout);
         }
         builder
             .build()
@@ -294,10 +301,24 @@ impl ServicePort for HttpService {
             })?;
             let client = self.client(true)?;
             let endpoint = self.endpoint("/v1/agent/converse")?;
-            let mut body = serde_json::json!({
-                "input_mode": "text",
-                "query": request.prompt,
-            });
+            if !request.has_exactly_one_input() {
+                return Err(PortError::new(
+                    "converse_input",
+                    "conversational requests require exactly one query or confirmation",
+                ));
+            }
+            let confirmation = request.context.confirmation.clone();
+            let mut body = if let Some(confirmation) = confirmation {
+                serde_json::json!({
+                    "input_mode": "text",
+                    "confirm": confirmation,
+                })
+            } else {
+                serde_json::json!({
+                    "input_mode": "text",
+                    "query": request.prompt,
+                })
+            };
             if let Some(conversation_id) = request.conversation_id {
                 body["conversation_id"] = serde_json::Value::String(conversation_id);
             }

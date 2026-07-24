@@ -1,8 +1,0 @@
-{
-  "schema_version": 1,
-  "foreground": "#EDEAE0",
-  "accent": "#9BC53D",
-  "accent_spans": [
-    {"line": 3, "start": 18, "length": 2}
-  ]
-}

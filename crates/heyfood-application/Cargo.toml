@@ -9,7 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-heyfood-core = { version = "=0.4.1", path = "../heyfood-core" }
+heyfood-core = { version = "=0.5.0", path = "../heyfood-core" }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }

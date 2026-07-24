@@ -1,0 +1,17 @@
+{
+  "contract": "backend/app/schemas/menu_watch.py",
+  "source_repository": "frntrllc/hellofood",
+  "source_commit": "56db3416a28c23b178aa65753d17a43bb7f25adb",
+  "source_tree": "50a70038d890d5aabf582c2df4ca1c75fd900409",
+  "source_blob": "16b1e8d05bfa9cf644a7188f17f1613b3ec07191",
+  "source_sha256": "fb7562ce187da86fff6f0740557f5b8eafcccb3c3c58d83bccecf96beba9a4c9",
+  "imported_path": "fixtures/contracts/menu-watch/menu_watch.py",
+  "runtime_module": "crates/heyfood-core/src/menu_watch.rs",
+  "required_scope": "menu:watch",
+  "endpoints": [
+    "POST /v1/menu/watch",
+    "GET /v1/menu/watch",
+    "DELETE /v1/menu/watch/{watch_id}"
+  ],
+  "status": "frozen"
+}

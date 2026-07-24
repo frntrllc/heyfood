@@ -20,7 +20,8 @@ pub use health::{
     HealthAuthorization, HealthConnection, HealthContext, HealthManagementOutcome, HealthPort,
 };
 pub use one_shot_turn::{
-    MAX_ONE_SHOT_EVENTS, MAX_ONE_SHOT_STREAM_BYTES, OneShotTurnResult, execute_one_shot_turn,
+    MAX_ONE_SHOT_EVENTS, MAX_ONE_SHOT_STREAM_BYTES, OneShotTurnResult, agent_result_text,
+    execute_one_shot_turn,
 };
 
 pub use ports::{

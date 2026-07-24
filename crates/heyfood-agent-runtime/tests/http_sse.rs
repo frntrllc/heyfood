@@ -4,12 +4,14 @@ use std::time::Duration;
 use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
 use heyfood_application::{
     BoxFuture, ClockPort, ConfigCommit, ConfigPort, CredentialCommit, CredentialPort, PortError,
-    RefreshPolicy, RunTurn, RunTurnOutcome, SerializedStateWriter, ServicePort, TurnRequest,
+    RefreshPolicy, RunTurn, RunTurnOutcome, SerializedStateWriter, ServicePort, TurnContext,
+    TurnRequest,
 };
 use heyfood_core::{
-    AccountId, AgentEvent, ClientConfig, ConfigRevision, CredentialVersion, GenerationId,
-    NetworkPolicy, OperationId, RefreshOutcome, RefreshRequest, SensitiveString, ServiceUrl,
-    SessionCredentials, SessionSnapshot,
+    AccountId, AgentConfirmationCommandWire, AgentEvent, ClientConfig, ConfigRevision,
+    ConfirmationDecisionWire, CredentialVersion, GenerationId, GroceryConfirmationId,
+    GroceryEditPatch, GroceryIdempotencyKey, NetworkPolicy, OperationId, RefreshOutcome,
+    RefreshRequest, SensitiveString, ServiceUrl, SessionCredentials, SessionSnapshot,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -20,6 +22,7 @@ fn deadlines() -> HttpDeadlines {
     HttpDeadlines {
         connect: Duration::from_secs(1),
         request: Duration::from_secs(2),
+        transcription: Duration::from_secs(2),
         pool_idle: Duration::from_secs(1),
         sse_inactivity: Duration::from_secs(2),
     }
@@ -497,6 +500,88 @@ async fn every_nonterminal_sse_type_is_normalized_before_result_and_done() {
     );
     assert!(matches!(received[3], AgentEvent::Choices { .. }));
     assert!(matches!(received[4], AgentEvent::Result { .. }));
+    events.close().await.unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn conversational_confirmation_uses_the_frozen_confirm_xor_query_shape() {
+    let (listener, base) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        let body: serde_json::Value = serde_json::from_str(
+            request
+                .split("\r\n\r\n")
+                .nth(1)
+                .expect("confirmation request body"),
+        )
+        .unwrap();
+        assert!(body.get("query").is_none());
+        assert_eq!(
+            body["confirm"],
+            serde_json::json!({
+                "confirmation_id": "00000000-0000-4000-8000-000000000001",
+                "idempotency_key": "00000000-0000-4000-8000-000000000002",
+                "decision": "accept",
+                "edits": {
+                    "items": [
+                        {"name": "scallion greens", "source_type": "manual"}
+                    ]
+                }
+            })
+        );
+        assert_eq!(body["conversation_id"], "conversation-grocery");
+        let stream = b"event: result\ndata: {\"conversation_id\":\"conversation-grocery\",\"text\":\"Grocery list updated.\",\"structured\":{\"type\":\"general_response\"}}\n\nevent: done\ndata: {}\n\n";
+        respond(&mut socket, "text/event-stream", stream).await;
+    });
+    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines())
+        .unwrap()
+        .with_cli_auth(cli_auth(None));
+    let accepted = service
+        .open_turn(
+            TurnRequest {
+                prompt: String::new(),
+                conversation_id: Some("conversation-grocery".into()),
+                context: TurnContext {
+                    confirmation: Some(AgentConfirmationCommandWire {
+                        confirmation_id: GroceryConfirmationId::parse(
+                            "00000000-0000-4000-8000-000000000001",
+                        )
+                        .unwrap(),
+                        idempotency_key: GroceryIdempotencyKey::parse(
+                            "00000000-0000-4000-8000-000000000002",
+                        )
+                        .unwrap(),
+                        decision: ConfirmationDecisionWire::Accept,
+                        edits: Some(
+                            GroceryEditPatch::new(
+                                serde_json::from_value(serde_json::json!({
+                                    "items": [
+                                        {"name": "scallion greens", "source_type": "manual"}
+                                    ]
+                                }))
+                                .unwrap(),
+                            )
+                            .unwrap(),
+                        ),
+                    }),
+                    ..TurnContext::default()
+                },
+                refresh: RefreshPolicy::Never,
+            },
+            credentials(1),
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let mut events = accepted.events;
+    assert!(matches!(
+        events.next().await.unwrap(),
+        Some(AgentEvent::Result { .. })
+    ));
+    assert!(events.next().await.unwrap().is_none());
     events.close().await.unwrap();
     server.await.unwrap();
 }

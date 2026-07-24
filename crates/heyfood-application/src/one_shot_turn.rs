@@ -2,8 +2,8 @@
 
 use std::fmt;
 
-use heyfood_core::{AgentEvent, OperationId, SessionCredentials, terminal_safe_text};
-use serde_json::Value;
+use heyfood_core::{AgentChoice, AgentEvent, OperationId, SessionCredentials, terminal_safe_text};
+use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::{PortError, ServicePort, TurnRequest};
@@ -34,10 +34,10 @@ pub async fn execute_one_shot_turn(
     operation_id: OperationId,
     cancellation: CancellationToken,
 ) -> Result<OneShotTurnResult, PortError> {
-    if request.prompt.trim().is_empty() {
+    if !request.has_exactly_one_input() {
         return Err(PortError::new(
             "invalid_prompt",
-            "turn prompt must not be empty",
+            "turn requires exactly one prompt or confirmation",
         ));
     }
 
@@ -51,6 +51,8 @@ pub async fn execute_one_shot_turn(
         .await?;
     let mut event_count = 0_usize;
     let mut stream_bytes = 0_usize;
+    let mut partial_text = String::new();
+    let mut choices: Option<(Vec<AgentChoice>, bool)> = None;
 
     loop {
         let next = accepted.events.next();
@@ -90,9 +92,10 @@ pub async fn execute_one_shot_turn(
 
         match event {
             AgentEvent::Result {
-                document,
+                mut document,
                 conversation_id,
             } => {
+                merge_stream_content(&mut document, &partial_text, choices.take());
                 accepted.events.close().await?;
                 return Ok(OneShotTurnResult {
                     document,
@@ -106,10 +109,69 @@ pub async fn execute_one_shot_turn(
                     terminal_safe_text(&error.message),
                 ));
             }
-            AgentEvent::Thinking { .. }
-            | AgentEvent::Progress { .. }
-            | AgentEvent::Partial { .. }
-            | AgentEvent::Choices { .. } => {}
+            AgentEvent::Partial { text } => partial_text.push_str(&text),
+            AgentEvent::Choices {
+                choices: streamed_choices,
+                allow_multiple,
+            } => choices = Some((streamed_choices, allow_multiple)),
+            AgentEvent::Thinking { .. } | AgentEvent::Progress { .. } => {}
         }
+    }
+}
+
+#[must_use]
+pub fn agent_result_text(document: &Value) -> Option<&str> {
+    document
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            ["message", "text", "response"].into_iter().find_map(|key| {
+                document
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+            })
+        })
+}
+
+fn merge_stream_content(
+    document: &mut Value,
+    partial_text: &str,
+    choices: Option<(Vec<AgentChoice>, bool)>,
+) {
+    let has_final_text = agent_result_text(document).is_some();
+    let Some(fields) = document.as_object_mut() else {
+        return;
+    };
+    if !partial_text.is_empty() && !has_final_text {
+        fields.insert("text".into(), Value::String(partial_text.to_owned()));
+    }
+    if let Some((choices, allow_multiple)) = choices {
+        let mut choice_document = Map::new();
+        let detailed = choices
+            .iter()
+            .filter_map(|choice| {
+                choice.value.as_ref().map(|value| {
+                    serde_json::json!({
+                        "label": &choice.label,
+                        "value": value
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        choice_document.insert(
+            "choices".into(),
+            Value::Array(
+                choices
+                    .into_iter()
+                    .map(|choice| Value::String(choice.label))
+                    .collect(),
+            ),
+        );
+        if !detailed.is_empty() {
+            choice_document.insert("choice_details".into(), Value::Array(detailed));
+        }
+        choice_document.insert("allow_multiple".into(), Value::Bool(allow_multiple));
+        fields.insert("choices".into(), Value::Object(choice_document));
     }
 }

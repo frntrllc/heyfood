@@ -24,6 +24,7 @@ jobs:
   public-native:
     name: v${{ inputs.version }} / ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
+    environment: native-release
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +37,8 @@ jobs:
             target: aarch64-unknown-linux-gnu
           - runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
     env:
       GH_TOKEN: ${{ github.token }}
       TARGET: ${{ matrix.target }}
@@ -51,6 +54,7 @@ jobs:
           gh release download "v$VERSION" \
             --repo "$GITHUB_REPOSITORY" \
             --pattern 'heyfood-*.tar.gz' \
+            --pattern 'heyfood-*.zip' \
             --pattern SHA256SUMS \
             --dir release
       - name: Verify checksums, archive policy, and signed provenance
@@ -58,13 +62,26 @@ jobs:
         run: |
           set -euo pipefail
           scripts/release/verify-assets.sh release "$VERSION"
-          for asset in release/*.tar.gz release/SHA256SUMS; do
+          for asset in release/*.tar.gz release/*.zip release/SHA256SUMS; do
             gh attestation verify "$asset" --repo "$GITHUB_REPOSITORY"
           done
       - name: Smoke the native public executable
+        if: runner.os != 'Windows'
         shell: bash
+        env:
+          HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
         run: scripts/release/smoke.sh release "$VERSION" "$TARGET"
+      - name: Smoke the native public Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./packaging/windows/smoke.ps1 `
+            -ReleaseDirectory release `
+            -Version $env:VERSION `
+            -RequireAuthenticode `
+            -PublisherSubject "${{ vars.WINDOWS_CODESIGN_SUBJECT }}"
       - name: Verify hosted installer provenance
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -90,6 +107,7 @@ jobs:
             fi
           )
       - name: Install through the public hosted path
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail

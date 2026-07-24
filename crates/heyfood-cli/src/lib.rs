@@ -9,8 +9,10 @@ use std::time::Duration;
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use heyfood_core::{
-    GroceryDecisionWire, GroceryItemStateWire, GroceryListWire, GroceryMutationProposalWire,
-    HealthContextWire, HealthFreshnessStatus, HealthProvider, ProfileStatus, terminal_safe_text,
+    ExclusionListResponseWire, GroceryDecisionWire, GroceryItemStateWire, GroceryListWire,
+    GroceryMutationProposalWire, GrocerySafetyStatus, HealthContextWire, HealthFreshnessStatus,
+    HealthProvider, MenuWatchListResponseWire, MenuWatchResponseWire, ProfileStatus, WatchWeekday,
+    terminal_safe_text,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -90,20 +92,19 @@ pub enum Command {
     Ask(AskArgs),
     /// Reply to an explicit conversation ID.
     Reply(AskArgs),
-    /// Run classic line-oriented chat.
-    #[command(hide = true)]
+    /// Open the native interactive terminal.
     Chat(LegacyArgs),
     /// Log a meal through the hosted agent.
-    Log(AskArgs),
+    Log(LogArgs),
     /// Assess a menu or food item.
-    Item(AskArgs),
+    Item(ItemArgs),
     /// Display the daily meal summary.
     #[command(hide = true)]
     Daily(LegacyArgs),
     /// Display a dietary profile.
     #[command(hide = true)]
     Profile(LegacyArgs),
-    /// Complete dietary onboarding; retained for parity but implemented in Phase 4.
+    /// Open guided dietary onboarding in the native TUI.
     #[command(hide = true)]
     Onboard(LegacyArgs),
     /// Authenticate or expand authorization for an existing account.
@@ -134,12 +135,17 @@ pub enum Command {
     /// Manage the active Grocery list.
     Grocery {
         #[command(subcommand)]
-        command: GroceryCommand,
+        command: Option<GroceryCommand>,
     },
     /// Read health context and manage provider integrations.
     Health {
         #[command(subcommand)]
         command: HealthCommand,
+    },
+    /// Schedule and manage recurring restaurant Menu Watch subscriptions.
+    Watch {
+        #[command(subcommand)]
+        command: Option<MenuWatchCommand>,
     },
     #[command(hide = true)]
     Recipes {
@@ -208,10 +214,24 @@ pub struct AskArgs {
     #[arg(long)]
     pub conversation_id: Option<String>,
 
-    #[arg(long, requires = "longitude")]
+    /// Latitude for location-aware requests.
+    #[arg(
+        long = "lat",
+        alias = "latitude",
+        requires = "longitude",
+        allow_hyphen_values = true,
+        value_parser = parse_latitude
+    )]
     pub latitude: Option<f64>,
 
-    #[arg(long, requires = "latitude")]
+    /// Longitude for location-aware requests.
+    #[arg(
+        long = "lng",
+        alias = "longitude",
+        requires = "latitude",
+        allow_hyphen_values = true,
+        value_parser = parse_longitude
+    )]
     pub longitude: Option<f64>,
 }
 
@@ -220,6 +240,90 @@ impl AskArgs {
     pub fn prompt(&self) -> String {
         self.text.join(" ")
     }
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct LogArgs {
+    /// Meal text submitted to the hosted agent.
+    #[arg(value_name = "MEAL", num_args = 0..)]
+    pub meal: Vec<String>,
+
+    /// Optional meal category.
+    #[arg(long = "type", value_enum)]
+    pub meal_type: Option<MealType>,
+
+    /// Household member name/id, `me`, or `everyone`.
+    #[arg(long = "for", value_name = "MEMBER")]
+    pub checking_for: Option<String>,
+}
+
+impl LogArgs {
+    #[must_use]
+    pub fn meal_text(&self) -> String {
+        self.meal.join(" ")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum MealType {
+    Breakfast,
+    Lunch,
+    Dinner,
+    Snack,
+}
+
+impl MealType {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Breakfast => "breakfast",
+            Self::Lunch => "lunch",
+            Self::Dinner => "dinner",
+            Self::Snack => "snack",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct ItemArgs {
+    /// Food or menu item to evaluate.
+    #[arg(value_name = "ITEM", num_args = 1..)]
+    pub name: Vec<String>,
+
+    /// Restaurant context.
+    #[arg(long, short = 'r')]
+    pub restaurant: Option<String>,
+
+    /// Restaurant index from the last search.
+    #[arg(long)]
+    pub at: Option<String>,
+}
+
+impl ItemArgs {
+    #[must_use]
+    pub fn item_name(&self) -> String {
+        self.name.join(" ")
+    }
+}
+
+fn parse_latitude(value: &str) -> Result<f64, String> {
+    parse_coordinate(value, -90.0, 90.0, "latitude")
+}
+
+fn parse_longitude(value: &str) -> Result<f64, String> {
+    parse_coordinate(value, -180.0, 180.0, "longitude")
+}
+
+fn parse_coordinate(value: &str, minimum: f64, maximum: f64, label: &str) -> Result<f64, String> {
+    let coordinate = value
+        .parse::<f64>()
+        .map_err(|_| format!("{label} must be a number"))?;
+    if !coordinate.is_finite() || !(minimum..=maximum).contains(&coordinate) {
+        return Err(format!(
+            "{label} must be finite and between {minimum} and {maximum}"
+        ));
+    }
+    Ok(coordinate)
 }
 
 /// Compatibility placeholder for Phase 2 command-topology inventory. These
@@ -281,6 +385,7 @@ impl LoginArgs {
 #[derive(Clone, Debug, Subcommand)]
 pub enum GroceryCommand {
     /// Read the active list without creating or replacing it.
+    #[command(name = "show", alias = "list")]
     List,
     /// Prepare an add-items mutation; never commits during preparation.
     Add(GroceryAddArgs),
@@ -288,6 +393,10 @@ pub enum GroceryCommand {
     Remove(GroceryReferencesArgs),
     /// Prepare an item-state mutation.
     State(GroceryStateArgs),
+    /// Read the account's canonical never-buy exclusions.
+    Exclusions,
+    /// Prepare a never-buy exclusion change; never commits during preparation.
+    Never(GroceryExclusionArgs),
     /// Export a list in a server-defined format.
     Export(GroceryExportArgs),
     /// Accept or cancel one server-signed proposal read from stdin.
@@ -331,6 +440,17 @@ pub struct GroceryStateArgs {
     pub state: GroceryStateArgument,
 }
 
+#[derive(Clone, Debug, Args)]
+pub struct GroceryExclusionArgs {
+    #[command(flatten)]
+    pub list: GroceryVersionArgs,
+    #[arg(value_name = "ITEM")]
+    pub item: String,
+    /// Remove this item from the never-buy list instead of adding it.
+    #[arg(long)]
+    pub remove: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum GroceryStateArgument {
     Active,
@@ -354,6 +474,12 @@ pub struct GroceryExportArgs {
     pub list_id: String,
     #[arg(long, value_enum, default_value_t = GroceryExportFormat::Markdown)]
     pub format: GroceryExportFormat,
+    /// Write sensitive dietary/member annotations to an owner-only file.
+    #[arg(long, value_name = "FILE")]
+    pub out: Option<PathBuf>,
+    /// Atomically replace an existing regular file.
+    #[arg(long, requires = "out")]
+    pub overwrite: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -410,6 +536,76 @@ pub enum HealthCommand {
     Sync(HealthProviderArgs),
     /// Disconnect a provider after explicit confirmation.
     Disconnect(HealthDisconnectArgs),
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum MenuWatchCommand {
+    /// List the current account's Menu Watch subscriptions.
+    #[command(name = "show", alias = "list")]
+    List,
+    /// Create a recurring Menu Watch subscription.
+    #[command(name = "add", alias = "create")]
+    Add(MenuWatchAddArgs),
+    /// Remove one Menu Watch subscription.
+    #[command(name = "remove", alias = "rm", alias = "delete")]
+    Remove(MenuWatchRemoveArgs),
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct MenuWatchAddArgs {
+    /// Internal restaurant UUID returned by restaurant discovery.
+    #[arg(value_name = "RESTAURANT_ID")]
+    pub restaurant_id: String,
+    /// Restaurant-local weekday for the recurring check.
+    #[arg(long, value_enum)]
+    pub weekday: WatchWeekdayArgument,
+    /// Restaurant-local hour in 24-hour time.
+    #[arg(long, value_name = "HOUR", value_parser = clap::value_parser!(u8).range(0..=23))]
+    pub hour: u8,
+    /// Record a quick-read event when a scheduled run finds a real change.
+    #[arg(long)]
+    pub notify: bool,
+    /// Explicit menu URL to verify and watch.
+    #[arg(long, value_name = "URL")]
+    pub menu_url: Option<String>,
+    /// Confirm that the selected menu URL belongs to this restaurant.
+    #[arg(long)]
+    pub confirm_menu_url: bool,
+    /// IANA timezone override when restaurant coordinates are insufficient.
+    #[arg(long, value_name = "IANA_TIMEZONE")]
+    pub tz: Option<String>,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct MenuWatchRemoveArgs {
+    #[arg(value_name = "WATCH_ID")]
+    pub watch_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum WatchWeekdayArgument {
+    Monday,
+    Tuesday,
+    Wednesday,
+    Thursday,
+    Friday,
+    Saturday,
+    Sunday,
+}
+
+impl WatchWeekdayArgument {
+    #[must_use]
+    pub const fn as_contract_value(self) -> u8 {
+        match self {
+            Self::Monday => 0,
+            Self::Tuesday => 1,
+            Self::Wednesday => 2,
+            Self::Thursday => 3,
+            Self::Friday => 4,
+            Self::Saturday => 5,
+            Self::Sunday => 6,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Args)]
@@ -524,9 +720,7 @@ impl RegistrationResultDocument {
             authenticated: true,
             account_outcome: None,
             profile_status,
-            // Classic chat and native onboarding are not implemented yet.
-            // Never send a newly connected user to a placeholder command.
-            next_command: "heyfood ask \"What can I eat?\"".into(),
+            next_command: "heyfood".into(),
         }
     }
 }
@@ -647,15 +841,97 @@ pub fn render_grocery_list(list: &GroceryListWire, mode: OutputMode) -> String {
             .map(terminal_safe_text)
             .map(|value| format!(" for {value}"))
             .unwrap_or_default();
-        let _ = writeln!(output, "{}. {name}{intended} [{state}]", index + 1);
+        let quantity = match (item.quantity, item.unit.as_deref(), item.package_quantity) {
+            (Some(value), Some(unit), _) => {
+                format!(" · {value} {}", terminal_safe_text(unit))
+            }
+            (Some(value), None, _) => format!(" · {value}"),
+            (None, _, Some(packages)) => format!(" · {packages} package(s)"),
+            _ => String::new(),
+        };
+        let _ = writeln!(
+            output,
+            "{}. {name}{intended}{quantity} [{state}]  id:{}",
+            index + 1,
+            terminal_safe_text(&item.id)
+        );
+        if !item.sources.is_empty() {
+            let provenance = item
+                .sources
+                .iter()
+                .map(|source| {
+                    let kind = terminal_safe_text(&source.source_type);
+                    source
+                        .source_ref
+                        .as_deref()
+                        .map_or(kind.clone(), |reference| {
+                            format!("{kind}:{}", terminal_safe_text(reference))
+                        })
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(output, "   source: {provenance}");
+        }
         if let Some(safety) = &item.safety {
-            let status = serde_json::to_value(safety.status)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_owned))
-                .unwrap_or_else(|| "unable_to_evaluate".into());
-            let _ = writeln!(output, "   ingredient screening: {status}");
+            let _ = writeln!(
+                output,
+                "   ingredient screening: {}",
+                grocery_safety_label(safety.status)
+            );
+            for flag in &safety.member_flags {
+                let intended_marker = item
+                    .intended_for
+                    .as_deref()
+                    .filter(|member| *member == flag.member_id)
+                    .map_or("", |_| " · intended");
+                let _ = writeln!(
+                    output,
+                    "   • {}: {}{intended_marker}",
+                    terminal_safe_text(&flag.member_id),
+                    grocery_safety_label(flag.status)
+                );
+                if let Some(reason) = flag.reason.as_deref() {
+                    let _ = writeln!(output, "     {}", terminal_safe_text(reason));
+                }
+                if !flag.substitutions.is_empty() {
+                    let substitutions = flag
+                        .substitutions
+                        .iter()
+                        .map(|value| terminal_safe_text(value))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let _ = writeln!(output, "     try: {substitutions}");
+                }
+            }
             let _ = writeln!(output, "   {}", terminal_safe_text(&safety.label_hint));
         }
+    }
+    output
+}
+
+const fn grocery_safety_label(status: GrocerySafetyStatus) -> &'static str {
+    match status {
+        GrocerySafetyStatus::GenerallySafer => "generally safer",
+        GrocerySafetyStatus::Risky => "risky",
+        GrocerySafetyStatus::Avoid => "avoid",
+        GrocerySafetyStatus::UnableToEvaluate => "unable to evaluate",
+    }
+}
+
+#[must_use]
+pub fn render_grocery_exclusions(
+    exclusions: &ExclusionListResponseWire,
+    mode: OutputMode,
+) -> String {
+    if mode == OutputMode::Json {
+        return render_json(exclusions).expect("Grocery exclusions DTO is serializable");
+    }
+    if exclusions.exclusions.is_empty() {
+        return "Never-buy list is empty.\n".into();
+    }
+    let mut output = String::from("Never buy\n");
+    for exclusion in &exclusions.exclusions {
+        let _ = writeln!(output, "• {}", terminal_safe_text(exclusion));
     }
     output
 }
@@ -669,10 +945,78 @@ pub fn render_grocery_proposal(proposal: &GroceryMutationProposalWire, mode: Out
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "grocery_mutation".into());
-    format!(
-        "Prepared {operation}; expires at {}. Review the structured preview and explicitly accept or cancel.\n",
+    let mut output = format!("Review {operation}\n");
+    if let Some(items) = proposal
+        .structured_preview
+        .get("items")
+        .and_then(Value::as_array)
+    {
+        for (index, item) in items.iter().enumerate() {
+            let name = ["name", "requested_name", "canonical_name"]
+                .into_iter()
+                .find_map(|key| item.get(key).and_then(Value::as_str))
+                .map(terminal_safe_text)
+                .unwrap_or_else(|| "item".into());
+            let intended = item
+                .get("intended_for")
+                .and_then(Value::as_str)
+                .map(terminal_safe_text)
+                .map(|member| format!(" for {member}"))
+                .unwrap_or_default();
+            let _ = writeln!(output, "{}. {name}{intended}", index + 1);
+            if let Some(safety) = item.get("safety") {
+                if let Some(status) = safety.get("status").and_then(Value::as_str) {
+                    let _ = writeln!(
+                        output,
+                        "   ingredient screening: {}",
+                        terminal_safe_text(status).replace('_', " ")
+                    );
+                }
+                if let Some(flags) = safety.get("member_flags").and_then(Value::as_array) {
+                    for flag in flags {
+                        let member = flag
+                            .get("member_id")
+                            .and_then(Value::as_str)
+                            .map(terminal_safe_text)
+                            .unwrap_or_else(|| "member".into());
+                        let status = flag
+                            .get("status")
+                            .and_then(Value::as_str)
+                            .map(terminal_safe_text)
+                            .unwrap_or_else(|| "unable to evaluate".into());
+                        let _ = writeln!(output, "   • {member}: {status}");
+                        if let Some(substitutions) = flag
+                            .get("substitutions")
+                            .and_then(Value::as_array)
+                            .filter(|values| !values.is_empty())
+                        {
+                            let substitutions = substitutions
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(terminal_safe_text)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            if !substitutions.is_empty() {
+                                let _ = writeln!(output, "     try: {substitutions}");
+                            }
+                        }
+                    }
+                }
+                if let Some(hint) = safety.get("label_hint").and_then(Value::as_str) {
+                    let _ = writeln!(output, "   {}", terminal_safe_text(hint));
+                }
+            }
+        }
+    }
+    let _ = writeln!(
+        output,
+        "Expires: {}",
         terminal_safe_text(&proposal.expires_at)
-    )
+    );
+    output.push_str(
+        "Nothing has changed. Use `--json` and pipe this proposal to `heyfood grocery confirm --decision accept|cancel`.\n",
+    );
+    output
 }
 
 #[must_use]
@@ -708,15 +1052,273 @@ pub fn render_health_context(context: &HealthContextWire, mode: OutputMode) -> S
 }
 
 #[must_use]
+pub fn render_menu_watch(watch: &MenuWatchResponseWire, mode: OutputMode) -> String {
+    if mode == OutputMode::Json {
+        return render_json(watch).expect("Menu Watch DTO is serializable");
+    }
+    render_menu_watch_entry(watch, mode)
+}
+
+#[must_use]
+pub fn render_menu_watch_list(watches: &MenuWatchListResponseWire, mode: OutputMode) -> String {
+    if mode == OutputMode::Json {
+        return render_json(watches).expect("Menu Watch list DTO is serializable");
+    }
+    let mut output = if mode.ansi() {
+        "\u{1b}[1mMenu Watch\u{1b}[0m\n".to_owned()
+    } else {
+        "Menu Watch\n".to_owned()
+    };
+    if watches.watches.is_empty() {
+        output.push_str("No watched menus.\n");
+        return output;
+    }
+    for watch in &watches.watches {
+        output.push_str(&render_menu_watch_entry(watch, mode));
+    }
+    output
+}
+
+fn render_menu_watch_entry(watch: &MenuWatchResponseWire, mode: OutputMode) -> String {
+    let weekday = weekday_label(watch.cadence.weekday);
+    let status = if watch.active { "active" } else { "inactive" };
+    let notification = if watch.notify {
+        "change events enabled"
+    } else {
+        "change events disabled"
+    };
+    let mut output = String::new();
+    let watch_id = watch.id.as_uuid().hyphenated().to_string();
+    let restaurant_id = watch.restaurant_id.as_uuid().hyphenated().to_string();
+    if mode.ansi() {
+        let _ = writeln!(
+            output,
+            "\u{1b}[1m{weekday} {:02}:00\u{1b}[0m · {status}",
+            watch.cadence.hour.get()
+        );
+    } else {
+        let _ = writeln!(
+            output,
+            "{weekday} {:02}:00 · {status}",
+            watch.cadence.hour.get()
+        );
+    }
+    let _ = writeln!(output, "  watch: {watch_id}");
+    let _ = writeln!(output, "  restaurant: {restaurant_id}");
+    let _ = writeln!(output, "  timezone: {}", terminal_safe_text(&watch.tz));
+    let _ = writeln!(
+        output,
+        "  next check: {}",
+        terminal_safe_text(&watch.next_run_at)
+    );
+    let _ = writeln!(output, "  {notification}");
+    if let Some(snapshot) = watch.last_snapshot_id.as_deref() {
+        let _ = writeln!(
+            output,
+            "  baseline snapshot: {}",
+            terminal_safe_text(snapshot)
+        );
+    } else {
+        output.push_str("  awaiting first successful baseline\n");
+    }
+    if let Some(verdict) = watch.identity_verdict.as_deref() {
+        let confidence = watch
+            .identity_confidence
+            .map(|value| format!(" · confidence {value:.3}"))
+            .unwrap_or_default();
+        let _ = writeln!(
+            output,
+            "  identity: {}{confidence}",
+            terminal_safe_text(verdict)
+        );
+    }
+    output
+}
+
+const fn weekday_label(weekday: WatchWeekday) -> &'static str {
+    match weekday.get() {
+        0 => "Monday",
+        1 => "Tuesday",
+        2 => "Wednesday",
+        3 => "Thursday",
+        4 => "Friday",
+        5 => "Saturday",
+        6 => "Sunday",
+        _ => unreachable!(),
+    }
+}
+
+#[must_use]
 pub fn render_agent_result(document: &Value, mode: OutputMode) -> String {
     if mode == OutputMode::Json {
         return render_json(document).expect("agent result is serializable JSON");
     }
-    if let Some(message) = document.get("message").and_then(Value::as_str) {
-        return format!("{}\n", terminal_safe_text(message));
+    let mut output = String::new();
+    if let Some(message) = ["message", "text", "response"]
+        .into_iter()
+        .find_map(|key| document.get(key).and_then(Value::as_str))
+    {
+        let _ = writeln!(output, "{}", terminal_safe_text(message));
     }
-    let encoded = serde_json::to_string(document).unwrap_or_else(|_| "{}".into());
-    format!("{}\n", terminal_safe_text(&encoded))
+    if let Some(choice_document) = document.get("choices").and_then(Value::as_object)
+        && let Some(choices) = choice_document.get("choices").and_then(Value::as_array)
+        && !choices.is_empty()
+    {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        let allow_multiple = choice_document
+            .get("allow_multiple")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let _ = writeln!(
+            output,
+            "{}",
+            if allow_multiple {
+                "Choose one or more"
+            } else {
+                "Choose one"
+            }
+        );
+        for (index, choice) in choices.iter().filter_map(Value::as_str).enumerate() {
+            let _ = writeln!(output, "{}  {}", index + 1, terminal_safe_text(choice));
+        }
+        let _ = writeln!(
+            output,
+            "In chat, enter a number. With ask/reply, send the choice text in the next turn."
+        );
+    }
+    if output.is_empty() {
+        let encoded = serde_json::to_string(document).unwrap_or_else(|_| "{}".into());
+        let _ = writeln!(output, "{}", terminal_safe_text(&encoded));
+    }
+    output
+}
+
+#[must_use]
+pub fn render_item_result(document: &Value, mode: OutputMode) -> String {
+    if mode == OutputMode::Json {
+        return render_json(document).expect("item result is serializable JSON");
+    }
+    let item = document
+        .get("item_name")
+        .and_then(Value::as_str)
+        .unwrap_or("Item");
+    let status = document
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .replace('_', " ");
+    let summary = document
+        .get("summary")
+        .and_then(Value::as_str)
+        .unwrap_or("No summary returned.");
+    let mut output = format!(
+        "{}  {}\n{}\n",
+        terminal_safe_text(item),
+        terminal_safe_text(&item_status_label(&status)),
+        terminal_safe_text(summary)
+    );
+    if let Some(confidence) = document.get("confidence").and_then(Value::as_f64) {
+        let _ = writeln!(output, "Confidence: {confidence:.2}");
+    }
+    if let Some(member) = [
+        "member_name",
+        "member_label",
+        "member_id",
+        "affected_member",
+    ]
+    .into_iter()
+    .find_map(|key| document.get(key).and_then(Value::as_str))
+    {
+        let _ = writeln!(output, "Applies to: {}", terminal_safe_text(member));
+    }
+    append_item_conflicts(&mut output, document);
+    for (heading, keys) in [
+        ("Ask staff", &["questions_to_ask"][..]),
+        ("Uncertainties", &["uncertainties", "uncertainty"][..]),
+        (
+            "Possible modifications",
+            &["modifications", "suggested_modifications"][..],
+        ),
+        ("Alternatives", &["alternatives"][..]),
+    ] {
+        if let Some(values) = keys.iter().find_map(|key| {
+            document
+                .get(*key)
+                .and_then(Value::as_array)
+                .filter(|values| !values.is_empty())
+        }) {
+            let _ = writeln!(output, "\n{heading}");
+            for value in values.iter().filter_map(Value::as_str) {
+                let _ = writeln!(output, "- {}", terminal_safe_text(value));
+            }
+        }
+    }
+    if let Some(provenance) = ["provenance", "source"]
+        .into_iter()
+        .find_map(|key| document.get(key).and_then(Value::as_str))
+    {
+        let _ = writeln!(output, "Source: {}", terminal_safe_text(provenance));
+    }
+    if let Some(freshness) = ["menu_freshness", "freshness"]
+        .into_iter()
+        .find_map(|key| document.get(key).and_then(Value::as_str))
+    {
+        let _ = writeln!(output, "Freshness: {}", terminal_safe_text(freshness));
+    }
+    output
+}
+
+fn item_status_label(value: &str) -> String {
+    let normalized = value.trim().to_lowercase().replace(['-', ' '], "_");
+    match normalized.as_str() {
+        "safe" | "safer" | "generally_safe" | "generally_safer" => "Generally safer".into(),
+        "risky" | "risk" | "caution" | "needs_review" => "Risky".into(),
+        "avoid" | "unsafe" => "Avoid".into(),
+        "" | "unknown" | "unable" | "unable_to_evaluate" | "not_evaluated" => {
+            "Unable to evaluate".into()
+        }
+        _ => value
+            .split_whitespace()
+            .enumerate()
+            .map(|(index, word)| {
+                if index == 0 {
+                    let mut characters = word.chars();
+                    characters.next().map_or_else(String::new, |first| {
+                        first.to_uppercase().collect::<String>() + characters.as_str()
+                    })
+                } else {
+                    word.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
+fn append_item_conflicts(output: &mut String, document: &Value) {
+    let Some(conflicts) = document
+        .get("conflicts")
+        .and_then(Value::as_array)
+        .filter(|values| !values.is_empty())
+    else {
+        return;
+    };
+    let _ = writeln!(output, "\nConflicts");
+    for conflict in conflicts.iter().filter_map(Value::as_object) {
+        let ingredient = conflict
+            .get("ingredient")
+            .and_then(Value::as_str)
+            .unwrap_or("Unknown ingredient");
+        let reason = conflict.get("reason").and_then(Value::as_str).unwrap_or("");
+        let _ = writeln!(
+            output,
+            "{}: {}",
+            terminal_safe_text(ingredient),
+            terminal_safe_text(reason)
+        );
+    }
 }
 
 pub fn generate_completion(shell: CompletionShell) -> Vec<u8> {
@@ -774,10 +1376,17 @@ mod registration_tests {
 
     #[test]
     fn register_accepts_machine_flags_after_the_command() {
-        let cli =
-            Cli::try_parse_from(["heyfood", "register", "--device", "--no-browser", "--json"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "heyfood",
+            "register",
+            "--device",
+            "--no-browser",
+            "--no-input",
+            "--json",
+        ])
+        .unwrap();
         assert!(cli.machine_output());
+        assert!(cli.no_input);
         assert!(matches!(
             cli.command,
             Some(Command::Register(RegisterArgs {
@@ -799,7 +1408,7 @@ mod registration_tests {
         assert_eq!(value["authenticated"], true);
         assert_eq!(value["account_outcome"], Value::Null);
         assert_eq!(value["profile_status"], "missing");
-        assert_eq!(value["next_command"], "heyfood ask \"What can I eat?\"");
+        assert_eq!(value["next_command"], "heyfood");
         assert!(!rendered.contains('\u{1b}'));
         assert!(rendered.ends_with('\n'));
     }
@@ -832,5 +1441,50 @@ mod registration_tests {
         .unwrap();
         let value: Value = serde_json::from_str(&rendered).unwrap();
         assert_eq!(value["error"]["outcome_uncertain"], true);
+    }
+
+    #[test]
+    fn agent_human_output_preserves_partial_text_and_choices() {
+        let rendered = render_agent_result(
+            &json!({
+                "text": "Try soup.",
+                "choices": {
+                    "choices": ["First", "Second"],
+                    "allow_multiple": false
+                }
+            }),
+            OutputMode::HumanPlain,
+        );
+        for line in [
+            "Try soup.",
+            "Choose one",
+            "1  First",
+            "2  Second",
+            "In chat, enter a number. With ask/reply, send the choice text in the next turn.",
+        ] {
+            assert!(rendered.lines().any(|rendered| rendered == line));
+        }
+    }
+
+    #[test]
+    fn item_human_output_uses_the_dedicated_python_compatible_shape() {
+        let rendered = render_item_result(
+            &json!({
+                "item_name": "veggie burger",
+                "status": "compatible",
+                "summary": "This item fits the profile.",
+                "confidence": 0.95,
+                "member_name": "Sarah"
+            }),
+            OutputMode::HumanPlain,
+        );
+        for line in [
+            "veggie burger  Compatible",
+            "This item fits the profile.",
+            "Confidence: 0.95",
+            "Applies to: Sarah",
+        ] {
+            assert!(rendered.lines().any(|rendered| rendered == line));
+        }
     }
 }
