@@ -13,6 +13,7 @@ pub const MAX_RENDERED_LINES: usize = 20_000;
 pub const MAX_SCROLLBACK_BYTES: usize = 4 * 1024 * 1024;
 const TRUNCATION_NOTICE: &str = "[… earlier content truncated …]\n";
 const MAX_PROMPT_HISTORY: usize = 100;
+const MAX_CONFIRMATION_SOURCES_PER_ITEM: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SlashCommandKind {
@@ -1871,9 +1872,7 @@ fn render_action_confirmation(envelope: &ActionConfirmationEnvelopeWire) -> Stri
                 _ => String::new(),
             };
             let _ = writeln!(output, "{}. {name}{intended}{amount}", index + 1);
-            if let Some(provenance) = item.get("provenance").and_then(serde_json::Value::as_str) {
-                let _ = writeln!(output, "   source: {}", terminal_safe_text(provenance));
-            }
+            render_confirmation_sources(&mut output, item);
             render_confirmation_safety(&mut output, item, intended_for);
         }
     }
@@ -1908,7 +1907,23 @@ fn editable_grocery_items(
     if items.is_empty() || items.len() > 25 {
         return None;
     }
-    items.iter().map(editable_grocery_item).collect()
+    let editable_items = items
+        .iter()
+        .map(editable_grocery_item)
+        .collect::<Option<Vec<_>>>()?;
+    let mut patch = serde_json::Map::new();
+    patch.insert(
+        "items".into(),
+        serde_json::Value::Array(
+            editable_items
+                .iter()
+                .cloned()
+                .map(serde_json::Value::Object)
+                .collect(),
+        ),
+    );
+    GroceryEditPatch::new(patch).ok()?;
+    Some(editable_items)
 }
 
 fn editable_grocery_item(
@@ -1952,6 +1967,53 @@ fn editable_grocery_item(
         serde_json::Value::String("manual".into()),
     );
     Some(editable)
+}
+
+fn render_confirmation_sources(output: &mut String, item: &serde_json::Value) {
+    let sources = item.get("sources").and_then(serde_json::Value::as_array);
+    let mut rendered_sources = 0;
+    if let Some(sources) = sources {
+        for source in sources.iter().take(MAX_CONFIRMATION_SOURCES_PER_ITEM) {
+            let Some(source_type) = source
+                .get("source_type")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| required_text(value, 64).ok())
+            else {
+                continue;
+            };
+            let mut provenance = terminal_safe_text(&source_type);
+            if let Some(source_ref) = source
+                .get("source_ref")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| required_text(value, 255).ok())
+            {
+                provenance.push(':');
+                provenance.push_str(&terminal_safe_text(&source_ref));
+            }
+            if let Some(source_detail) = source
+                .get("source_detail")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| required_text(value, 255).ok())
+            {
+                provenance.push_str(" · ");
+                provenance.push_str(&terminal_safe_text(&source_detail));
+            }
+            let _ = writeln!(output, "   source: {provenance}");
+            rendered_sources += 1;
+        }
+        if rendered_sources > 0 && sources.len() > MAX_CONFIRMATION_SOURCES_PER_ITEM {
+            let hidden = sources.len() - MAX_CONFIRMATION_SOURCES_PER_ITEM;
+            let _ = writeln!(output, "   source: … and {hidden} more");
+        }
+    }
+    if rendered_sources == 0
+        && let Some(provenance) = item
+            .get("provenance")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| required_text(value, 255).ok())
+    {
+        let _ = writeln!(output, "   source: {}", terminal_safe_text(&provenance));
+    }
 }
 
 fn render_confirmation_safety(
@@ -2841,6 +2903,86 @@ mod tests {
             model.scrollback.entries().iter().rev().nth(1).unwrap().text,
             "Edit and confirm"
         );
+    }
+
+    #[test]
+    fn grocery_edit_eligibility_matches_the_frozen_twenty_five_item_limit() {
+        let item = serde_json::json!({
+            "requested_name": "oats",
+            "quantity": 1,
+            "unit": "bag",
+            "note": "rolled",
+            "intended_for": "maya"
+        });
+        let make_envelope = |count| {
+            serde_json::from_value::<ActionConfirmationEnvelopeWire>(serde_json::json!({
+                "type": "action_confirmation",
+                "confirmation_id": "00000000-0000-4000-8000-000000000001",
+                "idempotency_key": "00000000-0000-4000-8000-000000000002",
+                "action": "grocery_list_add_items",
+                "preview": "Add screened ingredients",
+                "card_form": "item_list",
+                "structured_preview": {
+                    "items": vec![item.clone(); count]
+                }
+            }))
+            .unwrap()
+        };
+
+        assert_eq!(
+            editable_grocery_items(&make_envelope(25)).unwrap().len(),
+            25
+        );
+        assert!(editable_grocery_items(&make_envelope(26)).is_none());
+    }
+
+    #[test]
+    fn phase_a_source_provenance_is_visible_and_bounded() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/contracts/grocery-backend/phase-a/fixtures/grocery/export_json.json"
+        )))
+        .unwrap();
+        let production_item = fixture["list"]["items"][0].clone();
+        let envelope: ActionConfirmationEnvelopeWire = serde_json::from_value(serde_json::json!({
+            "type": "action_confirmation",
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "action": "grocery_list_add_items",
+            "preview": "Add a recipe ingredient",
+            "card_form": "item_list",
+            "structured_preview": {"items": [production_item]}
+        }))
+        .unwrap();
+
+        let card = render_action_confirmation(&envelope);
+        assert!(card.contains("source: recipe:dahl-001 · Red Lentil Dahl"));
+
+        let mut over_limit_item = fixture["list"]["items"][0].clone();
+        over_limit_item["sources"] = serde_json::Value::Array(
+            (0..=MAX_CONFIRMATION_SOURCES_PER_ITEM)
+                .map(|index| {
+                    serde_json::json!({
+                        "source_type": "recipe",
+                        "source_ref": format!("recipe-{index}")
+                    })
+                })
+                .collect(),
+        );
+        let envelope: ActionConfirmationEnvelopeWire = serde_json::from_value(serde_json::json!({
+            "type": "action_confirmation",
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "action": "grocery_list_add_items",
+            "preview": "Add a recipe ingredient",
+            "card_form": "item_list",
+            "structured_preview": {"items": [over_limit_item]}
+        }))
+        .unwrap();
+        let card = render_action_confirmation(&envelope);
+        assert!(card.contains("source: recipe:recipe-7"));
+        assert!(!card.contains("source: recipe:recipe-8"));
+        assert!(card.contains("source: … and 1 more"));
     }
 
     #[test]

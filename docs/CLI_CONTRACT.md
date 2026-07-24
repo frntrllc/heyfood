@@ -56,7 +56,9 @@ fixture carries the authoritative Grocery annotation under
 `item.safety.{status,member_flags,label_hint}`. The TUI prefers and fully renders
 the nested Grocery shape—including intended member, provenance, reasons, and
 substitutions—while retaining top-level `safety_flags` as an additive
-compatibility input.
+compatibility input. Production `sources[]` provenance is rendered as bounded,
+terminal-safe source type, reference, and detail lines; legacy singleton
+`provenance` remains a fallback.
 
 Legacy top-level `recommend`, `location`, `search`, `household`, `profile`, and
 other hidden topology are unavailable in this cut. Recognized legacy paths fail

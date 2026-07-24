@@ -53,7 +53,9 @@ authentication contracts are stabilized.
 - Adds contract-backed Grocery proposal correction in the TUI:
   `edit #N <replacement>` sends the complete bounded item set through C3's
   optional `edits` field, preserving the server-minted confirmation and
-  idempotency authority while the backend revalidates and re-screens it.
+  idempotency authority while the backend revalidates and re-screens it. The
+  client accepts the frozen maximum of 25 complete inputs and renders bounded
+  production `sources[]` provenance before confirmation.
 - Archives the final Python parity baseline under the non-release tag
   `archive/python-cli-73494a57` and verifies retained source bytes from Rust.
 

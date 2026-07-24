@@ -7,8 +7,11 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
-const MAX_GROCERY_EDIT_BYTES: usize = 16 * 1024;
-const MAX_GROCERY_EDIT_ENTRIES: usize = 64;
+// The frozen add-items contract permits 25 complete nine-field
+// GroceryItemInput objects. Keep the generic C3 envelope bounded while
+// allowing that maximum valid payload in full.
+const MAX_GROCERY_EDIT_BYTES: usize = 128 * 1024;
+const MAX_GROCERY_EDIT_ENTRIES: usize = 256;
 const MAX_GROCERY_EDIT_DEPTH: usize = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
