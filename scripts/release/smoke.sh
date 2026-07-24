@@ -26,6 +26,10 @@ tar -xzf "$archive" -C "$staging"
 binary="$staging/heyfood"
 test -f "$binary"
 test -x "$binary"
+if [[ "$target" == *-apple-darwin ]]; then
+  codesign --verify --deep --strict --verbose=2 "$binary"
+  spctl --assess --type execute --verbose=2 "$binary"
+fi
 test "$("$binary" --version)" = "heyfood $version"
 "$binary" --help >/dev/null
 "$binary" register --help >/dev/null

@@ -67,6 +67,7 @@ jobs:
     name: Build / ${{ matrix.target }}
     needs: validate
     runs-on: ${{ matrix.runner }}
+    environment: native-release
     strategy:
       fail-fast: false
       matrix:
@@ -122,6 +123,33 @@ jobs:
       - name: Install deterministic archive tooling
         if: runner.os == 'macOS'
         run: brew install gnu-tar
+      - name: Sign and notarize the macOS executable
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          HEYFOOD_MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          HEYFOOD_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          HEYFOOD_APPLE_ID: ${{ secrets.APPLE_NOTARY_ACCOUNT }}
+          HEYFOOD_APPLE_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
+          HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
+        run: packaging/macos/sign-and-notarize.sh "target/$TARGET/release/heyfood"
+      - name: Authenticode-sign the Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+          WINDOWS_CODESIGN_SUBJECT: ${{ vars.WINDOWS_CODESIGN_SUBJECT }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          ./packaging/windows/sign.ps1 `
+            -Binary "target/$env:TARGET/release/heyfood.exe" `
+            -CertificateBase64 $env:WINDOWS_CODESIGN_PFX_BASE64 `
+            -CertificatePassword $env:WINDOWS_CODESIGN_PFX_PASSWORD `
+            -PublisherSubject $env:WINDOWS_CODESIGN_SUBJECT `
+            -TimestampUrl $env:WINDOWS_TIMESTAMP_URL
       - name: Package the exact executable
         if: runner.os != 'Windows'
         shell: bash
@@ -129,6 +157,13 @@ jobs:
           TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.validate.outputs.version }}
         run: scripts/release/package.sh "target/$TARGET/release/heyfood" "$VERSION" "$TARGET" dist
+      - name: Smoke the packaged macOS or Linux executable
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: scripts/release/smoke.sh dist "$VERSION" "$TARGET"
       - name: Package the exact Windows executable
         if: runner.os == 'Windows'
         shell: pwsh
@@ -143,7 +178,9 @@ jobs:
             -OutputDirectory dist
           ./packaging/windows/smoke.ps1 `
             -ReleaseDirectory dist `
-            -Version $env:VERSION
+            -Version $env:VERSION `
+            -RequireAuthenticode `
+            -PublisherSubject "${{ vars.WINDOWS_CODESIGN_SUBJECT }}"
       - name: Upload the native archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

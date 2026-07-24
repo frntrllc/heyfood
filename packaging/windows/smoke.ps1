@@ -4,7 +4,11 @@ param(
     [string] $ReleaseDirectory,
 
     [Parameter(Mandatory = $true)]
-    [string] $Version
+    [string] $Version,
+
+    [switch] $RequireAuthenticode,
+
+    [string] $PublisherSubject
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,6 +33,17 @@ try {
         throw "Windows release archive must install exactly heyfood.exe"
     }
     $binary = $files[0].FullName
+    if ($RequireAuthenticode) {
+        if ([string]::IsNullOrWhiteSpace($PublisherSubject)) {
+            throw "expected Authenticode publisher subject is required"
+        }
+        $signature = Get-AuthenticodeSignature -LiteralPath $binary
+        if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+            $signature.SignerCertificate.Subject -ne $PublisherSubject -or
+            $null -eq $signature.TimeStamperCertificate) {
+            throw "installed Windows executable is not signed and timestamped by the expected publisher"
+        }
+    }
     $observedVersion = (& $binary --version | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $observedVersion -ne "heyfood $Version") {
         throw "installed Windows executable returned an unexpected version"

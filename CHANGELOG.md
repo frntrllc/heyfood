@@ -8,7 +8,11 @@ authentication contracts are stabilized.
 
 - Adds deterministic Windows x86-64 zip packaging and installed-executable
   smoke coverage to the native distribution matrix. Publication remains gated
-  on Authenticode signing and the public Windows installer.
+  on the first protected signing pass and the public Windows installer.
+- Requires protected tag builds to Authenticode-sign and timestamp Windows
+  executables and to Developer ID-sign, harden, and notarize both macOS
+  executables before packaging. Public artifact smoke re-verifies the platform
+  trust result.
 - Replaces the unsupported `v0.4.0` and `v0.4.1` incident artifacts with the
   fully qualified Rust CLI and interactive TUI recovery release.
 - Preserves terminal stream content when a terminal SSE document omits final

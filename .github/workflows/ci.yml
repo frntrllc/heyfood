@@ -42,7 +42,7 @@ jobs:
           fi
       - name: Lint distribution scripts
         shell: bash
-        run: shellcheck install.sh tests/installer_contract.sh scripts/release/*.sh
+        run: shellcheck install.sh tests/installer_contract.sh scripts/release/*.sh packaging/macos/*.sh
       - name: Test the hosted-installer contract
         shell: bash
         run: bash tests/installer_contract.sh
@@ -71,6 +71,23 @@ jobs:
           else
             echo "HEYFOOD_BIN=target/release/heyfood" >> "$GITHUB_ENV"
           fi
+      - name: Parse every Windows release script
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($script in Get-ChildItem packaging/windows/*.ps1) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $script.FullName,
+              [ref] $tokens,
+              [ref] $errors
+            ) | Out-Null
+            if ($errors.Count -ne 0) {
+              $errors | ForEach-Object { Write-Error $_ }
+              throw "PowerShell parser rejected $($script.FullName)"
+            }
+          }
       - name: Verify the active native command surface
         shell: bash
         run: |

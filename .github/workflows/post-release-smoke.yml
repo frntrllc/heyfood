@@ -74,7 +74,9 @@ jobs:
         run: |
           ./packaging/windows/smoke.ps1 `
             -ReleaseDirectory release `
-            -Version $env:VERSION
+            -Version $env:VERSION `
+            -RequireAuthenticode `
+            -PublisherSubject "${{ vars.WINDOWS_CODESIGN_SUBJECT }}"
       - name: Verify hosted installer provenance
         if: runner.os != 'Windows'
         shell: bash
