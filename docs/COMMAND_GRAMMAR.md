@@ -98,9 +98,10 @@ heyfood watch remove WATCH_UUID
 
 Watch creation, listing, and removal use the deployed `menu:watch` scope.
 Creation freezes the restaurant-local cadence, resolved timezone, notification
-preference, and identity-gate evidence. The backend does not yet expose its
-persisted snapshot diff through an account-scoped read endpoint, so the Rust
-client does not simulate or claim a watch-diff view.
+preference, and activation state. Identity-gate evidence is returned with the
+create response but is not persisted by the deployed contract. The backend does
+not yet expose its persisted snapshot diff through an account-scoped read
+endpoint, so the Rust client does not simulate or claim a watch-diff view.
 
 ## Global process controls
 

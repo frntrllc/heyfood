@@ -28,6 +28,7 @@ const MAX_JSON_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EXPORT_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TRANSCRIPTION_RESPONSE_BYTES: usize = 128 * 1024;
 const MAX_TRANSCRIPTION_ERROR_BYTES: usize = 16 * 1024;
+const MAX_MENU_WATCH_ERROR_BYTES: usize = 16 * 1024;
 
 #[derive(Clone, PartialEq)]
 pub enum GroceryExport {
@@ -343,9 +344,7 @@ impl HttpService {
             )?
             .header(header::ACCEPT, "application/json")
             .json(request);
-        self.dispatch_json(builder, cancellation, DispatchKind::Mutation)
-            .await
-            .map_err(menu_watch_create_error)
+        self.dispatch_menu_watch_create(builder, cancellation).await
     }
 
     pub async fn menu_watch_delete(
@@ -827,6 +826,77 @@ impl HttpService {
         let body = serde_json::from_slice::<TranscriptionErrorBody>(&bytes).unwrap_or_default();
         Err(transcription_http_error(status, body.error.as_deref()))
     }
+
+    async fn dispatch_menu_watch_create<T: DeserializeOwned>(
+        &self,
+        builder: RequestBuilder,
+        cancellation: CancellationToken,
+    ) -> Result<T, PortError> {
+        if cancellation.is_cancelled() {
+            return Err(PortError::new(
+                "request_cancelled_before_dispatch",
+                "request was cancelled before dispatch",
+            ));
+        }
+        let response = tokio::select! {
+            () = cancellation.cancelled() => {
+                return Err(PortError::uncertain(
+                    "request_cancelled_after_dispatch",
+                    "service response was not observed after request dispatch",
+                ));
+            }
+            result = builder.send() => result.map_err(|error| {
+                uncertain_transport("request_transport", &error)
+            })?,
+        };
+        if !response.status().is_success() {
+            let status = response.status();
+            if status != StatusCode::CONFLICT {
+                return Err(menu_watch_create_error(http_status_error(status)));
+            }
+            let fallback = || {
+                PortError::new(
+                    "menu_watch_conflict",
+                    "the watch conflicts with current Menu Watch state; review existing watches and retry",
+                )
+            };
+            let bytes = match read_limited(
+                response,
+                &cancellation,
+                DispatchKind::Safe,
+                MAX_MENU_WATCH_ERROR_BYTES,
+            )
+            .await
+            {
+                Ok(bytes) => bytes,
+                Err(_) => return Err(fallback()),
+            };
+            let body = serde_json::from_slice::<MenuWatchErrorBody>(&bytes).unwrap_or_default();
+            return Err(menu_watch_conflict_error(&body));
+        }
+        let content_type = media_type(&response);
+        if !is_json_media_type(&content_type) {
+            return Err(dispatch_error(
+                DispatchKind::Mutation,
+                "response_content_type",
+                "service response is not JSON",
+            ));
+        }
+        let bytes = read_limited(
+            response,
+            &cancellation,
+            DispatchKind::Mutation,
+            MAX_JSON_RESPONSE_BYTES,
+        )
+        .await?;
+        serde_json::from_slice(&bytes).map_err(|_| {
+            dispatch_error(
+                DispatchKind::Mutation,
+                "response_json",
+                "service response is invalid JSON",
+            )
+        })
+    }
 }
 
 fn dispatch_error(kind: DispatchKind, code: &'static str, message: &'static str) -> PortError {
@@ -863,6 +933,22 @@ fn http_status_error(status: StatusCode) -> PortError {
 struct TranscriptionErrorBody {
     #[serde(default)]
     error: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct MenuWatchErrorBody {
+    #[serde(default)]
+    error_code: Option<String>,
+    #[serde(default)]
+    details: Option<MenuWatchErrorDetails>,
+}
+
+#[derive(Default, Deserialize)]
+struct MenuWatchErrorDetails {
+    #[serde(default)]
+    requires_confirmation: Option<bool>,
+    #[serde(default)]
+    cap: Option<u64>,
 }
 
 fn transcription_http_error(status: StatusCode, error: Option<&str>) -> PortError {
@@ -918,16 +1004,40 @@ fn transcription_public_error(error: PortError) -> PortError {
 
 fn menu_watch_create_error(error: PortError) -> PortError {
     match error.code {
-        "version_conflict" => PortError::new(
-            "menu_watch_confirmation_or_limit",
-            "the watch needs explicit menu-URL confirmation or the account watch limit was reached",
-        ),
         "invalid_request" => PortError::new(
             "menu_watch_rejected",
             "the service rejected the restaurant, menu identity, schedule, or timezone",
         ),
         _ => error,
     }
+}
+
+fn menu_watch_conflict_error(body: &MenuWatchErrorBody) -> PortError {
+    let details = body.details.as_ref();
+    if details.and_then(|value| value.requires_confirmation) == Some(true) {
+        return PortError::new(
+            "menu_watch_confirmation_required",
+            "the menu identity requires review; retry with --confirm-menu-url only after verifying the URL",
+        );
+    }
+    if details.and_then(|value| value.cap).is_some()
+        || body.error_code.as_deref() == Some("daily_limit_exceeded")
+    {
+        return PortError::new(
+            "menu_watch_limit_reached",
+            "the Menu Watch limit was reached; remove an existing watch before adding another",
+        );
+    }
+    if body.error_code.as_deref() == Some("invalid_request") {
+        return PortError::new(
+            "menu_watch_already_exists",
+            "a watch with this cadence already exists for this restaurant",
+        );
+    }
+    PortError::new(
+        "menu_watch_conflict",
+        "the watch conflicts with current Menu Watch state; review existing watches and retry",
+    )
 }
 
 fn transcription_multipart(

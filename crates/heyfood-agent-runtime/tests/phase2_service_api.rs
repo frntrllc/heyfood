@@ -5,9 +5,9 @@ use heyfood_core::{
     AccountId, AddItemsRequestWire, ApplicationCapabilitiesWire, CredentialVersion,
     ExclusionMutationRequestWire, GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId,
     GroceryItemInputWire, GroceryItemStateWire, GroceryListVersion,
-    GroceryMutationConfirmRequestWire, NetworkPolicy, OperationId, RemoveItemsRequestWire,
-    SensitiveString, ServiceUrl, SessionCredentials, TranscriptionPurpose,
-    UpdateItemStateRequestWire,
+    GroceryMutationConfirmRequestWire, MenuWatchCreateRequestWire, NetworkPolicy, OperationId,
+    RemoveItemsRequestWire, RestaurantId, SensitiveString, ServiceUrl, SessionCredentials,
+    TranscriptionPurpose, UpdateItemStateRequestWire, WatchCadenceWire, WatchHour, WatchWeekday,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -272,6 +272,135 @@ async fn optional_scope_negotiation_uses_live_authorization_metadata() {
         .unwrap();
     assert_eq!(metadata.scopes_supported.last().unwrap(), "grocery:write");
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn menu_watch_conflicts_preserve_distinct_safe_recovery_guidance() {
+    for (body, expected_code) in [
+        (
+            json!({
+                "error_code": "forbidden",
+                "message": "Explicit confirmation is required.",
+                "trace_id": "trace-confirm",
+                "details": {
+                    "identity_verdict": "unverified",
+                    "identity_confidence": 0.665,
+                    "requires_confirmation": true,
+                    "auto_threshold": 0.85
+                }
+            }),
+            "menu_watch_confirmation_required",
+        ),
+        (
+            json!({
+                "error_code": "daily_limit_exceeded",
+                "message": "Watch cap reached.",
+                "trace_id": "trace-limit",
+                "details": {"cap": 10, "current": 10}
+            }),
+            "menu_watch_limit_reached",
+        ),
+        (
+            json!({
+                "error_code": "invalid_request",
+                "message": "A watch with this cadence already exists.",
+                "trace_id": "trace-duplicate",
+                "details": null
+            }),
+            "menu_watch_already_exists",
+        ),
+    ] {
+        let (listener, service) = fixture_service().await;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            assert!(request.starts_with("POST /v1/menu/watch "));
+            assert_eq!(
+                request_body(&request),
+                json!({
+                    "restaurant_id": "00000000-0000-4000-8000-000000000456",
+                    "cadence": {"weekday": 3, "hour": 9},
+                    "notify": true,
+                    "confirm_menu_url": false
+                })
+            );
+            respond(&mut socket, 409, body).await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                    .await
+                    .is_err(),
+                "Menu Watch create was retried"
+            );
+        });
+        let error = service
+            .menu_watch_create(
+                &credentials(),
+                OperationId::new(),
+                &MenuWatchCreateRequestWire {
+                    restaurant_id: RestaurantId::parse("00000000-0000-4000-8000-000000000456")
+                        .unwrap(),
+                    cadence: WatchCadenceWire {
+                        weekday: WatchWeekday::new(3).unwrap(),
+                        hour: WatchHour::new(9).unwrap(),
+                    },
+                    notify: true,
+                    menu_url: None,
+                    confirm_menu_url: false,
+                    tz: None,
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, expected_code);
+        assert!(!error.outcome_uncertain);
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn unknown_or_unreadable_menu_watch_conflicts_remain_truthful() {
+    for response in [
+        "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+            .to_owned(),
+        format!(
+            "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            16 * 1024 + 1
+        ),
+    ] {
+        let (listener, service) = fixture_service().await;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = read_request(&mut socket).await;
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        let error = service
+            .menu_watch_create(
+                &credentials(),
+                OperationId::new(),
+                &MenuWatchCreateRequestWire {
+                    restaurant_id: RestaurantId::parse(
+                        "00000000-0000-4000-8000-000000000456",
+                    )
+                    .unwrap(),
+                    cadence: WatchCadenceWire {
+                        weekday: WatchWeekday::new(3).unwrap(),
+                        hour: WatchHour::new(9).unwrap(),
+                    },
+                    notify: false,
+                    menu_url: None,
+                    confirm_menu_url: false,
+                    tz: None,
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "menu_watch_conflict");
+        assert!(!error.message.contains("confirm"));
+        assert!(!error.outcome_uncertain);
+        server.await.unwrap();
+    }
 }
 
 #[tokio::test]

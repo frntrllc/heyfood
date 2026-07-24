@@ -57,6 +57,19 @@ impl PanelRequest {
             Self::Location => "Location",
         }
     }
+
+    #[must_use]
+    pub const fn command(self) -> &'static str {
+        match self {
+            Self::Status => "/status",
+            Self::Grocery => "/grocery",
+            Self::Watch => "/watch",
+            Self::Health => "/health",
+            Self::Household => "/household",
+            Self::Profile => "/profile",
+            Self::Location => "/location",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1635,7 +1648,7 @@ fn open_panel(model: &mut AppModel, panel: PanelRequest) -> Vec<Effect> {
     model.next_operation_id = model.next_operation_id.saturating_add(1);
     model.scrollback.push(SemanticEntry {
         speaker: Speaker::User,
-        text: format!("/{}", panel.title().to_ascii_lowercase()),
+        text: panel.command().into(),
         streaming: false,
     });
     model.scrollback.push(SemanticEntry {
@@ -3699,6 +3712,14 @@ mod tests {
                 }]
             );
             assert_eq!(model.operation, OperationState::Running(1));
+            let user_entry = model
+                .scrollback
+                .entries()
+                .iter()
+                .rev()
+                .find(|entry| entry.speaker == Speaker::User)
+                .unwrap();
+            assert_eq!(user_entry.text, command);
             assert_eq!(
                 model.scrollback.entries().back().unwrap().speaker,
                 Speaker::Assistant
