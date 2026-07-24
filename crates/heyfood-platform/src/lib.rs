@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 pub use credential_broker::{CredentialBrokerStore, run_credential_broker_if_requested};
 #[cfg(all(not(windows), feature = "native-credentials"))]
 pub use persistence::KeyringCredentialStore;
-#[cfg(all(windows, feature = "native-credentials"))]
+#[cfg(all(windows, feature = "qualification-credentials"))]
 pub use persistence::WindowsCredentialQualificationCleanup;
 #[cfg(all(windows, feature = "native-credentials"))]
 pub use persistence::WindowsCredentialStore;

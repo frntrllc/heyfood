@@ -117,7 +117,9 @@ captures raw ANSI evidence, proves the request-path sequence, rejects credential
 material in the capture, validates the exact channel/account/device/API-key
 bindings in memory, observes terminal restoration on exit, and requires
 root-isolated credentials and user state to be absent before PASS evidence is
-written. The
+written. The Windows force-clean seam is available only through the
+non-default `qualification-credentials` feature used by the test target; normal
+product builds retain the fail-closed logout and reconciliation behavior. The
 evidence document deliberately reports `release_gate_complete: false` and
 credits none of the twelve showcase stages. It is harness foundation, not
 showcase conformance.

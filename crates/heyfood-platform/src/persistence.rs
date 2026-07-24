@@ -1758,36 +1758,38 @@ impl NativeAuthStore {
         clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
-    #[cfg(all(windows, feature = "native-credentials"))]
+    #[cfg(all(windows, feature = "qualification-credentials"))]
     fn purge_isolated_qualification_fixture(&self) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
-        let entries = [
-            self.windows_entry()?,
-            self.replacement_entry(
-                &self.replacement_pending_target,
-                "authorization-replacement-pending",
-            )?,
-            self.replacement_entry(
-                &self.replacement_previous_target,
-                "authorization-replacement-previous",
-            )?,
-            self.replacement_entry(&self.replacement_target, "authorization-replacement")?,
-        ];
-        for entry in &entries {
-            delete_keyring_entry(entry, "qualification_credential_delete")?;
-        }
-        clear_any_reconciliation_marker(&self.reconciliation_path)?;
-        verify_credential_delete_visibility(
-            CREDENTIAL_WRITE_VERIFY_TIMEOUT,
-            || {
-                for entry in &entries {
-                    if keyring_secret_exists(entry)? {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
+        purge_qualification_fixture_entries(
+            [
+                self.windows_entry(),
+                self.replacement_entry(
+                    &self.replacement_pending_target,
+                    "authorization-replacement-pending",
+                ),
+                self.replacement_entry(
+                    &self.replacement_previous_target,
+                    "authorization-replacement-previous",
+                ),
+                self.replacement_entry(&self.replacement_target, "authorization-replacement"),
+            ],
+            |entry| delete_keyring_entry(entry, "qualification_credential_delete"),
+            || clear_any_reconciliation_marker(&self.reconciliation_path),
+            |entries| {
+                verify_credential_delete_visibility(
+                    CREDENTIAL_WRITE_VERIFY_TIMEOUT,
+                    || {
+                        for entry in entries {
+                            if keyring_secret_exists(entry)? {
+                                return Ok(true);
+                            }
+                        }
+                        Ok(false)
+                    },
+                    thread::sleep,
+                )
             },
-            thread::sleep,
         )
     }
 
@@ -2333,24 +2335,27 @@ impl WindowsCredentialStore {
         clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
+    #[cfg(feature = "qualification-credentials")]
     fn purge_isolated_qualification_fixture(&self) -> Result<(), PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
-        let entries = [self.entry()?, self.authorization_stage_entry()?];
-        for entry in &entries {
-            delete_keyring_entry(entry, "qualification_credential_delete")?;
-        }
-        clear_any_reconciliation_marker(&self.reconciliation_path)?;
-        verify_credential_delete_visibility(
-            CREDENTIAL_WRITE_VERIFY_TIMEOUT,
-            || {
-                for entry in &entries {
-                    if keyring_secret_exists(entry)? {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
+        purge_qualification_fixture_entries(
+            [self.entry(), self.authorization_stage_entry()],
+            |entry| delete_keyring_entry(entry, "qualification_credential_delete"),
+            || clear_any_reconciliation_marker(&self.reconciliation_path),
+            |entries| {
+                verify_credential_delete_visibility(
+                    CREDENTIAL_WRITE_VERIFY_TIMEOUT,
+                    || {
+                        for entry in entries {
+                            if keyring_secret_exists(entry)? {
+                                return Ok(true);
+                            }
+                        }
+                        Ok(false)
+                    },
+                    thread::sleep,
+                )
             },
-            thread::sleep,
         )
     }
 
@@ -2569,13 +2574,13 @@ impl AuthorizationSessionStore for WindowsCredentialStore {
 /// every exact Credential Manager target even after a deliberately interrupted
 /// initialization or staged replacement. Cleanup verifies deletion visibility
 /// before returning success.
-#[cfg(all(windows, feature = "native-credentials"))]
+#[cfg(all(windows, feature = "qualification-credentials"))]
 pub struct WindowsCredentialQualificationCleanup {
     auth: NativeAuthStore,
     session: WindowsCredentialStore,
 }
 
-#[cfg(all(windows, feature = "native-credentials"))]
+#[cfg(all(windows, feature = "qualification-credentials"))]
 impl WindowsCredentialQualificationCleanup {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, PortError> {
         let root = root.as_ref();
@@ -3330,6 +3335,42 @@ fn verify_credential_delete_visibility(
         }
         wait(CREDENTIAL_WRITE_VERIFY_INTERVAL);
     }
+}
+
+#[cfg(all(feature = "qualification-credentials", any(windows, test)))]
+fn purge_qualification_fixture_entries<T>(
+    entry_results: impl IntoIterator<Item = Result<T, PortError>>,
+    mut delete_entry: impl FnMut(&T) -> Result<(), PortError>,
+    clear_marker: impl FnOnce() -> Result<(), PortError>,
+    verify_absent: impl FnOnce(&[T]) -> Result<(), PortError>,
+) -> Result<(), PortError> {
+    let mut first_error: Option<PortError> = None;
+    let mut entries = Vec::new();
+    for entry_result in entry_results {
+        match entry_result {
+            Ok(entry) => entries.push(entry),
+            Err(error) if first_error.is_none() => first_error = Some(error),
+            Err(_) => {}
+        }
+    }
+    for entry in &entries {
+        if let Err(error) = delete_entry(entry)
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+    if let Err(error) = clear_marker()
+        && first_error.is_none()
+    {
+        first_error = Some(error);
+    }
+    if let Err(error) = verify_absent(&entries)
+        && first_error.is_none()
+    {
+        first_error = Some(error);
+    }
+    first_error.map_or(Ok(()), Err)
 }
 
 #[cfg(any(windows, test))]
@@ -4192,6 +4233,50 @@ mod credential_write_verification_tests {
     }
 
     #[test]
+    #[cfg(feature = "qualification-credentials")]
+    fn qualification_cleanup_attempts_later_targets_and_final_checks_after_errors() {
+        let mut deletion_attempts = Vec::new();
+        let mut marker_attempted = false;
+        let mut verification_entries = Vec::new();
+
+        let error = purge_qualification_fixture_entries(
+            [
+                Err(PortError::new(
+                    "fixture_entry_failure",
+                    "injected entry construction failure",
+                )),
+                Ok("active"),
+                Ok("later-stage"),
+            ],
+            |entry| {
+                deletion_attempts.push(*entry);
+                if *entry == "active" {
+                    Err(PortError::new(
+                        "fixture_delete_failure",
+                        "injected deletion failure",
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+            || {
+                marker_attempted = true;
+                Ok(())
+            },
+            |entries| {
+                verification_entries.extend_from_slice(entries);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "fixture_entry_failure");
+        assert_eq!(deletion_attempts, ["active", "later-stage"]);
+        assert!(marker_attempted);
+        assert_eq!(verification_entries, ["active", "later-stage"]);
+    }
+
+    #[test]
     fn delayed_credential_visibility_retries_only_missing_and_older_state() {
         let expected = state("account-one", 3, "expected");
         let mut observations = VecDeque::from([
@@ -4425,7 +4510,7 @@ mod windows_acl_tests {
     }
 
     #[test]
-    #[cfg(feature = "native-credentials")]
+    #[cfg(feature = "qualification-credentials")]
     fn windows_qualification_cleanup_purges_partial_state_and_verifies_absence() {
         struct CredentialCleanup(WindowsCredentialQualificationCleanup);
 

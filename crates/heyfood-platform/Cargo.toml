@@ -11,6 +11,7 @@ publish.workspace = true
 [features]
 default = []
 native-credentials = ["dep:keyring", "dep:sysinfo"]
+qualification-credentials = ["native-credentials"]
 
 [dependencies]
 directories.workspace = true
