@@ -127,7 +127,7 @@ jobs:
         run: cargo test --locked --package heyfood-bin --test installed_showcase -- --ignored --exact installed_archive_registration_and_first_turn
       - name: Upload installed-artifact foundation evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fcbe94 # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: installed-showcase-${{ matrix.os }}
           path: showcase-evidence
