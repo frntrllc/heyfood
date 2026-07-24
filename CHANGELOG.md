@@ -6,6 +6,9 @@ authentication contracts are stabilized.
 
 ## 0.5.0 - Unreleased
 
+- Adds deterministic Windows x86-64 zip packaging and installed-executable
+  smoke coverage to the native distribution matrix. Publication remains gated
+  on Authenticode signing and the public Windows installer.
 - Replaces the unsupported `v0.4.0` and `v0.4.1` incident artifacts with the
   fully qualified Rust CLI and interactive TUI recovery release.
 - Preserves terminal stream content when a terminal SSE document omits final

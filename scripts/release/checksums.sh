@@ -16,6 +16,7 @@ expected_archives=(
   "heyfood-v$version-aarch64-unknown-linux-gnu.tar.gz"
   "heyfood-v$version-x86_64-apple-darwin.tar.gz"
   "heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz"
+  "heyfood-v$version-x86_64-pc-windows-msvc.zip"
 )
 
 for archive in "${expected_archives[@]}"; do

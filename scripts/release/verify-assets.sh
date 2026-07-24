@@ -16,6 +16,7 @@ expected_archives=(
   "heyfood-v$version-aarch64-unknown-linux-gnu.tar.gz"
   "heyfood-v$version-x86_64-apple-darwin.tar.gz"
   "heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz"
+  "heyfood-v$version-x86_64-pc-windows-msvc.zip"
 )
 
 asset_count=0
@@ -23,7 +24,7 @@ for asset_path in "$release_directory"/*; do
   test -f "$asset_path"
   asset=$(basename "$asset_path")
   case "$asset" in
-    SHA256SUMS | "heyfood-v$version-aarch64-apple-darwin.tar.gz" | "heyfood-v$version-aarch64-unknown-linux-gnu.tar.gz" | "heyfood-v$version-x86_64-apple-darwin.tar.gz" | "heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz") ;;
+    SHA256SUMS | "heyfood-v$version-aarch64-apple-darwin.tar.gz" | "heyfood-v$version-aarch64-unknown-linux-gnu.tar.gz" | "heyfood-v$version-x86_64-apple-darwin.tar.gz" | "heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz" | "heyfood-v$version-x86_64-pc-windows-msvc.zip") ;;
     *)
       echo "unexpected release asset: $asset" >&2
       exit 1
@@ -31,7 +32,7 @@ for asset_path in "$release_directory"/*; do
   esac
   asset_count=$((asset_count + 1))
 done
-test "$asset_count" -eq 5
+test "$asset_count" -eq 6
 
 expected_manifest=$(mktemp "${TMPDIR:-/tmp}/heyfood-manifest.XXXXXX")
 trap 'rm -f "$expected_manifest"' EXIT
@@ -41,7 +42,7 @@ trap 'rm -f "$expected_manifest"' EXIT
 )
 cmp "$expected_manifest" "$release_directory/SHA256SUMS"
 
-for archive in "${expected_archives[@]}"; do
+for archive in "${expected_archives[@]:0:4}"; do
   archive_path="$release_directory/$archive"
   gzip -t "$archive_path"
   test "$(tar -tzf "$archive_path")" = "heyfood"
@@ -53,3 +54,7 @@ for archive in "${expected_archives[@]}"; do
       ;;
   esac
 done
+
+windows_archive="$release_directory/heyfood-v$version-x86_64-pc-windows-msvc.zip"
+unzip -tq "$windows_archive" >/dev/null
+test "$(zipinfo -1 "$windows_archive")" = "heyfood.exe"

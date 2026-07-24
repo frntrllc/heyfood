@@ -83,6 +83,34 @@ jobs:
           "$HEYFOOD_BIN" health --help
           "$HEYFOOD_BIN" completion bash > completion.bash
           test -s completion.bash
+      - name: Package, smoke, and reproduce the Windows release archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = cargo metadata --locked --no-deps --format-version 1 |
+            ConvertFrom-Json |
+            Select-Object -ExpandProperty packages |
+            Where-Object { $_.name -eq "heyfood-bin" } |
+            Select-Object -ExpandProperty version
+          ./packaging/windows/package.ps1 `
+            -Binary target/release/heyfood.exe `
+            -Version $version `
+            -Target x86_64-pc-windows-msvc `
+            -OutputDirectory dist
+          ./packaging/windows/smoke.ps1 `
+            -ReleaseDirectory dist `
+            -Version $version
+          ./packaging/windows/package.ps1 `
+            -Binary target/release/heyfood.exe `
+            -Version $version `
+            -Target x86_64-pc-windows-msvc `
+            -OutputDirectory dist-repeat
+          $archive = "heyfood-v$version-x86_64-pc-windows-msvc.zip"
+          $first = (Get-FileHash -Algorithm SHA256 "dist/$archive").Hash
+          $second = (Get-FileHash -Algorithm SHA256 "dist-repeat/$archive").Hash
+          if ($first -ne $second) {
+            throw "Windows release archive is not reproducible"
+          }
       - name: Run native CLI and composition-root tests
         if: runner.os != 'Linux'
         run: cargo test --locked --package heyfood-cli --package heyfood-bin
@@ -101,7 +129,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Linux native credential build dependencies
         run: sudo apt-get update && sudo apt-get install --yes libdbus-1-dev pkg-config
-      - name: Build and package the host executable as the four-file fixture set
+      - name: Build and package the host executable as the five-archive fixture set
         shell: bash
         run: |
           set -euo pipefail
@@ -116,6 +144,11 @@ jobs:
             x86_64-unknown-linux-gnu; do
             scripts/release/package.sh "$binary" "$version" "$target" dist
           done
+          pwsh -NoProfile -File packaging/windows/package.ps1 \
+            -Binary "$binary" \
+            -Version "$version" \
+            -Target x86_64-pc-windows-msvc \
+            -OutputDirectory dist
           scripts/release/checksums.sh dist "$version"
           scripts/release/verify-assets.sh dist "$version"
           scripts/release/smoke.sh dist "$version" x86_64-unknown-linux-gnu
@@ -127,6 +160,14 @@ jobs:
             jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
           scripts/release/package.sh \
             target/release/heyfood "$version" x86_64-unknown-linux-gnu dist-repeat
+          pwsh -NoProfile -File packaging/windows/package.ps1 \
+            -Binary target/release/heyfood \
+            -Version "$version" \
+            -Target x86_64-pc-windows-msvc \
+            -OutputDirectory dist-repeat
           cmp \
             "dist/heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz" \
             "dist-repeat/heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz"
+          cmp \
+            "dist/heyfood-v$version-x86_64-pc-windows-msvc.zip" \
+            "dist-repeat/heyfood-v$version-x86_64-pc-windows-msvc.zip"

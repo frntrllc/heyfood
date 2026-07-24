@@ -13,6 +13,7 @@ hidden legacy command is not support: unavailable paths return
 | Native v0.4.1 | Unsupported | Do not install or use. Published before release authorization. |
 | Hosted installer | Suspended | Prints the incident notice and exits `1` without installing anything. |
 | Source | Available | Public for inspection and contributor evaluation under Apache 2.0. |
+| Windows x86-64 archive | Source/CI qualification | Deterministic zip packaging and installed-executable smoke are wired; Authenticode signing and the public per-user installer remain release blockers. |
 | Replacement native release | Unavailable | Not available until testing and release approval are complete. |
 
 ## Product capabilities
