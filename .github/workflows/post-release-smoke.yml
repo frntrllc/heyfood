@@ -24,6 +24,7 @@ jobs:
   public-native:
     name: v${{ inputs.version }} / ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
+    environment: native-release
     strategy:
       fail-fast: false
       matrix:
