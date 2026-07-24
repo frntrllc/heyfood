@@ -107,3 +107,14 @@ installed-artifact qualification, including denial, truncation, timeout,
 cancellation, and resource-lifecycle cases. Household targeting, consent-aware
 dietary context, and Grocery safety cards likewise still require
 installed-artifact and production-canary proof.
+
+Native CLI CI now runs the first bounded installed-artifact vertical on macOS,
+Linux, and Windows. It verifies the exact archive checksum and one-executable
+archive policy, extracts into a clean temporary user environment, performs
+device registration against a synthetic contract service, follows the
+production registration handoff into a real PTY, submits one streamed turn,
+captures raw ANSI evidence, proves the request-path sequence, rejects credential
+material in the capture, and observes terminal restoration on exit. The
+evidence document deliberately reports `release_gate_complete: false` and
+credits none of the twelve showcase stages. It is harness foundation, not
+showcase conformance.

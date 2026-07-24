@@ -71,6 +71,68 @@ jobs:
           else
             echo "HEYFOOD_BIN=target/release/heyfood" >> "$GITHUB_ENV"
           fi
+      - name: Install deterministic archive tooling
+        if: runner.os == 'macOS'
+        run: brew install gnu-tar
+      - name: Package the exact macOS or Linux showcase archive
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --locked --no-deps --format-version 1 |
+            jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
+          target=$(rustc -vV | sed -n 's/^host: //p')
+          mkdir -p showcase-dist showcase-evidence
+          scripts/release/package.sh "$HEYFOOD_BIN" "$version" "$target" showcase-dist
+          archive="heyfood-v$version-$target.tar.gz"
+          (
+            cd showcase-dist
+            shasum -a 256 "$archive" >SHA256SUMS
+          )
+          {
+            echo "HEYFOOD_SHOWCASE_ARCHIVE=$GITHUB_WORKSPACE/showcase-dist/$archive"
+            echo "HEYFOOD_SHOWCASE_MANIFEST=$GITHUB_WORKSPACE/showcase-dist/SHA256SUMS"
+            echo "HEYFOOD_SHOWCASE_EVIDENCE_DIR=$GITHUB_WORKSPACE/showcase-evidence"
+            echo "HEYFOOD_SHOWCASE_TARGET=$target"
+            echo "HEYFOOD_SHOWCASE_VERSION=$version"
+          } >>"$GITHUB_ENV"
+      - name: Package the exact Windows showcase archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = cargo metadata --locked --no-deps --format-version 1 |
+            ConvertFrom-Json |
+            Select-Object -ExpandProperty packages |
+            Where-Object { $_.name -eq "heyfood-bin" } |
+            Select-Object -ExpandProperty version
+          $target = (rustc -vV | Select-String '^host: ').Line.Substring(6)
+          New-Item -ItemType Directory -Force showcase-dist, showcase-evidence | Out-Null
+          ./packaging/windows/package.ps1 `
+            -Binary $env:HEYFOOD_BIN `
+            -Version $version `
+            -Target $target `
+            -OutputDirectory showcase-dist
+          $archive = "heyfood-v$version-$target.zip"
+          $digest = (Get-FileHash -Algorithm SHA256 "showcase-dist/$archive").Hash.ToLowerInvariant()
+          "$digest  $archive" | Set-Content -Encoding ascii showcase-dist/SHA256SUMS
+          $root = (Get-Location).Path
+          @(
+            "HEYFOOD_SHOWCASE_ARCHIVE=$root\showcase-dist\$archive"
+            "HEYFOOD_SHOWCASE_MANIFEST=$root\showcase-dist\SHA256SUMS"
+            "HEYFOOD_SHOWCASE_EVIDENCE_DIR=$root\showcase-evidence"
+            "HEYFOOD_SHOWCASE_TARGET=$target"
+            "HEYFOOD_SHOWCASE_VERSION=$version"
+          ) | Add-Content -Encoding utf8 $env:GITHUB_ENV
+      - name: Qualify clean registration and first turn from the installed archive
+        run: cargo test --locked --package heyfood-bin --test installed_showcase -- --ignored --exact installed_archive_registration_and_first_turn
+      - name: Upload installed-artifact foundation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fcbe94 # v7.0.1
+        with:
+          name: installed-showcase-${{ matrix.os }}
+          path: showcase-evidence
+          if-no-files-found: warn
+          retention-days: 14
       - name: Parse every Windows release script
         if: runner.os == 'Windows'
         shell: pwsh
