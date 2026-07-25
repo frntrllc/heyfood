@@ -47,14 +47,62 @@ assert_no_windows_release_path() {
   fi
 }
 
+line_of() {
+  local source=$1
+  local pattern=$2
+  awk -v pattern="$pattern" 'index($0, pattern) { print NR; exit }' "$source"
+}
+
 protected_slice="$CASE_DIR/protected-ci.yml"
 sed -n '/^  protected-candidate-preflight:/,$p' "$CANDIDATE_WORKFLOW" >"$protected_slice"
+macos_signer="$ROOT/packaging/macos/sign-and-notarize.sh"
 
-[[ -x "$ROOT/packaging/macos/sign-and-notarize.sh" ]] ||
+[[ -x "$macos_signer" ]] ||
   fail "the macOS signing tool must be executable"
 [[ "$(git -C "$ROOT" ls-files --stage -- packaging/macos/sign-and-notarize.sh |
   awk '{print $1}')" == "100755" ]] ||
   fail "Git must record the macOS signing tool with mode 100755"
+
+capture_line=$(line_of "$macos_signer" 'security list-keychains -d user |')
+create_line=$(line_of "$macos_signer" 'security create-keychain')
+settings_line=$(line_of "$macos_signer" 'security set-keychain-settings')
+unlock_line=$(line_of "$macos_signer" 'security unlock-keychain')
+import_line=$(line_of "$macos_signer" "security import \"\$p12\"")
+partition_line=$(line_of "$macos_signer" 'security set-key-partition-list')
+changed_line=$(line_of "$macos_signer" 'keychain_search_list_changed=true')
+register_line=$(line_of "$macos_signer" \
+  "security list-keychains -d user -s \"\$keychain\"")
+identity_line=$(line_of "$macos_signer" 'security find-identity')
+if [[ -z "$capture_line" || -z "$create_line" || -z "$settings_line" ||
+  -z "$unlock_line" || -z "$import_line" || -z "$partition_line" ||
+  -z "$changed_line" || -z "$register_line" || -z "$identity_line" ]]; then
+  fail "the macOS signing tool must contain the hosted-runner keychain sequence"
+fi
+if ! ((capture_line < create_line &&
+  create_line < settings_line &&
+  settings_line < unlock_line &&
+  unlock_line < import_line &&
+  import_line < partition_line &&
+  partition_line < changed_line &&
+  changed_line < register_line &&
+  register_line < identity_line)); then
+  fail "the macOS keychain sequence must be capture, create, configure, import, partition, register, discover"
+fi
+partition_block=$(sed -n \
+  "/^security set-key-partition-list \\\\/,/^  \"\\\$keychain\"\$/p" \
+  "$macos_signer")
+if grep -Eq '^[[:space:]]+-s([[:space:]\\]|$)' <<<"$partition_block"; then
+  fail "the hosted macOS partition-list command must not use the failing -s predicate"
+fi
+grep -Fq "security list-keychains -d user -s \"\${original_keychains[@]}\"" \
+  "$macos_signer" ||
+  fail "macOS signing cleanup must restore the prior user keychain search list"
+restore_line=$(line_of "$macos_signer" \
+  "security list-keychains -d user -s \"\${original_keychains[@]}\"")
+delete_line=$(line_of "$macos_signer" "security delete-keychain \"\$keychain\"")
+if [[ -z "$restore_line" || -z "$delete_line" || "$restore_line" -ge "$delete_line" ]]; then
+  fail "macOS signing cleanup must restore the search list before deleting the keychain"
+fi
 
 assert_four_targets "$RELEASE_WORKFLOW"
 assert_four_targets "$PUBLIC_SMOKE_WORKFLOW"

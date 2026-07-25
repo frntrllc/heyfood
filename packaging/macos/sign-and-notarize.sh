@@ -30,18 +30,49 @@ p12="$signing_directory/developer-id.p12"
 submission="$signing_directory/heyfood-notarization.zip"
 notary_result="$signing_directory/notary-result.json"
 keychain_password=$(openssl rand -hex 32)
+keychain_created=false
+keychain_search_list_changed=false
+original_keychains=()
 
 cleanup() {
-  security delete-keychain "$keychain" >/dev/null 2>&1 || true
+  local status=$?
+  local cleanup_failed=false
+
+  if [[ "$keychain_search_list_changed" == true ]]; then
+    if ! security list-keychains -d user -s "${original_keychains[@]}"; then
+      echo "failed to restore the macOS user keychain search list" >&2
+      cleanup_failed=true
+    fi
+  fi
+  if [[ "$keychain_created" == true ]]; then
+    if ! security delete-keychain "$keychain"; then
+      echo "failed to delete the temporary macOS signing keychain" >&2
+      cleanup_failed=true
+    fi
+  fi
   rm -rf -- "$signing_directory"
+  if [[ "$cleanup_failed" == true ]]; then
+    return 1
+  fi
+  return "$status"
 }
 trap cleanup EXIT
+
+while IFS= read -r existing_keychain; do
+  if [[ -n "$existing_keychain" ]]; then
+    original_keychains+=("$existing_keychain")
+  fi
+done < <(
+  security list-keychains -d user |
+    sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//'
+)
 
 printf '%s' "$HEYFOOD_MACOS_CERTIFICATE_P12_BASE64" |
   openssl base64 -d -A >"$p12"
 chmod 0600 "$p12"
 
 security create-keychain -p "$keychain_password" "$keychain"
+keychain_created=true
 security set-keychain-settings -lut 21600 "$keychain"
 security unlock-keychain -p "$keychain_password" "$keychain"
 security import "$p12" \
@@ -51,9 +82,10 @@ security import "$p12" \
   -T /usr/bin/security
 security set-key-partition-list \
   -S apple-tool:,apple: \
-  -s \
   -k "$keychain_password" \
   "$keychain"
+keychain_search_list_changed=true
+security list-keychains -d user -s "$keychain" "${original_keychains[@]}"
 
 identities=$(security find-identity -v -p codesigning "$keychain" |
   awk '/"Developer ID Application:/{print $2}')
