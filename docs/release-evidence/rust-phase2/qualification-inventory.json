@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "evidence_timestamp_utc": "2026-07-25T00:27:31Z",
+  "evidence_timestamp_utc": "2026-07-25T03:51:07Z",
   "release": "0.5.0",
   "lineage": {
     "repository": "https://github.com/frntrllc/heyfood.git",
     "pull_request": 27,
     "branch": "codex/rust-phase2-remediation",
-    "product_commit_sha": "7d554209bc889dc707e39c707fdf3a5e820cbddc",
-    "product_tree_sha": "59d4e619f29e414c4a7eabdae1fe8a0081239355",
+    "product_commit_sha": "efd745061786033db88ab04e33203f6bdee04888",
+    "product_tree_sha": "b3acc87184eb58fd3d9a0012433bc6969f0e5236",
     "draft": true,
     "merged": false
   },
@@ -19,14 +19,14 @@
     },
     "hosted": {
       "rust_ci": {
-        "run_id": 30135601977,
+        "run_id": 30142733818,
         "successes": 40,
         "expected_skips": 1,
         "failures": 0,
         "pending": 0
       },
       "native_cli_ci": {
-        "run_id": 30135601981,
+        "run_id": 30142733820,
         "successes": 6,
         "expected_skips": 2,
         "failures": 0,
@@ -35,11 +35,13 @@
     },
     "independent_rust_review": {
       "status": "go",
-      "scope": "production-canary credential-persistence remediation",
+      "scope": "v0.5.0 Health deferral and legacy-scope replacement remediation",
       "findings": 0
     }
   },
   "installed_artifact": {
+    "qualified_product_commit_sha": "7d554209bc889dc707e39c707fdf3a5e820cbddc",
+    "relationship_to_exact_head": "predecessor unsigned archive evidence; exact-head source archives separately passed Native CLI CI and final signed-candidate reruns remain required",
     "target": "aarch64-apple-darwin",
     "archive": "heyfood-v0.5.0-aarch64-apple-darwin.tar.gz",
     "archive_sha256": "e05dd72e83985ddfca73ee0b252242d4b0cff5f3beea69bc19a95830dc610121",
@@ -104,6 +106,8 @@
     ]
   },
   "production_canary": {
+    "qualified_product_commit_sha": "7d554209bc889dc707e39c707fdf3a5e820cbddc",
+    "relationship_to_exact_head": "predecessor production evidence retained without retroactive exact-head attribution",
     "native_registration": {
       "status": "passed",
       "artifact": "exact unsigned installed archive",
@@ -134,10 +138,12 @@
       "backend_prerequisite": "configure the production confirmation-signing secret"
     },
     "health": {
-      "status": "not_run_at_exact_head",
+      "status": "deferred_from_supported_v0.5.0_contract",
+      "implementation_required_for_release": false,
+      "production_canary_required_for_release": false,
       "latest_observed_backend_status_from_preceding_canary": 503,
       "latest_observed_backend_error_from_preceding_canary": "provider_unavailable",
-      "backend_prerequisite": "enable and configure the deployed integration provider or retain the documented deferral"
+      "release_boundary": "not advertised by CLI help, completion, or TUI discovery; fresh authorization omits Health scopes"
     },
     "cleanup": {
       "remote_authority_revoked": true,
@@ -168,7 +174,6 @@
   "release_gate_complete": false,
   "remaining_release_gates": [
     "configure the deployed Grocery confirmation-signing secret and run the positive, cancel, conflict, and non-mutation canaries",
-    "either configure and canary Health or preserve its truthful 0.5.0 deferral",
     "provision protected macOS and Windows signing inputs",
     "build real signed and notarized platform candidates",
     "rerun the installed-artifact core matrix with native credential backends against every signed candidate",

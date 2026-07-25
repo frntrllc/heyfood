@@ -1,21 +1,33 @@
 # Rust Phase 2 installed-artifact qualification
 
 The exact product commit is
-`7d554209bc889dc707e39c707fdf3a5e820cbddc` (tree
-`59d4e619f29e414c4a7eabdae1fe8a0081239355`). The bounded Rust review returned
-GO with no findings. Hosted exact-head qualification completed with 46
-successful jobs, three expected conditional skips, no failures, and no pending
-jobs.
+`efd745061786033db88ab04e33203f6bdee04888` (tree
+`b3acc87184eb58fd3d9a0012433bc6969f0e5236`). The bounded Rust review of the
+`v0.5.0` Health deferral and legacy-scope replacement returned GO with no
+findings. Hosted exact-head qualification completed with 46 successful jobs,
+three expected conditional skips, no failures, and no pending jobs.
+
+Health is absent from root help, all five generated completion formats, and TUI
+command discovery. An exact retained `health` invocation returns
+`capability_deferred` before credential access or network dispatch. Fresh
+authorization requests omit `health:read` and `integrations:manage`; atomic
+login tests prove a legacy Health-bearing grant is replaced by the exact
+canonical supported scope set only after success, while rejection and uncertain
+staging preserve the original credentials byte-for-byte.
 
 ## Installed archive
 
-The unsigned local `aarch64-apple-darwin` archive has SHA-256
+The unsigned local `aarch64-apple-darwin` archive evidence in this section was
+produced from predecessor product commit
+`7d554209bc889dc707e39c707fdf3a5e820cbddc`; it is retained without
+retroactively attributing those bytes to the exact head. That archive has SHA-256
 `e05dd72e83985ddfca73ee0b252242d4b0cff5f3beea69bc19a95830dc610121`.
 The installed executable has SHA-256
 `0d38114f1e249b8a472e16733968ee54fb6c767b9362218ab8fcd221176500eb`.
 
-The installed-artifact core matrix passed from the extracted archive, not a
-Cargo target. It covered:
+The predecessor installed-artifact core matrix passed from the extracted
+archive, not a Cargo target. Exact-head source archives separately passed Native
+CLI CI across the supported build platforms. The predecessor matrix covered:
 
 - clean-user registration, missing-profile onboarding and consent, profile
   upload, and the first authenticated TUI turn;
@@ -34,21 +46,24 @@ platform.
 
 ## Production canary
 
-The same exact installed artifact completed native macOS registration against
-production. Immediate durable credential readback passed with no reconciliation
-marker, closing the fractional-RFC3339-expiry defect found by the first run.
-A separate installed process reloaded the Keychain credential, completed
-authenticated Grocery and Menu Watch reads, completed a real TUI agent turn,
-and exited normally.
+The production evidence in this section also belongs to predecessor product
+commit `7d554209bc889dc707e39c707fdf3a5e820cbddc`; it is not claimed as an
+exact-head canary. That installed artifact completed native macOS registration
+against production. Immediate durable credential readback passed with no
+reconciliation marker, closing the fractional-RFC3339-expiry defect found by
+the first run. A separate installed process reloaded the Keychain credential,
+completed authenticated Grocery and Menu Watch reads, completed a real TUI
+agent turn, and exited normally.
 
-Menu Watch and Grocery read qualification passed at the exact head. No Grocery
-mutation occurred. The exact-head prepare canary was not repeated because the
+Menu Watch and Grocery read qualification passed for that predecessor product.
+No Grocery mutation occurred. Its prepare canary was not repeated because the
 immediately preceding production canary had already proven the deployed backend
 blocked before confirmation with `confirmation signing key unavailable`, and
-the Render configuration remained unchanged. Health was likewise not repeated
-at the exact head; the immediately preceding production canary returned HTTP
-503 `provider_unavailable`. Health must either be configured and canaried or
-remain truthfully deferred from the `0.5.0` support contract.
+the Render configuration remained unchanged. No Health canary was run for the
+exact Health-deferral head; none is required. The immediately preceding
+production canary returned HTTP 503 `provider_unavailable`. Health is now
+truthfully deferred from the supported `0.5.0` contract, so no additional
+Health implementation or production canary is required for this release.
 
 Canary cleanup revoked one link, two sessions, and two devices. The postflight
 session probe returned HTTP 401. Both isolated native Keychain entries and all
@@ -65,11 +80,10 @@ The shortest remaining path is:
 
 1. Configure the deployed Grocery confirmation-signing secret and run the
    positive, cancel, conflict, and non-mutation canaries.
-2. Configure and canary Health, or preserve its explicit `0.5.0` deferral.
-3. Provision the protected macOS and Windows signing inputs.
-4. Build signed/notarized candidates and rerun the installed-artifact matrix
+2. Provision the protected macOS and Windows signing inputs.
+3. Build signed/notarized candidates and rerun the installed-artifact matrix
    with native credential backends on every platform.
-5. Freeze the exact candidate lineage and obtain independent exact-SHA and
+4. Freeze the exact candidate lineage and obtain independent exact-SHA and
    exact-archive approval.
 
 PR #27 remains draft and unmerged. The installer remains fail-closed, the
