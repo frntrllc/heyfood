@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "evidence_timestamp_utc": "2026-07-25T00:27:31Z",
+  "release": "0.5.0",
+  "lineage": {
+    "repository": "https://github.com/frntrllc/heyfood.git",
+    "pull_request": 27,
+    "branch": "codex/rust-phase2-remediation",
+    "product_commit_sha": "7d554209bc889dc707e39c707fdf3a5e820cbddc",
+    "product_tree_sha": "59d4e619f29e414c4a7eabdae1fe8a0081239355",
+    "draft": true,
+    "merged": false
+  },
+  "exact_head_qualification": {
+    "local_workspace": {
+      "format": "passed",
+      "tests": "passed",
+      "strict_clippy_all_targets_all_features": "passed"
+    },
+    "hosted": {
+      "rust_ci": {
+        "run_id": 30135601977,
+        "successes": 40,
+        "expected_skips": 1,
+        "failures": 0,
+        "pending": 0
+      },
+      "native_cli_ci": {
+        "run_id": 30135601981,
+        "successes": 6,
+        "expected_skips": 2,
+        "failures": 0,
+        "pending": 0
+      }
+    },
+    "independent_rust_review": {
+      "status": "go",
+      "scope": "production-canary credential-persistence remediation",
+      "findings": 0
+    }
+  },
+  "installed_artifact": {
+    "target": "aarch64-apple-darwin",
+    "archive": "heyfood-v0.5.0-aarch64-apple-darwin.tar.gz",
+    "archive_sha256": "e05dd72e83985ddfca73ee0b252242d4b0cff5f3beea69bc19a95830dc610121",
+    "executable_sha256": "0d38114f1e249b8a472e16733968ee54fb6c767b9362218ab8fcd221176500eb",
+    "signed": false,
+    "credential_backend": "isolated_file",
+    "core_matrix": [
+      {
+        "id": "clean-user",
+        "status": "passed",
+        "assertions": [
+          "device registration",
+          "account-bound credential persistence",
+          "missing-profile onboarding",
+          "profile-sync consent",
+          "single profile upload",
+          "first authenticated TUI turn"
+        ]
+      },
+      {
+        "id": "returning-user",
+        "status": "passed",
+        "assertions": [
+          "first process exited",
+          "second installed process reloaded credentials",
+          "registration was not repeated",
+          "second authenticated turn"
+        ]
+      },
+      {
+        "id": "household-grocery",
+        "status": "passed",
+        "assertions": [
+          "member-specific screening and substitutions",
+          "proposal review and edit",
+          "cancel without mutation",
+          "single accept and single list-version advance",
+          "stale list rejection",
+          "stale household-context rejection"
+        ]
+      },
+      {
+        "id": "failure-safety",
+        "status": "passed",
+        "assertions": [
+          "no blind retry after uncertain dispatch",
+          "stream cancellation",
+          "pending-confirmation cancellation without mutation",
+          "terminal restoration after normal and interrupted exits"
+        ]
+      },
+      {
+        "id": "artifact-behavior",
+        "status": "source_qualified",
+        "assertions": [
+          "40, 80, and 120 column semantics",
+          "NO_COLOR",
+          "exact archive digest",
+          "packaged executable rather than Cargo target"
+        ]
+      }
+    ]
+  },
+  "production_canary": {
+    "native_registration": {
+      "status": "passed",
+      "artifact": "exact unsigned installed archive",
+      "credential_backend": "macos_keychain",
+      "fractional_expiry_readback": "passed",
+      "account_reconciliation_marker": "absent_after_registration"
+    },
+    "returning_user": {
+      "status": "passed",
+      "assertions": [
+        "separate installed process reloaded native credentials",
+        "authenticated Grocery read",
+        "authenticated Menu Watch read",
+        "authenticated TUI turn",
+        "normal TUI exit"
+      ]
+    },
+    "menu_watch": {
+      "status": "passed",
+      "operation": "read",
+      "mutation": false
+    },
+    "grocery": {
+      "read": "passed",
+      "prepare_mutation": "not_run_at_exact_head",
+      "mutation_observed": false,
+      "known_backend_error_from_preceding_canary": "confirmation signing key unavailable",
+      "backend_prerequisite": "configure the production confirmation-signing secret"
+    },
+    "health": {
+      "status": "not_run_at_exact_head",
+      "latest_observed_backend_status_from_preceding_canary": 503,
+      "latest_observed_backend_error_from_preceding_canary": "provider_unavailable",
+      "backend_prerequisite": "enable and configure the deployed integration provider or retain the documented deferral"
+    },
+    "cleanup": {
+      "remote_authority_revoked": true,
+      "links_revoked": 1,
+      "sessions_revoked": 2,
+      "devices_revoked": 2,
+      "postflight_auth_status": 401,
+      "native_keychain_entries_deleted": 2,
+      "isolated_local_credentials_removed": true
+    }
+  },
+  "protected_distribution": {
+    "workflow_source": "qualified",
+    "signed_candidate_executed": false,
+    "github_environment": "native-release",
+    "missing_inputs": [
+      "MACOS_DEVELOPER_ID_P12_BASE64",
+      "MACOS_DEVELOPER_ID_P12_PASSWORD",
+      "APPLE_NOTARY_ACCOUNT",
+      "APPLE_NOTARY_APP_PASSWORD",
+      "WINDOWS_CODESIGN_PFX_BASE64",
+      "WINDOWS_CODESIGN_PFX_PASSWORD",
+      "WINDOWS_CODESIGN_SUBJECT",
+      "WINDOWS_TIMESTAMP_URL"
+    ],
+    "aws_signing_material_discovered": false
+  },
+  "release_gate_complete": false,
+  "remaining_release_gates": [
+    "configure the deployed Grocery confirmation-signing secret and run the positive, cancel, conflict, and non-mutation canaries",
+    "either configure and canary Health or preserve its truthful 0.5.0 deferral",
+    "provision protected macOS and Windows signing inputs",
+    "build real signed and notarized platform candidates",
+    "rerun the installed-artifact core matrix with native credential backends against every signed candidate",
+    "freeze the candidate lineage and obtain independent exact-SHA and exact-archive approval"
+  ],
+  "prohibitions_preserved": [
+    "PR 27 remains draft and unmerged",
+    "installer remains fail-closed",
+    "release workflow remains disabled",
+    "no tag or release was published"
+  ]
+}
