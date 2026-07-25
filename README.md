@@ -79,16 +79,19 @@ exchange, and response-contract validation all succeed. If it reports an
 uncertain session-exchange or persistence outcome, do not start another
 registration attempt until account state is reconciled.
 
-Older native credentials may predate the Grocery or Menu Watch scopes. If a command
-reports `authorization_scope_upgrade_required`, approve the explicit upgrade:
+Older native credentials may predate the Grocery or Menu Watch scopes. If a
+command reports `authorization_scope_upgrade_required`, approve the explicit
+authorization replacement:
 
 ```bash
 heyfood login
 ```
 
-OAuth refresh cannot add authority. Login preserves the existing credentials
-through device approval and session exchange, verifies the complete expanded
-grant, and only then replaces both native credential stores.
+OAuth refresh cannot change authority. Login preserves the existing credentials
+through device approval and session exchange, verifies the complete canonical
+supported grant, and only then replaces both native credential stores. The
+replacement may add Grocery or Menu Watch authority and removes scopes for
+deferred capabilities such as Health.
 
 ## Current Rust command surface
 

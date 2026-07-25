@@ -7,7 +7,7 @@ legacy Python behavior or hidden compatibility topology.
 
 ```text
 register      create and connect a hello.food account
-login         authenticate again or approve expanded scopes
+login         authenticate again and replace the supported scope set
 ask           ask the hosted agent a one-shot question
 reply         continue an explicit conversation id
 log           log a meal through the hosted agent

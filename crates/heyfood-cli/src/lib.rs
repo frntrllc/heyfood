@@ -107,7 +107,7 @@ pub enum Command {
     /// Open guided dietary onboarding in the native TUI.
     #[command(hide = true)]
     Onboard(LegacyArgs),
-    /// Authenticate or expand authorization for an existing account.
+    /// Authenticate again and atomically replace authorization with the supported scope set.
     Login(LoginArgs),
     /// Create and connect a hello.food account.
     Register(RegisterArgs),

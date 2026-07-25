@@ -23,7 +23,7 @@ specific `capability_deferred`.
 | Capability | Rust CLI | Hosted hello.food | Status |
 |---|---|---|---|
 | Registration | `heyfood register` | Device authorization, identity verification, agreements, and consent | Current source command |
-| Login and scope upgrade | `heyfood login` | Atomic channel and application-session grant | Current source command |
+| Login and authorization replacement | `heyfood login` | Atomic channel and application-session grant | Current source command |
 | Food questions | `heyfood ask` | Hosted agent turn | Current source command |
 | Conversation continuation | `heyfood reply --conversation-id …` | Hosted conversation state | Current source command |
 | Meal logging | `heyfood log` | Hosted agent and meal memory | Current source command |

@@ -14,7 +14,7 @@ The following commands perform native product work:
 | Command | Contract |
 |---|---|
 | `register` | Starts device authorization, exchanges the approved grant, validates the response contract, and persists the complete native session. |
-| `login` | Explicitly signs in again and atomically expands an existing native grant; refresh is never used for scope widening. |
+| `login` | Explicitly signs in again and atomically replaces an existing native grant with the canonical supported scope set; refresh is never used to change authority. |
 | `chat` | Opens the authenticated interactive Rust TUI. |
 | `onboard` | Opens the Rust TUI directly in guided dietary-profile onboarding. |
 | `ask` | Runs one hosted-agent turn. |
@@ -41,7 +41,9 @@ Existing credentials missing a command's required scope fail locally with
 `authorization_scope_upgrade_required` and direct the user to `heyfood login`.
 The old channel and app-session credentials remain authoritative through the
 new browser/device grant and session exchange. A durable reconciliation marker
-blocks use if the final two-store replacement cannot complete.
+blocks use if the final two-store replacement cannot complete. The replacement
+may add Grocery or Menu Watch authority while removing scopes for deferred
+capabilities such as Health.
 
 Grocery reads include `grocery show` (compatibility alias `list`) and
 `grocery exclusions`.

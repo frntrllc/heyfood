@@ -18,6 +18,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
 
 const LIST_ID: &str = "00000000-0000-4000-8000-000000000123";
+// Canonical supported v0.5 scope set; intentionally excludes deferred Health authority.
 const FULL_SCOPE: &str = "account:link account:delete knowledge:read menu:read menu:watch recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe grocery:read grocery:write";
 
 struct TempRoot(PathBuf);
@@ -160,7 +161,13 @@ async fn respond_status(
 }
 
 fn old_scope() -> &'static str {
-    "account:link account:delete knowledge:read menu:read recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe"
+    "account:link account:delete knowledge:read menu:read recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe health:read integrations:manage"
+}
+
+fn assert_legacy_health_authority(scope: &str) {
+    let scopes = scope.split_whitespace().collect::<BTreeSet<_>>();
+    assert!(scopes.contains("health:read"));
+    assert!(scopes.contains("integrations:manage"));
 }
 
 fn capabilities(grocery: bool) -> Value {
@@ -585,6 +592,7 @@ async fn public_login_preserves_old_credentials_until_complete_then_replaces_bot
     let session_store = FileCredentialStore::open(&root.0).unwrap();
     let old_auth = auth_store.load().unwrap().unwrap();
     let old_session = session_store.load().await.unwrap().unwrap();
+    assert_legacy_health_authority(&old_auth.channel.scope);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -751,6 +759,8 @@ async fn public_login_preserves_old_credentials_until_complete_then_replaces_bot
     assert_ne!(expanded, old_auth);
     assert_ne!(expanded_session, old_session);
     assert_eq!(expanded.channel.scope, FULL_SCOPE);
+    assert!(!expanded.channel.scope.contains("health:read"));
+    assert!(!expanded.channel.scope.contains("integrations:manage"));
     assert_eq!(expanded.session, expanded_session);
     assert!(!root.0.join("auth.reconciliation").exists());
 }
@@ -763,6 +773,7 @@ async fn rejected_login_leaves_both_existing_credentials_byte_for_byte_authorita
     let session_store = FileCredentialStore::open(&root.0).unwrap();
     let old_auth = auth_store.load().unwrap().unwrap();
     let old_session = session_store.load().await.unwrap().unwrap();
+    assert_legacy_health_authority(&old_auth.channel.scope);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let verification_uri = format!("{base_url}/authorize");
@@ -792,6 +803,11 @@ async fn rejected_login_leaves_both_existing_credentials_byte_for_byte_authorita
                 )
                 .await;
                 continue;
+            }
+            if path == "/v1/channel/oauth/device/authorize" {
+                let request: Value =
+                    serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+                assert_eq!(request["scope"], FULL_SCOPE);
             }
             let body = if path == "/v1/auth/capabilities" {
                 capabilities(false)
@@ -835,6 +851,7 @@ async fn lost_prepare_response_then_expiry_recovers_old_authority_without_second
     let session_store = FileCredentialStore::open(&root.0).unwrap();
     let old_auth = auth_store.load().unwrap().unwrap();
     let old_session = session_store.load().await.unwrap().unwrap();
+    assert_legacy_health_authority(&old_auth.channel.scope);
     let authorization_transaction_id = "authorization-transaction-prepare-loss";
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -870,6 +887,7 @@ async fn lost_prepare_response_then_expiry_recovers_old_authority_without_second
                 "/v1/channel/oauth/device/authorize" => {
                     let body: Value =
                         serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+                    assert_eq!(body["scope"], FULL_SCOPE);
                     client_transaction_id =
                         body["client_transaction_id"].as_str().unwrap().to_owned();
                     respond(
