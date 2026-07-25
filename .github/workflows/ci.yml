@@ -167,8 +167,15 @@ jobs:
           "$HEYFOOD_BIN" login --help
           "$HEYFOOD_BIN" ask --help
           "$HEYFOOD_BIN" grocery --help
-          "$HEYFOOD_BIN" health --help
+          if "$HEYFOOD_BIN" --help | grep -Eq '^  health[[:space:]]'; then
+            echo "health must not appear in the supported v0.5.0 help surface"
+            exit 1
+          fi
           "$HEYFOOD_BIN" completion bash > completion.bash
+          if grep -Eq '(^|[^[:alpha:]])health([^[:alpha:]]|$)' completion.bash; then
+            echo "health must not appear in the supported v0.5.0 completion surface"
+            exit 1
+          fi
           test -s completion.bash
       - name: Package, smoke, and reproduce the Windows release archive
         if: runner.os == 'Windows'

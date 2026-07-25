@@ -14,7 +14,6 @@ log           log a meal through the hosted agent
 item          assess a food or menu item
 grocery       read, prepare, export, and confirm Grocery operations
 watch         create, list, and remove recurring Menu Watch subscriptions
-health        read health context and manage the Oura integration
 completion    print shell completion syntax
 ```
 
@@ -71,19 +70,14 @@ Mutation commands prepare a proposal and do not commit it. Confirmation reads
 the proposal from stdin so authorization material does not enter shell history
 or process arguments.
 
-## Health
+## Deferred Health integrations
 
-```bash
-heyfood health status
-heyfood health show
-heyfood health connect oura
-heyfood health sync oura
-heyfood health disconnect oura --yes
-```
-
-Oura is the current direct CLI provider. Apple Health summaries are acquired by
-the hello.food app and exposed only as provider-labeled hosted context; the CLI
-does not access HealthKit.
+Health integrations are not part of the supported `v0.5.0` command surface.
+They are absent from root help, shell completion, and the TUI command registry.
+The retained `health` spelling fails locally with `capability_deferred` before
+credential access or network dispatch. Oura and Apple Health integration work
+remains post-`v0.5.0`; no Health implementation or canary is required for this
+release.
 
 ## Menu Watch
 
@@ -125,7 +119,6 @@ installer remains suspended.
 ```text
 /grocery             open the capability-gated active Grocery list
 /watch               open recurring Menu Watch subscriptions
-/health              open provider-neutral integration and health context
 /profile             read consent and synchronized dietary profile state
 /household           show account-bound local household context
 /for MEMBER|everyone change household scope and reset conversation continuity
@@ -147,7 +140,8 @@ installed-artifact showcase qualification remain release gates.
 
 ## Unavailable compatibility topology
 
-Onboarding, profile editing, restaurant search, recommendation, menu, recipe,
-household management, voice device configuration, diagnostics, logout, and
-account management are not active Rust commands. Some names remain hidden for
-migration topology only and return `command_not_available`.
+Health integrations, profile editing, restaurant search, recommendation, menu,
+recipe, household management, voice device configuration, diagnostics, logout,
+and account management are not active Rust commands. Some names remain hidden
+for migration topology only. Health returns `capability_deferred`; unfinished
+compatibility topology returns `command_not_available`.

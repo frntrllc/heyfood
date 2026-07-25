@@ -19,8 +19,13 @@ authentication contracts are stabilized.
   text and recognizes the frozen `message`, `text`, and `response` result forms.
 - Keeps unfinished interactive commands out of slash-command discovery until
   their typed effects and functional panels are complete.
-- Adds cancellable, authenticated `/grocery` and `/health` TUI panels backed by
-  live capability/list and provider-neutral integration/context reads.
+- Adds a cancellable, authenticated `/grocery` TUI panel backed by live
+  capability and list reads.
+- Defers Health integrations from the supported `v0.5.0` contract. `health` is
+  hidden from root help and completion and fails locally with
+  `capability_deferred`; `/health` is not advertised by the TUI; fresh grants
+  do not request `health:read` or `integrations:manage`. Retained
+  provider-neutral code and fixtures are future work, not release claims.
 - Adds a live `/profile` consent/profile view plus account-bound local
   `/household` and `/location` panels; mismatched local state fails closed.
 - Adds a functional `/for MEMBER|everyone` context switch and threads the

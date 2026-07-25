@@ -2,9 +2,10 @@ use std::collections::BTreeSet;
 
 use clap::{CommandFactory, Parser};
 use heyfood_cli::{
-    Command, CommandLine, GroceryCommand, GroceryDecisionArgument, MenuWatchCommand, OutputMode,
-    WatchWeekdayArgument, render_grocery_exclusions, render_grocery_list, render_grocery_proposal,
-    render_json, render_menu_watch_list,
+    Command, CommandLine, CompletionShell, GroceryCommand, GroceryDecisionArgument,
+    MenuWatchCommand, OutputMode, WatchWeekdayArgument, render_grocery_exclusions,
+    render_grocery_list, render_grocery_proposal, render_json, render_menu_watch_list,
+    write_completions,
 };
 use heyfood_core::{
     ExclusionListResponseWire, GroceryListWire, GroceryMutationProposalWire,
@@ -13,7 +14,7 @@ use heyfood_core::{
 use serde_json::json;
 
 #[test]
-fn command_tree_contains_python_parity_and_authorized_phase2_families() {
+fn command_tree_retains_hidden_compatibility_and_authorized_phase2_families() {
     let actual = CommandLine::command()
         .get_subcommands()
         .map(|command| command.get_name().to_owned())
@@ -55,6 +56,37 @@ fn command_tree_contains_python_parity_and_authorized_phase2_families() {
     .map(str::to_owned)
     .collect();
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn v050_help_and_completions_hide_deferred_health_integrations() {
+    let mut command = CommandLine::command();
+    let root_help = command.render_long_help().to_string();
+    assert!(
+        !root_help
+            .lines()
+            .any(|line| line.trim_start().starts_with("health "))
+    );
+
+    let health_help = CommandLine::try_parse_from(["heyfood", "health", "--help"])
+        .unwrap_err()
+        .to_string();
+    assert!(health_help.contains("deferred from the supported v0.5.0 contract"));
+    assert!(!health_help.contains("connect"));
+    assert!(!health_help.contains("sync"));
+
+    for shell in [
+        CompletionShell::Bash,
+        CompletionShell::Elvish,
+        CompletionShell::Fish,
+        CompletionShell::PowerShell,
+        CompletionShell::Zsh,
+    ] {
+        let mut completion = Vec::new();
+        write_completions(shell, &mut completion);
+        let completion = String::from_utf8(completion).unwrap();
+        assert!(!completion.contains("health"));
+    }
 }
 
 #[test]

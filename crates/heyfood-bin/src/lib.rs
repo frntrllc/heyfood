@@ -2452,11 +2452,6 @@ async fn run_interactive_panel(
                 (Some("v1"), false) => "available · authorization required",
                 _ => "not advertised by service",
             };
-            let health = if authorization_has_scope(authorization_scope, "health:read") {
-                "authorized"
-            } else {
-                "authorization required"
-            };
             let menu_watch = if authorization_has_scope(authorization_scope, "menu:watch") {
                 "authorized · create/list/remove available"
             } else {
@@ -2478,7 +2473,7 @@ async fn run_interactive_panel(
                 }
             };
             Ok(format!(
-                "Session: active\nService: reachable\nProfile: {profile}\nGrocery: {grocery}\nMenu Watch: {menu_watch}\nHealth: {health}\nVoice: {voice}"
+                "Session: active\nService: reachable\nProfile: {profile}\nGrocery: {grocery}\nMenu Watch: {menu_watch}\nHealth integrations: deferred from v0.5.0\nVoice: {voice}"
             ))
         }
         PanelRequest::Grocery => {
@@ -4259,7 +4254,7 @@ mod tests {
         assert!(status.contains("Profile: authorized · sync consent granted"));
         assert!(status.contains("Grocery: available · authorized"));
         assert!(status.contains("Menu Watch: authorized · create/list/remove available"));
-        assert!(status.contains("Health: authorized"));
+        assert!(status.contains("Health integrations: deferred from v0.5.0"));
         assert!(status.contains(
             "Voice: native capture available · transcription authorized · permission checked on use"
         ));

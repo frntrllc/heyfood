@@ -46,6 +46,16 @@ The Rust artifact is not released until it passes every parity, security,
 platform, installation, and end-to-end gate. Internal build artifacts may be
 used for qualification, but users never receive a partial Rust client.
 
+### `v0.5.0` Health scope decision — 2026-07-24
+
+Health integrations are deferred from the supported `v0.5.0` contract. The
+release must not advertise `health` in CLI help or completion, `/health` in the
+TUI registry, request Health/integration-management scopes in fresh grants, or
+require Health implementation and production canaries. Retained
+provider-neutral types, transports, and frozen H1-H3 fixtures remain
+post-`v0.5.0` program assets only. This release decision narrows the recovery
+release without removing the longer-term Health vision below.
+
 For grocery, this plan supersedes every Python/PyPI/released-`0.3.x` client
 implementation clause in the historical grocery CLI surface directive. That
 document remains product/contract input only; Platform P0 and Grocery Phase A
@@ -195,12 +205,12 @@ gate passes. Retailer-provider work remains ordered after Grocery Phase A and
 Security D2: B1 provider foundation, then B2 Kroger; provider OAuth credentials
 never move into the native client.
 
-For health, the Rust program owns H1/H2 one-shot and TUI surfaces over the
-server-backed Oura contracts and later consumes provider-neutral Apple Health
-H3 rollups. The CLI never reads HealthKit directly and never stores provider
-OAuth tokens. Health H1/H2 is part of the native client program; H3 remains
-capability-gated on separately reviewed mobile/backend consent, upload,
-retention, encryption, and deletion contracts.
+After `v0.5.0`, the Rust program may resume H1/H2 one-shot and TUI work over the
+server-backed Oura contracts and later consume provider-neutral Apple Health H3
+rollups. The CLI never reads HealthKit directly and never stores provider OAuth
+tokens. Any future Health activation remains capability-gated on separately
+reviewed mobile/backend consent, upload, retention, encryption, deletion,
+client qualification, and an explicit release-contract change.
 
 Upon independent approval, this plan supersedes the Python/`prompt_toolkit`
 implementation choice in the reference plan. The reference plan's product,
@@ -1066,10 +1076,12 @@ The backend sequence is corrected Phase A plus Security D2 live, then B1
 provider foundations, then B2 Kroger binding. No current Rust work assumes an
 Instacart-first contract or moves provider OAuth tokens into the client.
 
-### Health integration contract
+### Post-`v0.5.0` Health integration contract
 
-H1/H2 is an additive native surface over the server-backed health and
-integration APIs:
+This section is retained as future program direction and is not part of the
+supported `v0.5.0` release. A later explicit release-contract change may make
+H1/H2 an additive native surface over the server-backed health and integration
+APIs:
 
 - `health status` reports connected providers and honest
   connected/stale/not-connected state;
@@ -1085,10 +1097,12 @@ integration APIs:
   optional health scopes or providers are absent.
 
 H1 reads require `health:read`; H2 management requires
-`integrations:manage`. These scopes are requested only after RFC 8414
+`integrations:manage`. A future activating release requests these scopes only
+after RFC 8414
 intersection proves the deployed server supports them. A real authenticated
 production canary must prove the endpoints, least-privilege session, and
-redirect/poll lifecycle before H1/H2 is declared releasable.
+redirect/poll lifecycle before H1/H2 is declared releasable in that later
+release.
 
 Apple Health H3 is provider-neutral from the Rust client's perspective.
 HealthKit authorization and collection remain mobile-owned; mobile uploads
@@ -1723,10 +1737,9 @@ release review passes.
 
 1. Produce signed internal release-candidate artifacts and run the complete
    platform/terminal matrix without publishing a supported partial product.
-2. Compare privacy-safe backend aggregate auth, agent SSE, transcription,
-   health context/integration management, and grocery capability/REST/
-   confirmation/conflict/screening success/failure with the pre-cutover
-   baseline; add no prompt, health value, grocery-item, member, or content
+2. Compare privacy-safe backend aggregate auth, agent SSE, transcription, and
+   grocery capability/REST/confirmation/conflict/screening success/failure with
+   the pre-cutover baseline; add no prompt, grocery-item, member, or content
    telemetry.
 3. Resolve every P0/P1 qualification finding and repeat affected review gates.
 4. Tag/archive the final Python baseline and verify exported fixtures are
@@ -1737,10 +1750,9 @@ release review passes.
    or supported product path.
 6. Verify Production advertises `capabilities.grocery = "v1"`, the deployed
    Phase A contract digest matches the mirrored fixture provenance, and a
-   least-privilege released-candidate session receives the optional scopes.
-   Also verify the released-candidate H1/H2 session receives only deployed
-   `health:read`/`integrations:manage` authority and completes the authenticated
-   provider-neutral canary.
+   least-privilege released-candidate session receives the optional Grocery
+   scopes. The `v0.5.0` candidate does not request Health authority or run a
+   Health provider canary.
 7. Merge the single DG-R5 cutover only after installed-artifact clean-user,
    returning-user, one-shot JSON, interactive typed, real-hardware voice, and
    capability-advertised grocery journeys pass.

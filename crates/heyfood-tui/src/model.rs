@@ -21,7 +21,6 @@ enum SlashCommandKind {
     New,
     Grocery,
     Watch,
-    Health,
     Household,
     For,
     Profile,
@@ -109,13 +108,6 @@ pub const SLASH_COMMAND_REGISTRY: &[SlashCommandSpec] = &[
         usage: "/watch",
         description: "Open recurring Menu Watch subscriptions",
         kind: SlashCommandKind::Watch,
-    },
-    SlashCommandSpec {
-        name: "/health",
-        aliases: &[],
-        usage: "/health",
-        description: "Open connected health context",
-        kind: SlashCommandKind::Health,
     },
     SlashCommandSpec {
         name: "/household",
@@ -1539,6 +1531,13 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
         .map_or((command.as_str(), ""), |(name, arguments)| {
             (name, arguments.trim())
         });
+    if name == "/health" {
+        push_notice(
+            model,
+            "Health integrations are deferred from the supported heyfood v0.5.0 contract.",
+        );
+        return Vec::new();
+    }
     let Some(spec) = resolve_slash_command(name) else {
         push_notice(
             model,
@@ -1571,7 +1570,6 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
         SlashCommandKind::Status
         | SlashCommandKind::Grocery
         | SlashCommandKind::Watch
-        | SlashCommandKind::Health
         | SlashCommandKind::Household
         | SlashCommandKind::Profile
         | SlashCommandKind::Onboard
@@ -1584,7 +1582,6 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
         SlashCommandKind::Status => return open_panel(model, PanelRequest::Status),
         SlashCommandKind::Grocery => return open_panel(model, PanelRequest::Grocery),
         SlashCommandKind::Watch => return open_panel(model, PanelRequest::Watch),
-        SlashCommandKind::Health => return open_panel(model, PanelRequest::Health),
         SlashCommandKind::Household => return open_panel(model, PanelRequest::Household),
         SlashCommandKind::For if arguments.is_empty() => {
             push_notice(model, &format!("Usage: {}", spec.usage));
@@ -3694,7 +3691,6 @@ mod tests {
             ("/status", PanelRequest::Status),
             ("/grocery", PanelRequest::Grocery),
             ("/watch", PanelRequest::Watch),
-            ("/health", PanelRequest::Health),
             ("/household", PanelRequest::Household),
             ("/profile", PanelRequest::Profile),
             ("/location", PanelRequest::Location),
@@ -3739,6 +3735,26 @@ mod tests {
             assert!(!result.streaming);
             assert_eq!(model.operation, OperationState::Idle);
         }
+    }
+
+    #[test]
+    fn deferred_health_panel_is_not_advertised_or_dispatched() {
+        assert!(
+            !SLASH_COMMAND_REGISTRY
+                .iter()
+                .any(|command| command.name == "/health")
+        );
+        let mut model = AppModel {
+            draft: "/health".into(),
+            cursor: "/health".len(),
+            ..AppModel::default()
+        };
+        assert!(dispatch(&mut model, Action::Submit).is_empty());
+        assert_eq!(model.operation, OperationState::Idle);
+        assert_eq!(
+            model.scrollback.entries().back().unwrap().text,
+            "Health integrations are deferred from the supported heyfood v0.5.0 contract."
+        );
     }
 
     #[test]

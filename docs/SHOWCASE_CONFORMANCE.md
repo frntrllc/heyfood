@@ -70,11 +70,13 @@ landing-page inventory. Its machine-readable contract is
   digest, and the real platform credential backend on the final signed
   candidate.
 
-Native voice and Menu Watch diff are not `0.5.0` gates. Health and Menu Watch
-management require one bounded production canary or truthful deferral. Passing
-the synthetic source-archive matrix does not authorize release: production
-registration/Grocery canaries, protected signing, the same matrix against the
-signed archives, and independent exact-SHA review remain required.
+Native voice, Menu Watch diff, and Health integrations are not `0.5.0` gates.
+Health integrations are explicitly deferred from the supported release
+contract and require neither implementation nor a production canary. Menu Watch
+management still requires one bounded production canary or truthful deferral.
+Passing the synthetic source-archive matrix does not authorize release:
+production registration/Grocery canaries, protected signing, the same matrix
+against the signed archives, and independent exact-SHA review remain required.
 
 ## Full post-`0.5.0` showcase E2E design
 

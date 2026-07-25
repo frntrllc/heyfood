@@ -137,7 +137,11 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<GroceryCommand>,
     },
-    /// Read health context and manage provider integrations.
+    /// Health integrations are deferred from the supported v0.5.0 contract.
+    #[command(
+        hide = true,
+        about = "Health integrations are deferred from the supported v0.5.0 contract."
+    )]
     Health {
         #[command(subcommand)]
         command: HealthCommand,
@@ -526,15 +530,20 @@ impl From<GroceryDecisionArgument> for GroceryDecisionWire {
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum HealthCommand {
-    /// Show connection states without health values.
+    /// Retained for future compatibility; unavailable in v0.5.0.
+    #[command(hide = true)]
     Status,
-    /// Read server-held H1 health context.
+    /// Retained for future compatibility; unavailable in v0.5.0.
+    #[command(hide = true)]
     Show,
-    /// Begin a server-owned provider authorization.
+    /// Retained for future compatibility; unavailable in v0.5.0.
+    #[command(hide = true)]
     Connect(HealthProviderArgs),
-    /// Request a server-side provider sync.
+    /// Retained for future compatibility; unavailable in v0.5.0.
+    #[command(hide = true)]
     Sync(HealthProviderArgs),
-    /// Disconnect a provider after explicit confirmation.
+    /// Retained for future compatibility; unavailable in v0.5.0.
+    #[command(hide = true)]
     Disconnect(HealthDisconnectArgs),
 }
 
@@ -1322,7 +1331,17 @@ fn append_item_conflicts(output: &mut String, document: &Value) {
 }
 
 pub fn generate_completion(shell: CompletionShell) -> Vec<u8> {
-    let mut command = CommandLine::command();
+    let source = CommandLine::command();
+    let mut command = clap::Command::new("heyfood");
+    for argument in source.get_arguments() {
+        command = command.arg(argument.clone());
+    }
+    for subcommand in source
+        .get_subcommands()
+        .filter(|subcommand| subcommand.get_name() != "health")
+    {
+        command = command.subcommand(subcommand.clone());
+    }
     let mut output = Vec::new();
     match shell {
         CompletionShell::Bash => clap_complete::generate(

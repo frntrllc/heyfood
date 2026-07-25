@@ -2,7 +2,7 @@
 
 This document defines the process interface for the current Rust public cut.
 Its active product commands are `register`, `login`, `chat`, `onboard`, `ask`,
-`reply`, `log`, `item`, `grocery`, and `health`. An interactive bare `heyfood`
+`reply`, `log`, `item`, `grocery`, and `watch`. An interactive bare `heyfood`
 invocation opens the same native TUI as `heyfood chat`.
 Human rendering may improve between compatible releases; machine-facing changes
 follow the compatibility policy below.
@@ -22,7 +22,15 @@ The following commands perform native product work:
 | `log` | Sends meal-log text through the hosted-agent turn endpoint. |
 | `item` | Sends a food or menu-item assessment through the hosted-agent turn endpoint. |
 | `grocery` | Reads, prepares, exports, and explicitly confirms Grocery v1 operations after capability discovery. |
-| `health` | Reads server-held health context and manages the provider-neutral Oura integration. Disconnect requires `--yes`. |
+| `watch` | Creates, lists, and removes recurring Menu Watch subscriptions. |
+
+Health integrations are deferred from the supported `v0.5.0` contract.
+`health` is hidden from root help and generated shell completion, `/health` is
+absent from the TUI command registry, and new grants do not request
+`health:read` or `integrations:manage`. The retained top-level spelling returns
+`capability_deferred` before credential access or network dispatch. Existing
+provider-neutral types, transports, and frozen fixtures are not a support claim
+and require no additional implementation or production canary for this release.
 
 `ask`, `reply`, `log`, and `item` accept positional UTF-8 text, an optional
 `--conversation-id`, and optional paired `--latitude`/`--longitude` values. If

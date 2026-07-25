@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 const OFFICIAL_CLIENT_ID: &str = "hf_cid_heyfood_cli";
 const APP_CLIENT_ID: &str = "heyfood-cli";
+const DEFERRED_LEGACY_SCOPES: &[&str] = &["health:read", "integrations:manage"];
 pub const LOGIN_SCOPES: &[&str] = &[
     "account:link",
     "account:delete",
@@ -27,8 +28,6 @@ pub const LOGIN_SCOPES: &[&str] = &[
     "meals:read",
     "meals:write",
     "audio:transcribe",
-    "health:read",
-    "integrations:manage",
     "grocery:read",
     "grocery:write",
 ];
@@ -438,9 +437,10 @@ impl RegistrationClient {
             .await
     }
 
-    /// Start an explicit sign-in that expands an existing grant to the full
-    /// canonical native scope set. Refresh and app-session re-exchange are
-    /// intentionally not used: neither operation can widen OAuth authority.
+    /// Start an explicit sign-in that replaces an existing grant with the
+    /// canonical supported release scope set. Refresh and app-session
+    /// re-exchange are intentionally not used: neither operation can change
+    /// OAuth authority.
     pub async fn start_device_reauthorization(
         &self,
         current_scope: &str,
@@ -454,7 +454,7 @@ impl RegistrationClient {
                 "This hello.food service does not advertise device authorization.",
             ));
         }
-        assert_preservable_scope(current_scope)?;
+        assert_known_reauthorization_scope(current_scope)?;
         validate_client_transaction_id(client_transaction_id)?;
         validate_device_id(device_id)?;
         self.start_device_authorization(
@@ -1337,10 +1337,12 @@ fn canonical_reauthorization_bundle(
     Ok((canonical, digest))
 }
 
-fn assert_preservable_scope(current_scope: &str) -> Result<(), RegistrationError> {
+fn assert_known_reauthorization_scope(current_scope: &str) -> Result<(), RegistrationError> {
     let current = parse_scope(current_scope);
     if current.is_empty()
-        || current.iter().any(|scope| !LOGIN_SCOPES.contains(scope))
+        || current
+            .iter()
+            .any(|scope| !LOGIN_SCOPES.contains(scope) && !DEFERRED_LEGACY_SCOPES.contains(scope))
         || current
             .iter()
             .enumerate()
@@ -1348,7 +1350,7 @@ fn assert_preservable_scope(current_scope: &str) -> Result<(), RegistrationError
     {
         return Err(RegistrationError::new(
             "reauthorization_scope_unsupported",
-            "The existing authorization contains a scope this client cannot safely preserve. Update heyfood or contact hello.food support before reauthorizing.",
+            "The existing authorization contains an unknown scope. Update heyfood or contact hello.food support before reauthorizing.",
         ));
     }
     Ok(())
@@ -1430,16 +1432,8 @@ mod tests {
             ("/v1/menu/watch", &["menu:watch"][..]),
             ("/v1/menu/watch", &["menu:watch"][..]),
             ("/v1/menu/watch/{watch_id}", &["menu:watch"][..]),
-            ("/v1/health/context", &["health:read"][..]),
-            ("/v1/integrations", &["health:read"][..]),
-            ("/v1/integrations/authorize", &["integrations:manage"][..]),
-            (
-                "/v1/integrations/{provider}/sync",
-                &["integrations:manage"][..],
-            ),
-            ("/v1/integrations/{provider}", &["integrations:manage"][..]),
         ];
-        assert_eq!(released_routes.len(), 17);
+        assert_eq!(released_routes.len(), 12);
         for (route, required_scopes) in released_routes {
             for required in required_scopes {
                 assert!(
@@ -1463,25 +1457,20 @@ mod tests {
     }
 
     #[test]
-    fn scope_upgrade_preserves_every_existing_scope_or_fails_closed() {
+    fn reauthorization_accepts_known_legacy_health_scope_but_no_longer_requests_it() {
         let v040 = LOGIN_SCOPES
             .iter()
             .copied()
-            .filter(|scope| {
-                !matches!(
-                    *scope,
-                    "menu:watch"
-                        | "health:read"
-                        | "integrations:manage"
-                        | "grocery:read"
-                        | "grocery:write"
-                )
-            })
+            .filter(|scope| !matches!(*scope, "menu:watch" | "grocery:read" | "grocery:write"))
             .collect::<Vec<_>>()
             .join(" ");
-        assert!(assert_preservable_scope(&v040).is_ok());
+        assert!(assert_known_reauthorization_scope(&v040).is_ok());
+        let legacy_health = format!("{v040} health:read integrations:manage");
+        assert!(assert_known_reauthorization_scope(&legacy_health).is_ok());
         assert_eq!(parse_scope(&LOGIN_SCOPES.join(" ")), LOGIN_SCOPES);
-        let error = assert_preservable_scope("account:link future:unknown").unwrap_err();
+        assert!(!LOGIN_SCOPES.contains(&"health:read"));
+        assert!(!LOGIN_SCOPES.contains(&"integrations:manage"));
+        let error = assert_known_reauthorization_scope("account:link future:unknown").unwrap_err();
         assert_eq!(error.code, "reauthorization_scope_unsupported");
     }
 
@@ -1550,16 +1539,7 @@ mod tests {
         let previous = LOGIN_SCOPES
             .iter()
             .copied()
-            .filter(|scope| {
-                !matches!(
-                    *scope,
-                    "menu:watch"
-                        | "health:read"
-                        | "integrations:manage"
-                        | "grocery:read"
-                        | "grocery:write"
-                )
-            })
+            .filter(|scope| !matches!(*scope, "menu:watch" | "grocery:read" | "grocery:write"))
             .collect::<Vec<_>>()
             .join(" ");
         let authorization = client

@@ -2,8 +2,9 @@
 
 This page is the authoritative public boundary between the current Rust command
 surface, hosted hello.food capabilities, and preview work. Recognition of a
-hidden legacy command is not support: unavailable paths return
-`command_not_available`.
+hidden legacy command is not support: unfinished paths return
+`command_not_available`, while the retained Health spelling returns the more
+specific `capability_deferred`.
 
 ## Distribution
 
@@ -28,8 +29,8 @@ hidden legacy command is not support: unavailable paths return
 | Meal logging | `heyfood log` | Hosted agent and meal memory | Current source command |
 | Item evaluation | `heyfood item` | Restaurant/menu evidence and dietary evaluation | Current source command |
 | Grocery | `heyfood grocery` plus TUI confirmation cards | Read, prepare, export, explicitly confirm/cancel, and correct pending add-item names | Current source command; production canaries pending |
-| Oura health context | `heyfood health` | Connect, sync, read, and disconnect | Current source command |
-| Apple Health | No direct CLI command | Daily summaries arrive through the hello.food app | Backend available |
+| Oura health integrations | Not advertised; retained command spelling fails closed with `capability_deferred` | Future provider-neutral integration work | Deferred from the supported `v0.5.0` contract; no implementation or canary release gate |
+| Apple Health | No CLI command or TUI panel | Mobile/backend work remains outside this release | Deferred from the supported `v0.5.0` contract |
 | Household context | Used by hosted turns and Grocery | Profiles and household-aware evaluation | Backend available; native roster management unavailable |
 | Restaurants and recipes | Via `ask` and `item` | Resolution, menu evidence, and recipe tools | Hosted through current commands |
 | Menu Watch | `heyfood watch` plus `/watch` TUI panel | Create/list/remove are deployed; scheduled execution remains operationally gated; no account-scoped diff-read route exists | Current source management command; diff view blocked on backend contract |

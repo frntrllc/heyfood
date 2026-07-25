@@ -18,7 +18,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
 
 const LIST_ID: &str = "00000000-0000-4000-8000-000000000123";
-const FULL_SCOPE: &str = "account:link account:delete knowledge:read menu:read menu:watch recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe health:read integrations:manage grocery:read grocery:write";
+const FULL_SCOPE: &str = "account:link account:delete knowledge:read menu:read menu:watch recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe grocery:read grocery:write";
 
 struct TempRoot(PathBuf);
 
@@ -263,14 +263,14 @@ fn response_for(method: &str, path: &str) -> (&'static str, Vec<u8>) {
 }
 
 #[tokio::test]
-async fn public_binary_dispatches_all_seventeen_health_grocery_and_watch_routes() {
+async fn public_binary_dispatches_all_twelve_grocery_and_watch_routes() {
     let root = TempRoot::new("routes");
     initialize(&root.0, FULL_SCOPE);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
         let mut product_routes = BTreeSet::new();
-        for _ in 0..28 {
+        for _ in 0..23 {
             let (mut socket, _) = listener.accept().await.unwrap();
             let request = read_request(&mut socket).await;
             let mut request_line = request.lines().next().unwrap().split_whitespace();
@@ -370,14 +370,6 @@ async fn public_binary_dispatches_all_seventeen_health_grocery_and_watch_routes(
             ],
             None,
         ),
-        (vec!["--json", "health", "status"], None),
-        (vec!["--json", "health", "show"], None),
-        (vec!["--json", "health", "connect", "oura"], None),
-        (vec!["--json", "health", "sync", "oura"], None),
-        (
-            vec!["--json", "health", "disconnect", "oura", "--yes"],
-            None,
-        ),
         (vec!["--json", "watch"], None),
         (
             vec![
@@ -423,11 +415,6 @@ async fn public_binary_dispatches_all_seventeen_health_grocery_and_watch_routes(
         "POST /v1/grocery/exclusions/remove".into(),
         "POST /v1/grocery/confirm".into(),
         format!("GET /v1/grocery/lists/{LIST_ID}/export"),
-        "GET /v1/health/context".into(),
-        "GET /v1/integrations".into(),
-        "POST /v1/integrations/authorize".into(),
-        "POST /v1/integrations/oura/sync".into(),
-        "DELETE /v1/integrations/oura".into(),
         "GET /v1/menu/watch".into(),
         "POST /v1/menu/watch".into(),
         "DELETE /v1/menu/watch/00000000-0000-4000-8000-000000000010".into(),
@@ -491,7 +478,8 @@ async fn public_binary_writes_json_export_to_an_owner_only_file() {
 }
 
 #[tokio::test]
-async fn public_binary_fails_closed_before_route_dispatch_for_scope_capability_and_confirmation() {
+async fn public_binary_fails_closed_before_route_dispatch_for_scope_deferral_capability_and_confirmation()
+ {
     let old = TempRoot::new("old-scope");
     initialize(
         &old.0,
@@ -499,7 +487,7 @@ async fn public_binary_fails_closed_before_route_dispatch_for_scope_capability_a
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let output = run(&old.0, &base_url, &["--json", "health", "show"], None).await;
+    let output = run(&old.0, &base_url, &["--json", "grocery", "list"], None).await;
     assert!(!output.status.success());
     let error: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
@@ -512,21 +500,50 @@ async fn public_binary_fails_closed_before_route_dispatch_for_scope_capability_a
             .is_err()
     );
 
-    let confirmed = TempRoot::new("confirmation");
-    initialize(&confirmed.0, FULL_SCOPE);
-    let output = run(
-        &confirmed.0,
-        &base_url,
-        &["--json", "health", "disconnect", "oura"],
-        None,
-    )
-    .await;
+    let output = run(&old.0, &base_url, &["--json", "health", "show"], None).await;
     assert!(!output.status.success());
+    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error["error"]["type"], "capability_deferred");
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
             .await
             .is_err()
     );
+
+    let confirmed = TempRoot::new("confirmation");
+    initialize(&confirmed.0, FULL_SCOPE);
+    let confirmation_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let confirmation_url = format!("http://{}", confirmation_listener.local_addr().unwrap());
+    let confirmation_server = tokio::spawn(async move {
+        let (mut socket, _) = confirmation_listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("GET /v1/auth/capabilities "));
+        respond(
+            &mut socket,
+            "application/json",
+            &serde_json::to_vec(&capabilities(true)).unwrap(),
+        )
+        .await;
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                confirmation_listener.accept()
+            )
+            .await
+            .is_err()
+        );
+    });
+    let output = run(
+        &confirmed.0,
+        &confirmation_url,
+        &["--json", "grocery", "confirm", "--decision", "cancel"],
+        None,
+    )
+    .await;
+    assert!(!output.status.success());
+    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error["error"]["type"], "confirmation_input");
+    confirmation_server.await.unwrap();
 
     let capability_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let capability_url = format!("http://{}", capability_listener.local_addr().unwrap());

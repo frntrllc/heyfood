@@ -79,7 +79,7 @@ exchange, and response-contract validation all succeed. If it reports an
 uncertain session-exchange or persistence outcome, do not start another
 registration attempt until account state is reconciled.
 
-Older native credentials may predate the Grocery and Health scopes. If a command
+Older native credentials may predate the Grocery or Menu Watch scopes. If a command
 reports `authorization_scope_upgrade_required`, approve the explicit upgrade:
 
 ```bash
@@ -102,8 +102,6 @@ heyfood grocery exclusions
 heyfood grocery never --list-id UUID --version 4 "raw onion"
 heyfood watch list
 heyfood watch add RESTAURANT_UUID --weekday thursday --hour 9 --notify
-heyfood health status
-heyfood health show
 ```
 
 `reply` requires an explicit `--conversation-id` in this cut because native
@@ -159,8 +157,14 @@ validated transcript in the composer for editing before submission. Use
 `/clear` to clear visible scrollback, and `/status` to inspect session
 readiness.
 
-Grocery, Menu Watch, Health, profile, household, location, and status panels are connected
-on the draft branch. Grocery list cards expose stable IDs, provenance, member
+Grocery, Menu Watch, profile, household, location, and status panels are
+connected on the draft branch. Health integrations are explicitly deferred from
+the supported `v0.5.0` contract: `health` is absent from root help and shell
+completion, `/health` is absent from TUI discovery, and fresh grants do not
+request Health or integration-management scopes. Retained internal
+provider-neutral contracts are future work, not a release capability.
+
+Grocery list cards expose stable IDs, provenance, member
 screening, substitutions, and never-buy exclusions. Conversational item-list
 proposals support typed accept/cancel decisions in the TUI. `grocery export
 LIST_ID --out FILE` writes annotations through an owner-only, exclusive,

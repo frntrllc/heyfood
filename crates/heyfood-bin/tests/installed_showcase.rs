@@ -57,7 +57,7 @@ const STALE_CONTEXT_CONFIRMATION_ID: &str = "00000000-0000-4000-8000-00000000003
 const STALE_CONTEXT_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-000000000034";
 const CTRL_C_CONFIRMATION_ID: &str = "00000000-0000-4000-8000-000000000041";
 const CTRL_C_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-000000000042";
-const FULL_SCOPE: &str = "account:link account:delete knowledge:read menu:read menu:watch recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe health:read integrations:manage grocery:read grocery:write";
+const FULL_SCOPE: &str = "account:link account:delete knowledge:read menu:read menu:watch recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe grocery:read grocery:write";
 const CORE_MATRIX_GROUPS: [&str; 5] = [
     "clean-user",
     "returning-user",
@@ -847,7 +847,8 @@ async fn run_installed_archive_core_release_matrix() {
         "deferred": {
             "native_voice": "not enabled in the default 0.5.0 artifact",
             "menu_watch_diff": "not a 0.5.0 gate",
-            "health_and_menu_watch_management": "require a bounded live canary or truthful deferral"
+            "health_integrations": "deferred from the supported 0.5.0 contract",
+            "menu_watch_management": "requires a bounded live canary or truthful deferral"
         },
         "remaining_release_gates": remaining_release_gates
     });
@@ -2590,10 +2591,10 @@ fn installed_harness_inventory_matches_core_release_contract() {
     );
     assert_eq!(
         contract["explicit_non_gates"],
-        json!(["native_voice", "menu_watch_diff"])
+        json!(["native_voice", "menu_watch_diff", "health_integrations"])
     );
     assert_eq!(
         contract["canary_or_defer"],
-        json!(["health", "menu_watch_management"])
+        json!(["menu_watch_management"])
     );
 }

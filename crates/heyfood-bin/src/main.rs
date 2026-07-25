@@ -279,6 +279,7 @@ async fn main() -> ExitCode {
         Some(Command::Login(arguments)) => login(arguments, machine).await,
         Some(Command::Chat(_)) => chat(machine).await,
         Some(Command::Onboard(_)) => onboard(machine).await,
+        Some(Command::Health { .. }) => deferred_health_command(machine),
         Some(command) if is_native_one_shot(&command) => {
             one_shot(command, output_mode, machine).await
         }
@@ -339,7 +340,6 @@ const fn is_native_one_shot(command: &Command) -> bool {
             | Command::Log(_)
             | Command::Item(_)
             | Command::Grocery { .. }
-            | Command::Health { .. }
             | Command::Watch { .. }
     )
 }
@@ -550,6 +550,16 @@ fn pending_command(machine: bool) -> ExitCode {
         "command_not_available",
         "This command has not been implemented in the native Rust client yet.",
         Some("Run `heyfood --help` to see the active native commands."),
+        machine,
+        false,
+    )
+}
+
+fn deferred_health_command(machine: bool) -> ExitCode {
+    failure(
+        "capability_deferred",
+        "Health integrations are deferred from the supported heyfood v0.5.0 contract.",
+        Some("Use `heyfood --help` to see the supported v0.5.0 commands."),
         machine,
         false,
     )
@@ -848,10 +858,6 @@ fn ensure_command_scopes(
                 ),
         } => &["grocery:read"],
         Command::Grocery { .. } => &["grocery:read", "grocery:write"],
-        Command::Health {
-            command: heyfood_cli::HealthCommand::Status | heyfood_cli::HealthCommand::Show,
-        } => &["health:read"],
-        Command::Health { .. } => &["integrations:manage"],
         Command::Watch { .. } => &["menu:watch"],
         _ => &[],
     };

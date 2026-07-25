@@ -53,10 +53,10 @@
   ],
   "explicit_non_gates": [
     "native_voice",
-    "menu_watch_diff"
+    "menu_watch_diff",
+    "health_integrations"
   ],
   "canary_or_defer": [
-    "health",
     "menu_watch_management"
   ]
 }
