@@ -19,7 +19,7 @@ Cargo target. It covered:
 
 - clean-user registration, missing-profile onboarding and consent, profile
   upload, and the first authenticated TUI turn;
-- full process exit, native credential reload in a second installed process,
+- full process exit, isolated-file credential reload in a second installed process,
   and a second authenticated turn;
 - household-aware Grocery screening, substitutions, proposal editing, cancel,
   single accept, list-version advance, and stale list/context rejection;
