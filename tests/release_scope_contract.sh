@@ -50,12 +50,23 @@ assert_no_windows_release_path() {
 protected_slice="$CASE_DIR/protected-ci.yml"
 sed -n '/^  protected-candidate-preflight:/,$p' "$CANDIDATE_WORKFLOW" >"$protected_slice"
 
+[[ -x "$ROOT/packaging/macos/sign-and-notarize.sh" ]] ||
+  fail "the macOS signing tool must be executable"
+[[ "$(git -C "$ROOT" ls-files --stage -- packaging/macos/sign-and-notarize.sh |
+  awk '{print $1}')" == "100755" ]] ||
+  fail "Git must record the macOS signing tool with mode 100755"
+
 assert_four_targets "$RELEASE_WORKFLOW"
 assert_four_targets "$PUBLIC_SMOKE_WORKFLOW"
 assert_four_targets "$protected_slice"
 assert_no_windows_release_path "$RELEASE_WORKFLOW"
 assert_no_windows_release_path "$PUBLIC_SMOKE_WORKFLOW"
 assert_no_windows_release_path "$protected_slice"
+grep -Fq "if [[ -z \"\${HEYFOOD_QUALIFICATION_KEYCHAIN:-}\" ]]; then" "$protected_slice" ||
+  fail "protected cleanup must tolerate a keychain that was never created"
+grep -Fq "if: \${{ always() && hashFiles('candidate-dist/**', 'candidate-evidence/**') != '' }}" \
+  "$protected_slice" ||
+  fail "protected upload must run only when candidate output exists"
 
 grep -Fq 'os: [ubuntu-22.04, macos-15, windows-2025]' "$CANDIDATE_WORKFLOW" ||
   fail "ordinary Windows CI must remain enabled"

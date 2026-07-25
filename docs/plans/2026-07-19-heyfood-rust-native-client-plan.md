@@ -1903,20 +1903,20 @@ plan complete.
 21. Every Python test and non-test invariant has a reviewed migration-ledger
     disposition, and no runtime asset or cross-repository API contract is
     orphaned by Python deletion.
-22. The inaugural-release halt/fix-forward drill succeeds before `0.4.0`; the
+22. The inaugural-release halt/fix-forward drill succeeds before `0.5.0`; the
     plan never claims a nonexistent prior-native rollback.
-23. Production advertises grocery v1 before `0.4.0` cutover, and the installed
-    Rust artifact provides the complete one-shot, JSON, TUI, conversational, and
-    voice grocery surface; every write requires generalized structured
-    confirmation and stale list versions fail without mutation. Capability-
-    absent behavior remains tested for development/older servers without
-    weakening ordinary CLI use.
+23. Production advertises Grocery v1 before `0.5.0` cutover, and the installed
+    Rust artifact provides the bounded one-shot, JSON, TUI, and conversational
+    Grocery surface required by the recovery-release matrix; every write
+    requires generalized structured confirmation and stale list versions fail
+    without mutation. Capability-absent behavior remains tested for
+    development/older servers without weakening ordinary CLI use.
 
 ## Risks and controls
 
 | Risk | Control |
 |---|---|
-| Big-bang cutover ships an incomplete client | No public partial release; full command/TUI/voice/platform parity and DG-R5 gate the single cutover |
+| Big-bang cutover ships an incomplete client | No public partial release; the bounded `v0.5.0` core matrix, four-platform distribution, and DG-R5 gate the cutover. Full command, voice, Windows, and showcase parity remain explicit post-`v0.5.0` work. |
 | Grocery backend and Rust client evolve against different assumptions | Backend team retains platform/domain ownership; versioned language-neutral fixtures and deployed capability gate every Rust surface |
 | Grocery work causes disposable Python implementation | Explicit prohibition on Python grocery client/release work; client effort starts in shared Rust application and presentation crates |
 | Rust scope expands into local agent platform | Explicit hosted-runtime boundary and non-goals |

@@ -394,14 +394,14 @@ jobs:
           keychain="$RUNNER_TEMP/heyfood-native-qualification.keychain-db"
           keychain_password=$(openssl rand -hex 32)
           security create-keychain -p "$keychain_password" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$keychain_password" "$keychain"
-          security default-keychain -d user -s "$keychain"
-          security list-keychains -d user -s "$keychain"
           {
             echo "HEYFOOD_QUALIFICATION_KEYCHAIN=$keychain"
             echo "HEYFOOD_SHOWCASE_EXTERNAL_CREDENTIAL_CLEANUP=true"
           } >>"$GITHUB_ENV"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security default-keychain -d user -s "$keychain"
+          security list-keychains -d user -s "$keychain"
       - name: Run the protected candidate matrix with native credentials
         if: runner.os != 'Linux'
         run: >-
@@ -421,7 +421,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${HEYFOOD_QUALIFICATION_KEYCHAIN:-}"
+          if [[ -z "${HEYFOOD_QUALIFICATION_KEYCHAIN:-}" ]]; then
+            echo "Qualification keychain was not created; no cleanup is required."
+            exit 0
+          fi
           security delete-keychain "$HEYFOOD_QUALIFICATION_KEYCHAIN"
           test ! -e "$HEYFOOD_QUALIFICATION_KEYCHAIN"
           mkdir -p candidate-evidence
@@ -442,7 +445,7 @@ jobs:
         with:
           subject-path: ${{ env.HEYFOOD_CANDIDATE_ARCHIVE }}
       - name: Upload protected candidate archive and qualification evidence
-        if: always()
+        if: ${{ always() && hashFiles('candidate-dist/**', 'candidate-evidence/**') != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: protected-candidate-${{ matrix.target }}
