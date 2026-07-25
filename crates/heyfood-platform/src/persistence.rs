@@ -4190,6 +4190,16 @@ mod credential_write_verification_tests {
 
     use super::*;
 
+    #[cfg(not(windows))]
+    struct Cleanup(PathBuf);
+
+    #[cfg(not(windows))]
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     fn state(account: &str, version: u64, token_suffix: &str) -> CredentialState {
         CredentialState::new(
             SessionCredentials::from_unix_expiry(
@@ -4346,6 +4356,43 @@ mod credential_write_verification_tests {
         )
         .unwrap_err();
         assert_uncertain_verify_error(error);
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn account_initialization_accepts_fractional_rfc3339_session_expiry() {
+        let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "heyfood-account-initialization-rfc3339-{}-{sequence}",
+            std::process::id()
+        ));
+        let _cleanup = Cleanup(root.clone());
+        let auth = NativeAuthStore::open(&root).unwrap();
+        let session = FileCredentialStore::open(&root).unwrap();
+        let bundle = AuthCredentialBundle {
+            channel: ChannelCredentials::from_rfc3339_expiry(
+                "hf_cid_heyfood_cli",
+                "production-canary-device",
+                SensitiveString::new("channel-access"),
+                SensitiveString::new("channel-refresh"),
+                "2099-01-01T00:00:00.123456789Z",
+                "account:link grocery:read grocery:write",
+            )
+            .unwrap(),
+            session: SessionCredentials::from_rfc3339_expiry(
+                AccountId::parse("account-production-canary").unwrap(),
+                SensitiveString::new("session-access"),
+                SensitiveString::new("session-refresh"),
+                CredentialVersion::new(1),
+                "2099-01-01T00:00:00.987654321Z",
+            )
+            .unwrap(),
+        };
+
+        auth.initialize_account_bound(&bundle, &session).unwrap();
+
+        assert!(!auth.reconciliation_path.exists());
+        assert_eq!(auth.load_account_bound(&session).unwrap(), Some(bundle));
     }
 }
 

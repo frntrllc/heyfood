@@ -376,13 +376,16 @@ impl SessionCredentials {
     ) -> Result<Self, &'static str> {
         let expires_at = OffsetDateTime::parse(access_expires_at, &Rfc3339)
             .map_err(|_| "credential expiry is not a valid RFC 3339 timestamp")?;
-        Ok(Self {
+        // Native credential stores persist whole Unix seconds. Canonicalize at
+        // the wire boundary so an RFC 3339 response with fractional seconds
+        // compares byte-for-byte with its immediate durable read-back.
+        Self::from_unix_expiry(
             account_id,
             access_token,
             refresh_token,
             version,
-            expires_at,
-        })
+            expires_at.unix_timestamp(),
+        )
     }
 
     #[must_use]
@@ -496,5 +499,29 @@ mod scope_tests {
                 .unwrap(),
             supported
         );
+    }
+
+    #[test]
+    fn rfc3339_session_expiry_is_canonicalized_to_persisted_unix_seconds() {
+        let account = AccountId::parse("account-canonical-expiry").unwrap();
+        let from_wire = SessionCredentials::from_rfc3339_expiry(
+            account.clone(),
+            SensitiveString::new("access-token"),
+            SensitiveString::new("refresh-token"),
+            CredentialVersion::new(1),
+            "2099-01-01T00:00:00.987654321Z",
+        )
+        .unwrap();
+        let from_store = SessionCredentials::from_unix_expiry(
+            account,
+            SensitiveString::new("access-token"),
+            SensitiveString::new("refresh-token"),
+            CredentialVersion::new(1),
+            from_wire.expires_at_unix(),
+        )
+        .unwrap();
+
+        assert_eq!(from_wire, from_store);
+        assert_eq!(from_wire.expires_at.nanosecond(), 0);
     }
 }
