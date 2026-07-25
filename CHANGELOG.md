@@ -6,13 +6,13 @@ authentication contracts are stabilized.
 
 ## 0.5.0 - Unreleased
 
-- Adds deterministic Windows x86-64 zip packaging and installed-executable
-  smoke coverage to the native distribution matrix. Publication remains gated
-  on the first protected signing pass and the public Windows installer.
-- Requires protected tag builds to Authenticode-sign and timestamp Windows
-  executables and to Developer ID-sign, harden, and notarize both macOS
-  executables before packaging. Public artifact smoke re-verifies the platform
-  trust result.
+- Defines the recovery-release distribution as exactly four archives: macOS
+  Apple Silicon, macOS Intel, Linux ARM64, and Linux x64. Windows distribution
+  is deferred to `v0.5.1`; ordinary Windows compile, test, Clippy, credential,
+  and deterministic packaging qualification remains active in CI.
+- Requires protected tag builds to Developer ID-sign, harden, and notarize both
+  macOS executables before packaging. Public artifact smoke re-verifies the
+  macOS trust result and all four archive attestations.
 - Replaces the unsupported `v0.4.0` and `v0.4.1` incident artifacts with the
   fully qualified Rust CLI and interactive TUI recovery release.
 - Preserves terminal stream content when a terminal SSE document omits final

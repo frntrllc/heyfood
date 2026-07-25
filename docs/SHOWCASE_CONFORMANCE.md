@@ -52,6 +52,11 @@ The `0.5.0` release gate is intentionally narrower than the twelve-stage
 landing-page inventory. Its machine-readable contract is
 `tests/showcase/core-release-matrix.v1.json`. The installed archive must prove:
 
+- distribution is limited to macOS Apple Silicon, macOS Intel, Linux ARM64,
+  and Linux x64. Windows distribution is deferred to `v0.5.1`, while ordinary
+  Windows compile, test, Clippy, credential, packaging, and installed-harness CI
+  remains required;
+
 - clean-user registration, missing-profile onboarding and consent, and a first
   authenticated TUI turn;
 - complete process exit followed by a second installed process that reloads
@@ -142,8 +147,11 @@ cases. Household targeting, consent-aware dietary context, and Grocery safety
 cards now have bounded installed-artifact proof; production-canary proof
 remains.
 
-Native CLI CI runs the bounded `0.5.0` matrix from packaged archives on macOS,
-Linux, and Windows. It verifies the checksum and one-executable archive policy,
+Ordinary Native CLI CI runs the bounded `0.5.0` behavior matrix from packaged
+fixtures on macOS, Linux, and Windows. Windows execution is source
+qualification for `v0.5.1`, not a `v0.5.0` distribution claim. The protected
+candidate and public release matrices run only the four authorized macOS/Linux
+archives. The harness verifies the checksum and one-executable archive policy,
 extracts into a clean temporary user environment, drives registration and
 onboarding through a real PTY, exits and starts a returning-user process,
 exercises household Grocery confirmation and conflict paths, checks

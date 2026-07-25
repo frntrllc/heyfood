@@ -151,6 +151,13 @@ composer remains editable while responses stream, keeps bounded process-local
 prompt history, and preserves conversation continuity only for the lifetime of
 the process.
 
+The bounded `v0.5.0` recovery release produces exactly four native archives:
+macOS Apple Silicon, macOS Intel, Linux ARM64, and Linux x64.
+Windows distribution is deferred to `v0.5.1`; ordinary Windows compile, test,
+Clippy, credential, and packaging qualification remains active in CI. Health,
+Menu Watch diff, native voice, full legacy parity, and the complete twelve-stage
+showcase are future work rather than `v0.5.0` release gates.
+
 Interactive controls include Enter to send, Shift+Enter or Ctrl+J for a
 newline, Up/Down for prompt history, PageUp/PageDown for scrollback, Ctrl+C to
 stop an active turn, and Ctrl+D or `/exit` to leave. In native-audio builds,
@@ -175,8 +182,8 @@ symlink-safe file path; `--overwrite` opts into atomic replacement. Proposal
 editing and the native voice vertical are present in source. `heyfood watch`
 and `/watch` create/list/remove or display subscriptions using the deployed
 `menu:watch` contract; the showcased diff view remains blocked on a backend
-account-scoped diff-read route. Installed-artifact showcase execution and
-real-hardware voice qualification remain incomplete release gates. Hidden
+account-scoped diff-read route. The broader installed-artifact showcase and
+real-hardware voice qualification remain post-`v0.5.0` conformance work. Hidden
 compatibility routes continue to fail closed where a native workflow is not
 complete.
 

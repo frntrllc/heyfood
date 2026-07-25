@@ -136,8 +136,10 @@ The panels are read-only and cancellable. `/voice`, Ctrl+Space, and F8 use the
 same bounded capture/transcription/review state machine when the artifact
 contains native audio support; unavailable artifacts and insufficient scopes
 fail before microphone access. Dietary onboarding, interactive Grocery
-confirmation, Menu Watch diff reading, real-hardware voice qualification, and
-installed-artifact showcase qualification remain release gates.
+confirmation, and the bounded installed-artifact core matrix remain active
+release work. Menu Watch diff, real-hardware voice qualification, full parity,
+and the complete twelve-stage showcase are post-`v0.5.0` conformance work, not
+release gates.
 
 ## Unavailable compatibility topology
 

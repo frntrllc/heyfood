@@ -84,9 +84,6 @@ jobs:
           - runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             archive: heyfood-v${{ needs.validate.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
-          - runner: windows-2025
-            target: x86_64-pc-windows-msvc
-            archive: heyfood-v${{ needs.validate.outputs.version }}-x86_64-pc-windows-msvc.zip
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Linux native credential build dependencies
@@ -112,11 +109,7 @@ jobs:
           export SOURCE_DATE_EPOCH
           SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
           cargo build --locked --release --package heyfood-bin --target "$TARGET"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            binary="target/$TARGET/release/heyfood.exe"
-          else
-            binary="target/$TARGET/release/heyfood"
-          fi
+          binary="target/$TARGET/release/heyfood"
           test "$($binary --version)" = "heyfood $VERSION"
           "$binary" --help >/dev/null
           "$binary" register --help >/dev/null
@@ -134,54 +127,19 @@ jobs:
           HEYFOOD_APPLE_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
           HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
         run: packaging/macos/sign-and-notarize.sh "target/$TARGET/release/heyfood"
-      - name: Authenticode-sign the Windows executable
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          TARGET: ${{ matrix.target }}
-          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
-          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
-          WINDOWS_CODESIGN_SUBJECT: ${{ vars.WINDOWS_CODESIGN_SUBJECT }}
-          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
-        run: |
-          ./packaging/windows/sign.ps1 `
-            -Binary "target/$env:TARGET/release/heyfood.exe" `
-            -CertificateBase64 $env:WINDOWS_CODESIGN_PFX_BASE64 `
-            -CertificatePassword $env:WINDOWS_CODESIGN_PFX_PASSWORD `
-            -PublisherSubject $env:WINDOWS_CODESIGN_SUBJECT `
-            -TimestampUrl $env:WINDOWS_TIMESTAMP_URL
       - name: Package the exact executable
-        if: runner.os != 'Windows'
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.validate.outputs.version }}
         run: scripts/release/package.sh "target/$TARGET/release/heyfood" "$VERSION" "$TARGET" dist
       - name: Smoke the packaged macOS or Linux executable
-        if: runner.os != 'Windows'
         shell: bash
         env:
           HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
           TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.validate.outputs.version }}
         run: scripts/release/smoke-archive.sh dist "$VERSION" "$TARGET"
-      - name: Package the exact Windows executable
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          TARGET: ${{ matrix.target }}
-          VERSION: ${{ needs.validate.outputs.version }}
-        run: |
-          ./packaging/windows/package.ps1 `
-            -Binary "target/$env:TARGET/release/heyfood.exe" `
-            -Version $env:VERSION `
-            -Target $env:TARGET `
-            -OutputDirectory dist
-          ./packaging/windows/smoke.ps1 `
-            -ReleaseDirectory dist `
-            -Version $env:VERSION `
-            -RequireAuthenticode `
-            -PublisherSubject "${{ vars.WINDOWS_CODESIGN_SUBJECT }}"
       - name: Upload the native archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -216,14 +174,13 @@ jobs:
         with:
           subject-path: |
             dist/*.tar.gz
-            dist/*.zip
             dist/SHA256SUMS
       - name: Create the immutable GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          gh release create "v$VERSION" dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
+          gh release create "v$VERSION" dist/*.tar.gz dist/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "heyfood v$VERSION" \

@@ -2576,6 +2576,23 @@ fn installed_harness_inventory_matches_core_release_contract() {
     .expect("decode installed core release contract");
     assert_eq!(contract["schema_version"], 1);
     assert_eq!(contract["release"], "0.5.0");
+    assert_eq!(
+        contract["distribution"]["release_targets"],
+        json!([
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu"
+        ])
+    );
+    assert_eq!(
+        contract["distribution"]["windows_distribution"],
+        "deferred_to_0.5.1"
+    );
+    assert_eq!(
+        contract["distribution"]["ordinary_windows_ci_required"],
+        true
+    );
     let observed = contract["groups"]
         .as_array()
         .expect("core release groups")

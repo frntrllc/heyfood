@@ -49,6 +49,10 @@ grep -Fq "installation is suspended" "$stderr" ||
   fail "suspended installer must explain the release state"
 grep -Fq "do not install or use" "$stderr" ||
   fail "suspended installer must give an explicit safety instruction"
+grep -Fq "v0.5.0 candidate qualification covers macOS Apple Silicon, macOS Intel, Linux ARM64, and Linux x64" "$stderr" ||
+  fail "suspended installer must state the four-platform candidate scope"
+grep -Fq "Windows distribution is deferred to v0.5.1" "$stderr" ||
+  fail "suspended installer must state the Windows deferral"
 grep -Fqx "$SUSPENSION_SENTINEL" "$INSTALLER" ||
   fail "suspended installer must retain the release-workflow sentinel"
 grep -Fq "grep -Fqx '$SUSPENSION_SENTINEL' install.sh" "$RELEASE_WORKFLOW" ||

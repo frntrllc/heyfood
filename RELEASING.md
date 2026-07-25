@@ -24,6 +24,10 @@ Releases. The legacy Python/PyPI channel is not a release authority.
 - The workflow builds on each target architecture instead of cross-compiling:
   `aarch64-apple-darwin`, `x86_64-apple-darwin`,
   `aarch64-unknown-linux-gnu`, and `x86_64-unknown-linux-gnu`.
+- Windows distribution is deferred to `v0.5.1`. Ordinary Windows compile,
+  test, Clippy, credential-backend, and deterministic packaging CI remains
+  required, but no Windows asset or signing credential participates in the
+  `v0.5.0` publication path.
 - Each archive is named `heyfood-vVERSION-TARGET.tar.gz` and contains one bare
   regular executable named `heyfood`.
 - `SHA256SUMS` covers exactly those four archives. The complete five-file set

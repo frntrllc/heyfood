@@ -1,12 +1,12 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v18 — Rust Phase 1 and the bounded Grocery Phase-A import are closed with GO; Phase 2 remediation continues in draft PR #27 while activation, publication, and product cutover remain gated
+**Status:** Draft v19 — Phase 2 feature work is frozen; draft PR #27 is preparing the bounded four-archive `v0.5.0` release candidate while activation, publication, and product cutover remain gated
 **Baseline:** final unpublished Python `0.4.0` candidate at `73494a57468dac83b4904ce6c390e36926f5c6fe`; the last public Python release remains `0.3.2`
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`
 **Active companion:** `frntrllc/hellofood` Platform P0, Grocery Phase A/Kroger, Security D2, and Health H1-H3 workstreams dated 2026-07-19
 **Primary user:** a developer using hello.food throughout the working day from a terminal
-**Replacement target:** `0.5.0`, released only when the complete Rust client passes every gate; immutable `v0.4.0` and `v0.4.1` remain unsupported incident records
+**Replacement target:** bounded Rust recovery release `0.5.0`; immutable `v0.4.0` and `v0.4.1` remain unsupported incident records
 **License:** Apache-2.0
 
 ## Executive decision
@@ -25,7 +25,8 @@ modeled on the strongest interaction patterns in the Grok Build TUI:
   first-run journey;
 - first-class voice capture and transcript review;
 - deterministic cancellation, terminal restoration, resize, and crash safety;
-- self-contained binaries for macOS, Linux, and Windows.
+- self-contained binaries for macOS and Linux in `v0.5.0`, with Windows
+  distribution following in `v0.5.1`.
 
 The intelligence, dietary graph, user data, and agent service remain hosted by
 hello.food. “Agent runtime” in this plan means the native client runtime around
@@ -42,9 +43,29 @@ that installs the Rust workspace as the sole supported heyfood product. There
 is no supported split runtime, parallel public channel, or gradual public
 command-by-command migration.
 
-The Rust artifact is not released until it passes every parity, security,
-platform, installation, and end-to-end gate. Internal build artifacts may be
-used for qualification, but users never receive a partial Rust client.
+The Rust artifact is not released until it passes the bounded release,
+security, platform, installation, and end-to-end gates assigned to that
+version. Internal build artifacts may be used for qualification. Broader
+parity and showcase conformance remain tracked without blocking the bounded
+recovery release.
+
+### `v0.5.0` release-scope decision — 2026-07-25
+
+The `v0.5.0` publication set contains exactly four archives:
+`aarch64-apple-darwin`, `x86_64-apple-darwin`,
+`aarch64-unknown-linux-gnu`, and `x86_64-unknown-linux-gnu`. Windows
+distribution is deferred to `v0.5.1`. Ordinary Windows compile, test, Clippy,
+Credential Manager, deterministic packaging, and installed-harness CI remains
+required, while Windows release credentials and assets are excluded from the
+`v0.5.0` candidate, publication, installer, and public-smoke paths.
+
+Health, Menu Watch diff, native voice, full legacy parity, and the complete
+twelve-stage landing-page showcase are not `v0.5.0` blockers. Their longer-term
+requirements remain in this plan as post-release work and must not be
+represented as supported `v0.5.0` capabilities. The active release path is the
+bounded clean-user, returning-user, household Grocery, failure-safety, and
+artifact-behavior matrix, followed by protected macOS signing/notarization,
+Linux archive qualification, exact-byte review, publication, and public smoke.
 
 ### `v0.5.0` Health scope decision — 2026-07-24
 
@@ -172,23 +193,14 @@ request these server-ahead scopes and must not be patched into a disposable
 Grocery client merely to satisfy that gate; the native Rust client owns the
 scoped positive canary and final surface.
 
-The same activation audit exposed a separate net-new-user release dependency.
-Production authorization is restored and publicly advertises both loopback
-PKCE and device code with SMS/email identity methods, after reconciling the
-API-only authorization-transaction key, recovery flag, agreement keyring,
-terms version, self-registration flag, and account-deletion flag. Public
-self-registration currently reports the exact public contract state
-`self_registration.status = "disabled"` because the administrative feature
-flag remains off. If that flag were enabled before the immutable PITR
-plaintext-removal T0 ages through the required seven-day window, runtime
-readiness would still report `unavailable`; the flag is not permission to
-bypass readiness. Required flags other than this intentional release hold,
-Vault, KMS, database TLS, Redis TLS, conversation-state encryption, exact
-schema, signed evidence, and transport proofs all pass; the T0 age gate remains
-the release blocker. No client, deployment, or operator may backdate or waive
-that evidence. The scheduled attestation refresher must preserve T0 and keep
-the HMAC fresh until the window matures, after which a real net-new registration
-canary is mandatory before native `0.4.0` release qualification.
+The same activation audit exposed a historical net-new-user release dependency
+around production authorization, encryption, and PITR evidence. That backend
+dependency is now closed: the release owner has declared the production
+registration and Grocery prerequisites green, including the signing-key and
+backend mutation canaries. The Rust team is not waiting on Grocery, AWS, or a
+new owner decision. The exact installed `v0.5.0` candidate must still prove its
+bounded clean-user and production Grocery journeys, but those are artifact
+qualification steps rather than authority to reopen backend work.
 
 Phase 1 is closed with GO at product SHA
 `09191ca5d3f3254eb6d2deb750e9f65a2c77df7a`, reviewed evidence
@@ -1718,20 +1730,21 @@ independent auth/privacy/UX review passes.
    transcript review and structured confirmation; add no grocery-specific audio
    capture or consent implementation.
 3. Qualify real hardware and permissions for the advertised matrix.
-4. Build the native bootstrap verifier, immutable `install.sh`/`install.ps1`,
-   JCS manifest, Sigstore bundles, hashes, SBOMs, provenance, macOS signing/
-   notarization, Windows signing, and Linux artifacts.
+4. Build the `v0.5.0` native bootstrap verifier, immutable `install.sh`, JCS
+   manifest, Sigstore bundles, hashes, SBOMs, provenance, macOS signing/
+   notarization, and Linux artifacts. Defer `install.ps1` and Windows signing
+   to `v0.5.1`.
 5. Exercise clean install, exact version, same-version repair, downgrade-floor,
    manifest halt, `0.4.1` fix-forward rehearsal, uninstall, proxy/custom CA,
    offline limitations, trust-root/identity rotation, and no-admin paths.
 6. Build the complete DG-R5 repository/package/workflow deletion as a reviewed
    but not-yet-merged cutover change.
 
-**Exit gate:** DG-R4/R5/R6 pass; voice is one continuous TUI turn; public-style
-native artifacts pass trust-bootstrap, install, signed halt/fix-forward, and
-platform-signature drills; the ledger has zero unmapped entries and the cutover
-removes every Python runtime/release path; independent voice, supply-chain, and
-release review passes.
+**Exit gate:** DG-R4/R5/R6 pass for the bounded `v0.5.0` contract; public-style
+macOS/Linux artifacts pass trust-bootstrap, install, signed halt/fix-forward,
+and platform-signature drills where applicable; the cutover removes every
+Python runtime/release path; independent supply-chain and release review passes.
+Voice and Windows qualification remain post-release work.
 
 ### Phase 6 — Final qualification, big-bang cutover, and GA
 
@@ -1754,11 +1767,13 @@ release review passes.
    scopes. The `v0.5.0` candidate does not request Health authority or run a
    Health provider canary.
 7. Merge the single DG-R5 cutover only after installed-artifact clean-user,
-   returning-user, one-shot JSON, interactive typed, real-hardware voice, and
-   capability-advertised grocery journeys pass.
-8. Cut `0.4.0` from the Rust-only repository state.
-9. Promote native `install.sh`/`install.ps1`, documentation, landing-page
-   animations, and support runbooks atomically; retire PyPI guidance.
+   returning-user, one-shot JSON, interactive typed, and
+   capability-advertised Grocery journeys pass. Real-hardware voice is not a
+   `v0.5.0` gate.
+8. Cut `0.5.0` from the Rust-only repository state.
+9. Promote native `install.sh`, documentation, landing-page animations, and
+   support runbooks atomically; retire PyPI guidance. Defer the Windows
+   installer to `v0.5.1`.
 10. Observe for 24 hours with named release owner `admin@frntr.ai` and recover
    or stop promotion on any critical journey failure, terminal restoration
    defect, installer/signature failure, wrong-list grocery mutation, broken or
@@ -1870,16 +1885,19 @@ plan complete.
     simulated TTY conditions.
 15. The reviewed cutover removes the Python implementation, Python packaging,
     PyPI workflows, and every runtime fallback to Python.
-16. Native signed artifacts exist for the declared macOS, Linux, and Windows
-    matrix.
+16. Native signed or attested artifacts exist for the platforms declared by
+    each release: four macOS/Linux archives for `v0.5.0`, with Windows deferred
+    to `v0.5.1`.
 17. First-party installers verify the pinned issuer/repository/tag-workflow
     identity, canonical signed manifest, Rekor proof, hashes, provenance, native
     platform signature, sequence, and rollback floor, then install atomically
     without Python or administrator access.
-18. Native `install.sh` and `install.ps1` are the sole supported public install
-    paths; documentation no longer presents pipx/PyPI as current.
-19. Public installed artifacts—not source checkouts—pass clean-user,
-    returning-user, JSON, typed TUI, and real-hardware voice qualification.
+18. Native `install.sh` is the sole `v0.5.0` public install path;
+    `install.ps1` follows with Windows in `v0.5.1`; documentation no longer
+    presents pipx/PyPI as current.
+19. Public installed `v0.5.0` artifacts—not source checkouts—pass the bounded
+    clean-user, returning-user, Grocery, failure-safety, and artifact-behavior
+    matrix. Real-hardware voice remains post-`v0.5.0` qualification.
 20. The local intelligence boundary remains unchanged: proprietary backend,
     data, dietary graph, and service logic are not moved into the open client.
 21. Every Python test and non-test invariant has a reviewed migration-ledger

@@ -1,12 +1,13 @@
 # Native release signing
 
-The tag-driven release workflow uses the protected `native-release` GitHub
-environment. A release build fails closed when any required signing input is
-missing, when a signing identity differs from the protected publisher identity,
-when timestamping or notarization fails, or when platform verification rejects
-the resulting executable.
+The `v0.5.0` tag-driven release workflow uses the protected `native-release`
+GitHub environment. It produces exactly four archives: macOS Apple Silicon,
+macOS Intel, Linux ARM64, and Linux x64.
+Windows distribution is deferred to `v0.5.1`; ordinary Windows CI remains
+required, but the `v0.5.0` protected candidate, publication, and public-smoke
+paths consume no Windows signing credential and emit no Windows asset.
 
-## Protected environment configuration
+## Protected `v0.5.0` environment configuration
 
 Configure these secrets in `native-release`:
 
@@ -14,14 +15,10 @@ Configure these secrets in `native-release`:
 - `MACOS_DEVELOPER_ID_P12_PASSWORD`
 - `APPLE_NOTARY_ACCOUNT`
 - `APPLE_NOTARY_APP_PASSWORD`
-- `WINDOWS_CODESIGN_PFX_BASE64`
-- `WINDOWS_CODESIGN_PFX_PASSWORD`
 
-Configure these environment variables:
+Configure this environment variable:
 
 - `APPLE_DEVELOPER_TEAM_ID`
-- `WINDOWS_CODESIGN_SUBJECT`
-- `WINDOWS_TIMESTAMP_URL`
 
 The macOS P12 must contain exactly one `Developer ID Application` identity.
 Both macOS architectures are signed with hardened runtime and a secure
@@ -30,33 +27,40 @@ and assessed by Gatekeeper before packaging. Signing, packaged-archive smoke,
 and downloaded-public-artifact smoke each require the executable's exact
 `TeamIdentifier` to match `APPLE_DEVELOPER_TEAM_ID`.
 
-The Windows PFX must contain a private key with the Code Signing enhanced key
-usage. The certificate subject must exactly match `WINDOWS_CODESIGN_SUBJECT`.
-SignTool uses SHA-256 for the file and RFC 3161 timestamp digests. Both the
-packaging smoke and public artifact smoke require a valid trusted signature,
-the expected publisher subject, and a timestamp certificate.
+The Linux archives do not require a platform code-signing identity. Their exact
+bytes and the canonical `SHA256SUMS` manifest are covered by GitHub artifact
+attestations and verified before execution.
 
 ## Protected candidate qualification
 
-Ordinary pull-request CI builds unsigned platform fixtures and tests archive
-determinism. It cannot satisfy the signing gate.
+Ordinary pull-request CI includes Windows and builds unsigned platform fixtures
+to test compilation, Clippy, credentials, installed behavior, and archive
+determinism. It cannot satisfy the `v0.5.0` protected signing gate.
 
 Before merge or publication, dispatch `Native CLI CI` with
 `qualify_signed_candidate=true` at the exact proposed product SHA. The
-`native-release` environment builds the five archives without creating a tag
-or GitHub Release, requires the protected macOS and Windows identities,
-attests each archive, and reruns the bounded installed-artifact matrix with
-Keychain, Secret Service, or Credential Manager. macOS uses a disposable
-qualification Keychain and records its destruction as separate evidence so
-credentials are not left in the runner's login Keychain.
+`native-release` environment builds the four authorized archives without
+creating a tag or GitHub Release, attests each archive, and reruns the bounded
+installed-artifact matrix with Keychain or Secret Service. macOS uses a
+disposable qualification Keychain and records its destruction as separate
+evidence so credentials are not left in the runner's login Keychain.
 
 Each protected build job runs the per-archive smoke gate because it owns
-exactly one target archive. The publication and public-download jobs separately
-run the strict complete-set verifier, which requires all five archives and the
-canonical `SHA256SUMS` manifest. A per-target job therefore cannot weaken or
-accidentally invoke the complete publication-set assertion.
+exactly one target archive. The aggregate candidate job then assembles all four
+archives, generates the canonical four-entry `SHA256SUMS`, rejects additional
+assets, verifies the complete five-file set, and attests the manifest. The
+publication and public-download jobs enforce the same complete-set policy.
 
-Candidate evidence remains incomplete until all five protected jobs pass and
-an independent reviewer approves the exact product SHA and archive digests.
-Release evidence remains incomplete until the subsequently published,
-downloaded artifacts pass the post-release platform checks.
+Candidate evidence remains incomplete until all four protected jobs and the
+aggregate complete-set job pass and an independent reviewer approves the exact
+product SHA and archive digests. Release evidence remains incomplete until the
+subsequently published, downloaded artifacts pass the post-release platform
+checks.
+
+## Windows `v0.5.1`
+
+Windows release packaging, Authenticode signing, and public installer
+qualification are deferred together to `v0.5.1`. The Windows source,
+Credential Manager implementation, PowerShell packaging/signing scripts, and
+ordinary Windows CI remain in the repository. They do not authorize or produce
+a Windows `v0.5.0` release asset.

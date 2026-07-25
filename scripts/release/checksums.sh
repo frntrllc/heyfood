@@ -16,11 +16,22 @@ expected_archives=(
   "heyfood-v$version-aarch64-unknown-linux-gnu.tar.gz"
   "heyfood-v$version-x86_64-apple-darwin.tar.gz"
   "heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz"
-  "heyfood-v$version-x86_64-pc-windows-msvc.zip"
 )
 
 for archive in "${expected_archives[@]}"; do
   test -f "$release_directory/$archive"
+done
+
+for asset_path in "$release_directory"/*; do
+  test -f "$asset_path"
+  asset=$(basename "$asset_path")
+  case "$asset" in
+    SHA256SUMS | "heyfood-v$version-aarch64-apple-darwin.tar.gz" | "heyfood-v$version-aarch64-unknown-linux-gnu.tar.gz" | "heyfood-v$version-x86_64-apple-darwin.tar.gz" | "heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz") ;;
+    *)
+      echo "unexpected release asset: $asset" >&2
+      exit 1
+      ;;
+  esac
 done
 
 (

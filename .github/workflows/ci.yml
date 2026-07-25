@@ -49,10 +49,14 @@ jobs:
           fi
       - name: Lint distribution scripts
         shell: bash
-        run: shellcheck install.sh tests/installer_contract.sh scripts/release/*.sh packaging/macos/*.sh
+        run: shellcheck install.sh tests/installer_contract.sh tests/release_scope_contract.sh scripts/release/*.sh packaging/macos/*.sh
       - name: Test the hosted-installer contract
         shell: bash
         run: bash tests/installer_contract.sh
+      - name: Test the bounded v0.5.0 release scope
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash tests/release_scope_contract.sh
 
   native-cli-smoke:
     name: Native CLI / ${{ matrix.os }}
@@ -224,7 +228,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Linux native credential build dependencies
         run: sudo apt-get update && sudo apt-get install --yes libdbus-1-dev pkg-config
-      - name: Build and package the host executable as the five-archive fixture set
+      - name: Build and package the host executable as the four-archive fixture set
         shell: bash
         run: |
           set -euo pipefail
@@ -239,11 +243,6 @@ jobs:
             x86_64-unknown-linux-gnu; do
             scripts/release/package.sh "$binary" "$version" "$target" dist
           done
-          pwsh -NoProfile -File packaging/windows/package.ps1 \
-            -Binary "$binary" \
-            -Version "$version" \
-            -Target x86_64-pc-windows-msvc \
-            -OutputDirectory dist
           scripts/release/checksums.sh dist "$version"
           scripts/release/verify-assets.sh dist "$version"
           scripts/release/smoke.sh dist "$version" x86_64-unknown-linux-gnu
@@ -255,17 +254,9 @@ jobs:
             jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
           scripts/release/package.sh \
             target/release/heyfood "$version" x86_64-unknown-linux-gnu dist-repeat
-          pwsh -NoProfile -File packaging/windows/package.ps1 \
-            -Binary target/release/heyfood \
-            -Version "$version" \
-            -Target x86_64-pc-windows-msvc \
-            -OutputDirectory dist-repeat
           cmp \
             "dist/heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz" \
             "dist-repeat/heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz"
-          cmp \
-            "dist/heyfood-v$version-x86_64-pc-windows-msvc.zip" \
-            "dist-repeat/heyfood-v$version-x86_64-pc-windows-msvc.zip"
 
   protected-candidate-preflight:
     name: Protected candidate signing preflight
@@ -280,11 +271,7 @@ jobs:
           MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
           APPLE_NOTARY_ACCOUNT: ${{ secrets.APPLE_NOTARY_ACCOUNT }}
           APPLE_NOTARY_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
-          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
-          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
           APPLE_DEVELOPER_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
-          WINDOWS_CODESIGN_SUBJECT: ${{ vars.WINDOWS_CODESIGN_SUBJECT }}
-          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
         run: |
           set -euo pipefail
           for name in \
@@ -292,11 +279,7 @@ jobs:
             MACOS_DEVELOPER_ID_P12_PASSWORD \
             APPLE_NOTARY_ACCOUNT \
             APPLE_NOTARY_APP_PASSWORD \
-            WINDOWS_CODESIGN_PFX_BASE64 \
-            WINDOWS_CODESIGN_PFX_PASSWORD \
-            APPLE_DEVELOPER_TEAM_ID \
-            WINDOWS_CODESIGN_SUBJECT \
-            WINDOWS_TIMESTAMP_URL; do
+            APPLE_DEVELOPER_TEAM_ID; do
             test -n "${!name:-}" || {
               echo "missing protected native-release input: $name" >&2
               exit 78
@@ -329,9 +312,6 @@ jobs:
           - runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             archive: tar
-          - runner: windows-2025
-            target: x86_64-pc-windows-msvc
-            archive: zip
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -374,24 +354,7 @@ jobs:
           HEYFOOD_APPLE_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
           HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
         run: packaging/macos/sign-and-notarize.sh "target/$TARGET/release/heyfood"
-      - name: Authenticode-sign the Windows executable
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          TARGET: ${{ matrix.target }}
-          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
-          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
-          WINDOWS_CODESIGN_SUBJECT: ${{ vars.WINDOWS_CODESIGN_SUBJECT }}
-          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
-        run: |
-          ./packaging/windows/sign.ps1 `
-            -Binary "target/$env:TARGET/release/heyfood.exe" `
-            -CertificateBase64 $env:WINDOWS_CODESIGN_PFX_BASE64 `
-            -CertificatePassword $env:WINDOWS_CODESIGN_PFX_PASSWORD `
-            -PublisherSubject $env:WINDOWS_CODESIGN_SUBJECT `
-            -TimestampUrl $env:WINDOWS_TIMESTAMP_URL
       - name: Package the protected macOS or Linux candidate
-        if: runner.os != 'Windows'
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
@@ -418,7 +381,6 @@ jobs:
             echo "HEYFOOD_CANDIDATE_ARCHIVE=$GITHUB_WORKSPACE/candidate-dist/$archive"
           } >>"$GITHUB_ENV"
       - name: Verify the protected macOS or Linux candidate
-        if: runner.os != 'Windows'
         shell: bash
         env:
           HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
@@ -440,42 +402,6 @@ jobs:
             echo "HEYFOOD_QUALIFICATION_KEYCHAIN=$keychain"
             echo "HEYFOOD_SHOWCASE_EXTERNAL_CREDENTIAL_CLEANUP=true"
           } >>"$GITHUB_ENV"
-      - name: Package and verify the protected Windows candidate
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          $version = cargo metadata --locked --no-deps --format-version 1 |
-            ConvertFrom-Json |
-            Select-Object -ExpandProperty packages |
-            Where-Object { $_.name -eq "heyfood-bin" } |
-            Select-Object -ExpandProperty version
-          New-Item -ItemType Directory -Force candidate-dist, candidate-evidence | Out-Null
-          ./packaging/windows/package.ps1 `
-            -Binary "target/$env:TARGET/release/heyfood.exe" `
-            -Version $version `
-            -Target $env:TARGET `
-            -OutputDirectory candidate-dist
-          ./packaging/windows/smoke.ps1 `
-            -ReleaseDirectory candidate-dist `
-            -Version $version `
-            -RequireAuthenticode `
-            -PublisherSubject "${{ vars.WINDOWS_CODESIGN_SUBJECT }}"
-          $archive = "heyfood-v$version-$env:TARGET.zip"
-          $digest = (Get-FileHash -Algorithm SHA256 "candidate-dist/$archive").Hash.ToLowerInvariant()
-          "$digest  $archive" | Set-Content -Encoding ascii candidate-dist/SHA256SUMS
-          $root = (Get-Location).Path
-          @(
-            "HEYFOOD_SHOWCASE_ARCHIVE=$root\candidate-dist\$archive"
-            "HEYFOOD_SHOWCASE_MANIFEST=$root\candidate-dist\SHA256SUMS"
-            "HEYFOOD_SHOWCASE_EVIDENCE_DIR=$root\candidate-evidence"
-            "HEYFOOD_SHOWCASE_TARGET=$env:TARGET"
-            "HEYFOOD_SHOWCASE_VERSION=$version"
-            "HEYFOOD_SHOWCASE_CREDENTIAL_BACKEND=native"
-            "HEYFOOD_SHOWCASE_SIGNED_CANDIDATE=true"
-            "HEYFOOD_CANDIDATE_ARCHIVE=$root\candidate-dist\$archive"
-          ) | Add-Content -Encoding utf8 $env:GITHUB_ENV
       - name: Run the protected candidate matrix with native credentials
         if: runner.os != 'Linux'
         run: >-
@@ -523,5 +449,53 @@ jobs:
           path: |
             candidate-dist
             candidate-evidence
+          if-no-files-found: error
+          retention-days: 14
+
+  protected-candidate-release-set:
+    name: Verify protected four-archive release set
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.qualify_signed_candidate }}
+    needs: protected-release-candidate
+    runs-on: ubuntu-22.04
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: protected-candidate-*
+          path: protected-download
+      - name: Assemble and verify the exact protected release set
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --locked --no-deps --format-version 1 |
+            jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
+          mkdir candidate-release
+          for target in \
+            aarch64-apple-darwin \
+            aarch64-unknown-linux-gnu \
+            x86_64-apple-darwin \
+            x86_64-unknown-linux-gnu; do
+            archive="heyfood-v$version-$target.tar.gz"
+            mapfile -t sources < <(find protected-download -type f -name "$archive")
+            test "${#sources[@]}" -eq 1
+            cp "${sources[0]}" "candidate-release/$archive"
+          done
+          scripts/release/checksums.sh candidate-release "$version"
+          scripts/release/verify-assets.sh candidate-release "$version"
+      - name: Attest the protected complete-set manifest
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: candidate-release/SHA256SUMS
+      - name: Upload the protected four-archive release set
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: protected-candidate-release-set
+          path: candidate-release
           if-no-files-found: error
           retention-days: 14
