@@ -837,7 +837,7 @@ fn one_shot_hint(code: &str) -> Option<&'static str> {
         "phase2_parity_pending" | "command_not_available" => Some("Run `heyfood --help`."),
         "session_cancelled_before_dispatch" => Some("Run the command again when ready."),
         "authorization_scope_upgrade_required" => {
-            Some("Run `heyfood login` to approve the expanded grant, then retry.")
+            Some("Run `heyfood login` to approve the current supported authorization set.")
         }
         _ => None,
     }

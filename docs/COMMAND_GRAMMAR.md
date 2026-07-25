@@ -52,8 +52,9 @@ heyfood login
 ```
 
 `--json` suppresses browser launch and interactive prompts. Device authorization
-still requires one human approval on `auth.hello.food`. Refresh never widens
-scopes; `login` is the explicit scope-upgrade path.
+still requires one human approval on `auth.hello.food`. Refresh cannot change
+authority; `login` atomically replaces the grant with the canonical supported
+scope set.
 
 ## Grocery
 
