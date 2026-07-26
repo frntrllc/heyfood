@@ -29,7 +29,14 @@ static WINDOWS_CREDENTIAL_MANAGER_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(windows)]
 static WINDOWS_HARDENED_PATHS: OnceLock<Mutex<std::collections::HashSet<(PathBuf, bool)>>> =
     OnceLock::new();
+// Windows runner and endpoint-protection latency can keep a valid
+// cross-process state commit in the lock queue for longer than one second.
+// Preserve the shorter Unix failure bound while giving native Windows
+// credential/config transactions a bounded window to serialize.
+#[cfg(not(windows))]
 const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
+#[cfg(windows)]
+const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(3);
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 #[cfg(any(windows, test))]
 const CREDENTIAL_WRITE_VERIFY_TIMEOUT: Duration = Duration::from_secs(1);
