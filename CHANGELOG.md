@@ -4,7 +4,7 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
-## 0.5.0 - Unreleased
+## 0.5.0 - 2026-07-25
 
 - Defines the recovery-release distribution as exactly four archives: macOS
   Apple Silicon, macOS Intel, Linux ARM64, and Linux x64. Windows distribution

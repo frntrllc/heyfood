@@ -1,6 +1,6 @@
 # heyfood Rust native client and interactive TUI plan
 
-**Status:** Draft v19 — Phase 2 feature work is frozen; draft PR #27 is preparing the bounded four-archive `v0.5.0` release candidate while activation, publication, and product cutover remain gated
+**Status:** Draft v20 — Phase 2 feature work is frozen; the bounded four-archive `v0.5.0` recovery release is approved for macOS and Linux, with Windows and Health deferred as recorded below
 **Baseline:** final unpublished Python `0.4.0` candidate at `73494a57468dac83b4904ce6c390e36926f5c6fe`; the last public Python release remains `0.3.2`
 **Reference plan:** `docs/plans/2026-07-19-heyfood-interactive-terminal-session-plan.md` at approved commit `56a4dca136a6d6f9ad3b5e99fa812ea433448d22`
 **Reference implementation:** local Apache-2.0 Grok Build checkout at `b189869b7755d2b482969acf6c92da3ecfeffd36`

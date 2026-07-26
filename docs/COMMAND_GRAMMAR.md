@@ -110,12 +110,10 @@ endpoint, so the Rust client does not simulate or claim a watch-diff view.
 
 `--raw` is a deprecated alias for `--json`.
 
-## Interactive TUI preview
+## Interactive TUI
 
-The draft Rust branch launches the TUI from an authenticated bare `heyfood`.
-On a clean machine it can complete device registration and continue into the
-same TUI process. This surface is not published or supported while the hosted
-installer remains suspended.
+Bare `heyfood` launches the authenticated TUI. On a clean machine it can
+complete device registration and continue into the same TUI process.
 
 ```text
 /grocery             open the capability-gated active Grocery list

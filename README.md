@@ -1,36 +1,31 @@
 # heyfood
 
 > [!CAUTION]
-> **Native installation is suspended. Do not install or use v0.4.0 or v0.4.1.**
-> Both releases were published before release authorization and are unsupported.
-> The hosted installer intentionally exits without installing anything until a
-> supported release is available.
+> **Do not install or use v0.4.0 or v0.4.1.**
+> Both releases were published before release authorization and remain
+> unsupported. The supported replacement is `v0.5.0`.
 
 Native command-line access to personalized food and dietary guidance from
 [hello.food](https://hello.food).
 
-This repository is moving the CLI and interactive terminal experience to Rust.
-The recovery release target is `0.5.0`. Publication is suspended while the
-installed-artifact journeys, native distribution, and exact-SHA release gates
-are completed. The immutable `v0.4.0` and `v0.4.1` releases are unsupported and
-must not be installed.
+The CLI and interactive terminal experience are implemented in Rust. The
+supported recovery release is `0.5.0` for macOS and Linux. The immutable
+`v0.4.0` and `v0.4.1` releases remain unsupported and must not be installed.
 
 See the [current capability and distribution status](docs/CAPABILITY_STATUS.md)
 before evaluating the client.
 
-## Installation status
+## Install
 
-There is no supported public native binary today. The hosted command currently
-prints the release status without installing anything:
+Install the supported native `v0.5.0` binary on macOS or Linux:
 
 ```bash
 curl -fsSL https://hey.food/install.sh | bash
 ```
 
-It prints the release-incident notice to stderr and exits `1`. Do not pin
-v0.4.0 or v0.4.1 to bypass the suspension. A successful install command will
-return here only after a replacement release passes testing and receives
-explicit release approval.
+The installer downloads the archive for the current CPU, verifies its checksum
+and exact version, and atomically installs it under the current user without
+`sudo` or shell-profile edits. Windows distribution is deferred to `v0.5.1`.
 
 ## Inspect or build from source
 
@@ -44,9 +39,9 @@ cargo build --release --locked --package heyfood-bin
 ./target/release/heyfood --help
 ```
 
-GitHub Releases and the hosted installer are the only supported public binary
-distribution path. Building a reviewed source revision is available for
-contributors, but it is not a supported substitute for the suspended release.
+GitHub Releases and the hosted installer are the supported public binary
+distribution paths. Building a reviewed source revision remains available for
+contributors.
 
 ## Register
 
@@ -144,12 +139,10 @@ do not retry a potentially committed operation blindly. See the
 
 ## Interactive terminal
 
-On this draft branch, registration continues into the native Rust TUI and an
-authenticated bare `heyfood` launches it directly. This is source-level preview
-work, not a supported release; the hosted installer remains suspended. The
-composer remains editable while responses stream, keeps bounded process-local
-prompt history, and preserves conversation continuity only for the lifetime of
-the process.
+Registration continues into the native Rust TUI and an authenticated bare
+`heyfood` launches it directly. The composer remains editable while responses
+stream, keeps bounded process-local prompt history, and preserves conversation
+continuity only for the lifetime of the process.
 
 The bounded `v0.5.0` recovery release produces exactly four native archives:
 macOS Apple Silicon, macOS Intel, Linux ARM64, and Linux x64.
@@ -168,7 +161,7 @@ validated transcript in the composer for editing before submission. Use
 readiness.
 
 Grocery, Menu Watch, profile, household, location, and status panels are
-connected on the draft branch. Health integrations are explicitly deferred from
+included in `v0.5.0`. Health integrations are explicitly deferred from
 the supported `v0.5.0` contract: `health` is absent from root help and shell
 completion, `/health` is absent from TUI discovery, and fresh grants do not
 request Health or integration-management scopes. Retained internal

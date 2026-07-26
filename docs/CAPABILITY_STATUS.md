@@ -12,12 +12,12 @@ specific `capability_deferred`.
 |---|---|---|
 | Native v0.4.0 | Unsupported | Do not install or use. Published before release authorization. |
 | Native v0.4.1 | Unsupported | Do not install or use. Published before release authorization. |
-| Hosted installer | Suspended | Prints the incident notice and exits `1` without installing anything. |
+| Hosted installer | Supported | Installs the checksum-verified native `v0.5.0` archive for macOS or Linux. |
 | Source | Available | Public for inspection and contributor evaluation under Apache 2.0. |
 | Windows x86-64 | Deferred | Windows distribution is deferred to `v0.5.1`. Ordinary Windows compile, test, Clippy, Credential Manager, and deterministic packaging qualification remains active in CI, but no Windows credential or asset participates in the `v0.5.0` release path. |
-| macOS native archives | Candidate qualification | Both `v0.5.0` architectures require Developer ID hardened-runtime signing, Apple notarized-code validation, and installed-artifact qualification. |
-| Linux native archives | Candidate qualification | Both `v0.5.0` architectures require exact-archive verification, attestation, installed-artifact qualification, and public smoke. |
-| Replacement native release | Unavailable | Not available until testing and release approval are complete. |
+| macOS native archives | Supported in v0.5.0 | Both architectures are Developer ID signed with hardened runtime, Apple notarized, and installed-artifact qualified. |
+| Linux native archives | Supported in v0.5.0 | Both architectures are checksum verified, attested, and installed-artifact qualified. |
+| Replacement native release | v0.5.0 | Supported on the four macOS/Linux targets listed above. |
 
 ## Product capabilities
 
@@ -29,13 +29,13 @@ specific `capability_deferred`.
 | Conversation continuation | `heyfood reply --conversation-id …` | Hosted conversation state | Current source command |
 | Meal logging | `heyfood log` | Hosted agent and meal memory | Current source command |
 | Item evaluation | `heyfood item` | Restaurant/menu evidence and dietary evaluation | Current source command |
-| Grocery | `heyfood grocery` plus TUI confirmation cards | Read, prepare, export, explicitly confirm/cancel, and correct pending add-item names | Current source command; production canaries pending |
+| Grocery | `heyfood grocery` plus TUI confirmation cards | Read, prepare, export, explicitly confirm/cancel, and correct pending add-item names | Supported v0.5.0 command |
 | Oura health integrations | Not advertised; retained command spelling fails closed with `capability_deferred` | Future provider-neutral integration work | Deferred from the supported `v0.5.0` contract; no implementation or canary release gate |
 | Apple Health | No CLI command or TUI panel | Mobile/backend work remains outside this release | Deferred from the supported `v0.5.0` contract |
 | Household context | Used by hosted turns and Grocery | Profiles and household-aware evaluation | Backend available; native roster management unavailable |
 | Restaurants and recipes | Via `ask` and `item` | Resolution, menu evidence, and recipe tools | Hosted through current commands |
 | Menu Watch | `heyfood watch` plus `/watch` TUI panel | Create/list/remove are deployed; scheduled execution remains operationally gated; no account-scoped diff-read route exists | Current source management command; diff view blocked on backend contract |
-| Interactive TUI | Draft branch launches authenticated chat and read panels | N/A | Source preview; packaged archives run the bounded `0.5.0` clean/returning-user, household Grocery, failure-safety, and 40/80/120-column matrix in CI. Signed-candidate reruns and production canaries remain pending; the broader landing-page journeys are future conformance work. |
+| Interactive TUI | Launches authenticated chat and functional read/action panels | N/A | Supported in v0.5.0; packaged archives pass the bounded clean/returning-user, household Grocery, failure-safety, and 40/80/120-column matrix. |
 | Voice capture | TUI `/voice`, Ctrl+Space, and F8 only in opt-in `native-audio` artifacts | Authenticated transcription | Not enabled in the default `0.5.0` build and not a recovery-release gate; real-hardware and platform qualification remain future work. |
 
 ## Process contract
