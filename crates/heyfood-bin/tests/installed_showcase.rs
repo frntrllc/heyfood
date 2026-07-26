@@ -514,6 +514,17 @@ async fn run_installed_archive_core_release_matrix() {
         shutdown,
         task: server,
     } = fixture;
+    // Real browsers may open and abandon a speculative connection before
+    // issuing the authorization GET. Prove that browser preconnect behavior
+    // cannot take down the installed-artifact fixture on any platform.
+    let speculative_connection = TcpStream::connect(
+        base_url
+            .strip_prefix("http://")
+            .expect("fixture URL uses the HTTP loopback scheme"),
+    )
+    .await
+    .expect("open speculative browser connection");
+    drop(speculative_connection);
 
     let clean_user = run_installed_pty(
         &installed_binary,
@@ -1113,7 +1124,9 @@ async fn start_fixture_service() -> FixtureService {
                 accepted = listener.accept() => accepted,
             };
             let (mut socket, _) = accepted.expect("accept showcase request");
-            let request = read_http_request(&mut socket).await;
+            let Some(request) = read_http_request(&mut socket).await else {
+                continue;
+            };
             request_sender
                 .send(RequestEvidence {
                     method: request.method.clone(),
@@ -1133,12 +1146,18 @@ async fn start_fixture_service() -> FixtureService {
     }
 }
 
-async fn read_http_request(socket: &mut TcpStream) -> HttpRequest {
+async fn read_http_request(socket: &mut TcpStream) -> Option<HttpRequest> {
     let mut bytes = Vec::new();
     let header_end = loop {
         let mut chunk = [0_u8; 2048];
         let count = socket.read(&mut chunk).await.expect("read request bytes");
-        assert_ne!(count, 0, "request ended before headers completed");
+        if count == 0 {
+            assert!(
+                bytes.is_empty(),
+                "request ended after sending incomplete headers"
+            );
+            return None;
+        }
         bytes.extend_from_slice(&chunk[..count]);
         if let Some(index) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
             break index + 4;
@@ -1179,12 +1198,12 @@ async fn read_http_request(socket: &mut TcpStream) -> HttpRequest {
         .next()
         .expect("request route")
         .to_owned();
-    HttpRequest {
+    Some(HttpRequest {
         method,
         path,
         headers: request_headers,
         body: bytes[header_end..header_end + content_length].to_vec(),
-    }
+    })
 }
 
 async fn respond_to_showcase_request(
