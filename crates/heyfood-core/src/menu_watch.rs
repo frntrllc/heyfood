@@ -1,8 +1,8 @@
 //! Typed Menu Watch contracts imported from hellofood backend main.
 //!
 //! The frozen source is `fixtures/contracts/menu-watch/menu_watch.py`. The
-//! server does not yet expose an account-scoped diff-read route, so this module
-//! intentionally models only create, list, and delete.
+//! account-owned list response includes the latest durable change summary,
+//! source selection, and identity evidence needed by the installed client.
 
 use std::fmt;
 
@@ -10,9 +10,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
 pub const MENU_WATCH_SCOPE: &str = "menu:watch";
-pub const MENU_WATCH_SOURCE_COMMIT: &str = "56db3416a28c23b178aa65753d17a43bb7f25adb";
+pub const MENU_WATCH_SOURCE_COMMIT: &str = "b2bc30b4984c09dc33107fde4db1723d31292886";
 pub const MENU_WATCH_SOURCE_SHA256: &str =
-    "fb7562ce187da86fff6f0740557f5b8eafcccb3c3c58d83bccecf96beba9a4c9";
+    "f8eb36955f14b3a1423b45e8dbf4ee62ed736e8fa1745f3fe18c2cd65758c582";
 
 macro_rules! uuid_identifier {
     ($name:ident, $message:literal) => {
@@ -138,6 +138,28 @@ pub struct MenuWatchCreateRequestWire {
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct MenuWatchChangeSummaryWire {
+    #[serde(default)]
+    pub added: u64,
+    #[serde(default)]
+    pub removed: u64,
+    #[serde(default)]
+    pub modified: u64,
+    #[serde(default)]
+    pub price_increases: u64,
+    #[serde(default)]
+    pub price_decreases: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct MenuWatchChangeEventWire {
+    pub changed_at: String,
+    pub previous_snapshot_id: String,
+    pub new_snapshot_id: String,
+    pub summary: MenuWatchChangeSummaryWire,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct MenuWatchResponseWire {
     pub id: MenuWatchId,
     pub restaurant_id: RestaurantId,
@@ -152,9 +174,17 @@ pub struct MenuWatchResponseWire {
     pub last_snapshot_id: Option<String>,
     pub created_at: String,
     #[serde(default)]
+    pub menu_url: Option<String>,
+    #[serde(default)]
     pub identity_verdict: Option<String>,
     #[serde(default)]
     pub identity_confidence: Option<f64>,
+    #[serde(default)]
+    pub identity_reasoning: Option<String>,
+    #[serde(default)]
+    pub identity_confirmed: Option<bool>,
+    #[serde(default)]
+    pub last_change: Option<MenuWatchChangeEventWire>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -211,13 +241,41 @@ mod tests {
                 "next_run_at": "2026-07-30T14:00:00Z",
                 "last_run_at": null,
                 "last_snapshot_id": null,
-                "created_at": "2026-07-23T12:00:00Z"
+                "created_at": "2026-07-23T12:00:00Z",
+                "menu_url": "https://ordering.example/abby",
+                "identity_verdict": "verified",
+                "identity_confidence": 0.97,
+                "identity_reasoning": "name and location matched",
+                "identity_confirmed": false,
+                "last_change": {
+                    "changed_at": "2026-07-24T14:05:00Z",
+                    "previous_snapshot_id": "snapshot-old",
+                    "new_snapshot_id": "snapshot-new",
+                    "summary": {
+                        "added": 17,
+                        "removed": 12,
+                        "modified": 50,
+                        "price_increases": 50,
+                        "price_decreases": 0
+                    }
+                }
             }],
             "count": 1
         }))
         .unwrap();
         assert_eq!(response.count, 1);
         assert_eq!(response.watches[0].cadence.weekday.get(), 3);
+        assert_eq!(
+            response.watches[0].menu_url.as_deref(),
+            Some("https://ordering.example/abby")
+        );
+        assert_eq!(
+            response.watches[0]
+                .last_change
+                .as_ref()
+                .map(|event| event.summary.added),
+            Some(17)
+        );
     }
 
     #[test]

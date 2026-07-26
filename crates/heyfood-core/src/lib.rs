@@ -39,9 +39,9 @@ pub use health::{
     HealthProvider, HealthTrend, TrendDirection,
 };
 pub use menu_watch::{
-    MENU_WATCH_SCOPE, MENU_WATCH_SOURCE_COMMIT, MENU_WATCH_SOURCE_SHA256,
-    MenuWatchCreateRequestWire, MenuWatchId, MenuWatchListResponseWire, MenuWatchResponseWire,
-    RestaurantId, WatchCadenceWire, WatchHour, WatchWeekday,
+    MENU_WATCH_SCOPE, MENU_WATCH_SOURCE_COMMIT, MENU_WATCH_SOURCE_SHA256, MenuWatchChangeEventWire,
+    MenuWatchChangeSummaryWire, MenuWatchCreateRequestWire, MenuWatchId, MenuWatchListResponseWire,
+    MenuWatchResponseWire, RestaurantId, WatchCadenceWire, WatchHour, WatchWeekday,
 };
 pub use migration::{
     ImportedPythonState, PythonFieldAction, PythonFieldDisposition, PythonImportOutcome,

@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use heyfood_application::render_household_menu;
 use heyfood_core::{
     ExclusionListResponseWire, GroceryDecisionWire, GroceryItemStateWire, GroceryListWire,
     GroceryMutationProposalWire, GrocerySafetyStatus, HealthContextWire, HealthFreshnessStatus,
@@ -1114,21 +1115,24 @@ fn render_menu_watch_entry(watch: &MenuWatchResponseWire, mode: OutputMode) -> S
     }
     let _ = writeln!(output, "  watch: {watch_id}");
     let _ = writeln!(output, "  restaurant: {restaurant_id}");
-    let _ = writeln!(output, "  timezone: {}", terminal_safe_text(&watch.tz));
+    let _ = writeln!(output, "  timezone: {}", inline_terminal_text(&watch.tz));
     let _ = writeln!(
         output,
         "  next check: {}",
-        terminal_safe_text(&watch.next_run_at)
+        inline_terminal_text(&watch.next_run_at)
     );
     let _ = writeln!(output, "  {notification}");
     if let Some(snapshot) = watch.last_snapshot_id.as_deref() {
         let _ = writeln!(
             output,
             "  baseline snapshot: {}",
-            terminal_safe_text(snapshot)
+            inline_terminal_text(snapshot)
         );
     } else {
         output.push_str("  awaiting first successful baseline\n");
+    }
+    if let Some(source) = watch.menu_url.as_deref() {
+        let _ = writeln!(output, "  menu source: {}", inline_terminal_text(source));
     }
     if let Some(verdict) = watch.identity_verdict.as_deref() {
         let confidence = watch
@@ -1138,10 +1142,50 @@ fn render_menu_watch_entry(watch: &MenuWatchResponseWire, mode: OutputMode) -> S
         let _ = writeln!(
             output,
             "  identity: {}{confidence}",
-            terminal_safe_text(verdict)
+            inline_terminal_text(verdict)
+        );
+    }
+    if let Some(reasoning) = watch.identity_reasoning.as_deref() {
+        let _ = writeln!(
+            output,
+            "  identity evidence: {}",
+            inline_terminal_text(reasoning)
+        );
+    }
+    if watch.identity_confirmed == Some(true) {
+        output.push_str("  identity source explicitly confirmed\n");
+    }
+    if let Some(change) = &watch.last_change {
+        let _ = writeln!(
+            output,
+            "  last change: {}",
+            inline_terminal_text(&change.changed_at)
+        );
+        let _ = writeln!(
+            output,
+            "    +{} added · -{} removed · {} modified",
+            change.summary.added, change.summary.removed, change.summary.modified
+        );
+        let _ = writeln!(
+            output,
+            "    {} price increases · {} price decreases",
+            change.summary.price_increases, change.summary.price_decreases
+        );
+        let _ = writeln!(
+            output,
+            "    snapshots: {} → {}",
+            inline_terminal_text(&change.previous_snapshot_id),
+            inline_terminal_text(&change.new_snapshot_id)
         );
     }
     output
+}
+
+fn inline_terminal_text(value: &str) -> String {
+    terminal_safe_text(value)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 const fn weekday_label(weekday: WatchWeekday) -> &'static str {
@@ -1168,6 +1212,12 @@ pub fn render_agent_result(document: &Value, mode: OutputMode) -> String {
         .find_map(|key| document.get(key).and_then(Value::as_str))
     {
         let _ = writeln!(output, "{}", terminal_safe_text(message));
+    }
+    if let Some(menu) = render_household_menu(document) {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&menu);
     }
     if let Some(choice_document) = document.get("choices").and_then(Value::as_object)
         && let Some(choices) = choice_document.get("choices").and_then(Value::as_array)
@@ -1433,6 +1483,55 @@ mod registration_tests {
     }
 
     #[test]
+    fn watch_human_output_preserves_source_identity_and_last_change() {
+        let watch: MenuWatchResponseWire = serde_json::from_value(json!({
+            "id": "00000000-0000-4000-8000-000000000010",
+            "restaurant_id": "0c1cb790-0000-4000-8000-000000000000",
+            "cadence": {"weekday": 3, "hour": 9},
+            "tz": "America/Chicago",
+            "active": true,
+            "notify": true,
+            "next_run_at": "2026-07-30T14:00:00Z",
+            "last_snapshot_id": "snapshot-new",
+            "created_at": "2026-07-23T12:00:00Z",
+            "menu_url": "https://ordering.example/abby\nforged",
+            "identity_verdict": "verified",
+            "identity_confidence": 0.97,
+            "identity_reasoning": "name and location matched\nforged",
+            "identity_confirmed": true,
+            "last_change": {
+                "changed_at": "2026-07-24T14:05:00Z",
+                "previous_snapshot_id": "snapshot-old",
+                "new_snapshot_id": "snapshot-new",
+                "summary": {
+                    "added": 17,
+                    "removed": 12,
+                    "modified": 50,
+                    "price_increases": 50,
+                    "price_decreases": 0
+                }
+            }
+        }))
+        .unwrap();
+
+        let rendered = render_menu_watch(&watch, OutputMode::HumanPlain);
+        for expected in [
+            "  menu source: https://ordering.example/abby forged",
+            "  identity: verified · confidence 0.970",
+            "  identity evidence: name and location matched forged",
+            "  identity source explicitly confirmed",
+            "  last change: 2026-07-24T14:05:00Z",
+            "    +17 added · -12 removed · 50 modified",
+            "    50 price increases · 0 price decreases",
+            "    snapshots: snapshot-old → snapshot-new",
+        ] {
+            assert!(rendered.lines().any(|line| line == expected), "{rendered}");
+        }
+        assert!(!rendered.contains("\nforged"));
+        assert!(!rendered.contains('\u{1b}'));
+    }
+
+    #[test]
     fn error_json_matches_the_public_envelope() {
         let rendered = render_error(
             "registration_unavailable",
@@ -1483,6 +1582,71 @@ mod registration_tests {
         ] {
             assert!(rendered.lines().any(|rendered| rendered == line));
         }
+    }
+
+    #[test]
+    fn agent_human_output_includes_the_complete_structured_household_menu() {
+        let rendered = render_agent_result(
+            &json!({
+                "text": "Here are the current options.",
+                "structured": {
+                    "type": "household_menu",
+                    "presentation": "full_menu",
+                    "restaurant_name": "Abby Jane Bakeshop",
+                    "source_url": "https://example.test/abby-jane",
+                    "source_lineage": "hunter_toast_sites",
+                    "menu_freshness": "Menu updated 2 hours ago",
+                    "captured_at": "2026-07-26T17:27:14Z",
+                    "freshness_hours": 2.0,
+                    "requested_max_age_seconds": 86400,
+                    "is_stale": false,
+                    "sections": [{
+                        "name": "Pastries",
+                        "items": [
+                            {
+                                "name": "Butter Croissant",
+                                "description": "Layers on layers.",
+                                "price_cents": 500,
+                                "composite_level": "caution",
+                                "safety": {
+                                    "member-jane": {
+                                        "label": "Jane",
+                                        "level": "caution",
+                                        "reason": "Butter may aggravate symptoms.",
+                                        "chips": ["Dairy"],
+                                        "conflicts": []
+                                    }
+                                }
+                            },
+                            {
+                                "name": "Chocolate Croissant",
+                                "price_cents": 525,
+                                "composite_level": "avoid"
+                            }
+                        ]
+                    }]
+                }
+            }),
+            OutputMode::HumanPlain,
+        );
+
+        assert!(rendered.starts_with("Here are the current options.\n\n"));
+        for expected in [
+            "Current menu at Abby Jane Bakeshop",
+            "Source: https://example.test/abby-jane",
+            "Freshness: Menu updated 2 hours ago",
+            "Captured: 2026-07-26T17:27:14Z",
+            "Source lineage: hunter_toast_sites",
+            "Pastries",
+            "• Butter Croissant  $5.00  [caution]",
+            "  Layers on layers.",
+            "  Why for Jane (caution): Butter may aggravate symptoms.",
+            "    Flags: Dairy",
+            "• Chocolate Croissant  $5.25  [avoid]",
+        ] {
+            assert!(rendered.lines().any(|line| line == expected));
+        }
+        assert_eq!(rendered.matches("• ").count(), 2);
     }
 
     #[test]
