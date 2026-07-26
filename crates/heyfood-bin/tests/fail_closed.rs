@@ -41,7 +41,7 @@ fn bare_binary_prints_only_runnable_native_next_steps() {
 }
 
 #[test]
-fn authenticated_one_shot_route_fails_with_registration_guidance_when_disconnected() {
+fn authenticated_one_shot_route_fails_with_account_connection_guidance_when_disconnected() {
     let root = TempHome::new();
     let mut command = Command::new(env!("CARGO_BIN_EXE_heyfood"));
     command
@@ -58,7 +58,7 @@ fn authenticated_one_shot_route_fails_with_registration_guidance_when_disconnect
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("diagnostic should be UTF-8");
-    assert!(stderr.contains("heyfood register"));
+    assert!(stderr.contains("heyfood login"));
     assert!(!stderr.contains("qualification"));
     assert!(!stderr.contains("cannot start"));
 }

@@ -58,21 +58,47 @@ activation are tracked in
 ## Supported-experience rubric
 
 The executable rubric is
-`tests/eval/tui-post-release-rubric.v1.json`. A supported public release must
+`tests/eval/tui-post-release-rubric.v2.json`. A supported public release must
 score **100/100**:
 
 | Category | Weight | Failure severity |
 |---|---:|---|
-| First run, registration, dietary onboarding, first response | 20 | P0 |
+| Bare-launch orientation and sign-in/create-account choice | 5 | P2 |
+| First account connection, dietary onboarding, first response | 15 | P0 |
 | Returning credential reload and usable second session | 15 | P0 |
 | Household targeting and Grocery review/edit/cancel/accept/conflicts | 30 | P0 |
 | Cancellation, uncertain outcomes, failure recovery, terminal restoration | 20 | P0 |
 | 40/80/120-column presentation, no-color mode, exact packaged artifact | 15 | P1 |
 
 The score is intentionally limited to supported behavior. Windows
-distribution, Health-aware planning, native voice, and Menu Watch diff are
-listed in the report as roadmap coverage debt; they are not converted into
-fake passing assertions and do not retroactively fail `v0.5.0`.
+distribution, Health-aware planning, native voice, and item-level Menu Watch
+diff detail are listed in the report as roadmap coverage debt; they are not
+converted into fake passing assertions. The published `v0.5.0` archive may
+therefore retain the known first-run-orientation P2 until a successor artifact
+contains and proves the automatic account-choice flow.
+
+## Excellence standard
+
+The next supported artifact is promotable only when all of these statements
+are true:
+
+- every supported installed archive scores 100/100 on the current rubric;
+- no open P0 or P1 product finding applies to the candidate;
+- the packaged executable—not a Cargo target—passes the clean-user,
+  returning-user, household Grocery, failure-safety, and artifact matrix;
+- first-frame latency is p95 below 100 ms across 30 warm probes;
+- input-to-frame latency is p95 below 25 ms across 2,000 inputs with 500
+  retained conversation entries;
+- semantic content survives 40-, 80-, and 120-column layouts, `NO_COLOR`, a
+  normal exit, application interrupt, body error, and panic;
+- every human-session dimension scores at least 4/5 before a feature release;
+- every public capability or landing-page demonstration has installed-artifact
+  evidence for the behavior it claims.
+
+The latency budgets are enforced by the source qualification suite in
+`crates/heyfood-bin/tests/phase0_qualification.rs`. The installed matrix owns
+artifact identity and real-terminal behavior. Neither substitutes for the
+other.
 
 ## Human session protocol
 
@@ -114,7 +140,7 @@ enforces this evidence hygiene.
 | P3 | Polish, spacing, minor discoverability, or optional enhancement | Prioritized backlog |
 
 Automated issues use the stable fingerprint
-`tui-post-release-v1:<category>`. A repeated failure updates the existing issue
+`tui-post-release-v2:<category>`. A repeated failure updates the existing issue
 instead of creating noise. A complete four-target recovery run closes the
 issue with a link to the evidence.
 

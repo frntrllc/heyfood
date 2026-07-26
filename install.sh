@@ -219,5 +219,6 @@ case ":${PATH:-}:" in
     ;;
 esac
 say "Next: heyfood"
-say "Connect an account: heyfood register"
+say "Open heyfood to sign in or create an account: heyfood"
+say "Direct account commands: heyfood login (existing) or heyfood register (new)"
 printf 'Uninstall: rm %q\n' "$INSTALL_PATH"

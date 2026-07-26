@@ -157,6 +157,7 @@ struct DeviceAuthorizationRequest<'a> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AuthorizationIntent {
+    Auto,
     CreateAccount,
     SignIn,
 }
@@ -164,6 +165,7 @@ enum AuthorizationIntent {
 impl AuthorizationIntent {
     const fn wire_value(self) -> &'static str {
         match self {
+            Self::Auto => "auto",
             Self::CreateAccount => "create_account",
             Self::SignIn => "sign_in",
         }
@@ -435,6 +437,36 @@ impl RegistrationClient {
         self.capabilities().await?;
         self.start_device_authorization(AuthorizationIntent::CreateAccount, None, None)
             .await
+    }
+
+    /// Start the unbound account-choice flow used by a fresh native install.
+    ///
+    /// The authorization website remains authoritative for choosing sign-in
+    /// or account creation. No local credential exists yet, so this path must
+    /// never enter the staged replacement protocol.
+    pub async fn start_device_connection(&self) -> Result<DeviceAuthorization, RegistrationError> {
+        self.start_unbound_device_authorization(AuthorizationIntent::Auto)
+            .await
+    }
+
+    /// Start an explicit existing-account sign-in on a fresh native install.
+    pub async fn start_device_login(&self) -> Result<DeviceAuthorization, RegistrationError> {
+        self.start_unbound_device_authorization(AuthorizationIntent::SignIn)
+            .await
+    }
+
+    async fn start_unbound_device_authorization(
+        &self,
+        intent: AuthorizationIntent,
+    ) -> Result<DeviceAuthorization, RegistrationError> {
+        let capabilities = self.authorization_capabilities().await?;
+        if capabilities.schema_version != 1 || !capabilities.authorization.device_code {
+            return Err(RegistrationError::new(
+                "authorization_unavailable",
+                "This hello.food service does not advertise device authorization.",
+            ));
+        }
+        self.start_device_authorization(intent, None, None).await
     }
 
     /// Start an explicit sign-in that replaces an existing grant with the
@@ -1584,6 +1616,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fresh_device_connection_uses_account_neutral_intent_and_builds_credentials() {
+        let (base_url, server) = fixture_server_with_intent(
+            DeviceTokenBehavior::Immediate,
+            SessionBehavior::Immediate,
+            "auto",
+        )
+        .await;
+        let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let client = RegistrationClient::new(service_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let authorization = client.start_device_connection().await.unwrap();
+        assert_eq!(authorization.user_code, "ABCD-EFGH");
+        assert!(
+            !authorization.verification_uri.contains("intent="),
+            "the service-owned verification URL must not be rewritten for the neutral flow"
+        );
+
+        let result = client
+            .complete_device_registration(
+                authorization,
+                "heyfood-test-device".into(),
+                Duration::from_secs(5),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.profile_status, ProfileStatus::Ready);
+        assert_eq!(result.credentials.session.account_id.as_str(), "user-test");
+        assert_eq!(result.credentials.channel.device_id, "heyfood-test-device");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fresh_explicit_login_uses_sign_in_intent() {
+        let (base_url, server) = fixture_server_with_intent(
+            DeviceTokenBehavior::Immediate,
+            SessionBehavior::Immediate,
+            "sign_in",
+        )
+        .await;
+        let service_url = ServiceUrl::parse(&base_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let client = RegistrationClient::new(service_url, NetworkPolicy::DEVELOPMENT).unwrap();
+        let authorization = client.start_device_login().await.unwrap();
+        assert_eq!(authorization.user_code, "ABCD-EFGH");
+        assert!(!authorization.verification_uri.contains("intent="));
+
+        let result = client
+            .complete_device_registration(
+                authorization,
+                "heyfood-test-device".into(),
+                Duration::from_secs(5),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.credentials.session.account_id.as_str(), "user-test");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn cancellation_after_session_dispatch_waits_for_response_and_completes() {
         let session_seen = Arc::new(Notify::new());
         let release_session = Arc::new(Notify::new());
@@ -1898,6 +1989,14 @@ mod tests {
         token_behavior: DeviceTokenBehavior,
         session_behavior: SessionBehavior,
     ) -> (String, tokio::task::JoinHandle<()>) {
+        fixture_server_with_intent(token_behavior, session_behavior, "create_account").await
+    }
+
+    async fn fixture_server_with_intent(
+        token_behavior: DeviceTokenBehavior,
+        session_behavior: SessionBehavior,
+        expected_intent: &'static str,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let base_url = format!("http://{address}");
@@ -1987,7 +2086,7 @@ mod tests {
                         let (_, request_body) = text.split_once("\r\n\r\n").unwrap();
                         let request: serde_json::Value =
                             serde_json::from_str(request_body).unwrap();
-                        assert_eq!(request["intent"], "create_account");
+                        assert_eq!(request["intent"], expected_intent);
                         assert_eq!(request["scope"], LOGIN_SCOPES.join(" "));
                         serde_json::json!({
                             "device_code": "hf_dc_01234567890123456789",

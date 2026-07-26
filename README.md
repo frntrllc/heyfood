@@ -43,18 +43,24 @@ GitHub Releases and the hosted installer are the supported public binary
 distribution paths. Building a reviewed source revision remains available for
 contributors.
 
-## Register
+## Connect an account
 
-Connect a hello.food account before running an agent command:
+Bare `heyfood` gives a fresh user one browser-based choice to sign in or create
+a hello.food account, then continues directly into onboarding and the TUI:
 
 ```bash
-heyfood register
+heyfood
 ```
 
-Registration starts the native device-authorization flow and prints a URL and
-short approval code. Identity verification and current Terms and Privacy
-acceptance happen on `auth.hello.food`; the hosted page offers the SMS and email
-methods enabled for the deployment. SMS registration is US-only.
+Use `heyfood login` to connect an existing account directly. On an already
+connected machine, the same command stages and atomically replaces the current
+authorization with the canonical supported scope set. Use `heyfood register`
+when account creation is explicitly intended.
+
+Account connection starts the native device-authorization flow and prints a
+URL and short approval code. Identity verification and current Terms and
+Privacy acceptance happen on `auth.hello.food`; the hosted page offers the SMS
+and email methods enabled for the deployment. SMS registration is US-only.
 
 On a headless machine, keep browser launch disabled:
 
@@ -139,7 +145,7 @@ do not retry a potentially committed operation blindly. See the
 
 ## Interactive terminal
 
-Registration continues into the native Rust TUI and an authenticated bare
+Account connection continues into the native Rust TUI and an authenticated bare
 `heyfood` launches it directly. The composer remains editable while responses
 stream, keeps bounded process-local prompt history, and preserves conversation
 continuity only for the lifetime of the process.
@@ -148,8 +154,9 @@ The bounded `v0.5.0` recovery release produces exactly four native archives:
 macOS Apple Silicon, macOS Intel, Linux ARM64, and Linux x64.
 Windows distribution is deferred to `v0.5.1`; ordinary Windows compile, test,
 Clippy, credential, and packaging qualification remains active in CI. Health,
-Menu Watch diff, native voice, full legacy parity, and the complete twelve-stage
-showcase are future work rather than `v0.5.0` release gates.
+item-level Menu Watch diff detail, native voice, full legacy parity, and the
+complete twelve-stage showcase are future work rather than `v0.5.0` release
+gates.
 
 Interactive controls include Enter to send, Shift+Enter or Ctrl+J for a
 newline, Up/Down for prompt history, PageUp/PageDown for scrollback, Ctrl+C to
@@ -174,11 +181,12 @@ LIST_ID --out FILE` writes annotations through an owner-only, exclusive,
 symlink-safe file path; `--overwrite` opts into atomic replacement. Proposal
 editing and the native voice vertical are present in source. `heyfood watch`
 and `/watch` create/list/remove or display subscriptions using the deployed
-`menu:watch` contract; the showcased diff view remains blocked on a backend
-account-scoped diff-read route. The broader installed-artifact showcase and
-real-hardware voice qualification remain post-`v0.5.0` conformance work. Hidden
-compatibility routes continue to fail closed where a native workflow is not
-complete.
+`menu:watch` contract. The TUI renders the latest account-owned change summary
+with source, freshness, and provenance; item-level added, removed, modified,
+and price-change detail remains follow-on work. The broader installed-artifact
+showcase and real-hardware voice qualification remain post-`v0.5.0`
+conformance work. Hidden compatibility routes continue to fail closed where a
+native workflow is not complete.
 
 ## Development
 

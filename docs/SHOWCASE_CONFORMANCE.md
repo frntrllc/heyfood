@@ -75,13 +75,15 @@ landing-page inventory. Its machine-readable contract is
   digest, and the real platform credential backend on the final signed
   candidate.
 
-Native voice, Menu Watch diff, and Health integrations are not `0.5.0` gates.
+Native voice, item-level Menu Watch diff detail, and Health integrations are not
+`0.5.0` gates.
 Health integrations are explicitly deferred from the supported release
 contract and require neither implementation nor a production canary. Menu Watch
-management still requires one bounded production canary or truthful deferral.
-Passing the synthetic source-archive matrix does not authorize release:
-production registration/Grocery canaries, protected signing, the same matrix
-against the signed archives, and independent exact-SHA review remain required.
+management and latest-summary rendering have since received bounded production
+proof. Passing the synthetic source-archive matrix did not itself authorize
+release: production registration/Grocery canaries, protected signing, the same
+matrix against the signed archives, and independent exact-SHA review were also
+required.
 
 ## Full post-`0.5.0` showcase E2E design
 
@@ -138,10 +140,11 @@ path are present in source. Voice checks authorization before opening the
 microphone, keeps bounded WAV data in memory, never retries transcription, and
 does not submit the transcript until the user presses Enter. Menu Watch
 create/list/remove and a read-only TUI subscription panel are present against
-the deployed least-privilege contract. Its showcased diff stage remains blocked
-on an account-scoped backend diff-read route. Authoritative health context in
-ordinary TUI turns and meal-memory proof remain implementation work. Native
-voice still requires real-hardware and installed-artifact qualification,
+the deployed least-privilege contract. The TUI now renders the latest
+account-owned change summary with freshness, source, and provenance; the
+showcased item-level diff stage remains follow-on work. Authoritative health
+context in ordinary TUI turns and meal-memory proof remain implementation work.
+Native voice still requires real-hardware and installed-artifact qualification,
 including denial, truncation, timeout, cancellation, and resource-lifecycle
 cases. Household targeting, consent-aware dietary context, and Grocery safety
 cards now have bounded installed-artifact proof; production-canary proof

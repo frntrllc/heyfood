@@ -5,7 +5,7 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 
 workflow=.github/workflows/continuous-tui-eval.yml
-rubric=tests/eval/tui-post-release-rubric.v1.json
+rubric=tests/eval/tui-post-release-rubric.v2.json
 runner=scripts/eval/run-installed-ux-eval.sh
 triage=scripts/eval/triage-github-issues.sh
 
@@ -17,6 +17,8 @@ test -x "$triage"
 test "$(jq -r '.schema_version' "$rubric")" = 1
 test "$(jq -r '.pass_threshold' "$rubric")" = 100
 test "$(jq '[.categories[].weight] | add' "$rubric")" = 100
+test "$(jq -r '.id' "$rubric")" = "tui-post-release-v2"
+test "$(jq -r '.categories[] | select(.id == "first-run-orientation") | .severity' "$rubric")" = "P2"
 test "$(
   jq -r '.categories[].id' "$rubric" | LC_ALL=C sort -u | wc -l | tr -d ' '
 )" = "$(
@@ -40,7 +42,10 @@ grep -Fq "scripts/eval/run-installed-ux-eval.sh" "$workflow"
 grep -Fq "issues: write" "$workflow"
 grep -Fq "if: always()" "$workflow"
 grep -Fq "HEYFOOD_EVAL_EXPECTED_REPORTS: \"4\"" "$workflow"
-grep -Fq "tui-post-release-v1:" "$triage"
+# shellcheck disable=SC2016 # These are literal implementation-contract fragments.
+grep -Fq 'rubric_id=$(jq -er' "$triage"
+# shellcheck disable=SC2016 # These are literal implementation-contract fragments.
+grep -Fq 'fingerprint="$rubric_id:$category"' "$triage"
 grep -Fq "gh issue create" "$triage"
 grep -Fq "gh issue edit" "$triage"
 grep -Fq "gh issue close" "$triage"

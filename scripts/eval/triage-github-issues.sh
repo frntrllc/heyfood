@@ -11,6 +11,7 @@ rubric=$2
 version=$3
 run_url=$4
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+rubric_id=$(jq -er '.id' "$rubric")
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/heyfood-eval-triage.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
@@ -89,7 +90,7 @@ issue_body_for() {
 while IFS= read -r category; do
   [[ -n "$category" ]] || continue
   if grep -Fqx "$category" "$failed_categories"; then
-    fingerprint="tui-post-release-v1:$category"
+    fingerprint="$rubric_id:$category"
     severity=$(
       jq -r --arg category "$category" \
         '.categories[] | select(.id == $category) | .severity' "$rubric"
@@ -120,7 +121,7 @@ while IFS= read -r category; do
         --body-file "$body"
     fi
   elif [[ "$report_count" -eq "$expected_reports" ]]; then
-    fingerprint="tui-post-release-v1:$category"
+    fingerprint="$rubric_id:$category"
     number=$(issue_number_for "$fingerprint")
     if [[ -n "$number" ]]; then
       gh issue close "$number" \
