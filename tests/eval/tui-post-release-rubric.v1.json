@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "id": "tui-post-release-v1",
+  "minimum_release": "0.5.0",
+  "pass_threshold": 100,
+  "categories": [
+    {
+      "id": "first-run-and-onboarding",
+      "objective": "A clean user can register, complete dietary onboarding, and receive a first streamed answer",
+      "severity": "P0",
+      "weight": 20,
+      "evidence_group": "clean-user",
+      "accepted_statuses": ["passed"],
+      "required_assertions": [
+        "device_registration_executed",
+        "account_bound_credentials_persisted",
+        "missing_profile_onboarding_completed",
+        "profile_sync_consent_granted",
+        "profile_uploaded_once",
+        "first_authenticated_tui_turn_completed"
+      ]
+    },
+    {
+      "id": "returning-session",
+      "objective": "A returning user reaches the TUI without repeating registration and conversation remains usable",
+      "severity": "P0",
+      "weight": 15,
+      "evidence_group": "returning-user",
+      "accepted_statuses": ["passed"],
+      "required_assertions": [
+        "first_process_exited",
+        "second_installed_process_reloaded_credentials",
+        "registration_not_repeated",
+        "second_authenticated_turn_completed"
+      ]
+    },
+    {
+      "id": "household-grocery",
+      "objective": "Household targeting and Grocery review, edit, cancel, accept, and stale-authority handling are understandable and correct",
+      "severity": "P0",
+      "weight": 30,
+      "evidence_group": "household-grocery",
+      "accepted_statuses": ["passed"],
+      "required_assertions": [
+        "maya_household_scope_bound",
+        "active_list_member_binding_screening_substitution_and_provenance_rendered",
+        "proposal_member_binding_screening_substitution_and_provenance_rendered",
+        "proposal_cancelled_without_mutation",
+        "proposal_edited_and_accepted_once",
+        "exact_server_minted_idempotency_authority_replayed",
+        "list_advanced_once",
+        "stale_list_authority_rejected",
+        "stale_household_context_authority_rejected"
+      ]
+    },
+    {
+      "id": "failure-recovery",
+      "objective": "Cancellation, uncertain outcomes, typed failures, and process exits leave the user informed and the terminal usable",
+      "severity": "P0",
+      "weight": 20,
+      "evidence_group": "failure-safety",
+      "accepted_statuses": ["passed"],
+      "required_assertions": [
+        "uncertain_dispatch_not_retried",
+        "ctrl_c_cancelled_stream",
+        "ctrl_c_cancelled_pending_confirmation_without_mutation",
+        "typed_failure_rendered_without_terminal_loss",
+        "full_presentation_restoration_after_normal_and_app_interrupt_exit"
+      ]
+    },
+    {
+      "id": "terminal-presentation",
+      "objective": "The installed artifact remains legible and semantically complete across supported widths and color modes",
+      "severity": "P1",
+      "weight": 15,
+      "evidence_group": "artifact-behavior",
+      "accepted_statuses": ["passed", "source-qualified"],
+      "required_assertions": [
+        "semantic_output_at_40_80_120_columns",
+        "no_color_has_no_color_sgr",
+        "archive_digest_exact",
+        "packaged_executable_only"
+      ]
+    }
+  ],
+  "roadmap_observations": [
+    {
+      "id": "existing-account-first-launch",
+      "status": "finding",
+      "target": "0.5.1",
+      "issue": "https://github.com/frntrllc/heyfood/issues/29",
+      "note": "Bare launch begins create-account authorization without exposing the existing-account login path; promote the corrected copy into the clean-user installed-artifact assertion."
+    },
+    {
+      "id": "menu-watch-diff",
+      "status": "deferred",
+      "target": "0.5.1",
+      "note": "Track as product coverage debt, not a v0.5.0 regression."
+    },
+    {
+      "id": "health-aware-planning",
+      "status": "deferred",
+      "target": "post-0.5.0",
+      "note": "Requires provider configuration and a separately authorized privacy-safe canary."
+    },
+    {
+      "id": "native-voice-meal-log",
+      "status": "deferred",
+      "target": "post-0.5.0",
+      "note": "Requires opt-in artifacts and real-hardware qualification."
+    },
+    {
+      "id": "windows-distribution",
+      "status": "deferred",
+      "target": "0.5.1",
+      "note": "Ordinary Windows source qualification remains active; public distribution is separate."
+    }
+  ],
+  "limitations": [
+    "The automated score covers the supported installed-artifact contract, not aesthetic taste or long-session comfort.",
+    "The deterministic backend proves client behavior without mutating a production household.",
+    "Production availability and latency require a dedicated least-privilege canary account before they can run unattended.",
+    "Deferred roadmap capabilities are visible as coverage debt and do not masquerade as v0.5.0 regressions."
+  ]
+}

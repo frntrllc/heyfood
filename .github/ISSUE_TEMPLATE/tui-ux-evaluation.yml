@@ -1,0 +1,68 @@
+name: TUI experience finding
+description: Record a reproducible problem from an installed heyfood TUI session.
+title: "[TUI UX] "
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Installed version
+      placeholder: heyfood 0.5.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS Apple Silicon
+        - macOS Intel
+        - Linux ARM64
+        - Linux x86-64
+        - Windows qualification build
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal and dimensions
+      placeholder: Ghostty 1.x, 120x35
+    validations:
+      required: true
+  - type: textarea
+    id: journey
+    attributes:
+      label: Journey and exact inputs
+      description: Exclude tokens, email addresses, dietary details, and household names.
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed experience
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected experience
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - P0 — unusable, unsafe, corrupting, or terminal not restored
+        - P1 — core journey blocked or materially misleading
+        - P2 — significant friction with a viable workaround
+        - P3 — polish, clarity, or discoverability
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Evidence hygiene
+      options:
+        - label: I removed credentials and personal dietary or household data.
+          required: true

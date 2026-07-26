@@ -100,6 +100,28 @@ fn main() {
                 )
             })
         }
+        Some("evaluate-post-release") => {
+            let evidence_directory = required_option(&mut arguments, "--evidence-dir");
+            let rubric = required_option(&mut arguments, "--rubric");
+            let output = required_option(&mut arguments, "--output");
+            no_extra_arguments(&mut arguments);
+            xtask::evaluate_post_release(
+                Path::new(&evidence_directory),
+                Path::new(&rubric),
+                Path::new(&output),
+            )
+            .and_then(|report| {
+                let message = format!(
+                    "post-release UX evaluation: score {}/{} with {} finding(s)",
+                    report.score, report.threshold, report.findings
+                );
+                if report.passed {
+                    Ok(message)
+                } else {
+                    Err(message)
+                }
+            })
+        }
         _ => usage(),
     };
 
@@ -118,9 +140,16 @@ fn no_extra_arguments(arguments: &mut impl Iterator<Item = String>) {
     }
 }
 
+fn required_option(arguments: &mut impl Iterator<Item = String>, expected: &str) -> String {
+    if arguments.next().as_deref() != Some(expected) {
+        usage();
+    }
+    arguments.next().unwrap_or_else(|| usage())
+}
+
 fn usage() -> ! {
     eprintln!(
-        "usage: cargo xtask <dependency-dag|verify-migration-ledger|verify-contracts|verify-grocery-contracts|import-grocery-contracts --source-repo PATH|verify-assets|verify-assets-approved|verify-phase0-evidence|verify-phase1-evidence>"
+        "usage: cargo xtask <dependency-dag|verify-migration-ledger|verify-contracts|verify-grocery-contracts|import-grocery-contracts --source-repo PATH|verify-assets|verify-assets-approved|verify-phase0-evidence|verify-phase1-evidence|evaluate-post-release --evidence-dir PATH --rubric PATH --output PATH>"
     );
     std::process::exit(2);
 }

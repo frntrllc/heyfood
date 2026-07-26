@@ -49,7 +49,7 @@ jobs:
           fi
       - name: Lint distribution scripts
         shell: bash
-        run: shellcheck install.sh tests/installer_contract.sh tests/release_scope_contract.sh scripts/release/*.sh packaging/macos/*.sh
+        run: shellcheck install.sh tests/installer_contract.sh tests/release_scope_contract.sh tests/continuous_eval_contract.sh scripts/eval/*.sh scripts/release/*.sh packaging/macos/*.sh
       - name: Test the hosted-installer contract
         shell: bash
         run: bash tests/installer_contract.sh
@@ -57,6 +57,10 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: bash tests/release_scope_contract.sh
+      - name: Test the continuous TUI evaluation contract
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash tests/continuous_eval_contract.sh
 
   native-cli-smoke:
     name: Native CLI / ${{ matrix.os }}
