@@ -89,7 +89,7 @@ if [[ "$target" == *-apple-darwin ]]; then
     echo "installed macOS executable is not signed by the expected Apple developer team" >&2
     exit 78
   fi
-  spctl --assess --type execute --verbose=2 "$binary"
+  codesign -vvvv -R="notarized" --check-notarization "$binary"
 fi
 test "$("$binary" --version)" = "heyfood $version"
 "$binary" --help >/dev/null

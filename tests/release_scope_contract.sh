@@ -56,6 +56,7 @@ line_of() {
 protected_slice="$CASE_DIR/protected-ci.yml"
 sed -n '/^  protected-candidate-preflight:/,$p' "$CANDIDATE_WORKFLOW" >"$protected_slice"
 macos_signer="$ROOT/packaging/macos/sign-and-notarize.sh"
+archive_smoke="$ROOT/scripts/release/smoke-archive.sh"
 
 [[ -x "$macos_signer" ]] ||
   fail "the macOS signing tool must be executable"
@@ -106,6 +107,9 @@ fi
 if grep -Eq '(^|[[:space:]])spctl([[:space:]]|$)' "$macos_signer"; then
   fail "standalone macOS executables must not use spctl app assessment"
 fi
+if grep -Eq '(^|[[:space:]])spctl([[:space:]]|$)' "$archive_smoke"; then
+  fail "packaged standalone macOS executables must not use spctl app assessment"
+fi
 accepted_line=$(line_of "$macos_signer" 'result.get("status") != "Accepted"')
 submission_evidence_line=$(line_of "$macos_signer" '"submission_id": submission_id')
 notarized_code_line=$(line_of "$macos_signer" \
@@ -118,6 +122,9 @@ if ! ((accepted_line < submission_evidence_line &&
   submission_evidence_line < notarized_code_line)); then
   fail "macOS signing must validate Accepted, log its submission ID, then check notarized code"
 fi
+grep -Fq "codesign -vvvv -R=\"notarized\" --check-notarization \"\$binary\"" \
+  "$archive_smoke" ||
+  fail "archive smoke must check the notarization of packaged standalone macOS code"
 
 assert_four_targets "$RELEASE_WORKFLOW"
 assert_four_targets "$PUBLIC_SMOKE_WORKFLOW"
