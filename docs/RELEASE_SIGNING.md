@@ -23,8 +23,9 @@ Configure this environment variable:
 The macOS P12 must contain exactly one `Developer ID Application` identity.
 Both macOS architectures are signed with hardened runtime and a secure
 timestamp, submitted with `notarytool --wait`, required to return `Accepted`,
-and assessed by Gatekeeper before packaging. Signing, packaged-archive smoke,
-and downloaded-public-artifact smoke each require the executable's exact
+and checked as notarized standalone code with Apple's `codesign` notarization
+requirement before packaging. Signing, packaged-archive smoke, and
+downloaded-public-artifact smoke each require the executable's exact
 `TeamIdentifier` to match `APPLE_DEVELOPER_TEAM_ID`.
 
 The Linux archives do not require a platform code-signing identity. Their exact

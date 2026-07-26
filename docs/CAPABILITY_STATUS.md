@@ -15,7 +15,7 @@ specific `capability_deferred`.
 | Hosted installer | Suspended | Prints the incident notice and exits `1` without installing anything. |
 | Source | Available | Public for inspection and contributor evaluation under Apache 2.0. |
 | Windows x86-64 | Deferred | Windows distribution is deferred to `v0.5.1`. Ordinary Windows compile, test, Clippy, Credential Manager, and deterministic packaging qualification remains active in CI, but no Windows credential or asset participates in the `v0.5.0` release path. |
-| macOS native archives | Candidate qualification | Both `v0.5.0` architectures require Developer ID hardened-runtime signing, Apple notarization, Gatekeeper assessment, and installed-artifact qualification. |
+| macOS native archives | Candidate qualification | Both `v0.5.0` architectures require Developer ID hardened-runtime signing, Apple notarized-code validation, and installed-artifact qualification. |
 | Linux native archives | Candidate qualification | Both `v0.5.0` architectures require exact-archive verification, attestation, installed-artifact qualification, and public smoke. |
 | Replacement native release | Unavailable | Not available until testing and release approval are complete. |
 

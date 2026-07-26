@@ -128,7 +128,21 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     result = json.load(handle)
 if result.get("status") != "Accepted":
     raise SystemExit("Apple notarization was not accepted")
+submission_id = result.get("id")
+if not isinstance(submission_id, str) or not submission_id.strip():
+    raise SystemExit("Apple notarization response omitted the submission identifier")
+print(
+    json.dumps(
+        {
+            "event": "apple_notarization",
+            "status": "Accepted",
+            "submission_id": submission_id,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+)
 PY
 
-spctl --assess --type execute --verbose=2 "$binary"
+codesign -vvvv -R="notarized" --check-notarization "$binary"
 "$binary" --version >/dev/null

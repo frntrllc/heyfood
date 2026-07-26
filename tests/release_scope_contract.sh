@@ -103,6 +103,21 @@ delete_line=$(line_of "$macos_signer" "security delete-keychain \"\$keychain\"")
 if [[ -z "$restore_line" || -z "$delete_line" || "$restore_line" -ge "$delete_line" ]]; then
   fail "macOS signing cleanup must restore the search list before deleting the keychain"
 fi
+if grep -Eq '(^|[[:space:]])spctl([[:space:]]|$)' "$macos_signer"; then
+  fail "standalone macOS executables must not use spctl app assessment"
+fi
+accepted_line=$(line_of "$macos_signer" 'result.get("status") != "Accepted"')
+submission_evidence_line=$(line_of "$macos_signer" '"submission_id": submission_id')
+notarized_code_line=$(line_of "$macos_signer" \
+  "codesign -vvvv -R=\"notarized\" --check-notarization \"\$binary\"")
+if [[ -z "$accepted_line" || -z "$submission_evidence_line" ||
+  -z "$notarized_code_line" ]]; then
+  fail "macOS signing must retain sanitized acceptance evidence and check notarized standalone code"
+fi
+if ! ((accepted_line < submission_evidence_line &&
+  submission_evidence_line < notarized_code_line)); then
+  fail "macOS signing must validate Accepted, log its submission ID, then check notarized code"
+fi
 
 assert_four_targets "$RELEASE_WORKFLOW"
 assert_four_targets "$PUBLIC_SMOKE_WORKFLOW"
