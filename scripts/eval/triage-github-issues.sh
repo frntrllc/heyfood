@@ -94,6 +94,14 @@ while IFS= read -r category; do
       jq -r --arg category "$category" \
         '.categories[] | select(.id == $category) | .severity' "$rubric"
     )
+    if [[ -z "$severity" && "$report_count" -gt 0 ]]; then
+      severity=$(
+        # shellcheck disable=SC2016 # `$category` is a jq variable.
+        xargs jq -s -r --arg category "$category" \
+          '[.[] | .categories[]? | select(.id == $category) | .severity // empty][0] // empty' \
+          <"$reports_file"
+      )
+    fi
     severity=${severity:-P1}
     title="[Automated UX eval][$severity] $category ($fingerprint)"
     body="$scratch/$category.md"
