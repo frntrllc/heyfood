@@ -126,8 +126,15 @@ fi
 readonly BIN_DIR BIN_DIR_VARIABLE CURRENT_UID BIN_OWNER_UID BIN_MODE BIN_WRITE_BITS
 
 readonly INSTALL_PATH="$BIN_DIR/$HEYFOOD_COMMAND"
-[[ ! -L "$INSTALL_PATH" ]] ||
-  fail "refusing to replace a symbolic link: $INSTALL_PATH"
+readonly LEGACY_PIPX_TARGET="$HOME/.local/pipx/venvs/heyfood-cli/bin/heyfood"
+LEGACY_PIPX_LINK=""
+if [[ -L "$INSTALL_PATH" ]]; then
+  LEGACY_PIPX_LINK=$(readlink "$INSTALL_PATH") ||
+    fail "could not inspect the existing heyfood symbolic link"
+  [[ "$LEGACY_PIPX_LINK" == "$LEGACY_PIPX_TARGET" ]] ||
+    fail "refusing to replace an unrecognized symbolic link: $INSTALL_PATH"
+fi
+readonly LEGACY_PIPX_LINK
 [[ ! -e "$INSTALL_PATH" || -f "$INSTALL_PATH" ]] ||
   fail "refusing to replace a non-file: $INSTALL_PATH"
 
@@ -188,6 +195,13 @@ VERSION_OUTPUT=$("$STAGED_EXECUTABLE" --version 2>&1) ||
   fail "the downloaded heyfood executable did not start successfully"
 [[ "$VERSION_OUTPUT" == "heyfood $VERSION" ]] ||
   fail "expected heyfood $VERSION before installation, received: $VERSION_OUTPUT"
+
+if [[ -n "$LEGACY_PIPX_LINK" ]]; then
+  [[ -L "$INSTALL_PATH" ]] ||
+    fail "the legacy heyfood symbolic link changed during installation"
+  [[ "$(readlink "$INSTALL_PATH")" == "$LEGACY_PIPX_LINK" ]] ||
+    fail "the legacy heyfood symbolic link target changed during installation"
+fi
 
 # The staging directory lives inside BIN_DIR, so this rename cannot cross a
 # filesystem boundary. A reader sees either the prior complete executable or

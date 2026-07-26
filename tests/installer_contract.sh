@@ -145,11 +145,11 @@ test_source_invariants() {
   assert_contains "$INSTALLER" 'set -euo pipefail'
   assert_contains "$INSTALLER" 'https://github.com'
   assert_contains "$INSTALLER" 'SUPPORTED_VERSION="0.5.0"'
+  assert_contains "$INSTALLER" '.local/pipx/venvs/heyfood-cli/bin/heyfood'
   assert_contains "$INSTALLER" 'SHA256SUMS'
   assert_contains "$INSTALLER" "mv -f -- \"\$STAGED_EXECUTABLE\" \"\$INSTALL_PATH\""
   assert_not_contains "$INSTALLER" 'HEYFOOD_NATIVE_INSTALLATION_SUSPENDED'
   assert_not_contains "$INSTALLER" 'pypi'
-  assert_not_contains "$INSTALLER" 'pipx'
   assert_not_contains "$INSTALLER" 'python'
   if grep -E '^[[:space:]]*(sudo|eval)([[:space:]]|$)' "$INSTALLER" >/dev/null; then
     fail "installer must not invoke sudo or eval"
@@ -253,6 +253,48 @@ test_rejects_uncontrolled_install_targets() {
     fail "installer followed the existing executable symlink"
 }
 
+make_legacy_pipx_link() {
+  local legacy_target="$HOME_DIR/.local/pipx/venvs/heyfood-cli/bin/heyfood"
+  mkdir -p "$BIN_DIR" "$(dirname "$legacy_target")"
+  cat >"$legacy_target" <<'EOF'
+#!/usr/bin/env bash
+printf 'heyfood 0.3.2\n'
+EOF
+  chmod 0755 "$legacy_target"
+  ln -s "$legacy_target" "$BIN_DIR/heyfood"
+}
+
+test_migrates_known_legacy_pipx_symlink() {
+  new_case legacy-pipx
+  make_release 0.5.0
+  make_legacy_pipx_link
+  run_installer
+
+  [[ -f "$BIN_DIR/heyfood" && ! -L "$BIN_DIR/heyfood" ]] ||
+    fail "legacy pipx symlink was not replaced by the native executable"
+  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.5.0" ]] ||
+    fail "legacy pipx migration did not install v0.5.0"
+  [[ "$("$HOME_DIR/.local/pipx/venvs/heyfood-cli/bin/heyfood")" == "heyfood 0.3.2" ]] ||
+    fail "legacy pipx migration changed the old environment"
+}
+
+test_failed_install_preserves_known_legacy_pipx_symlink() {
+  new_case legacy-pipx-failure
+  make_release 0.5.0
+  make_legacy_pipx_link
+  printf 'corruption\n' >>"$ASSET_DIR/heyfood-v0.5.0-$(host_target).tar.gz"
+  if run_installer; then
+    fail "legacy pipx migration accepted an invalid checksum"
+  fi
+
+  [[ -L "$BIN_DIR/heyfood" ]] ||
+    fail "failed migration removed the legacy pipx symlink"
+  [[ "$(readlink "$BIN_DIR/heyfood")" == "$HOME_DIR/.local/pipx/venvs/heyfood-cli/bin/heyfood" ]] ||
+    fail "failed migration changed the legacy pipx symlink"
+  [[ "$("$BIN_DIR/heyfood")" == "heyfood 0.3.2" ]] ||
+    fail "failed migration changed the legacy pipx executable"
+}
+
 write_existing_binary() {
   mkdir -p "$BIN_DIR"
   cat >"$BIN_DIR/heyfood" <<'EOF'
@@ -313,6 +355,8 @@ test_default_release_is_v050
 test_streamed_install
 test_rejects_unsupported_or_unsafe_version_before_download
 test_rejects_uncontrolled_install_targets
+test_migrates_known_legacy_pipx_symlink
+test_failed_install_preserves_known_legacy_pipx_symlink
 test_checksum_failure_preserves_existing_binary
 test_archive_shape_failure_preserves_existing_binary
 test_version_mismatch_preserves_existing_binary
