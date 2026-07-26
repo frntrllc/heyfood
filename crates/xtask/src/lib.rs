@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod json;
+mod post_release_eval;
 mod sha256;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,6 +13,7 @@ use std::process::Command;
 
 use cargo_metadata::{Metadata, MetadataCommand};
 use json::Json;
+pub use post_release_eval::{PostReleaseEvalSummary, evaluate as evaluate_post_release};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LedgerReport {

@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "evaluation": "tui-post-release-v1",
+  "evaluated_on": "2026-07-25",
+  "rubric_sha256": "875eba1416521cf4f17f31b1c5b1d810594aaa77a6623a1cd2825b5a58459ada",
+  "status": "passed",
+  "score": 100,
+  "maximum_score": 100,
+  "release": {
+    "version": "0.5.0",
+    "target": "aarch64-apple-darwin",
+    "archive_sha256": "4eca0dda88156ed51008c86f975848d53878c5df13cd3f0ce19d7716fd178b2f"
+  },
+  "execution": {
+    "public_github_release_archive": true,
+    "source_checkout_binary": false,
+    "real_pty": true,
+    "synthetic_backend": true,
+    "credential_backend": "isolated-file",
+    "duration_seconds": 11.01
+  },
+  "categories": [
+    {
+      "id": "first-run-and-onboarding",
+      "score": 20,
+      "maximum": 20,
+      "status": "passed"
+    },
+    {
+      "id": "returning-session",
+      "score": 15,
+      "maximum": 15,
+      "status": "passed"
+    },
+    {
+      "id": "household-grocery",
+      "score": 30,
+      "maximum": 30,
+      "status": "passed"
+    },
+    {
+      "id": "failure-recovery",
+      "score": 20,
+      "maximum": 20,
+      "status": "passed"
+    },
+    {
+      "id": "terminal-presentation",
+      "score": 15,
+      "maximum": 15,
+      "status": "passed"
+    }
+  ],
+  "findings": [],
+  "evidence_sha256": {
+    "installed_core_matrix": "a0ec70deb02b4107d010f7563d19ab1368881ce6659984325b17b66e7d191c50",
+    "post_release_report": "b3bcd6c23f7d52d045cbed359fe2b77970ed5442b5a0b0a4c3bebbdae28b36c1",
+    "clean_user_ansi": "267a17c5a316e4657979862a759a2e4668656fdb42bc7c4c20ef9da000b46edf",
+    "returning_user_ansi": "1846a1302c44bb99109f9d216e86f8d9d3dda874dc73eaad82e99de08921b327",
+    "width_40_ansi": "be6bab7d540511f64e6c3e1e81dcf88eb6c4492b71b76adf683f08951d9f6826",
+    "width_120_no_color_ansi": "6be428b280ac74501cfcea0ebd1f7a72187881437262ee19800a6b070f0ca34e",
+    "interrupt_exit_ansi": "9f70f27b582d1a0d2acf1de43b18904f1fde8d04f817fa3bce99c999cccad91d"
+  },
+  "limitations": [
+    "This is the supported-scope installed-artifact baseline, not a human aesthetic score.",
+    "Production availability and latency were not measured.",
+    "Deferred roadmap capabilities are not credited by this score."
+  ]
+}

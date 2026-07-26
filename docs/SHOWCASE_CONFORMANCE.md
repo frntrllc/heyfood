@@ -168,3 +168,9 @@ product builds retain fail-closed logout and reconciliation behavior.
 Source-archive evidence deliberately reports `release_gate_complete: false`;
 it qualifies the bounded matrix but neither the signed candidate nor the
 broader twelve-stage showcase contract.
+
+Post-release monitoring is governed separately by
+[`TUI_CONTINUOUS_EVALUATION.md`](TUI_CONTINUOUS_EVALUATION.md). It reruns the
+installed-artifact journeys against public archives, scores the supported
+experience, and deduplicates regressions without reopening this historical
+release gate.

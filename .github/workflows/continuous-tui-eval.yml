@@ -1,0 +1,147 @@
+name: Continuous TUI evaluation
+
+run-name: Continuous TUI evaluation v${{ inputs.version || '0.5.0' }}
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Public GitHub Release version without the v prefix
+        required: true
+        type: string
+        default: "0.5.0"
+
+permissions:
+  attestations: read
+  contents: read
+
+concurrency:
+  group: continuous-tui-eval-${{ inputs.version || '0.5.0' }}
+  cancel-in-progress: false
+
+jobs:
+  installed-experience:
+    name: v${{ inputs.version || '0.5.0' }} / ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version || '0.5.0' }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize fail-safe evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p eval-release eval-evidence
+          jq -n \
+            --arg version "$VERSION" \
+            --arg target "$TARGET" \
+            '{
+              schema_version: 1,
+              evaluation: "tui-post-release-v1",
+              status: "failed",
+              score: 0,
+              maximum_score: 100,
+              pass_threshold: 100,
+              release: {version: $version, target: $target},
+              categories: [{
+                id: "evaluation-infrastructure",
+                severity: "P1",
+                status: "failed",
+                observed_status: "workflow_did_not_reach_evaluator"
+              }],
+              findings: [{
+                fingerprint: "tui-post-release-v1:evaluation-infrastructure",
+                severity: "P1",
+                category: "evaluation-infrastructure",
+                summary: "The workflow stopped before complete UX evidence was produced"
+              }]
+            }' >eval-evidence/post-release-eval.json
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: rustup toolchain install 1.94.0 --profile minimal --no-self-update
+      - name: Download the exact public archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          archive="heyfood-v$VERSION-$TARGET.tar.gz"
+          gh release download "v$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$archive" \
+            --pattern SHA256SUMS \
+            --dir eval-release
+      - name: Verify public provenance and target checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="heyfood-v$VERSION-$TARGET.tar.gz"
+          gh attestation verify "eval-release/$archive" --repo "$GITHUB_REPOSITORY"
+          gh attestation verify eval-release/SHA256SUMS --repo "$GITHUB_REPOSITORY"
+          grep -E "^[0-9a-f]{64}  $archive$" eval-release/SHA256SUMS \
+            >eval-release/target-SHA256SUMS
+          mv eval-release/target-SHA256SUMS eval-release/SHA256SUMS
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            export HEYFOOD_APPLE_TEAM_ID=MKJVXQR548
+          fi
+          scripts/release/smoke-archive.sh eval-release "$VERSION" "$TARGET"
+      - name: Exercise and score the installed TUI
+        shell: bash
+        env:
+          HEYFOOD_SHOWCASE_ARCHIVE: ${{ github.workspace }}/eval-release/heyfood-v${{ inputs.version || '0.5.0' }}-${{ matrix.target }}.tar.gz
+          HEYFOOD_SHOWCASE_MANIFEST: ${{ github.workspace }}/eval-release/SHA256SUMS
+          HEYFOOD_SHOWCASE_EVIDENCE_DIR: ${{ github.workspace }}/eval-evidence
+          HEYFOOD_SHOWCASE_TARGET: ${{ matrix.target }}
+          HEYFOOD_SHOWCASE_VERSION: ${{ inputs.version || '0.5.0' }}
+        run: scripts/eval/run-installed-ux-eval.sh
+      - name: Upload privacy-safe evaluation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tui-eval-${{ matrix.target }}
+          path: eval-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+  triage:
+    name: Triage evaluation findings
+    if: always()
+    needs: installed-experience
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download all evaluation evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: tui-eval-*
+          path: downloaded-evidence
+      - name: Open, update, or resolve deduplicated issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version || '0.5.0' }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEYFOOD_EVAL_EXPECTED_REPORTS: "4"
+        run: >-
+          scripts/eval/triage-github-issues.sh
+          downloaded-evidence
+          tests/eval/tui-post-release-rubric.v1.json
+          "$VERSION"
+          "$RUN_URL"
