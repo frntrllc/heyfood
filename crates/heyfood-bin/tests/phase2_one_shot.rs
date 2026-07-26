@@ -431,6 +431,117 @@ async fn one_shot_ask_collects_sse_into_exactly_one_json_value() {
 }
 
 #[tokio::test]
+async fn exact_abby_jane_ask_renders_the_complete_current_menu_in_human_output() {
+    const QUERY: &str = "Show me this week's menu at Abby Jane Bakeshop in Dripping Springs, Texas";
+
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/agent/converse "));
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["query"], QUERY);
+        assert_eq!(body["input_mode"], "text");
+
+        let result = json!({
+            "conversation_id": "abby-jane-menu-conversation",
+            "message": "I found the current menu.",
+            "structured": {
+                "type": "household_menu",
+                "presentation": "full_menu",
+                "restaurant_name": "Abby Jane Bakeshop",
+                "source_url": "https://www.abbyjanebakes.com/menu",
+                "source_lineage": "hunter_toast_sites",
+                "menu_freshness": "Menu updated 2 hours ago",
+                "captured_at": "2026-07-26T17:27:14Z",
+                "freshness_hours": 2.0,
+                "requested_max_age_seconds": 86400,
+                "is_stale": false,
+                "sections": [
+                    {
+                        "name": "Bread",
+                        "items": [
+                            {
+                                "name": "Big Country",
+                                "description": "Naturally leavened country sourdough.",
+                                "price_cents": 900,
+                                "composite_level": "avoid",
+                                "safety": {
+                                    "member-jane": {
+                                        "member_id": "member-jane",
+                                        "label": "Jane",
+                                        "level": "avoid",
+                                        "reason": "Contains wheat flour (Celiac)",
+                                        "chips": ["Contains gluten"],
+                                        "conflicts": []
+                                    }
+                                },
+                                "allergen_detail": [{
+                                    "allergen_code": "wheat",
+                                    "confidence": "high",
+                                    "source": "owner_added",
+                                    "evidence": "Owner-confirmed wheat flour"
+                                }]
+                            },
+                            {
+                                "name": "Baguette",
+                                "price_cents": 400,
+                                "composite_level": "caution"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "Pastries",
+                        "items": [
+                            {
+                                "name": "Chocolate Croissant",
+                                "price_cents": 650,
+                                "composite_level": "generally_safer"
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+        let stream =
+            format!("event: result\ndata: {result}\n\nevent: done\ndata: {{}}\n\n").into_bytes();
+        respond_stream(&mut socket, &stream).await;
+    });
+
+    let parsed = CommandLine::try_parse_from(["heyfood", "ask", QUERY]).unwrap();
+    let output = OneShotExecutor::new(&service, &credentials(), OutputMode::HumanPlain)
+        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+
+    for expected in [
+        "I found the current menu.",
+        "Current menu at Abby Jane Bakeshop",
+        "Source: https://www.abbyjanebakes.com/menu",
+        "Source lineage: hunter_toast_sites",
+        "Freshness: Menu updated 2 hours ago",
+        "Captured: 2026-07-26T17:27:14Z",
+        "Bread",
+        "• Big Country  $9.00  [avoid]",
+        "  Why for Jane (avoid): Contains wheat flour (Celiac)",
+        "    Flags: Contains gluten",
+        "  Allergen flag: wheat (high, owner_added)",
+        "    Evidence: Owner-confirmed wheat flour",
+        "• Baguette  $4.00  [caution]",
+        "Pastries",
+        "• Chocolate Croissant  $6.50  [generally safer]",
+    ] {
+        assert!(
+            output.lines().any(|line| line == expected),
+            "missing {expected:?} from:\n{output}"
+        );
+    }
+    assert_eq!(output.matches("• ").count(), 3);
+    assert!(!output.contains('\u{1b}'));
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn streamed_choices_match_the_frozen_python_json_and_human_oracle() {
     let oracle = python_oracle();
     let (listener, service) = fixture_service().await;

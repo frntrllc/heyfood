@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, fmt::Write as _};
 
-use heyfood_application::{RunTurnOutcome, agent_result_text};
+use heyfood_application::{RunTurnOutcome, agent_result_text, render_household_menu};
 use heyfood_core::{
     ActionConfirmationEnvelopeWire, AgentConfirmationCommandWire, AgentEvent,
     ConfirmationDecisionWire, GroceryEditPatch, OnboardingOption, OnboardingProfileInput,
@@ -2073,6 +2073,7 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
         AgentEvent::Result { document, .. } => {
             let confirmation = ActionConfirmationEnvelopeWire::from_result_document(&document);
             let result = agent_result_text(&document).map(terminal_safe_text);
+            let household_menu = render_household_menu(&document);
             let choice_labels = std::mem::take(&mut model.pending_choice_labels);
             model.scrollback.mutate_last_assistant(|entry| {
                 match confirmation.as_ref() {
@@ -2086,7 +2087,17 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                         );
                     }
                     Ok(None) => {
-                        if let Some(result) = result {
+                        if let Some(menu) = household_menu {
+                            let mut rendered = result
+                                .filter(|value| !value.is_empty())
+                                .unwrap_or_else(|| entry.text.clone());
+                            if !rendered.is_empty() {
+                                rendered.push_str("\n\n");
+                            }
+                            rendered.push_str(&menu);
+                            entry.text = rendered;
+                            append_choice_labels(&mut entry.text, &choice_labels);
+                        } else if let Some(result) = result {
                             if !result.is_empty() {
                                 entry.text = result;
                                 append_choice_labels(&mut entry.text, &choice_labels);
@@ -2992,6 +3003,70 @@ mod tests {
             assert!(!entry.text.contains('{'));
             assert!(!entry.streaming);
         }
+    }
+
+    #[test]
+    fn terminal_result_renders_the_structured_household_menu_after_the_summary() {
+        let mut model = AppModel {
+            draft: "Show me this week's menu".into(),
+            cursor: 24,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "text": "Here are the current options.",
+                        "structured": {
+                            "type": "household_menu",
+                            "presentation": "full_menu",
+                            "restaurant_name": "Abby Jane Bakeshop",
+                            "source_url": "https://example.test/abby-jane",
+                            "menu_freshness": "Menu updated 2 hours ago",
+                            "captured_at": "2026-07-26T17:27:14Z",
+                            "freshness_hours": 2.0,
+                            "requested_max_age_seconds": 86400,
+                            "is_stale": false,
+                            "sections": [{
+                                "name": "Bread",
+                                "items": [
+                                    {
+                                        "name": "Baguette",
+                                        "price_cents": 400,
+                                        "composite_level": "avoid"
+                                    },
+                                    {
+                                        "name": "Big Country",
+                                        "price_cents": 900,
+                                        "composite_level": "caution"
+                                    }
+                                ]
+                            }]
+                        }
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+
+        let entry = model.scrollback.entries().back().unwrap();
+        assert!(entry.text.starts_with("Here are the current options.\n\n"));
+        for expected in [
+            "Current menu at Abby Jane Bakeshop",
+            "Source: https://example.test/abby-jane",
+            "Freshness: Menu updated 2 hours ago",
+            "Captured: 2026-07-26T17:27:14Z",
+            "Bread",
+            "• Baguette  $4.00  [avoid]",
+            "• Big Country  $9.00  [caution]",
+        ] {
+            assert!(entry.text.lines().any(|line| line == expected));
+        }
+        assert_eq!(entry.text.matches("• ").count(), 2);
+        assert!(!entry.streaming);
     }
 
     #[test]

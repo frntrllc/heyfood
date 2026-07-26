@@ -63,6 +63,25 @@ class MenuWatchCreateRequest(BaseModel):
     )
 
 
+class MenuWatchChangeSummary(BaseModel):
+    """Counts from the most recent durable changed snapshot pair."""
+
+    added: int = 0
+    removed: int = 0
+    modified: int = 0
+    price_increases: int = 0
+    price_decreases: int = 0
+
+
+class MenuWatchChangeEvent(BaseModel):
+    """Last non-empty change visible to this watch's owner."""
+
+    changed_at: datetime
+    previous_snapshot_id: str
+    new_snapshot_id: str
+    summary: MenuWatchChangeSummary
+
+
 class MenuWatchResponse(BaseModel):
     """A single menu-watch row as returned by create/list."""
 
@@ -76,10 +95,14 @@ class MenuWatchResponse(BaseModel):
     last_run_at: Optional[datetime] = None
     last_snapshot_id: Optional[str] = None
     created_at: datetime
-    # Identity-gate provenance (echoed on create so a CLI can show why a watch is
-    # active or what confidence it activated at). Not persisted on the row.
+    # Additive activation provenance. Optional preserves the installed v0.5.0
+    # contract and truthfully represents legacy rows created before migration 101.
+    menu_url: Optional[str] = None
     identity_verdict: Optional[str] = None
     identity_confidence: Optional[float] = None
+    identity_reasoning: Optional[str] = None
+    identity_confirmed: Optional[bool] = None
+    last_change: Optional[MenuWatchChangeEvent] = None
 
 
 class MenuWatchListResponse(BaseModel):
