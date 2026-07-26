@@ -53,7 +53,7 @@ jobs:
             --arg target "$TARGET" \
             '{
               schema_version: 1,
-              evaluation: "tui-post-release-v1",
+              evaluation: "tui-post-release-v2",
               status: "failed",
               score: 0,
               maximum_score: 100,
@@ -66,7 +66,7 @@ jobs:
                 observed_status: "workflow_did_not_reach_evaluator"
               }],
               findings: [{
-                fingerprint: "tui-post-release-v1:evaluation-infrastructure",
+                fingerprint: "tui-post-release-v2:evaluation-infrastructure",
                 severity: "P1",
                 category: "evaluation-infrastructure",
                 summary: "The workflow stopped before complete UX evidence was produced"
@@ -148,6 +148,6 @@ jobs:
         run: >-
           scripts/eval/triage-github-issues.sh
           downloaded-evidence
-          tests/eval/tui-post-release-rubric.v1.json
+          tests/eval/tui-post-release-rubric.v2.json
           "$VERSION"
           "$RUN_URL"

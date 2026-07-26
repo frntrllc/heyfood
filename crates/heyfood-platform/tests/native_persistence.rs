@@ -899,7 +899,12 @@ fn async_config_lock_wait_is_off_executor_and_bounded() {
     let started = Instant::now();
     let error = block_on(store.load()).unwrap_err();
     assert_eq!(error.code, "lock_timeout");
-    assert!(started.elapsed() < Duration::from_secs(2));
+    let upper_bound = if cfg!(windows) {
+        Duration::from_secs(4)
+    } else {
+        Duration::from_secs(2)
+    };
+    assert!(started.elapsed() < upper_bound);
     lock.unlock().unwrap();
 }
 

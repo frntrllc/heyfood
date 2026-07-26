@@ -7,7 +7,7 @@ legacy Python behavior or hidden compatibility topology.
 
 ```text
 register      create and connect a hello.food account
-login         authenticate again and replace the supported scope set
+login         connect an existing account or replace this machine's authorization
 ask           ask the hosted agent a one-shot question
 reply         continue an explicit conversation id
 log           log a meal through the hosted agent
@@ -53,8 +53,10 @@ heyfood login
 
 `--json` suppresses browser launch and interactive prompts. Device authorization
 still requires one human approval on `auth.hello.food`. Refresh cannot change
-authority; `login` atomically replaces the grant with the canonical supported
-scope set.
+authority. On a fresh machine, bare `heyfood` starts the account-neutral browser
+flow where the user chooses sign-in or account creation, while `heyfood login`
+connects an existing account. On a connected machine, `login` atomically
+replaces the grant with the canonical supported scope set.
 
 ## Grocery
 
@@ -93,10 +95,10 @@ heyfood watch remove WATCH_UUID
 
 Watch creation, listing, and removal use the deployed `menu:watch` scope.
 Creation freezes the restaurant-local cadence, resolved timezone, notification
-preference, and activation state. Identity-gate evidence is returned with the
-create response but is not persisted by the deployed contract. The backend does
-not yet expose its persisted snapshot diff through an account-scoped read
-endpoint, so the Rust client does not simulate or claim a watch-diff view.
+preference, and activation state. The TUI renders the latest account-owned
+change summary with source, freshness, and provenance. Item-level added,
+removed, modified, and price-change detail remains follow-on work and is not
+claimed by the current client.
 
 ## Global process controls
 
@@ -112,8 +114,9 @@ endpoint, so the Rust client does not simulate or claim a watch-diff view.
 
 ## Interactive TUI
 
-Bare `heyfood` launches the authenticated TUI. On a clean machine it can
-complete device registration and continue into the same TUI process.
+Bare `heyfood` launches the authenticated TUI. On a clean machine it offers
+sign-in or account creation, completes device authorization, and continues into
+the same TUI process.
 
 ```text
 /grocery             open the capability-gated active Grocery list
@@ -135,9 +138,9 @@ same bounded capture/transcription/review state machine when the artifact
 contains native audio support; unavailable artifacts and insufficient scopes
 fail before microphone access. Dietary onboarding, interactive Grocery
 confirmation, and the bounded installed-artifact core matrix remain active
-release work. Menu Watch diff, real-hardware voice qualification, full parity,
-and the complete twelve-stage showcase are post-`v0.5.0` conformance work, not
-release gates.
+release work. Item-level Menu Watch diff detail, real-hardware voice
+qualification, full parity, and the complete twelve-stage showcase are
+post-`v0.5.0` conformance work, not release gates.
 
 ## Unavailable compatibility topology
 

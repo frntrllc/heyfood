@@ -26,6 +26,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinSet;
 use unicode_width::UnicodeWidthChar;
 
 const TEST_PROMPT: &str = "Plan a synthetic dinner for installed-artifact qualification.";
@@ -44,6 +45,10 @@ const UNCERTAIN_PROMPT: &str = "Consume this mutation-like turn and close before
 const FAILURE_PROMPT: &str = "Return a typed synthetic failure to the installed TUI.";
 const WIDTH_PROMPT: &str = "Render a width-qualified installed response.";
 const WIDTH_RESPONSE: &str = "Width-qualified installed response complete.";
+const FIRST_RUN_ACCOUNT_CHOICE_COPY: &str =
+    "Welcome to heyfood. Sign in or create a hello.food account in your browser to continue.";
+const FIXTURE_HEADER_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const FIXTURE_MAX_PENDING_CONNECTIONS: usize = 16;
 const TEST_ACCOUNT: &str = "showcase-user";
 const TEST_DEVICE_CODE: &str = "hf_dc_showcase_01234567890123456789";
 const TEST_LIST_ID: &str = "00000000-0000-4000-8000-000000000123";
@@ -233,6 +238,7 @@ struct RequestEvidence {
 #[derive(Debug)]
 struct FixtureSummary {
     device_authorizations: usize,
+    authorization_intents: Vec<String>,
     cli_sessions: usize,
     consent_grants: usize,
     profile_uploads: usize,
@@ -252,6 +258,7 @@ struct FixtureState {
     profile_version: Option<u64>,
     list_version: u64,
     device_authorizations: usize,
+    authorization_intents: Vec<String>,
     cli_sessions: usize,
     consent_grants: usize,
     profile_uploads: usize,
@@ -272,6 +279,7 @@ impl Default for FixtureState {
             profile_version: None,
             list_version: 4,
             device_authorizations: 0,
+            authorization_intents: Vec::new(),
             cli_sessions: 0,
             consent_grants: 0,
             profile_uploads: 0,
@@ -290,6 +298,7 @@ impl FixtureState {
     fn finish(self) -> FixtureSummary {
         FixtureSummary {
             device_authorizations: self.device_authorizations,
+            authorization_intents: self.authorization_intents,
             cli_sessions: self.cli_sessions,
             consent_grants: self.consent_grants,
             profile_uploads: self.profile_uploads,
@@ -508,12 +517,23 @@ async fn run_installed_archive_core_release_matrix() {
         shutdown,
         task: server,
     } = fixture;
+    // Real browsers may open and hold a speculative connection before issuing
+    // the authorization GET. Keep this socket idle while the first installed
+    // journey proves that browser preconnect behavior cannot monopolize the
+    // fixture on any platform.
+    let held_speculative_connection = TcpStream::connect(
+        base_url
+            .strip_prefix("http://")
+            .expect("fixture URL uses the HTTP loopback scheme"),
+    )
+    .await
+    .expect("open speculative browser connection");
 
     let clean_user = run_installed_pty(
         &installed_binary,
         &user.0,
         &base_url,
-        &["register", "--device", "--no-browser", "--timeout", "10"],
+        &[],
         InstalledPtyOptions::new(80, false, credential_backend),
         vec![
             PtyAction::Wait("Kosher".into()),
@@ -541,6 +561,15 @@ async fn run_installed_archive_core_release_matrix() {
         ],
     )
     .await;
+    let mut speculative_probe = [0_u8; 1];
+    assert!(
+        matches!(
+            held_speculative_connection.try_read(&mut speculative_probe),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+        ),
+        "the held browser preconnect must remain idle and open while the installed journey progresses"
+    );
+    drop(held_speculative_connection);
 
     write_household_import_source(&user.0);
 
@@ -671,6 +700,29 @@ async fn run_installed_archive_core_release_matrix() {
         &width_120_no_color,
         &interrupt_exit,
     );
+    let first_run_choice_visible =
+        raw_terminal_contains(&clean_user, FIRST_RUN_ACCOUNT_CHOICE_COPY);
+    let automatic_account_intent_used = summary.authorization_intents.as_slice() == ["auto"];
+    let account_connection_confirmed =
+        raw_terminal_contains(&clean_user, "Your hello.food account is connected.");
+    let first_run_orientation_status = if first_run_choice_visible
+        && automatic_account_intent_used
+        && account_connection_confirmed
+    {
+        "passed"
+    } else {
+        "failed"
+    };
+    let mut first_run_orientation_assertions = Vec::new();
+    if first_run_choice_visible {
+        first_run_orientation_assertions.push("bare_launch_sign_in_or_create_copy_visible");
+    }
+    if automatic_account_intent_used {
+        first_run_orientation_assertions.push("automatic_browser_flow_uses_auto_account_intent");
+    }
+    if account_connection_confirmed {
+        first_run_orientation_assertions.push("bare_launch_account_connection_confirmed");
+    }
 
     #[cfg(windows)]
     credential_cleanup.purge_and_verify_absent();
@@ -760,10 +812,16 @@ async fn run_installed_archive_core_release_matrix() {
         },
         "core_matrix": [
             {
+                "id": "first-run-orientation",
+                "status": first_run_orientation_status,
+                "assertions": first_run_orientation_assertions
+            },
+            {
                 "id": "clean-user",
                 "status": "passed",
                 "assertions": [
                     "device_registration_executed",
+                    "device_account_connection_executed",
                     "account_bound_credentials_persisted",
                     "missing_profile_onboarding_completed",
                     "profile_sync_consent_granted",
@@ -829,6 +887,7 @@ async fn run_installed_archive_core_release_matrix() {
         })).collect::<Vec<_>>(),
         "fixture_state": {
             "device_authorizations": summary.device_authorizations,
+            "authorization_intents": summary.authorization_intents,
             "cli_sessions": summary.cli_sessions,
             "consent_grants": summary.consent_grants,
             "profile_uploads": summary.profile_uploads,
@@ -1070,14 +1129,41 @@ async fn start_fixture_service() -> FixtureService {
     let (shutdown_sender, mut shutdown_receiver) = oneshot::channel();
     let server = tokio::spawn(async move {
         let mut state = FixtureState::default();
+        let mut request_parsers = JoinSet::new();
         loop {
-            let accepted = tokio::select! {
+            let completed = tokio::select! {
                 biased;
-                _ = &mut shutdown_receiver => break,
-                accepted = listener.accept() => accepted,
+                _ = &mut shutdown_receiver => {
+                    request_parsers.abort_all();
+                    while request_parsers.join_next().await.is_some() {}
+                    break;
+                },
+                completed = request_parsers.join_next(),
+                    if !request_parsers.is_empty() => completed,
+                accepted = listener.accept(),
+                    if request_parsers.len() < FIXTURE_MAX_PENDING_CONNECTIONS => {
+                        let (mut socket, _) = accepted.expect("accept showcase request");
+                        request_parsers.spawn(async move {
+                            match tokio::time::timeout(
+                                FIXTURE_HEADER_IDLE_TIMEOUT,
+                                read_http_request(&mut socket),
+                            )
+                            .await
+                            {
+                                Ok(Some(request)) => Some((socket, request)),
+                                Ok(None) | Err(_) => None,
+                            }
+                        });
+                        continue;
+                    },
             };
-            let (mut socket, _) = accepted.expect("accept showcase request");
-            let request = read_http_request(&mut socket).await;
+            let Some(completed) = completed else {
+                continue;
+            };
+            let Some((mut socket, request)) = completed.expect("join showcase request parser")
+            else {
+                continue;
+            };
             request_sender
                 .send(RequestEvidence {
                     method: request.method.clone(),
@@ -1097,12 +1183,18 @@ async fn start_fixture_service() -> FixtureService {
     }
 }
 
-async fn read_http_request(socket: &mut TcpStream) -> HttpRequest {
+async fn read_http_request(socket: &mut TcpStream) -> Option<HttpRequest> {
     let mut bytes = Vec::new();
     let header_end = loop {
         let mut chunk = [0_u8; 2048];
         let count = socket.read(&mut chunk).await.expect("read request bytes");
-        assert_ne!(count, 0, "request ended before headers completed");
+        if count == 0 {
+            assert!(
+                bytes.is_empty(),
+                "request ended after sending incomplete headers"
+            );
+            return None;
+        }
         bytes.extend_from_slice(&chunk[..count]);
         if let Some(index) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
             break index + 4;
@@ -1143,12 +1235,12 @@ async fn read_http_request(socket: &mut TcpStream) -> HttpRequest {
         .next()
         .expect("request route")
         .to_owned();
-    HttpRequest {
+    Some(HttpRequest {
         method,
         path,
         headers: request_headers,
         body: bytes[header_end..header_end + content_length].to_vec(),
-    }
+    })
 }
 
 async fn respond_to_showcase_request(
@@ -1158,6 +1250,18 @@ async fn respond_to_showcase_request(
     state: &mut FixtureState,
 ) {
     match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/authorize") => {
+            assert_header_absent(&request, "authorization");
+            respond(
+                socket,
+                "text/html; charset=utf-8",
+                b"<!doctype html><title>hello.food test authorization</title>",
+            )
+            .await;
+        }
+        ("GET", "/favicon.ico") => {
+            respond_status(socket, "204 No Content", "image/x-icon", b"").await;
+        }
         ("GET", "/v1/auth/capabilities") => {
             assert_header(&request, "x-app-client-id", "heyfood-cli");
             assert_header_absent(&request, "authorization");
@@ -1199,7 +1303,15 @@ async fn respond_to_showcase_request(
             let body: Value =
                 serde_json::from_slice(&request.body).expect("decode device authorization");
             assert_eq!(body["client_id"], "hf_cid_heyfood_cli");
-            assert_eq!(body["intent"], "create_account");
+            let intent = body["intent"]
+                .as_str()
+                .expect("device authorization intent")
+                .to_owned();
+            assert!(
+                matches!(intent.as_str(), "auto" | "create_account"),
+                "installed account connection must use a supported first-run intent"
+            );
+            state.authorization_intents.push(intent);
             assert_eq!(body["scope"], FULL_SCOPE);
             respond_json(
                 socket,
@@ -1884,6 +1996,7 @@ fn run_installed_pty_blocking(
         "HEYFOOD_API_URL",
         "HEYFOOD_CREDENTIAL_STORE",
         "HEYFOOD_STATE_DIR",
+        "BROWSER",
         "HTTPS_PROXY",
         "HTTP_PROXY",
         "ALL_PROXY",
@@ -1893,6 +2006,9 @@ fn run_installed_pty_blocking(
     }
     command.env("HEYFOOD_API_URL", base_url);
     command.env("HEYFOOD_API_KEY", "showcase-api-key");
+    // Prefer a no-op browser where the platform honors BROWSER. Native
+    // launchers may still fetch the fixture's inert verification page.
+    command.env("BROWSER", "true");
     command.env("HEYFOOD_STATE_DIR", user_root);
     command.env(
         "HEYFOOD_CREDENTIAL_STORE",
@@ -1901,19 +2017,19 @@ fn run_installed_pty_blocking(
             ShowcaseCredentialBackend::Native => "native",
         },
     );
-    // Native Keychain/Secret Service discovery is tied to the logged-in OS
-    // user. Keep that identity while isolating every heyfood/XDG path. The
-    // explicit file backend and Windows fixture continue to receive a fully
-    // synthetic home/profile.
-    if options.credential_backend == ShowcaseCredentialBackend::IsolatedFile || cfg!(windows) {
+    // Native credential discovery is tied to the logged-in OS user. Keep that
+    // identity and its browser profile while isolating every heyfood path with
+    // HEYFOOD_STATE_DIR. Otherwise a detached Windows browser can retain a
+    // handle under the synthetic profile after the installed client exits.
+    if options.credential_backend == ShowcaseCredentialBackend::IsolatedFile {
         command.env("HOME", user_root);
+        command.env("USERPROFILE", user_root);
+        command.env("APPDATA", user_root.join("appdata"));
+        command.env("LOCALAPPDATA", user_root.join("local-appdata"));
     }
     command.env("XDG_CONFIG_HOME", user_root);
     command.env("XDG_DATA_HOME", user_root.join("data"));
     command.env("XDG_CACHE_HOME", user_root.join("cache"));
-    command.env("USERPROFILE", user_root);
-    command.env("APPDATA", user_root.join("appdata"));
-    command.env("LOCALAPPDATA", user_root.join("local-appdata"));
     command.env("NO_PROXY", "127.0.0.1,localhost");
     command.env("TERM", "xterm-256color");
     if options.no_color {
@@ -2082,11 +2198,7 @@ fn assert_core_terminal_contract(
     width_120_no_color: &[u8],
     interrupt_exit: &[u8],
 ) {
-    for expected in [
-        "Open this URL to continue:",
-        "Approval code: SHOW-CASE",
-        "Your hello.food account is connected.",
-    ] {
+    for expected in ["Open this URL to continue:", "Approval code: SHOW-CASE"] {
         assert_raw_terminal_text(clean_user, expected);
     }
     assert_no_color_sgr(width_120_no_color);
@@ -2105,11 +2217,15 @@ fn assert_core_terminal_contract(
 
 fn assert_raw_terminal_text(terminal: &[u8], expected: &str) {
     assert!(
-        terminal
-            .windows(expected.len())
-            .any(|window| window == expected.as_bytes()),
+        raw_terminal_contains(terminal, expected),
         "installed terminal evidence omitted raw text {expected:?}"
     );
+}
+
+fn raw_terminal_contains(terminal: &[u8], expected: &str) -> bool {
+    terminal
+        .windows(expected.len())
+        .any(|window| window == expected.as_bytes())
 }
 
 fn assert_terminal_restored(terminal: &[u8]) {

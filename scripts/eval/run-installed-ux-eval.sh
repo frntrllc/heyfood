@@ -7,9 +7,10 @@ set -euo pipefail
 : "${HEYFOOD_SHOWCASE_TARGET:?HEYFOOD_SHOWCASE_TARGET is required}"
 : "${HEYFOOD_SHOWCASE_VERSION:?HEYFOOD_SHOWCASE_VERSION is required}"
 
-rubric=${HEYFOOD_EVAL_RUBRIC:-tests/eval/tui-post-release-rubric.v1.json}
+rubric=${HEYFOOD_EVAL_RUBRIC:-tests/eval/tui-post-release-rubric.v2.json}
 output="$HEYFOOD_SHOWCASE_EVIDENCE_DIR/post-release-eval.json"
 mkdir -p "$HEYFOOD_SHOWCASE_EVIDENCE_DIR"
+rubric_id=$(jq -er '.id' "$rubric")
 
 write_failure_report() {
   local category=$1
@@ -19,13 +20,14 @@ write_failure_report() {
   jq -n \
     --arg version "$HEYFOOD_SHOWCASE_VERSION" \
     --arg target "$HEYFOOD_SHOWCASE_TARGET" \
+    --arg evaluation "$rubric_id" \
     --arg category "$category" \
     --arg severity "$severity" \
     --arg observed_status "$observed_status" \
     --arg summary "$summary" \
     '{
       schema_version: 1,
-      evaluation: "tui-post-release-v1",
+      evaluation: $evaluation,
       status: "failed",
       score: 0,
       maximum_score: 100,
@@ -46,7 +48,7 @@ write_failure_report() {
         observed_status: $observed_status
       }],
       findings: [{
-        fingerprint: ("tui-post-release-v1:" + $category),
+        fingerprint: ($evaluation + ":" + $category),
         severity: $severity,
         category: $category,
         summary: $summary

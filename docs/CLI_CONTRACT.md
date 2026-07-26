@@ -13,8 +13,8 @@ The following commands perform native product work:
 
 | Command | Contract |
 |---|---|
-| `register` | Starts device authorization, exchanges the approved grant, validates the response contract, and persists the complete native session. |
-| `login` | Explicitly signs in again and atomically replaces an existing native grant with the canonical supported scope set; refresh is never used to change authority. |
+| `register` | Explicitly starts create-account device authorization, exchanges the approved grant, validates the response contract, and persists the complete native session. |
+| `login` | Connects an existing account on a fresh machine; on a connected machine, explicitly signs in again and atomically replaces the native grant with the canonical supported scope set. Refresh is never used to change authority. |
 | `chat` | Opens the authenticated interactive Rust TUI. |
 | `onboard` | Opens the Rust TUI directly in guided dietary-profile onboarding. |
 | `ask` | Runs one hosted-agent turn. |
@@ -129,8 +129,8 @@ Machine-readable failures use this envelope and a nonzero exit status:
   "ok": false,
   "error": {
     "type": "login_required",
-    "message": "No hello.food account is connected. Run `heyfood register` first.",
-    "hint": "Run `heyfood register` and retry."
+    "message": "No hello.food account is connected. Run `heyfood login` first.",
+    "hint": "Run `heyfood login` to connect an account, then retry."
   }
 }
 ```

@@ -5,12 +5,10 @@
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
-#[cfg(feature = "native-credentials")]
-use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use heyfood_agent_runtime::{
-    CliAuthContext, HttpDeadlines, HttpService, ProvisionalReauthorization,
+    CliAuthContext, DeviceAuthorization, HttpDeadlines, HttpService, ProvisionalReauthorization,
     ReauthorizationStageStatus, ReauthorizationStatus, RegistrationClient, RegistrationError,
     StagedReauthorization,
 };
@@ -440,18 +438,21 @@ async fn prepare_bare_session()
             Ok((prepared, startup_notice, startup_onboarding))
         }
         Err(error) if error.code == "login_required" => {
-            eprintln!("Welcome to heyfood. Connect your hello.food account to continue.");
-            let registration = register_inner(
-                heyfood_cli::RegisterArgs {
+            eprintln!(
+                "Welcome to heyfood. Sign in or create a hello.food account in your browser to continue."
+            );
+            let registration = login_inner(
+                heyfood_cli::LoginArgs {
                     device: true,
                     no_browser: false,
                     timeout: 600,
-                    no_onboard: false,
                 },
                 false,
+                true,
             )
             .await
             .map_err(registration_to_one_shot)?;
+            eprintln!("Your hello.food account is connected.");
             let prepared = prepare_native_session(None, CancellationToken::new()).await?;
             Ok((
                 prepared,
@@ -630,7 +631,7 @@ async fn prepare_native_session(
         .ok_or_else(|| {
             heyfood_bin::OneShotError::new(
                 "login_required",
-                "No hello.food account is connected. Run `heyfood register` first.",
+                "No hello.food account is connected. Run `heyfood login` first.",
             )
         })?;
     if let Some(command) = command {
@@ -651,7 +652,7 @@ async fn prepare_native_session(
             .ok_or_else(|| {
                 heyfood_bin::OneShotError::new(
                     "login_required",
-                    "No hello.food account is connected. Run `heyfood register` first.",
+                    "No hello.food account is connected. Run `heyfood login` first.",
                 )
             })?;
         if auth.channel.expires_at_unix() > i64::try_from(now).unwrap_or(i64::MAX) {
@@ -701,7 +702,7 @@ async fn prepare_native_session(
         .ok_or_else(|| {
             heyfood_bin::OneShotError::new(
                 "login_required",
-                "No hello.food account is connected. Run `heyfood register` first.",
+                "No hello.food account is connected. Run `heyfood login` first.",
             )
         })?;
     let credentials = auth.session.clone();
@@ -833,7 +834,7 @@ fn read_command_stdin(command: &Command) -> Result<Vec<u8>, heyfood_bin::OneShot
 
 fn one_shot_hint(code: &str) -> Option<&'static str> {
     match code {
-        "login_required" => Some("Run `heyfood register` and retry."),
+        "login_required" => Some("Run `heyfood login` to connect an account, then retry."),
         "phase2_parity_pending" | "command_not_available" => Some("Run `heyfood --help`."),
         "session_cancelled_before_dispatch" => Some("Run the command again when ready."),
         "authorization_scope_upgrade_required" => {
@@ -880,7 +881,7 @@ fn ensure_command_scopes(
 }
 
 async fn login(arguments: heyfood_cli::LoginArgs, machine: bool) -> ExitCode {
-    let result = login_inner(arguments, machine).await;
+    let result = login_inner(arguments, machine, false).await;
     match result {
         Ok(document) => match heyfood_cli::render_registration_success(&document, machine) {
             Ok(output) => {
@@ -908,6 +909,7 @@ async fn login(arguments: heyfood_cli::LoginArgs, machine: bool) -> ExitCode {
 async fn login_inner(
     arguments: heyfood_cli::LoginArgs,
     machine: bool,
+    offer_account_choice: bool,
 ) -> Result<RegistrationResultDocument, RegistrationError> {
     let paths = NativePaths::discover().map_err(platform_error)?;
     let auth_store = NativeAuthStore::open(paths.config_dir()).map_err(platform_error)?;
@@ -926,17 +928,30 @@ async fn login_inner(
             .await;
     }
 
-    auth_store
+    let existing_authorization = auth_store
         .load_account_bound(&session_store)
-        .map_err(platform_error)?
-        .ok_or_else(|| RegistrationError {
-            code: "login_required",
-            public_message:
-                "No prior native account is available to reauthorize. Run `heyfood register` first."
-                    .into(),
-            retryable: false,
-            outcome_uncertain: false,
-        })?;
+        .map_err(platform_error)?;
+    if existing_authorization.is_none() {
+        let authorization = if offer_account_choice {
+            client.start_device_connection().await?
+        } else {
+            client.start_device_login().await?
+        };
+        return complete_initial_authorization(
+            &client,
+            &auth_store,
+            &session_store,
+            authorization,
+            InitialAuthorizationOptions {
+                policy,
+                no_browser: arguments.no_browser,
+                timeout: arguments.timeout(),
+                machine,
+            },
+        )
+        .await;
+    }
+
     let client_transaction_id = OperationId::new().as_uuid().to_string();
     let journal = auth_store
         .begin_authorization_replacement(client_transaction_id.clone(), &session_store)
@@ -1402,6 +1417,40 @@ async fn register_inner(
     let client = RegistrationClient::new(service_url, policy)?;
     let authorization = client.start_device_registration().await?;
 
+    let document = complete_initial_authorization(
+        &client,
+        &auth_store,
+        &session_store,
+        authorization,
+        InitialAuthorizationOptions {
+            policy,
+            no_browser: arguments.no_browser,
+            timeout: arguments.timeout(),
+            machine,
+        },
+    )
+    .await?;
+    if arguments.no_onboard && document.profile_status != heyfood_core::ProfileStatus::Ready {
+        eprintln!("Dietary onboarding was deferred. Your account remains connected.");
+    }
+    Ok(document)
+}
+
+#[derive(Clone, Copy)]
+struct InitialAuthorizationOptions {
+    policy: NetworkPolicy,
+    no_browser: bool,
+    timeout: Duration,
+    machine: bool,
+}
+
+async fn complete_initial_authorization(
+    client: &RegistrationClient,
+    auth_store: &NativeAuthStore,
+    session_store: &NativeSessionStore,
+    authorization: DeviceAuthorization,
+    options: InitialAuthorizationOptions,
+) -> Result<RegistrationResultDocument, RegistrationError> {
     eprintln!(
         "Open this URL to continue: {}",
         authorization.verification_uri
@@ -1411,9 +1460,9 @@ async fn register_inner(
 
     // JSON mode is noninteractive by contract and therefore never launches a
     // browser. Human mode launches best-effort after publishing a copyable URL.
-    if !machine
-        && !arguments.no_browser
-        && let Ok(destination) = BrowserUrl::parse(&authorization.verification_uri, policy)
+    if !options.machine
+        && !options.no_browser
+        && let Ok(destination) = BrowserUrl::parse(&authorization.verification_uri, options.policy)
     {
         let _ = NativeBrowser.open(destination).await;
     }
@@ -1427,7 +1476,7 @@ async fn register_inner(
         }
     });
     let outcome = client
-        .complete_device_registration(authorization, device_id, arguments.timeout(), cancellation)
+        .complete_device_registration(authorization, device_id, options.timeout, cancellation)
         .await;
     signal.abort();
     let outcome = outcome?;
@@ -1435,16 +1484,13 @@ async fn register_inner(
     // Persist only after OAuth, app-session exchange, and contract validation
     // all succeed. A durable cross-store marker blocks any split outcome.
     auth_store
-        .initialize_account_bound(&outcome.credentials, &session_store)
+        .initialize_account_bound(&outcome.credentials, session_store)
         .map_err(|_| RegistrationError {
             code: "registration_persistence_outcome_uncertain",
             public_message: "The account was connected, but its account-bound native credentials could not be initialized. Do not retry registration until account state is reconciled.".into(),
             retryable: false,
             outcome_uncertain: true,
         })?;
-    if arguments.no_onboard && outcome.profile_status != heyfood_core::ProfileStatus::Ready {
-        eprintln!("Dietary onboarding was deferred. Your account remains connected.");
-    }
     Ok(RegistrationResultDocument::completed(
         outcome.profile_status,
     ))
@@ -1491,7 +1537,7 @@ fn registration_hint(code: &str) -> Option<&'static str> {
         "registration_unavailable" => Some("Registration is not enabled on this service yet."),
         "account_already_connected" => Some("Run `heyfood ask \"What can I eat?\"`."),
         "cancelled" | "authorization_expired" => {
-            Some("Run `heyfood register` to start a fresh request.")
+            Some("Run `heyfood` to start a fresh account-connection request.")
         }
         "auth_contract_error" => {
             Some("Update heyfood and retry. If it continues, check hello.food service status.")
@@ -1505,7 +1551,7 @@ fn registration_hint(code: &str) -> Option<&'static str> {
         "session_exchange_outcome_uncertain"
         | "session_exchange_contract_uncertain"
         | "registration_persistence_outcome_uncertain" => {
-            Some("Do not start another registration attempt until account state is reconciled.")
+            Some("Do not start another account-connection attempt until state is reconciled.")
         }
         _ => None,
     }

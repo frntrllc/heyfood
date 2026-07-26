@@ -393,4 +393,68 @@ mod tests {
         );
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn v2_preserves_the_known_v050_orientation_gap_as_one_p2_finding() {
+        let root = scratch("v2-orientation");
+        let evidence = root.join("evidence");
+        fs::create_dir_all(&evidence).unwrap();
+        let rubric = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/eval/tui-post-release-rubric.v2.json");
+        let rubric_document: serde_json::Value =
+            serde_json::from_slice(&fs::read(&rubric).unwrap()).unwrap();
+        let groups = rubric_document["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|category| {
+                let id = category["id"].as_str().unwrap();
+                json!({
+                    "id": category["evidence_group"],
+                    "status": if id == "first-run-orientation" {
+                        "failed"
+                    } else if id == "terminal-presentation" {
+                        "source-qualified"
+                    } else {
+                        "passed"
+                    },
+                    "assertions": if id == "first-run-orientation" {
+                        json!([])
+                    } else {
+                        category["required_assertions"].clone()
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        fs::write(
+            evidence.join("installed-core-matrix.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": 2,
+                "qualification": "installed-artifact-core-matrix",
+                "archive": {
+                    "version": "0.5.0",
+                    "target": "aarch64-apple-darwin",
+                    "sha256": "abc"
+                },
+                "environment": {"synthetic_backend": true},
+                "core_matrix": groups
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let output = root.join("report.json");
+        let result = evaluate(&evidence, &rubric, &output).unwrap();
+        assert!(!result.passed);
+        assert_eq!(result.score, 95);
+        assert_eq!(result.findings, 1);
+        let report: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(
+            report["findings"][0]["fingerprint"],
+            "tui-post-release-v2:first-run-orientation"
+        );
+        assert_eq!(report["findings"][0]["severity"], "P2");
+        fs::remove_dir_all(root).unwrap();
+    }
 }
