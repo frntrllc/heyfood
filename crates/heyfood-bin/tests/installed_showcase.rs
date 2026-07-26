@@ -1980,19 +1980,19 @@ fn run_installed_pty_blocking(
             ShowcaseCredentialBackend::Native => "native",
         },
     );
-    // Native Keychain/Secret Service discovery is tied to the logged-in OS
-    // user. Keep that identity while isolating every heyfood/XDG path. The
-    // explicit file backend and Windows fixture continue to receive a fully
-    // synthetic home/profile.
-    if options.credential_backend == ShowcaseCredentialBackend::IsolatedFile || cfg!(windows) {
+    // Native credential discovery is tied to the logged-in OS user. Keep that
+    // identity and its browser profile while isolating every heyfood path with
+    // HEYFOOD_STATE_DIR. Otherwise a detached Windows browser can retain a
+    // handle under the synthetic profile after the installed client exits.
+    if options.credential_backend == ShowcaseCredentialBackend::IsolatedFile {
         command.env("HOME", user_root);
+        command.env("USERPROFILE", user_root);
+        command.env("APPDATA", user_root.join("appdata"));
+        command.env("LOCALAPPDATA", user_root.join("local-appdata"));
     }
     command.env("XDG_CONFIG_HOME", user_root);
     command.env("XDG_DATA_HOME", user_root.join("data"));
     command.env("XDG_CACHE_HOME", user_root.join("cache"));
-    command.env("USERPROFILE", user_root);
-    command.env("APPDATA", user_root.join("appdata"));
-    command.env("LOCALAPPDATA", user_root.join("local-appdata"));
     command.env("NO_PROXY", "127.0.0.1,localhost");
     command.env("TERM", "xterm-256color");
     if options.no_color {
