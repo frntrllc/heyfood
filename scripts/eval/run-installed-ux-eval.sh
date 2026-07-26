@@ -11,16 +11,18 @@ rubric=${HEYFOOD_EVAL_RUBRIC:-tests/eval/tui-post-release-rubric.v1.json}
 output="$HEYFOOD_SHOWCASE_EVIDENCE_DIR/post-release-eval.json"
 mkdir -p "$HEYFOOD_SHOWCASE_EVIDENCE_DIR"
 
-set +e
-cargo test --locked --package heyfood-bin --test installed_showcase \
-  installed_archive_core_release_matrix -- --ignored --exact
-harness_status=$?
-set -e
-
-if [[ "$harness_status" -ne 0 ]]; then
+write_failure_report() {
+  local category=$1
+  local severity=$2
+  local observed_status=$3
+  local summary=$4
   jq -n \
     --arg version "$HEYFOOD_SHOWCASE_VERSION" \
     --arg target "$HEYFOOD_SHOWCASE_TARGET" \
+    --arg category "$category" \
+    --arg severity "$severity" \
+    --arg observed_status "$observed_status" \
+    --arg summary "$summary" \
     '{
       schema_version: 1,
       evaluation: "tui-post-release-v1",
@@ -36,23 +38,50 @@ if [[ "$harness_status" -ne 0 ]]; then
         evidence_file: null
       },
       categories: [{
-        id: "installed-artifact-harness",
+        id: $category,
         objective: "The public installed-artifact journey harness completes",
-        severity: "P0",
+        severity: $severity,
         weight: 100,
         status: "failed",
-        observed_status: "test_process_failed"
+        observed_status: $observed_status
       }],
       findings: [{
-        fingerprint: "tui-post-release-v1:installed-artifact-harness",
-        severity: "P0",
-        category: "installed-artifact-harness",
-        summary: "The installed-artifact PTY harness failed before evidence was complete"
+        fingerprint: ("tui-post-release-v1:" + $category),
+        severity: $severity,
+        category: $category,
+        summary: $summary
       }],
       limitations: [
-        "Inspect the workflow log for the first failed terminal assertion."
+        "Inspect the workflow log for the first failed build or terminal assertion."
       ]
     }' >"$output"
+}
+
+set +e
+cargo test --locked --package heyfood-bin --test installed_showcase --no-run
+build_status=$?
+set -e
+if [[ "$build_status" -ne 0 ]]; then
+  write_failure_report \
+    "evaluation-infrastructure" \
+    "P1" \
+    "harness_build_failed" \
+    "The installed-artifact evaluator failed to build before a product journey ran"
+  exit "$build_status"
+fi
+
+set +e
+cargo test --locked --package heyfood-bin --test installed_showcase \
+  installed_archive_core_release_matrix -- --ignored --exact
+harness_status=$?
+set -e
+
+if [[ "$harness_status" -ne 0 ]]; then
+  write_failure_report \
+    "installed-artifact-harness" \
+    "P0" \
+    "test_process_failed" \
+    "The installed-artifact PTY journey failed before complete evidence was produced"
   exit "$harness_status"
 fi
 

@@ -72,6 +72,12 @@ jobs:
                 summary: "The workflow stopped before complete UX evidence was produced"
               }]
             }' >eval-evidence/post-release-eval.json
+      - name: Install Linux harness build dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libdbus-1-dev pkg-config
       - name: Install the pinned Rust toolchain
         shell: bash
         run: rustup toolchain install 1.94.0 --profile minimal --no-self-update

@@ -33,6 +33,7 @@ do
 done
 
 grep -Fq 'cron: "17 9 * * *"' "$workflow"
+grep -Fq "sudo apt-get install --yes libdbus-1-dev pkg-config" "$workflow"
 grep -Fq "gh release download" "$workflow"
 grep -Fq "gh attestation verify" "$workflow"
 grep -Fq "scripts/eval/run-installed-ux-eval.sh" "$workflow"
@@ -43,6 +44,9 @@ grep -Fq "tui-post-release-v1:" "$triage"
 grep -Fq "gh issue create" "$triage"
 grep -Fq "gh issue edit" "$triage"
 grep -Fq "gh issue close" "$triage"
+grep -Fq -- "--no-run" "$runner"
+grep -Fq '"evaluation-infrastructure"' "$runner"
+grep -Fq '"installed-artifact-harness"' "$runner"
 
 if grep -Eq 'api\\.hello\\.food|HEYFOOD_API_URL|grocery[[:space:]]+accept' "$workflow"; then
   echo "continuous evaluation must not silently acquire production mutation authority" >&2
