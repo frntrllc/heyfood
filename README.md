@@ -45,7 +45,12 @@ contributors.
 
 ## Connect an account
 
-Bare `heyfood` gives a fresh user one browser-based choice to sign in or create
+The supported public `v0.5.0` artifact predates the account-neutral first-run
+flow: bare launch begins explicit account creation, and fresh-machine login for
+an existing account is not yet supported. This is the known successor-artifact
+gap tracked in [#29](https://github.com/frntrllc/heyfood/issues/29).
+
+Current source gives a fresh user one browser-based choice to sign in or create
 a hello.food account, then continues directly into onboarding and the TUI:
 
 ```bash

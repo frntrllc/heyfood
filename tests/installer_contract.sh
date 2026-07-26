@@ -169,8 +169,8 @@ test_exact_native_install() {
   [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.5.0" ]] ||
     fail "installed executable did not report the exact release version"
   assert_contains "$STDOUT_LOG" "Installed heyfood 0.5.0 at $BIN_DIR/heyfood"
-  assert_contains "$STDOUT_LOG" "Open heyfood to sign in or create an account: heyfood"
-  assert_contains "$STDOUT_LOG" "Direct account commands: heyfood login (existing) or heyfood register (new)"
+  assert_contains "$STDOUT_LOG" "Account connection in v0.5.0 begins with: heyfood register"
+  assert_contains "$STDOUT_LOG" "Existing-account first-run support requires a successor release."
   assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.5.0/SHA256SUMS"
   assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.5.0/heyfood-v0.5.0-$(host_target).tar.gz"
 }

@@ -26,6 +26,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinSet;
 use unicode_width::UnicodeWidthChar;
 
 const TEST_PROMPT: &str = "Plan a synthetic dinner for installed-artifact qualification.";
@@ -46,6 +47,8 @@ const WIDTH_PROMPT: &str = "Render a width-qualified installed response.";
 const WIDTH_RESPONSE: &str = "Width-qualified installed response complete.";
 const FIRST_RUN_ACCOUNT_CHOICE_COPY: &str =
     "Welcome to heyfood. Sign in or create a hello.food account in your browser to continue.";
+const FIXTURE_HEADER_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const FIXTURE_MAX_PENDING_CONNECTIONS: usize = 16;
 const TEST_ACCOUNT: &str = "showcase-user";
 const TEST_DEVICE_CODE: &str = "hf_dc_showcase_01234567890123456789";
 const TEST_LIST_ID: &str = "00000000-0000-4000-8000-000000000123";
@@ -514,17 +517,17 @@ async fn run_installed_archive_core_release_matrix() {
         shutdown,
         task: server,
     } = fixture;
-    // Real browsers may open and abandon a speculative connection before
-    // issuing the authorization GET. Prove that browser preconnect behavior
-    // cannot take down the installed-artifact fixture on any platform.
-    let speculative_connection = TcpStream::connect(
+    // Real browsers may open and hold a speculative connection before issuing
+    // the authorization GET. Keep this socket idle while the first installed
+    // journey proves that browser preconnect behavior cannot monopolize the
+    // fixture on any platform.
+    let held_speculative_connection = TcpStream::connect(
         base_url
             .strip_prefix("http://")
             .expect("fixture URL uses the HTTP loopback scheme"),
     )
     .await
     .expect("open speculative browser connection");
-    drop(speculative_connection);
 
     let clean_user = run_installed_pty(
         &installed_binary,
@@ -558,6 +561,15 @@ async fn run_installed_archive_core_release_matrix() {
         ],
     )
     .await;
+    let mut speculative_probe = [0_u8; 1];
+    assert!(
+        matches!(
+            held_speculative_connection.try_read(&mut speculative_probe),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+        ),
+        "the held browser preconnect must remain idle and open while the installed journey progresses"
+    );
+    drop(held_speculative_connection);
 
     write_household_import_source(&user.0);
 
@@ -1117,14 +1129,39 @@ async fn start_fixture_service() -> FixtureService {
     let (shutdown_sender, mut shutdown_receiver) = oneshot::channel();
     let server = tokio::spawn(async move {
         let mut state = FixtureState::default();
+        let mut request_parsers = JoinSet::new();
         loop {
-            let accepted = tokio::select! {
+            let completed = tokio::select! {
                 biased;
-                _ = &mut shutdown_receiver => break,
-                accepted = listener.accept() => accepted,
+                _ = &mut shutdown_receiver => {
+                    request_parsers.abort_all();
+                    while request_parsers.join_next().await.is_some() {}
+                    break;
+                },
+                completed = request_parsers.join_next(),
+                    if !request_parsers.is_empty() => completed,
+                accepted = listener.accept(),
+                    if request_parsers.len() < FIXTURE_MAX_PENDING_CONNECTIONS => {
+                        let (mut socket, _) = accepted.expect("accept showcase request");
+                        request_parsers.spawn(async move {
+                            match tokio::time::timeout(
+                                FIXTURE_HEADER_IDLE_TIMEOUT,
+                                read_http_request(&mut socket),
+                            )
+                            .await
+                            {
+                                Ok(Some(request)) => Some((socket, request)),
+                                Ok(None) | Err(_) => None,
+                            }
+                        });
+                        continue;
+                    },
             };
-            let (mut socket, _) = accepted.expect("accept showcase request");
-            let Some(request) = read_http_request(&mut socket).await else {
+            let Some(completed) = completed else {
+                continue;
+            };
+            let Some((mut socket, request)) = completed.expect("join showcase request parser")
+            else {
                 continue;
             };
             request_sender
