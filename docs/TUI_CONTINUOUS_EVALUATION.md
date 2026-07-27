@@ -52,6 +52,8 @@ least-privilege canary identity is provisioned with:
 The fail-closed production workflow is
 `.github/workflows/production-tui-canary.yml`. It remains inert unless the
 repository variable `HEYFOOD_PRODUCTION_CANARY_ENABLED` is exactly `true`.
+The job also rejects every ref except `refs/heads/main`, and the `native-eval`
+environment's deployment-branch policy must independently allow only `main`.
 No workflow may silently fall back to a real user account. Provisioning and
 activation are tracked in
 [heyfood issue #30](https://github.com/frntrllc/heyfood/issues/30).
@@ -63,9 +65,23 @@ The protected `native-eval` environment owns two secrets:
   `credentials.native` documents. The job decodes it into a fresh owner-only
   state directory and never searches the runner or a maintainer's home
   directory.
-- `HEYFOOD_CANARY_SECRET_ROTATOR_TOKEN` may update only the protected canary
-  state secret. The workflow writes refreshed rotating credentials back as one
-  encrypted environment-secret update before destroying the decoded files.
+- `HEYFOOD_CANARY_ROTATOR_APP_PRIVATE_KEY`, paired with the environment
+  variable `HEYFOOD_CANARY_ROTATOR_APP_ID`, mints a short-lived non-personal
+  GitHub App installation token. The workflow writes refreshed rotating
+  credentials back as one encrypted environment-secret update before
+  destroying the decoded files.
+
+GitHub does not offer per-secret write permission. The rotator App therefore
+has the broader repository `Environments: write` permission and can technically
+write or delete other environment secrets in this repository. This residual
+scope is explicit: the App is installed only on `frntrllc/heyfood`, has no
+personal identity, mints a short-lived token only inside `native-eval`, and the
+workflow calls exactly one fixed secret name. The main-only job condition,
+selected-branch environment policy, protected private key, GitHub audit log,
+and immediate token revocation are the defense-in-depth controls. A dedicated
+OIDC broker enforcing the environment and secret name is the future
+least-privilege replacement; the current design must not be described as
+per-secret authorization.
 
 The canary downloads and verifies the exact public Linux x86-64 archive. It
 executes an authenticated agent turn, reads the active Grocery list, prepares a
@@ -77,9 +93,12 @@ Only bounded status, latency, endpoint class, public version, archive digest,
 and sanitized error type enter uploaded evidence. Raw prompts, responses,
 names, emails, dietary details, tokens, conversation IDs, household IDs, and
 list IDs remain in a private temporary directory and are destroyed. A
-deterministic contract, credential, or safety failure opens an incident
-immediately. An availability failure must occur in two consecutive completed
-canary runs before it opens a product incident.
+deterministic contract, credential, rotation, cleanup, or safety failure opens
+an incident immediately. An availability failure must occur in two consecutive
+completed canary runs for the same public release version, target, and archive
+digest before it opens a product incident. Incident fingerprints and recovery
+are exact-artifact-bound so a replaced or different archive cannot satisfy the
+consecutive-failure or closure rule.
 
 Activation order is deliberately strict:
 
@@ -90,10 +109,19 @@ Activation order is deliberately strict:
    and the explicit owner-only file store in a temporary directory.
 4. Encode the two resulting state documents into the version-1 atomic bundle
    and save it in `native-eval`.
-5. Install the narrowly scoped secret-rotator credential.
-6. Dispatch the workflow manually and inspect the privacy-safe evidence.
-7. Set `HEYFOOD_PRODUCTION_CANARY_ENABLED=true` only after that first run
+5. Restrict `native-eval` deployments to the protected `main` branch.
+6. Install the repository-only canary-rotator GitHub App and its protected
+   private key; acknowledge the documented `Environments: write` residual
+   scope.
+7. Dispatch the workflow from `main` and inspect the privacy-safe evidence.
+8. Set `HEYFOOD_PRODUCTION_CANARY_ENABLED=true` only after that first run
    passes; the six-hour schedule then becomes authoritative.
+
+To revoke the canary, first set
+`HEYFOOD_PRODUCTION_CANARY_ENABLED=false`, revoke the dedicated CLI device and
+session in the hello.food authorization control plane, and delete both
+`native-eval` secrets. Never repurpose the synthetic account or its household
+for a human session.
 
 ## Supported-experience rubric
 

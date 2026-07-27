@@ -24,7 +24,11 @@ concurrency:
 jobs:
   production-canary:
     name: Public Linux x64 against production
-    if: ${{ vars.HEYFOOD_PRODUCTION_CANARY_ENABLED == 'true' }}
+    if: >-
+      ${{
+        github.ref == 'refs/heads/main' &&
+        vars.HEYFOOD_PRODUCTION_CANARY_ENABLED == 'true'
+      }}
     runs-on: ubuntu-22.04
     environment: native-eval
     env:
@@ -51,7 +55,7 @@ jobs:
               release: {
                 version: $version,
                 target: $target,
-                archive_sha256: null
+                archive_sha256: "unavailable"
               },
               provenance: {
                 public_installed_artifact: false,
@@ -82,11 +86,13 @@ jobs:
         shell: bash
         env:
           STATE_BUNDLE: ${{ secrets.HEYFOOD_CANARY_STATE_BUNDLE_B64 }}
-          ROTATOR_TOKEN: ${{ secrets.HEYFOOD_CANARY_SECRET_ROTATOR_TOKEN }}
+          ROTATOR_APP_ID: ${{ vars.HEYFOOD_CANARY_ROTATOR_APP_ID }}
+          ROTATOR_APP_PRIVATE_KEY: ${{ secrets.HEYFOOD_CANARY_ROTATOR_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           test -n "$STATE_BUNDLE"
-          test -n "$ROTATOR_TOKEN"
+          test -n "$ROTATOR_APP_ID"
+          test -n "$ROTATOR_APP_PRIVATE_KEY"
           printf '%s' "$STATE_BUNDLE" | base64 --decode >canary-state/bundle.json
           jq -e '
             type == "object" and
@@ -102,8 +108,6 @@ jobs:
           test -s canary-state/auth.native
           test -s canary-state/credentials.native
           chmod 0600 canary-state/auth.native canary-state/credentials.native
-          sha256sum canary-state/auth.native canary-state/credentials.native \
-            >canary-state/seed-digests
       - name: Download the exact public archive
         shell: bash
         run: |
@@ -146,46 +150,33 @@ jobs:
           export HEYFOOD_CANARY_ARCHIVE_SHA256
           HEYFOOD_CANARY_ARCHIVE_SHA256=$(cat canary-release/archive.sha256)
           scripts/eval/run-production-canary.sh
+      - name: Mint a short-lived non-personal environment-writer token
+        id: rotator-token
+        if: always()
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.HEYFOOD_CANARY_ROTATOR_APP_ID }}
+          private-key: ${{ secrets.HEYFOOD_CANARY_ROTATOR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: heyfood
       - name: Atomically rotate protected canary state when safe
         id: rotate
         if: always()
         continue-on-error: true
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.HEYFOOD_CANARY_SECRET_ROTATOR_TOKEN }}
+          GH_TOKEN: ${{ steps.rotator-token.outputs.token }}
         run: |
           set -euo pipefail
-          for required in auth.native credentials.native; do
-            test -f "canary-state/$required"
-            test ! -L "canary-state/$required"
-            test -s "canary-state/$required"
-          done
-          if find canary-state -mindepth 1 -maxdepth 1 \
-            \( -name '*.reconciliation' -o -name '*authorization-*' \) \
-            -print -quit | grep -q .; then
-            echo "refusing to rotate unresolved credential state" >&2
-            exit 1
-          fi
-          auth=$(base64 -w0 canary-state/auth.native)
-          credentials=$(base64 -w0 canary-state/credentials.native)
-          jq -cn \
-            --arg auth "$auth" \
-            --arg credentials "$credentials" \
-            '{schema_version: 1, auth: $auth, credentials: $credentials}' |
-            base64 -w0 |
-            gh secret set HEYFOOD_CANARY_STATE_BUNDLE_B64 \
-              --env native-eval \
-              --repo "$GITHUB_REPOSITORY"
-      - name: Upload privacy-safe production evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: production-canary-evidence
-          path: canary-evidence/production-canary.json
-          if-no-files-found: error
-          retention-days: 30
+          scripts/eval/rotate-production-canary-state.sh \
+            canary-state \
+            native-eval \
+            "$GITHUB_REPOSITORY"
       - name: Destroy decoded credentials and private response material
+        id: cleanup
         if: always()
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -194,16 +185,40 @@ jobs:
           find "${RUNNER_TEMP:-/tmp}" -maxdepth 1 \
             -type d -name 'heyfood-production-canary.*' \
             -exec find {} -type f -exec shred -u {} \; -exec rm -rf {} +
+      - name: Finalize journey, rotation, and cleanup evidence
+        if: always()
+        shell: bash
+        env:
+          JOURNEY_OUTCOME: ${{ steps.canary.outcome }}
+          ROTATION_OUTCOME: ${{ steps.rotate.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
+        run: |
+          set -euo pipefail
+          scripts/eval/finalize-production-canary.sh \
+            canary-evidence/production-canary.json \
+            "$JOURNEY_OUTCOME" \
+            "$ROTATION_OUTCOME" \
+            "$CLEANUP_OUTCOME"
+      - name: Upload privacy-safe production evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-canary-evidence
+          path: canary-evidence/production-canary.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Enforce canary and credential-rotation results
         if: always()
         shell: bash
         env:
           CANARY_OUTCOME: ${{ steps.canary.outcome }}
           ROTATE_OUTCOME: ${{ steps.rotate.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
         run: |
           set -euo pipefail
           test "$CANARY_OUTCOME" = success
           test "$ROTATE_OUTCOME" = success
+          test "$CLEANUP_OUTCOME" = success
 
   triage:
     name: Triage production canary
@@ -250,6 +265,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version || '0.5.0' }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEYFOOD_CANARY_JOB_RESULT: ${{ needs.production-canary.result }}
         run: |
           set -euo pipefail
           current=$(find current-evidence -type f -name production-canary.json -print -quit)

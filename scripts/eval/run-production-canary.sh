@@ -167,7 +167,8 @@ unset HEYFOOD_API_KEY
 
 classify_error() {
   case "$1" in
-    request_transport | response_transport | sse_inactivity | service_unavailable | rate_limited)
+    request_transport | response_transport | sse_inactivity | service_unavailable | rate_limited | \
+      http_status)
       printf 'availability'
       ;;
     login_required | scope_required | authorization_scope_upgrade_required | \
@@ -249,7 +250,7 @@ if ! jq -e '
 fi
 list_id=$(jq -er '.id' "$before")
 list_version=$(jq -er '.version' "$before")
-before_digest=$(jq -S -c '{id, version, items}' "$before" | sha256sum | cut -d' ' -f1)
+before_digest=$(jq -S -c '.' "$before" | sha256sum | cut -d' ' -f1)
 
 prompt="$scratch/prompt"
 printf '%s\n' \
@@ -280,17 +281,47 @@ if ! jq -e '
   (.structured_preview.items[0].safety | type == "object") and
   (.structured_preview.items[0].safety.status | type == "string") and
   (.structured_preview.items[0].safety.member_flags | type == "array" and length >= 1) and
+  (.structured_preview.items[0].safety.member_flags |
+    any((.reason | type == "string" and length > 0) and
+        (.substitutions | type == "array" and length >= 1))) and
+  (.structured_preview.items[0].safety.label_hint |
+    type == "string" and length > 0) and
   (.preconditions | type == "array" and length >= 2)
 ' "$proposal" >/dev/null; then
   write_report "failed" "contract" "grocery_prepare" "grocery_safety_contract"
+  exit 1
+fi
+proposal_confirmation_id=$(jq -er '.confirmation_id' "$proposal")
+proposal_operation=$(jq -er '.operation' "$proposal")
+if ! jq -e \
+  --arg id "$list_id" \
+  --argjson version "$list_version" \
+  '
+    .preconditions |
+    any(
+      .type == "list_version" and
+      .list_id == $id and
+      .expected_version == $version
+    ) and
+    any(
+      .type == "household_context_hash" and
+      (.expected_hash | type == "string" and length == 64)
+    )
+  ' "$proposal" >/dev/null; then
+  write_report "failed" "contract" "grocery_prepare" "grocery_authority_contract"
   exit 1
 fi
 
 cancel="$scratch/cancel.json"
 run_operation grocery_cancel "$cancel" "$proposal" \
   "${common[@]}" grocery confirm --decision cancel
-if ! jq -e '
+if ! jq -e \
+  --arg confirmation_id "$proposal_confirmation_id" \
+  --arg operation "$proposal_operation" \
+  '
   .status == "cancelled" and
+  .confirmation_id == $confirmation_id and
+  .operation == $operation and
   .list == null and
   .exclusions == null
 ' "$cancel" >/dev/null; then
@@ -308,7 +339,7 @@ if ! jq -e \
   write_report "failed" "safety" "grocery_nonmutation" "list_authority_changed"
   exit 1
 fi
-after_digest=$(jq -S -c '{id, version, items}' "$after" | sha256sum | cut -d' ' -f1)
+after_digest=$(jq -S -c '.' "$after" | sha256sum | cut -d' ' -f1)
 if [[ "$before_digest" != "$after_digest" ]]; then
   write_report "failed" "safety" "grocery_nonmutation" "cancel_mutated_list"
   exit 1

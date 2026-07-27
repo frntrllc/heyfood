@@ -7,20 +7,27 @@ cd "$root"
 workflow=.github/workflows/production-tui-canary.yml
 runner=scripts/eval/run-production-canary.sh
 triage=scripts/eval/triage-production-canary.sh
+finalize=scripts/eval/finalize-production-canary.sh
+rotate=scripts/eval/rotate-production-canary-state.sh
 
 test -f "$workflow"
 test -x "$runner"
 test -x "$triage"
+test -x "$finalize"
+test -x "$rotate"
 
 grep -Fq 'cron: "23 */6 * * *"' "$workflow"
 grep -Fq "environment: native-eval" "$workflow"
+grep -Fq "github.ref == 'refs/heads/main'" "$workflow"
 grep -Fq "HEYFOOD_PRODUCTION_CANARY_ENABLED == 'true'" "$workflow"
 grep -Fq "HEYFOOD_CANARY_STATE_BUNDLE_B64" "$workflow"
-grep -Fq "HEYFOOD_CANARY_SECRET_ROTATOR_TOKEN" "$workflow"
+grep -Fq "HEYFOOD_CANARY_ROTATOR_APP_ID" "$workflow"
+grep -Fq "HEYFOOD_CANARY_ROTATOR_APP_PRIVATE_KEY" "$workflow"
 grep -Fq "gh attestation verify" "$workflow"
-grep -Fq "gh secret set HEYFOOD_CANARY_STATE_BUNDLE_B64" "$workflow"
 grep -Fq "scripts/eval/run-production-canary.sh" "$workflow"
 grep -Fq "scripts/eval/triage-production-canary.sh" "$workflow"
+grep -Fq "scripts/eval/finalize-production-canary.sh" "$workflow"
+grep -Fq "scripts/eval/rotate-production-canary-state.sh" "$workflow"
 grep -Fq -- "--decision cancel" "$runner"
 if grep -Eq -- '--decision[[:space:]]+accept|grocery[[:space:]]+accept' \
   "$workflow" "$runner"; then
@@ -53,9 +60,16 @@ cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
 args=" $* "
-if [[ "${HEYFOOD_CANARY_STUB_FAILURE:-}" == availability &&
+if [[ "${HEYFOOD_CANARY_STUB_FAILURE:-}" =~ ^(availability|http_status)$ &&
   "$args" == *" grocery list "* ]]; then
-  printf '%s\n' '{"ok":false,"error":{"type":"request_transport","message":"redacted"}}'
+  error_type=request_transport
+  if [[ "${HEYFOOD_CANARY_STUB_FAILURE:-}" == http_status ]]; then
+    error_type=http_status
+  fi
+  jq -cn --arg error_type "$error_type" '{
+    ok: false,
+    error: {type: $error_type, message: "redacted"}
+  }'
   exit 1
 fi
 if [[ "$args" == *" grocery list "* ]]; then
@@ -88,11 +102,24 @@ elif [[ "$args" == *" grocery add "* ]]; then
         name: "onion",
         safety: {
           status: "risky",
-          member_flags: [{member_id: "synthetic", status: "risky"}]
+          member_flags: [{
+            member_id: "synthetic",
+            status: "risky",
+            reason: "synthetic screening reason",
+            substitutions: ["synthetic substitute"]
+          }],
+          label_hint: "Synthetic label guidance."
         }
       }]
     },
-    preconditions: [{type: "list_version"}, {type: "household_context_hash"}],
+    preconditions: [{
+      type: "list_version",
+      list_id: "00000000-0000-4000-8000-000000000030",
+      expected_version: 7
+    }, {
+      type: "household_context_hash",
+      expected_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }],
     confirmation_token: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   }'
 elif [[ "$args" == *" grocery confirm "* ]]; then
@@ -153,6 +180,16 @@ jq -e '
   .failure.error_type == "request_transport"
 ' "$evidence-availability/production-canary.json" >/dev/null
 
+if run_fixture http_status; then
+  echo "generic HTTP-status fixture unexpectedly passed" >&2
+  exit 1
+fi
+jq -e '
+  .status == "failed" and
+  .failure.category == "availability" and
+  .failure.error_type == "http_status"
+' "$evidence-http_status/production-canary.json" >/dev/null
+
 if run_fixture mutation; then
   echo "mutation fixture unexpectedly passed" >&2
   exit 1
@@ -186,6 +223,32 @@ PATH="$triage_bin:$PATH" \
   frntrllc/heyfood
 test ! -e "$triage_log"
 
+mismatched_previous="$scratch/mismatched-previous.json"
+jq '.release.version = "0.5.1"' \
+  "$evidence-availability/production-canary.json" >"$mismatched_previous"
+PATH="$triage_bin:$PATH" \
+  HEYFOOD_CANARY_TRIAGE_LOG="$triage_log" \
+  "$triage" \
+  "$evidence-availability/production-canary.json" \
+  "$mismatched_previous" \
+  0.5.0 \
+  https://example.invalid/version-bound \
+  frntrllc/heyfood
+test ! -e "$triage_log"
+
+mismatched_digest="$scratch/mismatched-digest.json"
+jq '.release.archive_sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' \
+  "$evidence-availability/production-canary.json" >"$mismatched_digest"
+PATH="$triage_bin:$PATH" \
+  HEYFOOD_CANARY_TRIAGE_LOG="$triage_log" \
+  "$triage" \
+  "$evidence-availability/production-canary.json" \
+  "$mismatched_digest" \
+  0.5.0 \
+  https://example.invalid/digest-bound \
+  frntrllc/heyfood
+test ! -e "$triage_log"
+
 PATH="$triage_bin:$PATH" \
   HEYFOOD_CANARY_TRIAGE_LOG="$triage_log" \
   "$triage" \
@@ -206,5 +269,49 @@ PATH="$triage_bin:$PATH" \
   https://example.invalid/safety \
   frntrllc/heyfood
 grep -Fqx "issue create" "$triage_log"
+
+: >"$triage_log"
+postcondition_failure="$scratch/postcondition-failure.json"
+cp "$success" "$postcondition_failure"
+"$finalize" "$postcondition_failure" success failure success
+jq -e '
+  .status == "failed" and
+  .failure.category == "credential" and
+  .failure.operation == "state_rotation" and
+  .failure.error_type == "protected_state_rotation_failed" and
+  .postconditions.protected_state_rotation == "failure"
+' "$postcondition_failure" >/dev/null
+PATH="$triage_bin:$PATH" \
+  HEYFOOD_CANARY_TRIAGE_LOG="$triage_log" \
+  HEYFOOD_CANARY_JOB_RESULT=failure \
+  "$triage" \
+  "$postcondition_failure" \
+  - \
+  0.5.0 \
+  https://example.invalid/rotation \
+  frntrllc/heyfood
+grep -Fqx "issue create" "$triage_log"
+
+rotation_bin="$scratch/rotation-bin"
+rotation_capture="$scratch/rotation-bundle"
+mkdir "$rotation_bin"
+cat >"$rotation_bin/gh" <<'GH'
+#!/usr/bin/env bash
+set -euo pipefail
+test "$1 $2 $3" = "secret set HEYFOOD_CANARY_STATE_BUNDLE_B64"
+cat >"${HEYFOOD_CANARY_ROTATION_CAPTURE:?}"
+GH
+chmod 0700 "$rotation_bin/gh"
+PATH="$rotation_bin:$PATH" \
+  GH_TOKEN=fixture-short-lived-app-token \
+  HEYFOOD_CANARY_ROTATION_CAPTURE="$rotation_capture" \
+  "$rotate" "$state" native-eval frntrllc/heyfood
+base64 --decode <"$rotation_capture" >"$scratch/rotated-bundle.json"
+jq -er '.auth' "$scratch/rotated-bundle.json" |
+  base64 --decode >"$scratch/rotated-auth"
+jq -er '.credentials' "$scratch/rotated-bundle.json" |
+  base64 --decode >"$scratch/rotated-credentials"
+cmp "$state/auth.native" "$scratch/rotated-auth"
+cmp "$state/credentials.native" "$scratch/rotated-credentials"
 
 echo "production canary contract is fail-closed, non-mutating, and privacy-safe"
