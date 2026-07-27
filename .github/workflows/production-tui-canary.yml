@@ -160,6 +160,7 @@ jobs:
           private-key: ${{ secrets.HEYFOOD_CANARY_ROTATOR_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: heyfood
+          permission-environments: write
       - name: Atomically rotate protected canary state when safe
         id: rotate
         if: always()
