@@ -61,6 +61,10 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: bash tests/continuous_eval_contract.sh
+      - name: Test the production TUI canary contract
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash tests/production_canary_contract.sh
 
   native-cli-smoke:
     name: Native CLI / ${{ matrix.os }}
