@@ -49,11 +49,51 @@ least-privilege canary identity is provisioned with:
 - a versioned Grocery fixture where all automated proposals are cancelled;
 - credentials stored only in a protected `native-eval` environment.
 
-Until that identity exists, the deterministic installed-artifact suite is the
-continuous product loop and production coverage remains explicitly absent. No
-workflow may silently fall back to a real user account. Provisioning and
+The fail-closed production workflow is
+`.github/workflows/production-tui-canary.yml`. It remains inert unless the
+repository variable `HEYFOOD_PRODUCTION_CANARY_ENABLED` is exactly `true`.
+No workflow may silently fall back to a real user account. Provisioning and
 activation are tracked in
 [heyfood issue #30](https://github.com/frntrllc/heyfood/issues/30).
+
+The protected `native-eval` environment owns two secrets:
+
+- `HEYFOOD_CANARY_STATE_BUNDLE_B64` is one atomic, base64-encoded JSON envelope
+  containing only the dedicated account's `auth.native` and
+  `credentials.native` documents. The job decodes it into a fresh owner-only
+  state directory and never searches the runner or a maintainer's home
+  directory.
+- `HEYFOOD_CANARY_SECRET_ROTATOR_TOKEN` may update only the protected canary
+  state secret. The workflow writes refreshed rotating credentials back as one
+  encrypted environment-secret update before destroying the decoded files.
+
+The canary downloads and verifies the exact public Linux x86-64 archive. It
+executes an authenticated agent turn, reads the active Grocery list, prepares a
+synthetically screened proposal, explicitly cancels it, and proves the list
+version and content did not change. It never sends an accept decision and
+never installs a Kroger or Health provider token.
+
+Only bounded status, latency, endpoint class, public version, archive digest,
+and sanitized error type enter uploaded evidence. Raw prompts, responses,
+names, emails, dietary details, tokens, conversation IDs, household IDs, and
+list IDs remain in a private temporary directory and are destroyed. A
+deterministic contract, credential, or safety failure opens an incident
+immediately. An availability failure must occur in two consecutive completed
+canary runs before it opens a product incident.
+
+Activation order is deliberately strict:
+
+1. Create the dedicated synthetic hello.food account and isolated household.
+2. Add a synthetic profile and versioned Grocery fixture; add no provider
+   integration.
+3. Connect the public CLI once with the supported Grocery read/write scopes
+   and the explicit owner-only file store in a temporary directory.
+4. Encode the two resulting state documents into the version-1 atomic bundle
+   and save it in `native-eval`.
+5. Install the narrowly scoped secret-rotator credential.
+6. Dispatch the workflow manually and inspect the privacy-safe evidence.
+7. Set `HEYFOOD_PRODUCTION_CANARY_ENABLED=true` only after that first run
+   passes; the six-hour schedule then becomes authoritative.
 
 ## Supported-experience rubric
 

@@ -1,0 +1,261 @@
+name: Production TUI canary
+
+run-name: Production TUI canary v${{ inputs.version || '0.5.0' }}
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Public GitHub Release version without the v prefix
+        required: true
+        type: string
+        default: "0.5.0"
+
+permissions:
+  attestations: read
+  contents: read
+
+concurrency:
+  group: production-tui-canary
+  cancel-in-progress: false
+
+jobs:
+  production-canary:
+    name: Public Linux x64 against production
+    if: ${{ vars.HEYFOOD_PRODUCTION_CANARY_ENABLED == 'true' }}
+    runs-on: ubuntu-22.04
+    environment: native-eval
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version || '0.5.0' }}
+      TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize fail-safe evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p canary-release canary-extract canary-evidence canary-state
+          chmod 0700 canary-state
+          jq -n \
+            --arg version "$VERSION" \
+            --arg target "$TARGET" \
+            '{
+              schema_version: 1,
+              evaluation: "heyfood-production-canary-v1",
+              status: "failed",
+              release: {
+                version: $version,
+                target: $target,
+                archive_sha256: null
+              },
+              provenance: {
+                public_installed_artifact: false,
+                production_api: false,
+                synthetic_account: true,
+                provider_tokens_present: false
+              },
+              mutation_policy: {
+                proposal_prepared: false,
+                decision: null,
+                non_mutation_verified: false,
+                accept_permitted: false
+              },
+              operations: [],
+              failure: {
+                category: "evaluation_infrastructure",
+                operation: "initialize",
+                error_type: "workflow_incomplete"
+              },
+              privacy: {
+                raw_requests_retained: false,
+                raw_responses_retained: false,
+                identifiers_retained: false,
+                credentials_retained: false
+              }
+            }' >canary-evidence/production-canary.json
+      - name: Require the isolated protected credential bundle
+        shell: bash
+        env:
+          STATE_BUNDLE: ${{ secrets.HEYFOOD_CANARY_STATE_BUNDLE_B64 }}
+          ROTATOR_TOKEN: ${{ secrets.HEYFOOD_CANARY_SECRET_ROTATOR_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$STATE_BUNDLE"
+          test -n "$ROTATOR_TOKEN"
+          printf '%s' "$STATE_BUNDLE" | base64 --decode >canary-state/bundle.json
+          jq -e '
+            type == "object" and
+            (keys | sort) == ["auth", "credentials", "schema_version"] and
+            .schema_version == 1 and
+            (.auth | type == "string" and length > 0) and
+            (.credentials | type == "string" and length > 0)
+          ' canary-state/bundle.json >/dev/null
+          jq -er '.auth' canary-state/bundle.json |
+            base64 --decode >canary-state/auth.native
+          jq -er '.credentials' canary-state/bundle.json |
+            base64 --decode >canary-state/credentials.native
+          test -s canary-state/auth.native
+          test -s canary-state/credentials.native
+          chmod 0600 canary-state/auth.native canary-state/credentials.native
+          sha256sum canary-state/auth.native canary-state/credentials.native \
+            >canary-state/seed-digests
+      - name: Download the exact public archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          archive="heyfood-v$VERSION-$TARGET.tar.gz"
+          gh release download "v$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$archive" \
+            --pattern SHA256SUMS \
+            --dir canary-release
+      - name: Verify public provenance, checksum, and archive policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="heyfood-v$VERSION-$TARGET.tar.gz"
+          gh attestation verify "canary-release/$archive" --repo "$GITHUB_REPOSITORY"
+          gh attestation verify canary-release/SHA256SUMS --repo "$GITHUB_REPOSITORY"
+          grep -E "^[0-9a-f]{64}  $archive$" canary-release/SHA256SUMS \
+            >canary-release/target-SHA256SUMS
+          mv canary-release/target-SHA256SUMS canary-release/SHA256SUMS
+          scripts/release/smoke-archive.sh canary-release "$VERSION" "$TARGET"
+          tar -xzf "canary-release/$archive" -C canary-extract
+          test -x canary-extract/heyfood
+          test "$(find canary-extract -mindepth 1 -maxdepth 1 -type f | wc -l)" = 1
+          sha256sum "canary-release/$archive" | cut -d' ' -f1 \
+            >canary-release/archive.sha256
+      - name: Run the bounded non-mutating production journey
+        id: canary
+        continue-on-error: true
+        shell: bash
+        env:
+          HEYFOOD_CANARY_BINARY: ${{ github.workspace }}/canary-extract/heyfood
+          HEYFOOD_CANARY_STATE_DIR: ${{ github.workspace }}/canary-state
+          HEYFOOD_CANARY_EVIDENCE_DIR: ${{ github.workspace }}/canary-evidence
+          HEYFOOD_CANARY_VERSION: ${{ inputs.version || '0.5.0' }}
+          HEYFOOD_CANARY_TARGET: x86_64-unknown-linux-gnu
+        run: |
+          set -euo pipefail
+          export HEYFOOD_CANARY_ARCHIVE_SHA256
+          HEYFOOD_CANARY_ARCHIVE_SHA256=$(cat canary-release/archive.sha256)
+          scripts/eval/run-production-canary.sh
+      - name: Atomically rotate protected canary state when safe
+        id: rotate
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.HEYFOOD_CANARY_SECRET_ROTATOR_TOKEN }}
+        run: |
+          set -euo pipefail
+          for required in auth.native credentials.native; do
+            test -f "canary-state/$required"
+            test ! -L "canary-state/$required"
+            test -s "canary-state/$required"
+          done
+          if find canary-state -mindepth 1 -maxdepth 1 \
+            \( -name '*.reconciliation' -o -name '*authorization-*' \) \
+            -print -quit | grep -q .; then
+            echo "refusing to rotate unresolved credential state" >&2
+            exit 1
+          fi
+          auth=$(base64 -w0 canary-state/auth.native)
+          credentials=$(base64 -w0 canary-state/credentials.native)
+          jq -cn \
+            --arg auth "$auth" \
+            --arg credentials "$credentials" \
+            '{schema_version: 1, auth: $auth, credentials: $credentials}' |
+            base64 -w0 |
+            gh secret set HEYFOOD_CANARY_STATE_BUNDLE_B64 \
+              --env native-eval \
+              --repo "$GITHUB_REPOSITORY"
+      - name: Upload privacy-safe production evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-canary-evidence
+          path: canary-evidence/production-canary.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Destroy decoded credentials and private response material
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          find canary-state -type f -exec shred -u {} +
+          find canary-state -depth -type d -empty -delete
+          find "${RUNNER_TEMP:-/tmp}" -maxdepth 1 \
+            -type d -name 'heyfood-production-canary.*' \
+            -exec find {} -type f -exec shred -u {} \; -exec rm -rf {} +
+      - name: Enforce canary and credential-rotation results
+        if: always()
+        shell: bash
+        env:
+          CANARY_OUTCOME: ${{ steps.canary.outcome }}
+          ROTATE_OUTCOME: ${{ steps.rotate.outcome }}
+        run: |
+          set -euo pipefail
+          test "$CANARY_OUTCOME" = success
+          test "$ROTATE_OUTCOME" = success
+
+  triage:
+    name: Triage production canary
+    if: ${{ always() && needs.production-canary.result != 'skipped' }}
+    needs: production-canary
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download current production evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: production-canary-evidence
+          path: current-evidence
+      - name: Download the immediately preceding canary evidence when available
+        id: previous
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          previous_run=$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/production-tui-canary.yml/runs?status=completed&per_page=10" \
+              --jq '.workflow_runs[0].id // empty'
+          )
+          if [[ -n "$previous_run" ]] &&
+            gh run download "$previous_run" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name production-canary-evidence \
+              --dir previous-evidence; then
+            find previous-evidence -type f -name production-canary.json -print -quit \
+              >previous-path
+          else
+            printf '%s\n' - >previous-path
+          fi
+      - name: Apply deterministic and consecutive-failure policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version || '0.5.0' }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          current=$(find current-evidence -type f -name production-canary.json -print -quit)
+          previous=$(cat previous-path)
+          scripts/eval/triage-production-canary.sh \
+            "$current" \
+            "$previous" \
+            "$VERSION" \
+            "$RUN_URL"
