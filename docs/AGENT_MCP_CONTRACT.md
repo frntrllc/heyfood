@@ -1,6 +1,6 @@
 # heyfood local MCP contract
 
-**Status:** Phase 0 protocol freeze; no `heyfood mcp` command is public
+**Status:** v1 read/discovery contract supported in `v0.6.0`
 
 ## Transport
 
@@ -42,14 +42,13 @@ records the exact empty environment and the environment-policy digest. A
 different environment, policy digest, executable, host, or scope blocks
 receipt-based replacement/uninstall and reports a conflict.
 
-Phase 3 must prove that API-origin, API-key, CA, credential-store, state-root,
-debug/test, and unknown `HEYFOOD_*` substitution fail before credential
-access, network dispatch, or stdout protocol startup.
+Qualification proves that API-origin, API-key, CA, credential-store,
+state-root, debug/test, and unknown `HEYFOOD_*` substitution fail before
+credential access, network dispatch, or stdout protocol startup.
 
 ## Initial tool set
 
-Phase 3 may advertise only these read/discovery candidates after exact schema
-review:
+The server advertises exactly these read/discovery tools:
 
 ```text
 heyfood_get_manifest
@@ -100,6 +99,10 @@ behind.
 ## Tool results
 
 - Results are structured, versioned, bounded, and renderer-neutral.
+- Every advertised JSON Schema is closed and contains both the tool's success
+  document and the common privacy-safe error document. Runtime validation
+  converts out-of-contract success data into `mcp_output_schema_mismatch`
+  before writing it.
 - Stable resource IDs, household/safety context, freshness, and provenance are
   preserved where required.
 - Service failure is not converted into an empty list or success.

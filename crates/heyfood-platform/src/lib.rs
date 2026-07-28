@@ -27,7 +27,7 @@ pub use persistence::WindowsCredentialStore;
 pub use persistence::{
     AtomicFile, AuthorizationReplacementJournal, AuthorizationReplacementPhase,
     AuthorizationSessionStore, FileCredentialStore, NativeAuthRefreshGuard, NativeAuthStore,
-    NativeConfigStore, SensitiveExportWriter,
+    NativeConfigStore, OwnerOnlyPath, SensitiveExportWriter,
 };
 pub use python_import::PythonStateImporter;
 
@@ -67,6 +67,13 @@ impl NativePaths {
             }
             return Ok(Self::under(root));
         }
+        Self::discover_platform_default()
+    }
+
+    /// Discover only the operating-system profile root. Agent protocol
+    /// servers use this entry point so inherited environment variables cannot
+    /// redirect credential or account state.
+    pub fn discover_platform_default() -> Result<Self, PortError> {
         let project = ProjectDirs::from("ai", "frntr", "heyfood").ok_or_else(|| {
             PortError::new(
                 "platform_paths",

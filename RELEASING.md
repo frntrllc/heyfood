@@ -24,10 +24,11 @@ Releases. The legacy Python/PyPI channel is not a release authority.
 - The workflow builds on each target architecture instead of cross-compiling:
   `aarch64-apple-darwin`, `x86_64-apple-darwin`,
   `aarch64-unknown-linux-gnu`, and `x86_64-unknown-linux-gnu`.
-- Windows distribution is deferred to `v0.5.1`. Ordinary Windows compile,
+- Windows distribution remains deferred to a separately qualified future
+  release. Ordinary Windows compile,
   test, Clippy, credential-backend, and deterministic packaging CI remains
   required, but no Windows asset or signing credential participates in the
-  `v0.5.0` publication path.
+  macOS/Linux publication path.
 - Each archive is named `heyfood-vVERSION-TARGET.tar.gz` and contains one bare
   regular executable named `heyfood`.
 - `SHA256SUMS` covers exactly those four archives. The complete five-file set
@@ -51,8 +52,9 @@ Releases. The legacy Python/PyPI channel is not a release authority.
    push only the tag.
 4. The release workflow validates the tag, runs the native workspace tests,
    builds and smokes all four target executables, creates deterministic
-   archives, generates `SHA256SUMS`, attests all five files, and creates the
-   GitHub Release.
+   archives, qualifies embedded agent discovery, reversible Codex/Claude setup,
+   and the bounded MCP protocol, generates `SHA256SUMS`, attests all five
+   files, and creates the GitHub Release.
 5. The reusable post-release workflow downloads the public files on all four
    target runners, verifies checksums, archive policy, and GitHub attestations,
    then runs both the public executable smoke and the hosted installer contract.

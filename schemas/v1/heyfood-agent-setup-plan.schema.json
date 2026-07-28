@@ -13,6 +13,7 @@
     "project_root",
     "binary",
     "package",
+    "plan_sha256",
     "ready",
     "changed",
     "hosts"
@@ -62,6 +63,9 @@
     },
     "package": {
       "$ref": "#/$defs/package"
+    },
+    "plan_sha256": {
+      "$ref": "#/$defs/sha256"
     },
     "ready": {
       "type": "boolean"
@@ -140,6 +144,7 @@
         "compatibility",
         "skill_path",
         "receipt_path",
+        "mcp",
         "action",
         "conflicts",
         "user_actions"
@@ -189,6 +194,9 @@
           "minLength": 1,
           "maxLength": 4096
         },
+        "mcp": {
+          "$ref": "#/$defs/mcp"
+        },
         "action": {
           "type": "string",
           "enum": [
@@ -214,6 +222,63 @@
             "type": "string",
             "maxLength": 1024
           }
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "transport",
+        "command",
+        "arguments",
+        "environment",
+        "environment_policy_sha256",
+        "configuration_scope",
+        "action"
+      ],
+      "properties": {
+        "name": {
+          "const": "heyfood"
+        },
+        "transport": {
+          "const": "stdio"
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "arguments": {
+          "const": [
+            "mcp",
+            "serve"
+          ]
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "maxProperties": 0
+        },
+        "environment_policy_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "configuration_scope": {
+          "enum": [
+            "user",
+            "project",
+            "unsupported"
+          ]
+        },
+        "action": {
+          "enum": [
+            "install",
+            "replace",
+            "uninstall",
+            "none",
+            "conflict"
+          ]
         }
       }
     }

@@ -3,13 +3,13 @@
 > [!CAUTION]
 > **Do not install or use v0.4.0 or v0.4.1.**
 > Both releases were published before release authorization and remain
-> unsupported. The supported replacement is `v0.5.0`.
+> unsupported. The supported replacement is `v0.6.0`.
 
 Native command-line access to personalized food and dietary guidance from
 [hello.food](https://hello.food).
 
 The CLI and interactive terminal experience are implemented in Rust. The
-supported recovery release is `0.5.0` for macOS and Linux. The immutable
+supported release is `0.6.0` for macOS and Linux. The immutable
 `v0.4.0` and `v0.4.1` releases remain unsupported and must not be installed.
 
 See the [current capability and distribution status](docs/CAPABILITY_STATUS.md)
@@ -17,7 +17,7 @@ before evaluating the client.
 
 ## Install
 
-Install the supported native `v0.5.0` binary on macOS or Linux:
+Install the supported native `v0.6.0` binary on macOS or Linux:
 
 ```bash
 curl -fsSL https://hey.food/install.sh | bash
@@ -25,7 +25,8 @@ curl -fsSL https://hey.food/install.sh | bash
 
 The installer downloads the archive for the current CPU, verifies its checksum
 and exact version, and atomically installs it under the current user without
-`sudo` or shell-profile edits. Windows distribution is deferred to `v0.5.1`.
+`sudo` or shell-profile edits. Windows distribution remains deferred to a
+separately qualified future release.
 
 ## Inspect or build from source
 
@@ -45,7 +46,7 @@ contributors.
 
 ## Agent discovery
 
-The v0.6.0 source candidate can explain its exact installed automation
+The v0.6.0 binary can explain its exact installed automation
 contract without repository access, credentials, or a network connection:
 
 ```bash
@@ -63,19 +64,17 @@ non-mutating preview:
 heyfood --json agent setup --target all --scope user --dry-run
 ```
 
-See [Agent Skill setup](docs/AGENT_SETUP.md) for apply, update, project-scope,
-and receipt-bound uninstall behavior. The local read-only MCP server is a
-separately qualified increment and is not implied by Agent Skill installation.
+See [Agent Skill setup](docs/AGENT_SETUP.md) for digest-bound apply, update,
+project-scope, MCP registration, and receipt-bound uninstall behavior. The
+`v0.6.0` exposes exactly six typed read/discovery MCP tools; it
+exposes no agent mutation, shell, file, raw API, credential, or TUI-control
+tool.
 
 ## Connect an account
 
-The supported public `v0.5.0` artifact predates the account-neutral first-run
-flow: bare launch begins explicit account creation, and fresh-machine login for
-an existing account is not yet supported. This is the known successor-artifact
-gap tracked in [#29](https://github.com/frntrllc/heyfood/issues/29).
-
-Current source gives a fresh user one browser-based choice to sign in or create
-a hello.food account, then continues directly into onboarding and the TUI:
+The supported client gives a fresh user one browser-based choice to sign in or
+create a hello.food account, then continues directly into onboarding and the
+TUI:
 
 ```bash
 heyfood
@@ -179,12 +178,12 @@ Account connection continues into the native Rust TUI and an authenticated bare
 stream, keeps bounded process-local prompt history, and preserves conversation
 continuity only for the lifetime of the process.
 
-The bounded `v0.5.0` recovery release produces exactly four native archives:
+The bounded `v0.6.0` release produces exactly four native archives:
 macOS Apple Silicon, macOS Intel, Linux ARM64, and Linux x64.
-Windows distribution is deferred to `v0.5.1`; ordinary Windows compile, test,
+Windows distribution remains deferred; ordinary Windows compile, test,
 Clippy, credential, and packaging qualification remains active in CI. Health,
 item-level Menu Watch diff detail, native voice, full legacy parity, and the
-complete twelve-stage showcase are future work rather than `v0.5.0` release
+complete twelve-stage showcase are future work rather than `v0.6.0` release
 gates.
 
 Interactive controls include Enter to send, Shift+Enter or Ctrl+J for a
@@ -197,8 +196,8 @@ validated transcript in the composer for editing before submission. Use
 readiness.
 
 Grocery, Menu Watch, profile, household, location, and status panels are
-included in `v0.5.0`. Health integrations are explicitly deferred from
-the supported `v0.5.0` contract: `health` is absent from root help and shell
+included in `v0.6.0`. Health integrations are explicitly deferred from
+the supported `v0.6.0` contract: `health` is absent from root help and shell
 completion, `/health` is absent from TUI discovery, and fresh grants do not
 request Health or integration-management scopes. Retained internal
 provider-neutral contracts are future work, not a release capability.
@@ -213,7 +212,7 @@ and `/watch` create/list/remove or display subscriptions using the deployed
 `menu:watch` contract. The TUI renders the latest account-owned change summary
 with source, freshness, and provenance; item-level added, removed, modified,
 and price-change detail remains follow-on work. The broader installed-artifact
-showcase and real-hardware voice qualification remain post-`v0.5.0`
+showcase and real-hardware voice qualification remain post-`v0.6.0`
 conformance work. Hidden compatibility routes continue to fail closed where a
 native workflow is not complete.
 

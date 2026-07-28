@@ -96,3 +96,33 @@ test "$("$binary" --version)" = "heyfood $version"
 "$binary" register --help >/dev/null
 "$binary" completion bash >"$staging/completion.bash"
 test -s "$staging/completion.bash"
+
+"$binary" agent describe >"$staging/agent-manifest.json"
+jq -e \
+  '.schema_version == 1
+   and .automation_surfaces.mcp_stdio == "active"
+   and ([.commands[].name] | index("mcp serve")) != null
+   and ([.capabilities[] | select(.id == "agent-mcp" and .status == "active")] | length) == 1' \
+  "$staging/agent-manifest.json" >/dev/null
+"$binary" agent guide --format markdown >"$staging/agent-guide.md"
+grep -Fq 'heyfood mcp serve' "$staging/agent-guide.md"
+
+if env -i \
+  HOME="$HOME" \
+  PATH="$PATH" \
+  HEYFOOD_UNKNOWN_QUALIFICATION_OVERRIDE=must-not-be-read \
+  "$binary" mcp serve >"$staging/mcp.stdout" 2>"$staging/mcp.stderr"; then
+  echo "MCP accepted a forbidden inherited HEYFOOD_* variable" >&2
+  exit 1
+fi
+test ! -s "$staging/mcp.stdout"
+grep -Fq 'HEYFOOD_UNKNOWN_QUALIFICATION_OVERRIDE' "$staging/mcp.stderr"
+if env -i HOME="$HOME" PATH="$PATH" \
+  "$binary" --json mcp serve >"$staging/mcp-modifier.stdout" 2>"$staging/mcp-modifier.stderr"; then
+  echo "MCP accepted a one-shot output modifier" >&2
+  exit 1
+fi
+test ! -s "$staging/mcp-modifier.stdout"
+grep -Fq 'stdout is reserved for MCP' "$staging/mcp-modifier.stderr"
+node scripts/release/mcp-smoke.mjs "$binary"
+scripts/release/agent-setup-smoke.sh "$binary" "$staging/agent-setup"

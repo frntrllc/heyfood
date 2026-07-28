@@ -59,14 +59,16 @@ pub struct CreateMenuWatchRequest {
     pub tz: Option<String>,
 }
 
-pub trait MenuWatchPort: Send + Sync {
+pub trait MenuWatchReadPort: Send + Sync {
     fn list(
         &self,
         credentials: SessionCredentials,
         operation_id: OperationId,
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<MenuWatchList, PortError>>;
+}
 
+pub trait MenuWatchPort: MenuWatchReadPort {
     fn create(
         &self,
         credentials: SessionCredentials,
@@ -85,12 +87,12 @@ pub trait MenuWatchPort: Send + Sync {
 }
 
 pub struct ListMenuWatches<'a> {
-    port: &'a dyn MenuWatchPort,
+    port: &'a dyn MenuWatchReadPort,
 }
 
 impl<'a> ListMenuWatches<'a> {
     #[must_use]
-    pub const fn new(port: &'a dyn MenuWatchPort) -> Self {
+    pub const fn new(port: &'a dyn MenuWatchReadPort) -> Self {
         Self { port }
     }
 
@@ -194,7 +196,7 @@ mod tests {
         }
     }
 
-    impl MenuWatchPort for RejectingPort {
+    impl MenuWatchReadPort for RejectingPort {
         fn list(
             &self,
             _credentials: SessionCredentials,
@@ -203,7 +205,9 @@ mod tests {
         ) -> BoxFuture<'_, Result<MenuWatchList, PortError>> {
             self.called()
         }
+    }
 
+    impl MenuWatchPort for RejectingPort {
         fn create(
             &self,
             _credentials: SessionCredentials,

@@ -95,6 +95,11 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<AgentCommand>,
     },
+    /// Run the local, bounded Model Context Protocol server.
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
     /// Ask the hosted agent a one-shot question.
     Ask(AskArgs),
     /// Reply to an explicit conversation ID.
@@ -225,10 +230,16 @@ pub enum AgentCommand {
     Schema(AgentSchemaArgs),
     /// Run credential-free, network-free local integration diagnostics.
     Doctor,
-    /// Plan or install the canonical Agent Skill for a supported host.
+    /// Plan or install the Agent Skill and read-only MCP registration.
     Setup(AgentSetupArgs),
-    /// Remove only an exact receipt-bound Agent Skill installation.
+    /// Remove only an exact receipt-bound skill and MCP registration.
     Uninstall(AgentUninstallArgs),
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum McpCommand {
+    /// Serve the six read/discovery tools over newline-delimited stdio.
+    Serve,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -278,6 +289,10 @@ pub struct AgentSetupArgs {
     #[arg(long, conflicts_with = "dry_run")]
     pub apply: bool,
 
+    /// Exact SHA-256 printed by the reviewed dry-run; required with --apply.
+    #[arg(long, value_name = "SHA256", requires = "apply")]
+    pub plan_sha256: Option<String>,
+
     /// Explicitly request the default non-mutating dry-run.
     #[arg(long, conflicts_with = "apply")]
     pub dry_run: bool,
@@ -304,6 +319,10 @@ pub struct AgentUninstallArgs {
     /// Apply the displayed plan. Without this flag uninstall is a dry-run.
     #[arg(long, conflicts_with = "dry_run")]
     pub apply: bool,
+
+    /// Exact SHA-256 printed by the reviewed dry-run; required with --apply.
+    #[arg(long, value_name = "SHA256", requires = "apply")]
+    pub plan_sha256: Option<String>,
 
     /// Explicitly request the default non-mutating dry-run.
     #[arg(long, conflicts_with = "apply")]

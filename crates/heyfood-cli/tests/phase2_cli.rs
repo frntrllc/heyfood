@@ -101,6 +101,7 @@ fn command_tree_retains_hidden_compatibility_and_authorized_phase2_families() {
         "log",
         "login",
         "logout",
+        "mcp",
         "members",
         "menu",
         "onboard",

@@ -319,7 +319,7 @@ fn commands() -> Vec<CommandContract> {
         .with_output_schema(EmbeddedSchema::Doctor),
         command(
             "agent setup",
-            "Plan or install the canonical heyfood Agent Skill.",
+            "Plan or install the canonical heyfood Agent Skill and read-only MCP registration.",
             "agent_unsupported",
             "arguments",
             "agent_setup_plan_v1",
@@ -339,7 +339,7 @@ fn commands() -> Vec<CommandContract> {
         .with_reconciliation("heyfood agent setup --target TARGET --scope SCOPE --dry-run"),
         command(
             "agent uninstall",
-            "Plan or remove an exact receipt-bound heyfood Agent Skill.",
+            "Plan or remove an exact receipt-bound heyfood Agent Skill and MCP registration.",
             "agent_unsupported",
             "arguments",
             "agent_setup_plan_v1",
@@ -357,6 +357,24 @@ fn commands() -> Vec<CommandContract> {
         )
         .with_output_schema(EmbeddedSchema::SetupPlan)
         .with_reconciliation("heyfood agent uninstall --target TARGET --scope SCOPE --dry-run"),
+        command(
+            "mcp serve",
+            "Serve six bounded read/discovery tools over local MCP stdio.",
+            "agent_safe",
+            "mcp_stdio",
+            "mcp_json_rpc",
+            "long_lived_json_rpc_frames",
+            "remote_read",
+            true,
+            false,
+            true,
+            NONE,
+            "tool_specific",
+            "none",
+            "none",
+            "none",
+            &["/absolute/path/to/heyfood mcp serve"],
+        ),
         command(
             "ask",
             "Ask the hosted conversational service.",
@@ -767,7 +785,7 @@ pub fn manifest() -> Value {
         },
         "automation_surfaces": {
             "one_shot_json": "active",
-            "mcp_stdio": "deferred",
+            "mcp_stdio": "active",
             "tui_automation": "unsupported"
         },
         "limits": {
@@ -789,7 +807,7 @@ pub fn manifest() -> Value {
             {"id": "agent-self-description", "status": "active", "summary": "Offline manifest, guide, schemas, and doctor are embedded.", "contract_version": "v1"},
             {"id": "grocery", "status": "active", "summary": "Human Grocery workflows are active; agent access follows per-command audience.", "contract_version": "v1"},
             {"id": "menu-watch", "status": "active", "summary": "Human Menu Watch management is active; agent access follows per-command audience.", "contract_version": "v1"},
-            {"id": "agent-mcp", "status": "deferred", "summary": "The local typed MCP server is not active in this phase.", "contract_version": null},
+            {"id": "agent-mcp", "status": "active", "summary": "Six bounded read/discovery tools are available over local stdio with native account credentials.", "contract_version": "v1"},
             {"id": "health", "status": "deferred", "summary": "Health is outside the supported release contract.", "contract_version": null},
             {"id": "native-voice", "status": "deferred", "summary": "Native voice is not enabled in the default artifact.", "contract_version": null},
             {"id": "windows-distribution", "status": "deferred", "summary": "Windows source CI is active; public Windows distribution is deferred.", "contract_version": null}
@@ -1077,6 +1095,7 @@ mod tests {
                         "sha256": "1".repeat(64),
                         "files": 6
                     },
+                    "plan_sha256": "2".repeat(64),
                     "ready": true,
                     "changed": false,
                     "hosts": [{
@@ -1087,6 +1106,16 @@ mod tests {
                         "compatibility": "compatible",
                         "skill_path": "/home/user/.agents/skills/heyfood",
                         "receipt_path": "/state/receipts/receipt.json",
+                        "mcp": {
+                            "name": "heyfood",
+                            "transport": "stdio",
+                            "command": "/absolute/heyfood",
+                            "arguments": ["mcp", "serve"],
+                            "environment": {},
+                            "environment_policy_sha256": "3".repeat(64),
+                            "configuration_scope": "user",
+                            "action": "install"
+                        },
                         "action": "install",
                         "conflicts": [],
                         "user_actions": []

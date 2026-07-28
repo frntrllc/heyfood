@@ -7,8 +7,8 @@ artifact**, preserve privacy-safe evidence, turn reproducible failures into one
 deduplicated GitHub issue per experience category, and prove recovery after a
 fix.
 
-This is post-release product evaluation. It does not reopen the completed
-`v0.5.0` recovery-release gate.
+This is post-release product evaluation. It does not reopen a completed release
+gate.
 
 ## The operating loop
 
@@ -141,9 +141,9 @@ score **100/100**:
 The score is intentionally limited to supported behavior. Windows
 distribution, Health-aware planning, native voice, and item-level Menu Watch
 diff detail are listed in the report as roadmap coverage debt; they are not
-converted into fake passing assertions. The published `v0.5.0` archive may
-therefore retain the known first-run-orientation P2 until a successor artifact
-contains and proves the automatic account-choice flow.
+converted into fake passing assertions. The historical `v0.5.0` archive retains
+its known first-run-orientation P2; supported successor releases must satisfy
+the current rubric.
 
 ## Excellence standard
 

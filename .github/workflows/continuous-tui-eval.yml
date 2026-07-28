@@ -1,6 +1,6 @@
 name: Continuous TUI evaluation
 
-run-name: Continuous TUI evaluation v${{ inputs.version || '0.5.0' }}
+run-name: Continuous TUI evaluation v${{ inputs.version || '0.6.0' }}
 
 on:
   schedule:
@@ -11,19 +11,19 @@ on:
         description: Public GitHub Release version without the v prefix
         required: true
         type: string
-        default: "0.5.0"
+        default: "0.6.0"
 
 permissions:
   attestations: read
   contents: read
 
 concurrency:
-  group: continuous-tui-eval-${{ inputs.version || '0.5.0' }}
+  group: continuous-tui-eval-${{ inputs.version || '0.6.0' }}
   cancel-in-progress: false
 
 jobs:
   installed-experience:
-    name: v${{ inputs.version || '0.5.0' }} / ${{ matrix.target }}
+    name: v${{ inputs.version || '0.6.0' }} / ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -39,7 +39,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
     env:
       GH_TOKEN: ${{ github.token }}
-      VERSION: ${{ inputs.version || '0.5.0' }}
+      VERSION: ${{ inputs.version || '0.6.0' }}
       TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -109,11 +109,11 @@ jobs:
       - name: Exercise and score the installed TUI
         shell: bash
         env:
-          HEYFOOD_SHOWCASE_ARCHIVE: ${{ github.workspace }}/eval-release/heyfood-v${{ inputs.version || '0.5.0' }}-${{ matrix.target }}.tar.gz
+          HEYFOOD_SHOWCASE_ARCHIVE: ${{ github.workspace }}/eval-release/heyfood-v${{ inputs.version || '0.6.0' }}-${{ matrix.target }}.tar.gz
           HEYFOOD_SHOWCASE_MANIFEST: ${{ github.workspace }}/eval-release/SHA256SUMS
           HEYFOOD_SHOWCASE_EVIDENCE_DIR: ${{ github.workspace }}/eval-evidence
           HEYFOOD_SHOWCASE_TARGET: ${{ matrix.target }}
-          HEYFOOD_SHOWCASE_VERSION: ${{ inputs.version || '0.5.0' }}
+          HEYFOOD_SHOWCASE_VERSION: ${{ inputs.version || '0.6.0' }}
         run: scripts/eval/run-installed-ux-eval.sh
       - name: Upload privacy-safe evaluation evidence
         if: always()
@@ -142,7 +142,7 @@ jobs:
       - name: Open, update, or resolve deduplicated issues
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version || '0.5.0' }}
+          VERSION: ${{ inputs.version || '0.6.0' }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           HEYFOOD_EVAL_EXPECTED_REPORTS: "4"
         run: >-

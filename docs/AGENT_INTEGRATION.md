@@ -33,8 +33,9 @@ surface. Never assume that a command is agent-safe merely because it exists.
 
 `heyfood agent setup` installs one canonical, versioned Agent Skill for the
 qualified Codex and Claude Code host versions. It defaults to a credential-free
-dry run, changes no general host instructions, and does not enable MCP or grant
-permissions. Apply, replacement, and uninstall are exact-host,
+dry run, changes no general host instructions, and registers only the bounded
+read-only MCP server through the host's own configuration command. It grants
+no permissions. Apply, replacement, and uninstall are exact-host,
 exact-executable, and receipt bound. See [AGENT_SETUP.md](AGENT_SETUP.md).
 
 The setup and uninstall commands are `agent_unsupported`: they are explicit

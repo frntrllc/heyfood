@@ -346,7 +346,8 @@
             "attached_terminal",
             "arguments_or_utf8_stdin_plus_controlling_terminal",
             "arguments_plus_controlling_terminal",
-            "json_stdin_plus_controlling_terminal"
+            "json_stdin_plus_controlling_terminal",
+            "mcp_stdio"
           ]
         },
         "output_family": {
@@ -384,7 +385,8 @@
             "raw_markdown_or_one_json_value",
             "human_terminal",
             "shell_source",
-            "typed_rejection"
+            "typed_rejection",
+            "long_lived_json_rpc_frames"
           ]
         },
         "operation_class": {
@@ -431,7 +433,8 @@
             "not_applicable",
             "safe_read",
             "no_blind_retry",
-            "reconcile_before_retry"
+            "reconcile_before_retry",
+            "tool_specific"
           ]
         },
         "reconciliation_command": {

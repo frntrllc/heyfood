@@ -7,6 +7,7 @@ legacy Python behavior or hidden compatibility topology.
 
 ```text
 agent         inspect the exact installed agent integration contract offline
+mcp           serve the bounded local read/discovery MCP protocol
 register      create and connect a hello.food account
 login         connect an existing account or replace this machine's authorization
 ask           ask the hosted agent a one-shot question
@@ -28,9 +29,11 @@ heyfood agent schema --list
 heyfood agent schema manifest
 heyfood agent doctor
 heyfood agent setup --target codex|claude|all --scope user|project \
-  [--project-root /absolute/path] [--dry-run|--apply] [--replace]
+  [--project-root /absolute/path] [--dry-run|--apply] \
+  [--plan-sha256 REVIEWED_SHA256] [--replace]
 heyfood agent uninstall --target codex|claude|all --scope user|project \
-  [--project-root /absolute/path] [--dry-run|--apply]
+  [--project-root /absolute/path] [--dry-run|--apply] \
+  [--plan-sha256 REVIEWED_SHA256]
 ```
 
 These commands do not read credentials, contact hello.food, mutate product
@@ -40,8 +43,22 @@ identifier from `--list`; unknown names return a typed runtime error.
 `agent setup` and `agent uninstall` are separate opt-in user configuration
 operations. They default to dry-run, require `--apply` to change state,
 preserve modified or unreceipted files, and never edit general `AGENTS.md`,
-`CLAUDE.md`, or shared MCP configuration. They are not agent-safe command
-fallbacks.
+or `CLAUDE.md`. Apply requires the exact digest of the rechecked dry-run plan.
+MCP changes use the qualified host's own `mcp add/remove` command and are
+receipt-bound. They are not agent-safe command fallbacks.
+
+## Local MCP
+
+```bash
+heyfood mcp serve
+```
+
+This long-lived stdio JSON-RPC process is the sole exception to the one-value
+CLI stdout contract. It exposes exactly six typed read/discovery tools and no
+mutation, generic command, shell, file, raw API, credential, or TUI-control
+surface. It uses only account-bound native credentials and the compiled
+production service origin. Human/one-shot modifiers and every inherited
+`HEYFOOD_*` variable fail before credential access or protocol startup.
 
 ## Text input
 
@@ -129,11 +146,11 @@ authority are never rendered.
 
 ## Deferred Health integrations
 
-Health integrations are not part of the supported `v0.5.0` command surface.
+Health integrations are not part of the supported `v0.6.0` command surface.
 They are absent from root help, shell completion, and the TUI command registry.
 The retained `health` spelling fails locally with `capability_deferred` before
 credential access or network dispatch. Oura and Apple Health integration work
-remains post-`v0.5.0`; no Health implementation or canary is required for this
+remains post-`v0.6.0`; no Health implementation or canary is required for this
 release.
 
 ## Menu Watch
@@ -197,7 +214,7 @@ fail before microphone access. Dietary onboarding, interactive Grocery
 confirmation, and the bounded installed-artifact core matrix remain active
 release work. Item-level Menu Watch diff detail, real-hardware voice
 qualification, full parity, and the complete twelve-stage showcase are
-post-`v0.5.0` conformance work, not release gates.
+post-`v0.6.0` conformance work, not release gates.
 
 ## Unavailable compatibility topology
 

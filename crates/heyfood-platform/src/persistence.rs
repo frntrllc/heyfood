@@ -104,6 +104,21 @@ impl AtomicFile {
     }
 }
 
+/// Applies and verifies the platform's owner-only permission policy to setup
+/// artifacts that are not written through [`AtomicFile`].
+pub struct OwnerOnlyPath;
+
+impl OwnerOnlyPath {
+    pub fn directory(path: &Path) -> Result<(), PortError> {
+        create_private_dir(path)
+    }
+
+    pub fn file(path: &Path) -> Result<(), PortError> {
+        make_private_file(path)
+            .map_err(|error| PortError::new("native_permissions", error.to_string()))
+    }
+}
+
 /// Writes a user-selected dietary-data export without following a destination
 /// symlink/reparse point or exposing partially written content.
 pub struct SensitiveExportWriter;

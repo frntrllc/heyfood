@@ -73,6 +73,7 @@ fn setup(arguments: AgentSetupArgs, machine: bool) -> ExitCode {
                 SetupMode::DryRun
             },
             replace: arguments.replace,
+            expected_plan_sha256: arguments.plan_sha256,
         },
         machine,
     )
@@ -91,6 +92,7 @@ fn uninstall(arguments: AgentUninstallArgs, machine: bool) -> ExitCode {
                 SetupMode::DryRun
             },
             replace: false,
+            expected_plan_sha256: arguments.plan_sha256,
         },
         machine,
     )
@@ -159,6 +161,18 @@ fn render_setup_plan(plan: &SetupPlan) -> String {
             terminal_safe_text(host.compatibility)
         );
         let _ = writeln!(output, "  Skill: {path}");
+        let _ = writeln!(
+            output,
+            "  MCP: {} · {} · {} mcp serve · environment empty",
+            terminal_safe_text(host.mcp.action),
+            terminal_safe_text(host.mcp.configuration_scope),
+            terminal_safe_text(&host.mcp.command.display().to_string()),
+        );
+        let _ = writeln!(
+            output,
+            "  MCP environment policy: {}",
+            terminal_safe_text(&host.mcp.environment_policy_sha256)
+        );
         if let Some(version) = host.host_version.as_deref() {
             let _ = writeln!(output, "  Host: {}", terminal_safe_text(version));
         }
@@ -173,7 +187,9 @@ fn render_setup_plan(plan: &SetupPlan) -> String {
     if plan.mode == SetupMode::DryRun && plan.ready {
         let _ = writeln!(
             output,
-            "\nNo files changed. Re-run this exact command with `--apply` after reviewing the plan."
+            "\nPlan SHA-256: {}\nNo files changed. Re-run this exact command with `--apply --plan-sha256 {}` after reviewing the plan.",
+            terminal_safe_text(&plan.plan_sha256),
+            terminal_safe_text(&plan.plan_sha256),
         );
     } else if plan.changed {
         let _ = writeln!(output, "\nChanges completed.");
@@ -224,8 +240,8 @@ mod tests {
     use std::path::PathBuf;
 
     use heyfood_agent_setup::{
-        BinaryIdentity, HostSetupPlan, SetupMode, SetupOperation, SetupPlan, SetupScope,
-        SetupTarget, SkillPackageIdentity,
+        BinaryIdentity, HostSetupPlan, McpRegistrationPlan, SetupMode, SetupOperation, SetupPlan,
+        SetupScope, SetupTarget, SkillPackageIdentity,
     };
 
     use super::render_setup_plan;
@@ -250,6 +266,7 @@ mod tests {
                 sha256: "b".repeat(64),
                 files: 6,
             },
+            plan_sha256: "c".repeat(64),
             ready: false,
             changed: false,
             hosts: vec![HostSetupPlan {
@@ -260,6 +277,16 @@ mod tests {
                 compatibility: "compatible",
                 skill_path: PathBuf::from("/tmp/project/.agents/skills/heyfood"),
                 receipt_path: PathBuf::from("/tmp/receipt"),
+                mcp: McpRegistrationPlan {
+                    name: "heyfood",
+                    transport: "stdio",
+                    command: PathBuf::from("/tmp/heyfood"),
+                    arguments: vec!["mcp".to_owned(), "serve".to_owned()],
+                    environment: std::collections::BTreeMap::new(),
+                    environment_policy_sha256: "d".repeat(64),
+                    configuration_scope: "unsupported",
+                    action: "conflict",
+                },
                 action: "conflict",
                 conflicts: vec!["user-owned\u{1b}[31m files remain".to_owned()],
                 user_actions: vec!["resolve the conflict".to_owned()],

@@ -156,27 +156,27 @@ for target in \
   aarch64-unknown-linux-gnu \
   x86_64-apple-darwin \
   x86_64-unknown-linux-gnu; do
-  "$ROOT/scripts/release/package.sh" "$ROOT/install.sh" 0.5.0 "$target" "$distribution"
+  "$ROOT/scripts/release/package.sh" "$ROOT/install.sh" 0.6.0 "$target" "$distribution"
 done
-"$ROOT/scripts/release/checksums.sh" "$distribution" 0.5.0
-"$ROOT/scripts/release/verify-assets.sh" "$distribution" 0.5.0
+"$ROOT/scripts/release/checksums.sh" "$distribution" 0.6.0
+"$ROOT/scripts/release/verify-assets.sh" "$distribution" 0.6.0
 [[ "$(wc -l <"$distribution/SHA256SUMS" | tr -d '[:space:]')" -eq 4 ]] ||
   fail "the release manifest must bind exactly four archives"
 
-windows_asset="$distribution/heyfood-v0.5.0-x86_64-pc-windows-msvc.zip"
+windows_asset="$distribution/heyfood-v0.6.0-x86_64-pc-windows-msvc.zip"
 touch "$windows_asset"
-if "$ROOT/scripts/release/checksums.sh" "$distribution" 0.5.0 >/dev/null 2>&1; then
-  fail "checksum generation must reject a Windows v0.5.0 asset"
+if "$ROOT/scripts/release/checksums.sh" "$distribution" 0.6.0 >/dev/null 2>&1; then
+  fail "checksum generation must reject a Windows v0.6.0 asset"
 fi
-if "$ROOT/scripts/release/verify-assets.sh" "$distribution" 0.5.0 >/dev/null 2>&1; then
-  fail "complete-set verification must reject a Windows v0.5.0 asset"
+if "$ROOT/scripts/release/verify-assets.sh" "$distribution" 0.6.0 >/dev/null 2>&1; then
+  fail "complete-set verification must reject a Windows v0.6.0 asset"
 fi
 
-grep -Fq "Windows distribution is deferred to \`v0.5.1\`" "$ROOT/README.md" ||
+grep -Fq "Windows distribution remains deferred" "$ROOT/README.md" ||
   fail "README must state the Windows release boundary"
-grep -Fq "Windows distribution is deferred to \`v0.5.1\`" "$ROOT/docs/CAPABILITY_STATUS.md" ||
+grep -Fq "Windows distribution requires a separately qualified future release" "$ROOT/docs/CAPABILITY_STATUS.md" ||
   fail "capability status must state the Windows release boundary"
-grep -Fq "Windows distribution is deferred to \`v0.5.1\`" "$ROOT/docs/RELEASE_SIGNING.md" ||
+grep -Fq "Windows distribution is deferred to a separately qualified future release" "$ROOT/docs/RELEASE_SIGNING.md" ||
   fail "signing policy must state the Windows release boundary"
 jq -e '
   .distribution.release_targets == [
@@ -185,7 +185,7 @@ jq -e '
     "aarch64-unknown-linux-gnu",
     "x86_64-unknown-linux-gnu"
   ] and
-  .distribution.windows_distribution == "deferred_to_0.5.1" and
+  .distribution.windows_distribution == "deferred_to_future_release" and
   .distribution.ordinary_windows_ci_required == true and
   .explicit_non_gates == [
     "native_voice",
@@ -195,4 +195,4 @@ jq -e '
 ' "$ROOT/tests/showcase/core-release-matrix.v1.json" >/dev/null ||
   fail "the core matrix must preserve the bounded distribution and non-gates"
 
-printf 'release scope contract: four v0.5.0 archives; Windows CI retained\n'
+printf 'release scope contract: four v0.6.0 archives; Windows CI retained\n'

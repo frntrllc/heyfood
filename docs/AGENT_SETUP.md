@@ -21,22 +21,26 @@ Dry-run is the default and changes nothing:
 heyfood --json agent setup --target all --scope user --dry-run
 ```
 
-Apply the exact displayed plan:
+Apply the exact displayed plan digest:
 
 ```bash
-heyfood --json agent setup --target all --scope user --apply
+heyfood --json agent setup --target all --scope user --apply \
+  --plan-sha256 SHA256_FROM_DRY_RUN
 ```
 
 Project scope requires an explicit absolute Git worktree:
 
 ```bash
-heyfood --json agent setup --target codex --scope project \
+heyfood --json agent setup --target claude --scope project \
   --project-root /absolute/project --dry-run
 ```
 
-Project setup installs only the host’s scoped skill. Claude Code may still ask
-the user to trust that project. Setup does not answer or bypass host trust and
-permission prompts.
+Setup installs the scoped skill and registers
+`/absolute/verified/heyfood mcp serve` through the host's own MCP command.
+Claude Code may still ask the user to trust a project. Setup does not answer
+or bypass host trust and permission prompts. Codex project scope fails closed
+because the qualified Codex host has no project-scoped `mcp add`; Codex user
+scope remains supported.
 
 ## Update and uninstall
 
@@ -44,6 +48,9 @@ Re-running the same apply is idempotent. A binary or package upgrade reports a
 conflict until the user supplies `--replace`; replacement is accepted only
 when the installed files still match the prior receipt. Replace one host at a
 time so the prior installation remains recoverable.
+An exact receipt-bound pre-MCP skill is recognized as receipt schema v1: it
+can be uninstalled directly, or migrated with the same explicit single-host
+`--replace` sequence. Modified or unreceipted legacy files remain conflicts.
 
 Preview removal:
 
@@ -54,7 +61,8 @@ heyfood --json agent uninstall --target all --scope user --dry-run
 Then apply:
 
 ```bash
-heyfood --json agent uninstall --target all --scope user --apply
+heyfood --json agent uninstall --target all --scope user --apply \
+  --plan-sha256 SHA256_FROM_DRY_RUN
 ```
 
 Uninstall removes only an exact receipt-bound installation. Modified files,
@@ -68,7 +76,8 @@ configuration are preserved and reported as conflicts.
 - The skill never teaches an agent to drive the TUI or invoke human-only
   mutations.
 - Setup never stores credentials or adds permissions.
+- The MCP entry contains the exact absolute heyfood path, `mcp serve`
+  arguments, and an empty environment. Startup rejects every inherited
+  `HEYFOOD_*` value before credentials, network, or protocol stdout.
 - Health, native voice, Windows distribution, and agent mutations remain
   deferred unless the exact installed manifest says otherwise.
-- MCP configuration is not installed until the separately qualified read-only
-  MCP phase is active.

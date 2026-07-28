@@ -27,6 +27,7 @@ heyfood-agent-setup = { version = "=0.6.0", path = "../heyfood-agent-setup" }
 heyfood-application = { version = "=0.6.0", path = "../heyfood-application" }
 heyfood-cli = { version = "=0.6.0", path = "../heyfood-cli" }
 heyfood-core = { version = "=0.6.0", path = "../heyfood-core" }
+heyfood-mcp = { version = "=0.6.0", path = "../heyfood-mcp" }
 heyfood-platform = { version = "=0.6.0", path = "../heyfood-platform" }
 heyfood-tui = { version = "=0.6.0", path = "../heyfood-tui" }
 heyfood-voice = { version = "=0.6.0", path = "../heyfood-voice" }

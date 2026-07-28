@@ -1,7 +1,9 @@
 # heyfood agent-native interface and distribution plan
 
-**Status:** Draft v3 — planning authority only; implementation and public
-support claims require the phase gates and independent reviews below
+**Status:** Draft v4 — Phases 0 and 1 are closed; the `v0.6.0` candidate
+implements Phases 2 and 3 and remains gated on the bounded Phase 5
+installed-artifact and independent-review requirements below. Phase 4
+mutations are neither implemented nor authorized.
 **Baseline:** `frntrllc/heyfood` `main` at
 `d68091a9cf6341c2c9120ba9251a6e0dd79a9616`
 **Companion contracts:** `docs/CLI_CONTRACT.md`,
@@ -12,6 +14,12 @@ support claims require the phase gates and independent reviews below
 coding agents such as Codex or Claude Code acting under those people's control
 **Release boundary:** post-`v0.5.0`; this plan does not change the supported
 `v0.5.0` platform or capability contract
+
+**v0.6.0 release slice:** embedded self-description, receipt-bound Codex and
+Claude skill/MCP setup, and exactly six read/discovery MCP tools. The absence
+of every Phase 4 mutation tool is a required passing condition. A later
+mutation release requires separate authorization, implementation, evidence,
+and review; it is not a blocker for the read-only release slice.
 
 ## Executive decision
 
@@ -824,8 +832,10 @@ Phase 1 may ship as self-description without claiming Codex/Claude integration.
 Deliverables:
 
 1. Add the canonical heyfood `SKILL.md` and progressive-disclosure references.
-2. Build private Codex and Claude candidate plugin/skill packages generated
-   from the canonical source.
+2. Build Codex and Claude candidate skill packages generated from the
+   canonical source. The supported `v0.6.0` path is binary-embedded,
+   receipt-bound setup through each host's own configuration commands; a
+   marketplace publication is not required or claimed.
 3. Add `heyfood agent setup` dry-run/apply/uninstall with conflict-safe,
    receipt-bound host-owned operations and typed user-action handoffs.
 4. Add the frozen host/version setup matrix, host-specific setup
@@ -836,8 +846,9 @@ Deliverables:
    uncertain outcomes in clean host profiles. With MCP absent, test that the
    skill uses only `agent_safe` CLI routes and never invokes Grocery accept,
    meal log, Menu Watch mutation, or another human-only command.
-6. Produce signed or attested private candidate artifacts for Phase 5. Do not
-   publish to a marketplace, enable default setup, or make support claims.
+6. Produce signed or attested candidate artifacts for Phase 5. Do not publish
+   to a marketplace, enable setup by default, or make support claims before
+   the installed-artifact gate closes.
 
 Exit gate:
 
@@ -1026,10 +1037,11 @@ product must not claim “Codex support,” “Claude Code support,” or genera
 control until the corresponding installed-artifact matrix passes. After GO,
 rollout proceeds in this order:
 
-1. publish the exact reviewed skill/plugin packages through host-owned
-   channels;
-2. verify marketplace/install provenance and public bytes;
-3. enable only the qualified setup targets and MCP tools;
+1. publish the exact reviewed executable archives containing the canonical
+   skill and setup implementation;
+2. verify public archive, embedded-skill, manifest, schema, and installer
+   bytes;
+3. enable only the qualified host-owned setup targets and MCP tools;
 4. update support/capability claims with exact host/version boundaries; and
 5. run clean public installation, discovery, read, cancellation, and eligible
    confirmation smoke tests.

@@ -5,8 +5,8 @@ use heyfood_application::{
     DeployedGroceryMutationRequest, GroceryDisplayItem, GroceryDisplayList,
     GroceryDisplayMemberFlag, GroceryDisplaySafety, GroceryDisplaySource, GroceryExclusions,
     GroceryExport, GroceryExportPort, GroceryMutationPort, GroceryReadPort, MenuWatchChangeEvent,
-    MenuWatchChangeSummary, MenuWatchList, MenuWatchPort, MenuWatchSnapshot, PortError,
-    RegistrationAvailability, StatusPort,
+    MenuWatchChangeSummary, MenuWatchList, MenuWatchPort, MenuWatchReadPort, MenuWatchSnapshot,
+    PortError, RegistrationAvailability, StatusPort,
 };
 use heyfood_core::{
     AddItemsRequestWire, ApplicationCapabilitiesWire, AuthorizationServerMetadataWire,
@@ -920,7 +920,7 @@ impl StatusPort for HttpService {
     }
 }
 
-impl MenuWatchPort for HttpService {
+impl MenuWatchReadPort for HttpService {
     fn list(
         &self,
         credentials: SessionCredentials,
@@ -933,7 +933,9 @@ impl MenuWatchPort for HttpService {
                 .map(menu_watch_list_from_wire)
         })
     }
+}
 
+impl MenuWatchPort for HttpService {
     fn create(
         &self,
         credentials: SessionCredentials,

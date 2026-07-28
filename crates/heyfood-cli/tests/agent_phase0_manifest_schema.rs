@@ -89,6 +89,9 @@ fn runtime_manifest_validates_and_exactly_matches_active_command_authority() {
 
     let mut active_paths = BTreeSet::new();
     visible_command_paths(&CommandLine::command_tree(), "", &mut active_paths);
+    // `mcp` is a structural Clap grouping with no executable default; the
+    // manifest inventories the callable `mcp serve` surface.
+    active_paths.remove("mcp");
     let manifest_paths = manifest["commands"]
         .as_array()
         .expect("manifest commands")
@@ -672,7 +675,7 @@ fn golden_manifest_contains_every_required_nullable_and_surface_field() {
         assert_required_object(&schema, "/$defs/command/required", command);
     }
 
-    assert_eq!(golden["automation_surfaces"]["mcp_stdio"], "deferred");
+    assert_eq!(golden["automation_surfaces"]["mcp_stdio"], "active");
     assert_eq!(
         golden["automation_surfaces"]["tui_automation"],
         "unsupported"

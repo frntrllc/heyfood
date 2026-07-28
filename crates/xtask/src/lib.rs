@@ -2901,6 +2901,14 @@ fn expected_workspace_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static
             BTreeSet::from(["heyfood-platform", "heyfood-windows-file"]),
         ),
         (
+            "heyfood-mcp",
+            BTreeSet::from([
+                "heyfood-agent-contract",
+                "heyfood-application",
+                "heyfood-core",
+            ]),
+        ),
+        (
             "heyfood-platform",
             BTreeSet::from([
                 "heyfood-application",
@@ -2935,6 +2943,7 @@ fn expected_workspace_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static
                 "heyfood-application",
                 "heyfood-cli",
                 "heyfood-core",
+                "heyfood-mcp",
                 "heyfood-platform",
                 "heyfood-tui",
                 "heyfood-voice",

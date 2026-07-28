@@ -188,7 +188,9 @@ fn inventory_covers_the_exact_clap_command_tree() {
 
     let mut clap_paths = BTreeSet::new();
     command_paths(&CommandLine::command_tree(), "", &mut clap_paths);
-    clap_paths.retain(|path| path != "agent" && !path.starts_with("agent "));
+    clap_paths.retain(|path| {
+        path != "agent" && !path.starts_with("agent ") && path != "mcp" && !path.starts_with("mcp ")
+    });
 
     assert_eq!(
         inventory_paths, clap_paths,
@@ -505,7 +507,7 @@ fn deferred_and_hidden_topology_is_never_agent_safe() {
 }
 
 #[test]
-fn phase2_adds_only_bounded_agent_setup_without_mcp() {
+fn phase3_adds_only_the_bounded_mcp_serve_entrypoint() {
     let command = CommandLine::command_tree();
     let agent = command
         .find_subcommand("agent")
@@ -524,5 +526,11 @@ fn phase2_adds_only_bounded_agent_setup_without_mcp() {
             "uninstall"
         ])
     );
-    assert!(command.find_subcommand("mcp").is_none());
+    let mcp = command.find_subcommand("mcp").expect("Phase 3 MCP command");
+    assert_eq!(
+        mcp.get_subcommands()
+            .map(clap::Command::get_name)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["serve"])
+    );
 }

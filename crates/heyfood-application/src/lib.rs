@@ -33,7 +33,8 @@ pub use health::{
 pub use household_menu::render_household_menu;
 pub use menu_watch::{
     CreateMenuWatch, CreateMenuWatchRequest, ListMenuWatches, MenuWatchChangeEvent,
-    MenuWatchChangeSummary, MenuWatchList, MenuWatchPort, MenuWatchSnapshot, RemoveMenuWatch,
+    MenuWatchChangeSummary, MenuWatchList, MenuWatchPort, MenuWatchReadPort, MenuWatchSnapshot,
+    RemoveMenuWatch,
 };
 pub use one_shot_turn::{
     MAX_ONE_SHOT_EVENTS, MAX_ONE_SHOT_STREAM_BYTES, OneShotTurnResult, agent_result_text,

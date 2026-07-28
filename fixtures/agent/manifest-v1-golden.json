@@ -1,6 +1,6 @@
 {
   "automation_surfaces": {
-    "mcp_stdio": "deferred",
+    "mcp_stdio": "active",
     "one_shot_json": "active",
     "tui_automation": "unsupported"
   },
@@ -38,10 +38,10 @@
       "summary": "Human Menu Watch management is active; agent access follows per-command audience."
     },
     {
-      "contract_version": null,
+      "contract_version": "v1",
       "id": "agent-mcp",
-      "status": "deferred",
-      "summary": "The local typed MCP server is not active in this phase."
+      "status": "active",
+      "summary": "Six bounded read/discovery tools are available over local stdio with native account credentials."
     },
     {
       "contract_version": null,
@@ -81,7 +81,7 @@
       "operation_class": "local_read",
       "output_family": "heyfood_agent_manifest_v1",
       "output_schema_id": "https://hey.food/schemas/v1/heyfood-agent-manifest.schema.json",
-      "output_schema_sha256": "2d078de78da2606f20c2a1a48188565efe28dcaec6c796f5cea8c11a12e38d80",
+      "output_schema_sha256": "056011fb36521e89fae5540eda25c8e895df8a0f6e104df3a842821f3c672839",
       "path": "agent",
       "product_state_mutation": false,
       "purpose": "Describe the exact installed agent contract.",
@@ -108,7 +108,7 @@
       "operation_class": "local_read",
       "output_family": "heyfood_agent_manifest_v1",
       "output_schema_id": "https://hey.food/schemas/v1/heyfood-agent-manifest.schema.json",
-      "output_schema_sha256": "2d078de78da2606f20c2a1a48188565efe28dcaec6c796f5cea8c11a12e38d80",
+      "output_schema_sha256": "056011fb36521e89fae5540eda25c8e895df8a0f6e104df3a842821f3c672839",
       "path": "agent describe",
       "product_state_mutation": false,
       "purpose": "Describe the exact installed agent contract.",
@@ -218,10 +218,10 @@
       "operation_class": "mutation",
       "output_family": "agent_setup_plan_v1",
       "output_schema_id": "https://hey.food/schemas/v1/heyfood-agent-setup-plan.schema.json",
-      "output_schema_sha256": "d2ecce6c1631adc5fe4ba7d42e4c4d9336e4cfcd905a4001b9592fa717b6401f",
+      "output_schema_sha256": "cf3c6c65652b3da29f87627e2abe74701a7b11721e57c087385420683329813e",
       "path": "agent setup",
       "product_state_mutation": false,
-      "purpose": "Plan or install the canonical heyfood Agent Skill.",
+      "purpose": "Plan or install the canonical heyfood Agent Skill and read-only MCP registration.",
       "reconciliation_command": "heyfood agent setup --target TARGET --scope SCOPE --dry-run",
       "required_scopes": [],
       "retry_class": "no_blind_retry",
@@ -245,13 +245,40 @@
       "operation_class": "mutation",
       "output_family": "agent_setup_plan_v1",
       "output_schema_id": "https://hey.food/schemas/v1/heyfood-agent-setup-plan.schema.json",
-      "output_schema_sha256": "d2ecce6c1631adc5fe4ba7d42e4c4d9336e4cfcd905a4001b9592fa717b6401f",
+      "output_schema_sha256": "cf3c6c65652b3da29f87627e2abe74701a7b11721e57c087385420683329813e",
       "path": "agent uninstall",
       "product_state_mutation": false,
-      "purpose": "Plan or remove an exact receipt-bound heyfood Agent Skill.",
+      "purpose": "Plan or remove an exact receipt-bound heyfood Agent Skill and MCP registration.",
       "reconciliation_command": "heyfood agent uninstall --target TARGET --scope SCOPE --dry-run",
       "required_scopes": [],
       "retry_class": "no_blind_retry",
+      "status": "active"
+    },
+    {
+      "audience": "agent_safe",
+      "authorization_upgrade_command": null,
+      "browser_handoff": "none",
+      "credential_side_effect_possible": true,
+      "error_schema_id": "https://hey.food/schemas/v1/heyfood-cli-error.schema.json",
+      "error_schema_sha256": "18e5bc9fdafccd06e5a0e5bd185ba213488ef5f11fbfed51f06646992254cc8e",
+      "examples": [
+        "/absolute/path/to/heyfood mcp serve"
+      ],
+      "exit_behavior": "long_lived_json_rpc_frames",
+      "human_confirmation": "none",
+      "input_channel": "mcp_stdio",
+      "interactivity": "none",
+      "network": true,
+      "operation_class": "remote_read",
+      "output_family": "mcp_json_rpc",
+      "output_schema_id": null,
+      "output_schema_sha256": null,
+      "path": "mcp serve",
+      "product_state_mutation": false,
+      "purpose": "Serve six bounded read/discovery tools over local MCP stdio.",
+      "reconciliation_command": null,
+      "required_scopes": [],
+      "retry_class": "tool_specific",
       "status": "active"
     },
     {

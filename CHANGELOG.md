@@ -4,6 +4,19 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
+## 0.6.0 - 2026-07-27
+
+- Adds offline, exact-artifact agent discovery through `heyfood agent
+  describe`, `guide`, `schema`, and `doctor`.
+- Adds canonical Codex and Claude Code skill packages plus digest-bound,
+  receipt-bound `agent setup` and `agent uninstall` workflows.
+- Adds `heyfood mcp serve` with exactly six bounded read/discovery tools for
+  manifest, status, capabilities, Grocery list and exclusions, and Menu Watch
+  reads.
+- Keeps every agent mutation, arbitrary shell/file/raw-API access, TUI
+  automation, Health, default-build native voice, and Windows distribution
+  outside the supported release contract.
+
 ## 0.5.0 - 2026-07-25
 
 - Defines the recovery-release distribution as exactly four archives: macOS

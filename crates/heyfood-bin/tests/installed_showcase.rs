@@ -2691,7 +2691,7 @@ fn installed_harness_inventory_matches_core_release_contract() {
     ))
     .expect("decode installed core release contract");
     assert_eq!(contract["schema_version"], 1);
-    assert_eq!(contract["release"], "0.5.0");
+    assert_eq!(contract["release"], "0.6.0");
     assert_eq!(
         contract["distribution"]["release_targets"],
         json!([
@@ -2703,7 +2703,7 @@ fn installed_harness_inventory_matches_core_release_contract() {
     );
     assert_eq!(
         contract["distribution"]["windows_distribution"],
-        "deferred_to_0.5.1"
+        "deferred_to_future_release"
     );
     assert_eq!(
         contract["distribution"]["ordinary_windows_ci_required"],

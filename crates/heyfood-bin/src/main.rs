@@ -14,6 +14,8 @@ use heyfood_agent_runtime::{
     StagedReauthorization,
 };
 #[cfg(feature = "native-credentials")]
+use heyfood_application::EnsureSessionError;
+#[cfg(feature = "native-credentials")]
 use heyfood_application::{BoxFuture, CredentialCommit, CredentialPort, PortError};
 use heyfood_application::{BrowserPort, EnsureSession, EnsureSessionOutcome};
 use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
@@ -23,6 +25,8 @@ use heyfood_core::{
 };
 #[cfg(feature = "native-credentials")]
 use heyfood_core::{CommitId, SessionCredentials};
+#[cfg(feature = "native-credentials")]
+use heyfood_mcp::{HeyfoodMcpServer, McpSessionContext, McpSessionProvider};
 #[cfg(feature = "native-credentials")]
 use heyfood_platform::AuthorizationSessionStore;
 #[cfg(feature = "native-credentials")]
@@ -240,6 +244,18 @@ async fn main() -> ExitCode {
     if let Some(outcome) = heyfood_platform::run_credential_broker_if_requested() {
         return outcome;
     }
+    #[cfg(feature = "native-credentials")]
+    if raw_arguments_request_mcp()
+        && let Some(name) = inherited_heyfood_environment()
+    {
+        // This must precede every debug/test credential hook as well as normal
+        // CLI composition so *all* MCP builds reject inherited overrides
+        // before credential state can be touched.
+        eprintln!(
+            "heyfood: MCP rejected inherited {name}; launch it with an empty HEYFOOD_* environment"
+        );
+        return ExitCode::FAILURE;
+    }
     #[cfg(all(debug_assertions, feature = "native-credentials"))]
     if std::env::var_os("HEYFOOD_TEST_DELETE_NATIVE_CREDENTIALS").as_deref()
         == Some(std::ffi::OsStr::new("1"))
@@ -257,11 +273,23 @@ async fn main() -> ExitCode {
     let machine = cli.machine_output();
     let no_input = cli.no_input;
     let output_mode = cli.output_mode(io::stdout().is_terminal());
+    #[cfg(feature = "native-credentials")]
+    let mcp_modifier_used =
+        cli.json || cli.raw || cli.no_color || cli.no_banner || cli.verbose || cli.no_input;
     if cli.raw {
         eprintln!("--raw is deprecated; use --json.");
     }
     match cli.command {
         Some(Command::Agent { command }) => heyfood_bin::agent_discovery::run(command, machine),
+        #[cfg(feature = "native-credentials")]
+        Some(Command::Mcp {
+            command: heyfood_cli::McpCommand::Serve,
+        }) => mcp_serve(mcp_modifier_used).await,
+        #[cfg(not(feature = "native-credentials"))]
+        Some(Command::Mcp { .. }) => {
+            eprintln!("heyfood: MCP requires the native credential feature");
+            ExitCode::FAILURE
+        }
         Some(Command::Completion { shell }) => {
             if machine {
                 return failure(
@@ -286,6 +314,153 @@ async fn main() -> ExitCode {
         Some(_) => pending_command(machine),
         None => bare(machine).await,
     }
+}
+
+#[cfg(feature = "native-credentials")]
+fn raw_arguments_request_mcp() -> bool {
+    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    arguments.windows(2).any(|pair| {
+        pair[0] == std::ffi::OsStr::new("mcp") && pair[1] == std::ffi::OsStr::new("serve")
+    })
+}
+
+#[cfg(feature = "native-credentials")]
+struct NativeMcpSessions {
+    state: tokio::sync::Mutex<Option<NativeMcpSessionState>>,
+}
+
+#[cfg(feature = "native-credentials")]
+struct NativeMcpSessionState {
+    ensure_session: Arc<EnsureSession>,
+    snapshot: SessionSnapshot,
+    authorization_scope: String,
+}
+
+#[cfg(feature = "native-credentials")]
+impl McpSessionProvider for NativeMcpSessions {
+    fn current(
+        &self,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<McpSessionContext, PortError>> {
+        Box::pin(async move {
+            let mut guard = self.state.lock().await;
+            if guard.is_none() {
+                let prepared = prepare_mcp_session(cancellation.child_token())
+                    .await
+                    .map_err(mcp_prepare_error)?;
+                *guard = Some(NativeMcpSessionState {
+                    ensure_session: prepared.ensure_session,
+                    snapshot: prepared.snapshot,
+                    authorization_scope: prepared.authorization_scope,
+                });
+            }
+            let state = guard.as_mut().expect("MCP session was initialized");
+            let outcome = state
+                .ensure_session
+                .execute(state.snapshot.clone(), cancellation)
+                .await
+                .map_err(mcp_session_error)?;
+            let credentials = match outcome {
+                EnsureSessionOutcome::Current(credentials) => credentials,
+                EnsureSessionOutcome::Refreshed(credentials) => {
+                    state.snapshot.credentials = credentials.clone();
+                    state.snapshot.reconciliation_required = false;
+                    credentials
+                }
+                EnsureSessionOutcome::CancelledBeforeDispatch => {
+                    return Err(PortError::new(
+                        "mcp_session_cancelled_before_dispatch",
+                        "Session validation was cancelled before dispatch",
+                    ));
+                }
+            };
+            Ok(McpSessionContext::new(
+                credentials,
+                state.authorization_scope.clone(),
+            ))
+        })
+    }
+}
+
+#[cfg(feature = "native-credentials")]
+fn mcp_prepare_error(error: heyfood_bin::OneShotError) -> PortError {
+    if error.outcome_uncertain {
+        PortError::uncertain(error.code, error.message)
+    } else {
+        PortError::new(error.code, error.message)
+    }
+}
+
+#[cfg(feature = "native-credentials")]
+fn mcp_session_error(error: EnsureSessionError) -> PortError {
+    match error {
+        EnsureSessionError::Service(error) => error,
+        EnsureSessionError::ReconciliationRequired
+        | EnsureSessionError::ServiceReconciliationRequired(_)
+        | EnsureSessionError::CredentialReconciliationRequired(_)
+        | EnsureSessionError::ReconciliationMarkerWrite { .. } => PortError::uncertain(
+            "mcp_session_reconciliation_required",
+            "Session refresh has an unresolved outcome; stop and run `heyfood login` before retrying",
+        ),
+    }
+}
+
+#[cfg(feature = "native-credentials")]
+async fn mcp_serve(modifier_used: bool) -> ExitCode {
+    if modifier_used {
+        eprintln!(
+            "heyfood: `mcp serve` rejects human/one-shot output and input modifiers because stdout is reserved for MCP"
+        );
+        return ExitCode::FAILURE;
+    }
+    if let Some(name) = inherited_heyfood_environment() {
+        eprintln!(
+            "heyfood: MCP rejected inherited {name}; launch it with an empty HEYFOOD_* environment"
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let (service_url, policy) = match production_service_url() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!(
+                "heyfood: MCP startup failed [{}]: {}",
+                error.code,
+                terminal_safe_text(&error.message)
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let service = match HttpService::new(service_url, policy, HttpDeadlines::default()) {
+        Ok(service) => Arc::new(service),
+        Err(error) => {
+            eprintln!(
+                "heyfood: MCP startup failed [{}]: {}",
+                error.code,
+                terminal_safe_text(&error.message)
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let sessions = Arc::new(NativeMcpSessions {
+        state: tokio::sync::Mutex::new(None),
+    });
+    let server = HeyfoodMcpServer::new(service, sessions);
+    match heyfood_mcp::serve_stdio(server).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("heyfood: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(feature = "native-credentials")]
+fn inherited_heyfood_environment() -> Option<String> {
+    std::env::vars_os().find_map(|(name, _)| {
+        let name = name.to_string_lossy();
+        name.starts_with("HEYFOOD_").then(|| name.into_owned())
+    })
 }
 
 async fn chat(machine: bool) -> ExitCode {
@@ -607,6 +782,153 @@ struct PreparedNativeSession {
     ensure_session: Arc<EnsureSession>,
     snapshot: SessionSnapshot,
     authorization_scope: String,
+}
+
+#[cfg(feature = "native-credentials")]
+async fn prepare_mcp_session(
+    cancellation: CancellationToken,
+) -> Result<PreparedNativeSession, heyfood_bin::OneShotError> {
+    let paths =
+        NativePaths::discover_platform_default().map_err(heyfood_bin::OneShotError::from)?;
+    let auth_store =
+        NativeAuthStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?;
+    let credential_store = Arc::new(
+        CredentialBrokerStore::open(paths.config_dir(), Duration::from_secs(15))
+            .map_err(heyfood_bin::OneShotError::from)?,
+    );
+    auth_store
+        .finish_authorization_terminal_cleanup()
+        .map_err(heyfood_bin::OneShotError::from)?;
+    if auth_store
+        .pending_authorization_replacement()
+        .map_err(heyfood_bin::OneShotError::from)?
+        .is_some()
+    {
+        return Err(heyfood_bin::OneShotError::new(
+            "reauthorization_reconciliation_required",
+            "A staged login must be reconciled before MCP can start. Run `heyfood login`.",
+        ));
+    }
+    let mut auth = auth_store
+        .load_account_bound(credential_store.as_ref())
+        .map_err(heyfood_bin::OneShotError::from)?
+        .ok_or_else(|| {
+            heyfood_bin::OneShotError::new(
+                "login_required",
+                "No native hello.food account is connected. Run `heyfood login` first.",
+            )
+        })?;
+
+    let (service_url, policy) = production_service_url()?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |value| value.as_secs());
+    if auth.channel.expires_at_unix() <= i64::try_from(now).unwrap_or(i64::MAX) {
+        let refresh = auth_store
+            .begin_refresh()
+            .map_err(heyfood_bin::OneShotError::from)?;
+        auth = refresh
+            .load()
+            .map_err(heyfood_bin::OneShotError::from)?
+            .ok_or_else(|| {
+                heyfood_bin::OneShotError::new(
+                    "login_required",
+                    "No native hello.food account is connected. Run `heyfood login` first.",
+                )
+            })?;
+        if auth.channel.expires_at_unix() > i64::try_from(now).unwrap_or(i64::MAX) {
+            drop(refresh);
+        } else {
+            if cancellation.is_cancelled() {
+                return Err(heyfood_bin::OneShotError::new(
+                    "channel_refresh_cancelled_before_dispatch",
+                    "Channel refresh was cancelled before dispatch.",
+                ));
+            }
+            let client = RegistrationClient::new(service_url.clone(), policy)
+                .map_err(registration_to_one_shot)?;
+            refresh.mark_reconciliation_required().map_err(|_| {
+                uncertain_one_shot(
+                    "channel_refresh_reconciliation_write",
+                    "Channel refresh was not dispatched because its reconciliation marker could not be saved.",
+                )
+            })?;
+            auth.channel = match client.refresh_channel(&auth.channel).await {
+                Ok(channel) => channel,
+                Err(error) if error.outcome_uncertain => {
+                    return Err(registration_to_one_shot(error));
+                }
+                Err(error) => {
+                    refresh.clear_reconciliation_required().map_err(|_| {
+                        uncertain_one_shot(
+                            "channel_refresh_reconciliation_clear",
+                            "The channel refresh was rejected, but its reconciliation marker could not be cleared.",
+                        )
+                    })?;
+                    return Err(registration_to_one_shot(error));
+                }
+            };
+            if refresh.replace(&auth).is_err() {
+                return Err(uncertain_one_shot(
+                    "channel_refresh_persistence_outcome_uncertain",
+                    "The channel credential rotated, but it could not be saved. Stop and contact hello.food support; do not retry.",
+                ));
+            }
+        }
+    }
+
+    auth = auth_store
+        .load_account_bound(credential_store.as_ref())
+        .map_err(heyfood_bin::OneShotError::from)?
+        .ok_or_else(|| {
+            heyfood_bin::OneShotError::new(
+                "login_required",
+                "No native hello.food account is connected. Run `heyfood login` first.",
+            )
+        })?;
+    let credentials = auth.session.clone();
+    let authorization_scope = auth.channel.scope.clone();
+    let reconciliation_required = credential_store
+        .reconciliation_required()
+        .map_err(heyfood_bin::OneShotError::from)?;
+    let cli_auth = CliAuthContext::new(
+        auth.channel.device_id.clone(),
+        auth.channel.access_token.clone(),
+        None,
+    )
+    .map_err(heyfood_bin::OneShotError::from)?;
+    let service = Arc::new(
+        HttpService::new(service_url, policy, HttpDeadlines::default())
+            .map_err(heyfood_bin::OneShotError::from)?
+            .with_cli_auth(cli_auth),
+    );
+    let ensure_session = Arc::new(EnsureSession::new(
+        service.clone(),
+        credential_store,
+        Arc::new(NativeClock),
+    ));
+    Ok(PreparedNativeSession {
+        paths,
+        service,
+        ensure_session,
+        snapshot: SessionSnapshot {
+            credentials,
+            reconciliation_required,
+        },
+        authorization_scope,
+    })
+}
+
+#[cfg(feature = "native-credentials")]
+fn production_service_url() -> Result<(ServiceUrl, NetworkPolicy), heyfood_bin::OneShotError> {
+    let policy = NetworkPolicy::HTTPS_ONLY;
+    let url = ServiceUrl::parse("https://api.hello.food", policy).map_err(|_| {
+        heyfood_bin::OneShotError::new(
+            "mcp_service_origin",
+            "The compiled production service origin is invalid",
+        )
+    })?;
+    Ok((url, policy))
 }
 
 async fn prepare_native_session(

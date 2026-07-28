@@ -38,72 +38,69 @@ server, skill, instruction, or configuration was installed or modified.
 
 ## Frozen setup behavior
 
+The executable setup path and separately downloadable plugin packages are
+distinct mechanisms. `heyfood agent setup` installs the canonical six-file
+standalone skill and registers the local MCP server; it does not claim that a
+marketplace plugin was installed.
+
+Every apply is bound to the SHA-256 of a complete dry-run plan. Setup rechecks
+the plan after acquiring its owner-only lock and stops if any host, file,
+binary, registration, or receipt identity changed.
+
 ### Codex user scope
 
-1. Dry-run resolves the exact `codex` executable and verifies the compatible
-   version.
-2. Plugin distribution prefers a reviewed marketplace followed by
-   `codex plugin add heyfood@MARKETPLACE --json`.
-3. Local stdio MCP uses the host-owned command:
+1. Dry-run resolves the exact `codex` executable, verifies the qualified
+   version, inspects `codex mcp get heyfood --json`, and plans the standalone
+   skill at `~/.agents/skills/heyfood`.
+2. Apply installs that skill and invokes the host-owned command:
 
    ```text
    codex mcp add heyfood -- /absolute/verified/path/heyfood mcp serve
    ```
 
-4. Setup verifies the resulting entry with `codex mcp get heyfood` only after
-   the user authorized apply.
-5. Uninstall uses `codex mcp remove heyfood` and
-   `codex plugin remove heyfood@MARKETPLACE --json`, conditional on the exact
-   installation receipt.
-
-The configured MCP command must be the verified absolute executable path.
-Bare `heyfood` resolution through `PATH` is prohibited.
-The host entry supplies no environment variables. MCP startup enforces the
-frozen environment policy before credential access; a setup receipt records
-its digest and the exact empty host environment.
+3. Setup verifies the resulting JSON entry: stdio transport, the exact
+   executable, exact `mcp serve` arguments, and no environment entries.
+4. Receipt-bound uninstall invokes `codex mcp remove heyfood`, verifies
+   absence, and removes only the exact installed skill.
 
 ### Codex project scope
 
-Repository guidance and skill/plugin marketplace source may live under the
-explicit project root. Project MCP configuration requires the trusted
-project's `.codex/config.toml`; the observed `codex mcp add` command has no
-project-scope flag and manages user configuration.
-
-Therefore setup does not pretend a host-owned project-MCP command exists. It
-must either:
-
-- return `user_action_required` with an exact reviewed snippet; or
-- after separate implementation review, use the plan's schema-aware,
-  lock-protected, atomic, receipt-bound shared-file adapter.
-
-It never silently appends to project configuration.
+The observed Codex `mcp add` command has no project-scope flag. Project scope
+therefore fails closed with a concrete conflict and directs the user to the
+qualified user-scope setup. Setup never edits `.codex/config.toml` itself and
+never represents a user-level registration as project-local.
 
 ### Claude user scope
 
-1. Dry-run resolves the exact `claude` executable and compatible version.
-2. Plugin distribution uses a reviewed marketplace and
-   `claude plugin install heyfood@MARKETPLACE --scope user`.
-3. MCP uses:
+1. Dry-run verifies the exact host and inspects the named entry.
+2. Apply installs `~/.claude/skills/heyfood` and invokes:
 
    ```text
    claude mcp add --transport stdio --scope user heyfood -- /absolute/verified/path/heyfood mcp serve
    ```
 
-4. Uninstall uses matching `--scope user` plugin and MCP removal.
-
-The Claude entry also supplies no environment variables and is bound to the
-same frozen MCP environment-policy digest.
+3. Setup verifies the reported user scope, stdio transport, exact command and
+   arguments, and empty environment.
+4. Uninstall uses `claude mcp remove --scope user heyfood`.
 
 ### Claude project scope
 
-Project setup requires an explicit existing absolute project root. Plugin
-installation uses `--scope project`; MCP uses `--scope project` and therefore
-lets Claude own `.claude/settings.json` and `.mcp.json` changes. Claude prompts
-before using project-scoped MCP servers. Setup reports
-`user_action_required` until that trust decision is completed.
+Project setup requires an explicit, absolute, existing Git worktree. The skill
+is installed at `.claude/skills/heyfood`; MCP registration is delegated to:
 
-Local scope remains user-private to one project and is never conflated with
-project/team scope.
+```text
+claude mcp add --transport stdio --scope project heyfood -- /absolute/verified/path/heyfood mcp serve
+```
+
+Claude owns its project configuration and normal trust prompt. The plan
+reports that trust decision as a user action; setup does not click or bypass
+it.
+
+For all scopes, the configured command is the verified absolute executable,
+not a bare `heyfood` resolved through `PATH`. Registration supplies no
+environment entries. MCP startup independently rejects every inherited
+`HEYFOOD_*` value before credential access, network dispatch, or protocol
+stdout.
 
 ## Receipts and rollback
 
@@ -111,16 +108,17 @@ Every applied action records:
 
 - target host, exact version, scope, and project root when applicable;
 - absolute host and heyfood executable identities;
-- marketplace/plugin identity and digest;
-- MCP name, transport, exact command/arguments, and configuration owner;
+- canonical standalone-skill package identity and every installed file digest;
+- MCP name, stdio transport, exact command/arguments, and configuration scope;
 - exact empty MCP environment plus the frozen environment-policy digest;
-- expected prior state/digest;
-- actions completed and outstanding user handoffs; and
-- uninstall/rollback operation.
+- and the exact receipt-bound skill destination.
 
 Receipts contain no credentials and use owner-only storage. Replacement and
 uninstall require an exact matching prior receipt. If the current state has
-changed, setup preserves it and reports a conflict.
+changed, setup preserves it and reports a conflict. Multi-host uninstall
+stages all receipt and skill removals before host changes; failures restore
+the staged set or return an explicit uncertain outcome. Link/reparse
+substitution is blocked by anchored no-follow directory handles.
 
 ## Unsupported combinations
 
