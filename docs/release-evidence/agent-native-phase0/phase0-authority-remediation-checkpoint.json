@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "status": "ready_for_third_independent_review_not_phase_exit",
+  "previous_review": {
+    "product_commit": "c26c196fd9c685761d7ab0209be6ad17a94f163f",
+    "product_tree": "4834ce6c471b8963d0af52a41eb7798320691f65",
+    "evidence_head": "cf5d8c6eec1a5f1873b696a795c312b3cf2c5a60",
+    "checkpoint_sha256": "6dbe6fea0fd6f7ff0467446b45277df3d9884fa9299dc1e76e80d38e3a0a5dbf",
+    "verdict": "request_changes",
+    "record": "docs/release-evidence/agent-native-phase0/phase0-review-c26c196.json",
+    "p0": 0,
+    "p1": 2,
+    "p2": 0
+  },
+  "product": {
+    "commit": "f3ddd84d3a65ccd2b87015110bbb33fab3f753b8",
+    "tree": "f452f1e7f26c59bd08d07f4d61e1842cb8ca4d6a",
+    "baseline": "d68091a9cf6341c2c9120ba9251a6e0dd79a9616"
+  },
+  "remediation": [
+    {
+      "finding": "AN-P0-R2-01-command-route-authority",
+      "evidence": [
+        "docs/release-evidence/agent-native-phase0/command-authority-inventory.json",
+        "docs/release-evidence/agent-native-phase0/dg-r2-dispatch-inventory.json",
+        "crates/heyfood-cli/tests/agent_phase0_inventory.rs",
+        "crates/heyfood-agent-runtime/tests/agent_phase0_dg_r2_inventory.rs"
+      ],
+      "result": "Conversation authority now names POST /v1/agent/converse. Endpoint-distinct Grocery list/exclusion reads and add/remove/state/exclusion prepares have exact policies. Every exact command POST/PUT/DELETE joins to one DG-R2 row whose source anchor is verified against the runtime."
+    },
+    {
+      "finding": "AN-P0-R2-02-approval-wire-completeness",
+      "evidence": [
+        "docs/AGENT_APPROVAL_CONTRACT.md",
+        "schemas/v1/agent-proposal-presentation.schema.json",
+        "schemas/v1/agent-approval-protocol.schema.json",
+        "fixtures/agent/approval-protocol-v1-lifecycle.json",
+        "crates/heyfood-cli/tests/agent_phase0_manifest_schema.rs"
+      ],
+      "result": "Thirteen strict v1 envelopes now cover session, proposal, human view/decision, observation, commit, cancel, receipts, and typed errors. Separate strict schemas freeze session, bound-observation, bound-mutation, and browser-decision headers. Fixed origins, cookies, CSRF, nonces, idempotency, conflict/replay, uncertain-outcome, and no-blind-retry rules are normative and lifecycle/negative fixtures pass the local full-schema conformance validator."
+    }
+  ],
+  "local_verification": [
+    {
+      "command": "cargo test --workspace --all-features --locked",
+      "status": "passed"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+      "status": "passed"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "status": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "status": "passed"
+    },
+    {
+      "command": "jq empty on all Phase 0 evidence, v1 schema, and agent fixture JSON",
+      "status": "passed"
+    }
+  ],
+  "product_tree_evidence_digests_sha256": {
+    "phase0_inventory": "fd1403d244fd3d4c090944c6c4e0743e5c20eaebbacdd176dae8246f2abdd7bd",
+    "command_authority_inventory": "c71861a6c1e3306327830ab65001958febb6d2dadb64ad7ccd0b601960129219",
+    "dg_r2_dispatch_inventory": "3854eac006152fdad0360ad18ac1a5707941a3eaf98bc94540263975c87b7f2f",
+    "approval_contract": "bfbb49d8e5c659a8a6eddd38946a79164825bd573ac5805e53f094fee41606e3",
+    "approval_protocol_schema": "800f1ee096dbb11ad867a7e1697a4c79b7a0626fc91b08768c9889168a369939",
+    "proposal_presentation_schema": "22f11ca3ff14032316cb0bc087e0cc0ab233e5103ac46780796a7fde3c6925d4",
+    "approval_lifecycle_fixture": "84b0f494ceb7f3416553102c5f12a8f26bea3f0c0e14dc9ea331391e9b724756",
+    "command_inventory_tests": "d2ed3e5f62269a20dd65c6ae05ed2c155f516ff068d3c34745ebfe6f8cacf4c3",
+    "approval_protocol_tests": "b8e9bd4e5600923f209c7bac72fb21098585bd682823b41fd2b2f4807258a9e1",
+    "previous_review_record": "b53a44c8f2136de975bc3d687529538c3355ac78b103265c7d10242c390b0334"
+  },
+  "remaining_external_gates": [
+    "Hosted ordinary CI must pass at the exact product commit.",
+    "Exact installed-archive controlling-terminal qualification and the Windows CONIN$/CONOUT$ path remain pending.",
+    "Independent exact-SHA Rust architecture and agent/security review must close both remaining P1 findings."
+  ],
+  "public_agent_surface_enabled": false,
+  "phase_exit_authorized": false,
+  "phase1_authorized": false
+}
