@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod capability;
 pub mod ensure_session;
 pub mod grocery;
 pub mod health;
@@ -12,6 +13,9 @@ pub mod run_turn;
 pub mod state_writer;
 pub mod supervisor;
 
+pub use capability::{
+    CapabilityPort, CapabilitySnapshot, DiscoverCapabilities, RegistrationAvailability,
+};
 pub use ensure_session::{EnsureSession, EnsureSessionError, EnsureSessionOutcome};
 pub use grocery::{
     GroceryCacheKey, GroceryItemReferenceCache, GroceryListSnapshot, GroceryMutationIntent,

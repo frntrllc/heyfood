@@ -60,7 +60,7 @@
         "GroceryPort has no production HttpService adapter and current one-shot/panel orchestration calls HttpService directly.",
         "The deployed active-list wire lacks the context fingerprint required by the provisional GroceryListSnapshot, so the read and mutation-authority seams must be separated or reconciled without inventing authority.",
         "Menu Watch has no application port/controller.",
-        "Capability/status has no application port/controller.",
+        "Capability discovery is extracted through CapabilityPort and DiscoverCapabilities; composed status scope, profile, and voice readiness orchestration remains in heyfood-bin.",
         "Household context and presentation orchestration remain in heyfood-bin."
       ]
     },

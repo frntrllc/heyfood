@@ -1,6 +1,6 @@
 //! Contract-derived Phase 2 REST operations.
 
-use heyfood_application::PortError;
+use heyfood_application::{BoxFuture, CapabilityPort, CapabilitySnapshot, PortError};
 use heyfood_core::{
     AddItemsRequestWire, ApplicationCapabilitiesWire, AuthorizationServerMetadataWire,
     ExclusionListResponseWire, ExclusionMutationRequestWire, GroceryEntityId, GroceryListWire,
@@ -361,14 +361,14 @@ impl HttpService {
         Ok(())
     }
 
-    pub fn require_grocery_v1(capabilities: &ApplicationCapabilitiesWire) -> Result<(), PortError> {
-        match capabilities.application_version("grocery") {
-            Some("v1") => Ok(()),
-            None => Err(PortError::new(
+    pub fn require_grocery_v1(capabilities: &CapabilitySnapshot) -> Result<(), PortError> {
+        match &capabilities.grocery {
+            heyfood_core::GroceryCapability::V1 => Ok(()),
+            heyfood_core::GroceryCapability::Unavailable => Err(PortError::new(
                 "grocery_capability_unavailable",
                 "Grocery is not advertised by this deployment",
             )),
-            Some(_) => Err(PortError::new(
+            heyfood_core::GroceryCapability::UnsupportedVersion(_) => Err(PortError::new(
                 "grocery_capability_unsupported",
                 "Grocery advertises an unsupported contract version",
             )),
@@ -377,7 +377,7 @@ impl HttpService {
 
     pub async fn grocery_list(
         &self,
-        capabilities: &ApplicationCapabilitiesWire,
+        capabilities: &CapabilitySnapshot,
         credentials: &SessionCredentials,
         operation_id: OperationId,
         cancellation: CancellationToken,
@@ -397,7 +397,7 @@ impl HttpService {
 
     pub async fn grocery_prepare_add(
         &self,
-        capabilities: &ApplicationCapabilitiesWire,
+        capabilities: &CapabilitySnapshot,
         credentials: &SessionCredentials,
         operation_id: OperationId,
         request: &AddItemsRequestWire,
@@ -416,7 +416,7 @@ impl HttpService {
 
     pub async fn grocery_prepare_remove(
         &self,
-        capabilities: &ApplicationCapabilitiesWire,
+        capabilities: &CapabilitySnapshot,
         credentials: &SessionCredentials,
         operation_id: OperationId,
         request: &RemoveItemsRequestWire,
@@ -435,7 +435,7 @@ impl HttpService {
 
     pub async fn grocery_prepare_state(
         &self,
-        capabilities: &ApplicationCapabilitiesWire,
+        capabilities: &CapabilitySnapshot,
         credentials: &SessionCredentials,
         operation_id: OperationId,
         request: &UpdateItemStateRequestWire,
@@ -454,7 +454,7 @@ impl HttpService {
 
     pub async fn grocery_exclusions(
         &self,
-        capabilities: &ApplicationCapabilitiesWire,
+        capabilities: &CapabilitySnapshot,
         credentials: &SessionCredentials,
         operation_id: OperationId,
         cancellation: CancellationToken,
@@ -474,7 +474,7 @@ impl HttpService {
 
     pub async fn grocery_prepare_add_exclusion(
         &self,
-        capabilities: &ApplicationCapabilitiesWire,
+        capabilities: &CapabilitySnapshot,
         credentials: &SessionCredentials,
         operation_id: OperationId,
         request: &ExclusionMutationRequestWire,
@@ -493,7 +493,7 @@ impl HttpService {
 
     pub async fn grocery_prepare_remove_exclusion(
         &self,
-        capabilities: &ApplicationCapabilitiesWire,
+        capabilities: &CapabilitySnapshot,
         credentials: &SessionCredentials,
         operation_id: OperationId,
         request: &ExclusionMutationRequestWire,
@@ -512,7 +512,7 @@ impl HttpService {
 
     pub async fn grocery_confirm(
         &self,
-        capabilities: &ApplicationCapabilitiesWire,
+        capabilities: &CapabilitySnapshot,
         credentials: &SessionCredentials,
         operation_id: OperationId,
         request: &GroceryMutationConfirmRequestWire,
@@ -531,7 +531,7 @@ impl HttpService {
 
     pub async fn grocery_export(
         &self,
-        capabilities: &ApplicationCapabilitiesWire,
+        capabilities: &CapabilitySnapshot,
         credentials: &SessionCredentials,
         operation_id: OperationId,
         list_id: GroceryEntityId,
@@ -682,7 +682,7 @@ impl HttpService {
 
     async fn grocery_mutation<B, T>(
         &self,
-        capabilities: &ApplicationCapabilitiesWire,
+        capabilities: &CapabilitySnapshot,
         credentials: &SessionCredentials,
         operation_id: OperationId,
         path: &str,
@@ -895,6 +895,19 @@ impl HttpService {
                 "response_json",
                 "service response is invalid JSON",
             )
+        })
+    }
+}
+
+impl CapabilityPort for HttpService {
+    fn discover(
+        &self,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<CapabilitySnapshot, PortError>> {
+        Box::pin(async move {
+            self.discover_capabilities(cancellation)
+                .await
+                .map(CapabilitySnapshot::from_wire)
         })
     }
 }

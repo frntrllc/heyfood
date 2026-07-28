@@ -1,13 +1,14 @@
 use std::time::Duration;
 
 use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
+use heyfood_application::CapabilitySnapshot;
 use heyfood_core::{
-    AccountId, AddItemsRequestWire, ApplicationCapabilitiesWire, CredentialVersion,
-    ExclusionMutationRequestWire, GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId,
-    GroceryItemInputWire, GroceryItemStateWire, GroceryListVersion,
-    GroceryMutationConfirmRequestWire, MenuWatchCreateRequestWire, NetworkPolicy, OperationId,
-    RemoveItemsRequestWire, RestaurantId, SensitiveString, ServiceUrl, SessionCredentials,
-    TranscriptionPurpose, UpdateItemStateRequestWire, WatchCadenceWire, WatchHour, WatchWeekday,
+    AccountId, AddItemsRequestWire, CredentialVersion, ExclusionMutationRequestWire,
+    GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId, GroceryItemInputWire,
+    GroceryItemStateWire, GroceryListVersion, GroceryMutationConfirmRequestWire,
+    MenuWatchCreateRequestWire, NetworkPolicy, OperationId, RemoveItemsRequestWire, RestaurantId,
+    SensitiveString, ServiceUrl, SessionCredentials, TranscriptionPurpose,
+    UpdateItemStateRequestWire, WatchCadenceWire, WatchHour, WatchWeekday,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -54,19 +55,21 @@ fn fixture_wav() -> Vec<u8> {
     wav
 }
 
-fn capabilities(version: Option<&str>) -> ApplicationCapabilitiesWire {
+fn capabilities(version: Option<&str>) -> CapabilitySnapshot {
     let mut applications = serde_json::Map::new();
     if let Some(version) = version {
         applications.insert("grocery".into(), Value::String(version.into()));
     }
-    serde_json::from_value(json!({
-        "schema_version": 1,
-        "self_registration": {"status": "disabled", "regions": [], "identity_methods": []},
-        "authorization": {"loopback_pkce": true, "device_code": true, "identity_methods": []},
-        "profile_readiness": true,
-        "application_capabilities": applications,
-    }))
-    .unwrap()
+    CapabilitySnapshot::from_wire(
+        serde_json::from_value(json!({
+            "schema_version": 1,
+            "self_registration": {"status": "disabled", "regions": [], "identity_methods": []},
+            "authorization": {"loopback_pkce": true, "device_code": true, "identity_methods": []},
+            "profile_readiness": true,
+            "application_capabilities": applications,
+        }))
+        .unwrap(),
+    )
 }
 
 async fn fixture_service() -> (TcpListener, HttpService) {
@@ -235,6 +238,7 @@ async fn capability_discovery_gates_typed_grocery_reads() {
         .discover_capabilities(CancellationToken::new())
         .await
         .unwrap();
+    let advertised = CapabilitySnapshot::from_wire(advertised);
     let list = service
         .grocery_list(
             &advertised,

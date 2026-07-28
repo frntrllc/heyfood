@@ -6,8 +6,9 @@ use std::{fmt, io, sync::Arc, time::Duration};
 
 use heyfood_agent_runtime::{GroceryExport, HttpService};
 use heyfood_application::{
-    AudioCapturePort, EnsureSession, EnsureSessionError, EnsureSessionOutcome, RefreshPolicy,
-    RunTurnOutcome, ServicePort, TurnContext, TurnRequest, execute_one_shot_turn,
+    AudioCapturePort, CapabilitySnapshot, DiscoverCapabilities, EnsureSession, EnsureSessionError,
+    EnsureSessionOutcome, RefreshPolicy, RunTurnOutcome, ServicePort, TurnContext, TurnRequest,
+    execute_one_shot_turn,
 };
 use heyfood_cli::{
     AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, MenuWatchCommand,
@@ -433,9 +434,8 @@ impl<'a> OneShotExecutor<'a> {
         stdin: &[u8],
         cancellation: CancellationToken,
     ) -> Result<String, OneShotError> {
-        let capabilities = self
-            .service
-            .discover_capabilities(cancellation.child_token())
+        let capabilities = DiscoverCapabilities::new(self.service)
+            .execute(cancellation.child_token())
             .await?;
         HttpService::require_grocery_v1(&capabilities)?;
         match command {
@@ -822,7 +822,7 @@ impl<'a> OneShotExecutor<'a> {
 
     async fn resolve_references(
         &self,
-        capabilities: &heyfood_core::ApplicationCapabilitiesWire,
+        capabilities: &CapabilitySnapshot,
         requested_list_id: &str,
         requested_version: u64,
         references: &[String],
@@ -2419,8 +2419,8 @@ async fn run_interactive_panel(
 
     match panel {
         PanelRequest::Status => {
-            let capabilities = service
-                .discover_capabilities(cancellation.child_token())
+            let capabilities = DiscoverCapabilities::new(service.as_ref())
+                .execute(cancellation.child_token())
                 .await
                 .map_err(panel_error)?;
             let profile = if authorization_has_scope(authorization_scope, "profile:read") {
@@ -2445,11 +2445,11 @@ async fn run_interactive_panel(
                 "not authorized"
             };
             let grocery = match (
-                capabilities.application_version("grocery"),
+                capabilities.grocery.is_usable(),
                 authorization_has_scope(authorization_scope, "grocery:read"),
             ) {
-                (Some("v1"), true) => "available · authorized",
-                (Some("v1"), false) => "available · authorization required",
+                (true, true) => "available · authorized",
+                (true, false) => "available · authorization required",
                 _ => "not advertised by service",
             };
             let menu_watch = if authorization_has_scope(authorization_scope, "menu:watch") {
@@ -2477,8 +2477,8 @@ async fn run_interactive_panel(
             ))
         }
         PanelRequest::Grocery => {
-            let capabilities = service
-                .discover_capabilities(cancellation.child_token())
+            let capabilities = DiscoverCapabilities::new(service.as_ref())
+                .execute(cancellation.child_token())
                 .await
                 .map_err(panel_error)?;
             let list = service
