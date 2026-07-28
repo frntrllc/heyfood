@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "qualification": "phase0-installed-archive-controlling-terminal",
+  "status": "passed",
+  "reviewed_product_commit": "796ba0afe3ca68c6ecaf0e876520111f99243355",
+  "reviewed_product_tree": "5b6a5fea91f074006699faa754ad6cc62316e434",
+  "platform": {
+    "target": "aarch64-apple-darwin",
+    "version": "0.5.0",
+    "credential_backend": "isolated_file",
+    "signed_candidate": false
+  },
+  "artifact": {
+    "file_name": "heyfood-v0.5.0-aarch64-apple-darwin.tar.gz",
+    "archive_sha256": "97b98463ecc1a6288df57fdcd10969eec29ec709e9acea4d84ae7f6ef8411ad3",
+    "executable_sha256": "a10766353c9d06a8f2def44d155277800248f0e7d4d80e66aa830ea9688daf72",
+    "source_checkout_binary": false,
+    "exact_manifest_digest_verified": true
+  },
+  "harness": {
+    "source": "crates/heyfood-bin/tests/installed_showcase.rs",
+    "source_sha256": "cc35615fb522f246ec4c2fc698153b8c7a1faffa6f3499ad5c62f9735b10c7b3",
+    "package_script_sha256": "cbe3e40f4a3045559e5cd45ae90b4924311ba5f0b9cb4208d6b352578ba03337",
+    "ci_workflow_sha256": "14fb1204f7f5606352765f4e55919641b17354e25f642a9d89d87ff005dbdf61",
+    "test": "installed_archive_core_release_matrix",
+    "result": {
+      "passed": 1,
+      "failed": 0,
+      "filtered_out": 3,
+      "duration_seconds": 11.10
+    }
+  },
+  "matrix": [
+    {
+      "id": "first-run-orientation",
+      "status": "passed"
+    },
+    {
+      "id": "clean-user",
+      "status": "passed"
+    },
+    {
+      "id": "returning-user",
+      "status": "passed"
+    },
+    {
+      "id": "household-grocery",
+      "status": "passed"
+    },
+    {
+      "id": "failure-safety",
+      "status": "passed"
+    },
+    {
+      "id": "artifact-behavior",
+      "status": "source_qualified"
+    }
+  ],
+  "assertions": [
+    "clean registration, profile onboarding and consent, and first authenticated TUI turn",
+    "second installed process reloads credentials without registration and completes an authenticated turn",
+    "household-aware Grocery read, screening, substitutions, proposal review/edit, cancel without mutation, accept exactly once, and stale list/context rejection",
+    "no blind retry, stream Ctrl-C, confirmation Ctrl-C without mutation, typed failure, and terminal restoration",
+    "40, 80, and 120 column semantics, NO_COLOR, exact archive digest, and packaged executable identity",
+    "generated evidence and terminal captures contain no credentials and isolated credentials are absent after the run"
+  ],
+  "generated_evidence_sha256": {
+    "installed_core_matrix_json": "aa882400cf5bf86f2be38d503f72d3b03efb4d978a5e4a01797133f4ae1b6f44",
+    "clean_user_ansi": "83e9efc68534f91166c1e354c628486316c02c978480c4f8e903d442a51c25ee",
+    "returning_user_ansi": "1846a1302c44bb99109f9d216e86f8d9d3dda874dc73eaad82e99de08921b327",
+    "width_40_ansi": "be6bab7d540511f64e6c3e1e81dcf88eb6c4492b71b76adf683f08951d9f6826",
+    "width_120_no_color_ansi": "6be428b280ac74501cfcea0ebd1f7a72187881437262ee19800a6b070f0ca34e",
+    "interrupt_exit_ansi": "9f70f27b582d1a0d2acf1de43b18904f1fde8d04f817fa3bce99c999cccad91d"
+  },
+  "remaining_external_gates": [
+    "Hosted ordinary CI must pass at exact product commit 796ba0afe3ca68c6ecaf0e876520111f99243355.",
+    "The installed-archive Windows CONIN$/CONOUT$ qualification must pass against exact candidate bytes."
+  ],
+  "phase0_exit_authorized": false,
+  "phase1_authorized": false
+}
