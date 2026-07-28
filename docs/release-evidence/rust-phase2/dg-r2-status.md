@@ -1,37 +1,54 @@
-# DG-R2 status for Phase 2 remediation
+# DG-R2 status after agent-native Phase 0 inventory
 
-DG-R2 is **incomplete** and remains an exit-gate blocker.
+The current client dispatch inventory is complete. Server replay and deployed
+reconciliation evidence remains incomplete, so this document does not
+authorize agent mutation or a later phase exit.
 
-This status is pinned to remediation product commit
-`d1b2b92cfd47e9a1e2d60a206e477ca376d008e7` and does not claim deployed replay
-or production-canary evidence.
+The authoritative machine-readable inventory is
+`docs/release-evidence/agent-native-phase0/dg-r2-dispatch-inventory.json`.
+Its gate checks live in
+`crates/heyfood-agent-runtime/tests/agent_phase0_dg_r2_inventory.rs`.
+
+## Current result
+
+- 24 POST, PUT, or DELETE routes compiled into the Rust workspace are
+  classified.
+- 21 are public or feature-reachable; three Health routes are compiled but the
+  supported product rejects them before credential access.
+- Every row defines reachability, operation class, client retry rule, observed
+  or missing server replay contract, reconciliation path, source anchor,
+  evidence, and blockers.
+- `X-Request-ID` is explicitly not classified as idempotency authority.
+- No row permits a blind retry after dispatch.
+- Direct meal, Grocery, and Menu Watch mutation routes remain
+  human-terminal-only and cannot become agent fallbacks.
 
 ## Evidence already present
 
-- `/v1/agent/converse` has automatic Reqwest retries disabled. Tests cover
-  cancellation and transport loss after request-body consumption, assert an
-  uncertain outcome, and assert one observed request.
-- Grocery POST tests assert exact imported request payloads and one dispatch for
-  prepare add/remove/state and confirmation. Cancellation after dispatch remains
-  uncertain and is not blindly replayed.
-- Item evaluation uses a provider-neutral, non-mutating channel tool and has no
-  automatic retry.
-- `X-Request-ID` remains a tracing operation ID; this remediation does not claim
-  that it is a server idempotency key.
+- Session refresh and credential rotation have durable reconciliation markers
+  and cancellation-after-acceptance tests.
+- `/v1/agent/converse` has no automatic retry; cancellation, timeout, transport
+  loss, EOF, and bounded-stream failures after dispatch remain uncertain.
+- Grocery request fixtures cover every current prepare/confirm payload and one
+  observed dispatch.
+- Menu Watch create conflict taxonomy plus cancellation, disconnect, invalid
+  body, and no-retry behavior is tested.
+- Profile consent/sync, audio transcription, OAuth staging, promotion, and
+  account-bound persistence have focused contract tests.
 
-## Evidence still required
+## Server/deployment evidence still required by later phases
 
-- A reviewed endpoint table for converse and every Grocery POST defining server
-  acceptance, replay key, fingerprint binding, mismatch behavior, and safe
-  status/read reconciliation.
-- Deployed identical-key replay and fingerprint-mismatch proof for proposal,
-  screening, weekly, and confirmation paths.
-- Timeout-after-proposal, disconnect-during-confirmation, replayed accept,
-  stale-list/context, and cancellation-boundary tests against the deployed
-  contract.
-- Privacy-safe production canaries proving positive read, prepare/cancel,
-  stale-version conflict, active-list non-mutation, and no duplicate screening,
-  proposal, or committed mutation.
+Twelve rows retain explicit server-contract blockers. They principally require:
 
-Until those artifacts exist and receive exact-SHA review, uncertain POSTs remain
-non-retryable and Phase 2 remains HOLD.
+- device-authorization recovery behavior after transport loss;
+- channel-session identical-grant replay/fingerprint behavior;
+- conversational hosted-tool mutation and reconciliation classification;
+- identical profile-consent replay behavior;
+- Grocery proposal replay, mismatch, stale-list/context, and confirmation
+  replay evidence;
+- Menu Watch duplicate-create and repeated-delete behavior; and
+- privacy-safe deployed canaries proving no duplicate proposal, screening,
+  watch, or committed mutation.
+
+Until those artifacts are frozen and independently reviewed, uncertain
+dispatches remain non-retryable and no MCP protected mutation may be exposed.

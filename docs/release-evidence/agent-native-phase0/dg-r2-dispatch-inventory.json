@@ -1,0 +1,449 @@
+{
+  "schema_version": 1,
+  "program": "heyfood-agent-native",
+  "baseline_commit": "d68091a9cf6341c2c9120ba9251a6e0dd79a9616",
+  "status": "client_inventory_complete_server_evidence_pending",
+  "rules": {
+    "x_request_id_is_idempotency_authority": false,
+    "blind_retry_after_dispatch": false,
+    "agent_mutation_fallback": false,
+    "uncertain_outcome_requires_reconciliation": true
+  },
+  "dispatches": [
+    {
+      "id": "channel-device-authorize",
+      "method": "POST",
+      "path": "/v1/channel/oauth/device/authorize",
+      "reachability": "public_auth",
+      "operation": "create_device_authorization",
+      "client_rule": "one_explicit_start_restart_only_after_terminal_failure",
+      "server_replay_contract": "not_frozen",
+      "reconciliation": "terminal_expiry_or_fresh_explicit_restart",
+      "source": "crates/heyfood-agent-runtime/src/registration.rs",
+      "source_anchor": ".post(self.endpoint(\"/v1/channel/oauth/device/authorize\")?)",
+      "evidence": [
+        "crates/heyfood-agent-runtime/src/registration.rs"
+      ],
+      "blockers": [
+        "Freeze whether transport loss before a response can leave a recoverable authorization transaction."
+      ]
+    },
+    {
+      "id": "channel-device-token",
+      "method": "POST",
+      "path": "/v1/channel/oauth/device/token",
+      "reachability": "public_auth",
+      "operation": "rfc8628_token_poll",
+      "client_rule": "poll_only_at_server_interval_stop_on_uncertain_transport",
+      "server_replay_contract": "rfc8628_polling_semantics",
+      "reconciliation": "authorization_transaction_and_terminal_oauth_status",
+      "source": "crates/heyfood-agent-runtime/src/registration.rs",
+      "source_anchor": ".post(self.endpoint(\"/v1/channel/oauth/device/token\")?)",
+      "evidence": [
+        "crates/heyfood-agent-runtime/src/registration.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "channel-session-exchange",
+      "method": "POST",
+      "path": "/v1/channel/oauth/cli/session",
+      "reachability": "public_auth_and_refresh_recovery",
+      "operation": "exchange_channel_grant_for_application_session",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "not_frozen",
+      "reconciliation": "account_bound_authorization_state_and_explicit_reexchange_policy",
+      "source": "crates/heyfood-agent-runtime/src/registration.rs",
+      "source_anchor": ".post(self.endpoint(\"/v1/channel/oauth/cli/session\")?)",
+      "additional_source_anchors": [
+        "service.endpoint(\"/v1/channel/oauth/cli/session\")?"
+      ],
+      "evidence": [
+        "crates/heyfood-agent-runtime/src/registration.rs",
+        "crates/heyfood-agent-runtime/src/lib.rs",
+        "crates/heyfood-bin/tests/activated_commands.rs"
+      ],
+      "blockers": [
+        "Freeze the server replay/fingerprint behavior for an identical channel grant and device ID."
+      ]
+    },
+    {
+      "id": "channel-token-refresh",
+      "method": "POST",
+      "path": "/v1/channel/oauth/token",
+      "reachability": "public_auth_recovery",
+      "operation": "rotate_channel_credentials",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "oauth_rotating_refresh",
+      "reconciliation": "durable authorization replacement journal",
+      "source": "crates/heyfood-agent-runtime/src/registration.rs",
+      "source_anchor": ".post(self.endpoint(\"/v1/channel/oauth/token\")?)",
+      "evidence": [
+        "crates/heyfood-agent-runtime/src/registration.rs",
+        "crates/heyfood-bin/tests/activated_commands.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "cli-reauthorization-prepare",
+      "method": "POST",
+      "path": "/v1/channel/oauth/cli/reauthorizations",
+      "reachability": "public_login",
+      "operation": "prepare_or_recover_exact_authority_bundle",
+      "client_rule": "same_transaction_recovery_only",
+      "server_replay_contract": "client_and_authorization_transaction_bound",
+      "reconciliation": "GET staged_reauthorization_status",
+      "source": "crates/heyfood-agent-runtime/src/registration.rs",
+      "source_anchor": ".post(self.endpoint(\"/v1/channel/oauth/cli/reauthorizations\")?)",
+      "evidence": [
+        "crates/heyfood-agent-runtime/src/registration.rs",
+        "crates/heyfood-bin/tests/activated_commands.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "cli-reauthorization-promote",
+      "method": "POST",
+      "path": "/v1/channel/oauth/cli/reauthorizations/{stage_id}/promote",
+      "reachability": "public_login",
+      "operation": "promote_staged_authority",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "stage_recovery_token_bundle_digest_bound",
+      "reconciliation": "GET staged_reauthorization_status_before_local_promotion",
+      "source": "crates/heyfood-agent-runtime/src/registration.rs",
+      "source_anchor": "\"/v1/channel/oauth/cli/reauthorizations/{}/promote\"",
+      "evidence": [
+        "crates/heyfood-agent-runtime/src/registration.rs",
+        "crates/heyfood-bin/tests/activated_commands.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "cli-reauthorization-abort",
+      "method": "POST",
+      "path": "/v1/channel/oauth/cli/reauthorizations/{stage_id}/abort",
+      "reachability": "public_login_reconciliation",
+      "operation": "abort_staged_authority",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "stage_recovery_token_bound",
+      "reconciliation": "GET staged_reauthorization_status",
+      "source": "crates/heyfood-agent-runtime/src/registration.rs",
+      "source_anchor": "\"/v1/channel/oauth/cli/reauthorizations/{}/abort\"",
+      "evidence": [
+        "crates/heyfood-agent-runtime/src/registration.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "application-session-refresh",
+      "method": "POST",
+      "path": "/v1/auth/session/refresh",
+      "reachability": "all_authenticated_commands",
+      "operation": "rotate_application_session",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "rotating_refresh_no_generic_replay_key",
+      "reconciliation": "durable credential reconciliation_marker_then_bounded_channel_session_reexchange",
+      "source": "crates/heyfood-agent-runtime/src/lib.rs",
+      "source_anchor": "self.endpoint(\"/v1/auth/session/refresh\")?",
+      "evidence": [
+        "crates/heyfood-application/tests/ensure_session.rs",
+        "crates/heyfood-application/tests/run_turn.rs",
+        "crates/heyfood-agent-runtime/tests/http_sse.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "agent-converse",
+      "method": "POST",
+      "path": "/v1/agent/converse",
+      "reachability": "ask_reply_log_and_tui",
+      "operation": "stream_agent_turn_and_possible_server_tools",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "not_frozen",
+      "reconciliation": "conversation_and_affected_product_state_reads",
+      "source": "crates/heyfood-agent-runtime/src/lib.rs",
+      "source_anchor": "self.endpoint(\"/v1/agent/converse\")?",
+      "evidence": [
+        "crates/heyfood-agent-runtime/tests/http_sse.rs",
+        "crates/heyfood-application/tests/run_turn.rs",
+        "crates/heyfood-bin/tests/phase2_one_shot.rs"
+      ],
+      "blockers": [
+        "Prove which hosted tools can mutate product state and freeze their reconciliation reads before any conversational route becomes agent_safe."
+      ]
+    },
+    {
+      "id": "channel-tool-explain-item",
+      "method": "POST",
+      "path": "/v1/channel/tools/explain_item",
+      "reachability": "public_item",
+      "operation": "provider_neutral_item_read",
+      "client_rule": "no_automatic_retry",
+      "server_replay_contract": "post_as_read_no_mutation",
+      "reconciliation": "explicit_user_resubmission",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/channel/tools/explain_item\"",
+      "evidence": [
+        "crates/heyfood-bin/tests/phase2_one_shot.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "profile-consent-grant",
+      "method": "POST",
+      "path": "/v1/profile/consent",
+      "reachability": "interactive_onboarding",
+      "operation": "grant_versioned_profile_sync_consent",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "not_frozen",
+      "reconciliation": "GET /v1/profile/consent",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/profile/consent\"",
+      "evidence": [
+        "crates/heyfood-agent-runtime/tests/phase2_service_api.rs",
+        "crates/heyfood-bin/src/lib.rs"
+      ],
+      "blockers": [
+        "Freeze identical consent-version replay behavior."
+      ]
+    },
+    {
+      "id": "profile-sync-upsert",
+      "method": "PUT",
+      "path": "/v1/profile/sync",
+      "reachability": "interactive_onboarding",
+      "operation": "versioned_profile_replace",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "optimistic_expected_version",
+      "reconciliation": "GET /v1/profile/sync",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/profile/sync\"",
+      "evidence": [
+        "crates/heyfood-agent-runtime/tests/phase2_service_api.rs",
+        "crates/heyfood-bin/src/lib.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "audio-transcription",
+      "method": "POST",
+      "path": "/v1/audio/transcriptions",
+      "reachability": "native_audio_feature",
+      "operation": "bounded_audio_transcription",
+      "client_rule": "no_automatic_retry_new_capture_requires_explicit_user_action",
+      "server_replay_contract": "not_frozen",
+      "reconciliation": "none_non_product_mutation",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/audio/transcriptions\"",
+      "evidence": [
+        "crates/heyfood-agent-runtime/tests/phase2_service_api.rs",
+        "crates/heyfood-bin/src/lib.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "grocery-prepare-add",
+      "method": "POST",
+      "path": "/v1/grocery/items",
+      "reachability": "public_human_terminal_only",
+      "operation": "prepare_add_items",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "proposal_authority_returned_no_client_replay_key",
+      "reconciliation": "GET active_list_and_explicit_new_prepare",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/grocery/items\"",
+      "evidence": [
+        "crates/heyfood-agent-runtime/tests/phase2_service_api.rs",
+        "crates/heyfood-bin/tests/activated_commands.rs"
+      ],
+      "blockers": [
+        "Freeze identical-request proposal replay and fingerprint-mismatch behavior."
+      ]
+    },
+    {
+      "id": "grocery-prepare-remove",
+      "method": "POST",
+      "path": "/v1/grocery/items/remove",
+      "reachability": "public_human_terminal_only",
+      "operation": "prepare_remove_items",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "proposal_authority_returned_no_client_replay_key",
+      "reconciliation": "GET active_list_and_explicit_new_prepare",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/grocery/items/remove\"",
+      "evidence": [
+        "crates/heyfood-agent-runtime/tests/phase2_service_api.rs"
+      ],
+      "blockers": [
+        "Freeze identical-request proposal replay and fingerprint-mismatch behavior."
+      ]
+    },
+    {
+      "id": "grocery-prepare-state",
+      "method": "POST",
+      "path": "/v1/grocery/items/state",
+      "reachability": "public_human_terminal_only",
+      "operation": "prepare_item_state",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "proposal_authority_returned_no_client_replay_key",
+      "reconciliation": "GET active_list_and_explicit_new_prepare",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/grocery/items/state\"",
+      "evidence": [
+        "crates/heyfood-agent-runtime/tests/phase2_service_api.rs"
+      ],
+      "blockers": [
+        "Freeze identical-request proposal replay and fingerprint-mismatch behavior."
+      ]
+    },
+    {
+      "id": "grocery-prepare-add-exclusion",
+      "method": "POST",
+      "path": "/v1/grocery/exclusions",
+      "reachability": "public_human_terminal_only",
+      "operation": "prepare_add_exclusion",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "proposal_authority_returned_no_client_replay_key",
+      "reconciliation": "GET exclusions_and_explicit_new_prepare",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/grocery/exclusions\"",
+      "evidence": [
+        "crates/heyfood-agent-runtime/tests/phase2_service_api.rs"
+      ],
+      "blockers": [
+        "Freeze identical-request proposal replay and fingerprint-mismatch behavior."
+      ]
+    },
+    {
+      "id": "grocery-prepare-remove-exclusion",
+      "method": "POST",
+      "path": "/v1/grocery/exclusions/remove",
+      "reachability": "public_human_terminal_only",
+      "operation": "prepare_remove_exclusion",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "proposal_authority_returned_no_client_replay_key",
+      "reconciliation": "GET exclusions_and_explicit_new_prepare",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/grocery/exclusions/remove\"",
+      "evidence": [
+        "crates/heyfood-agent-runtime/tests/phase2_service_api.rs"
+      ],
+      "blockers": [
+        "Freeze identical-request proposal replay and fingerprint-mismatch behavior."
+      ]
+    },
+    {
+      "id": "grocery-confirm",
+      "method": "POST",
+      "path": "/v1/grocery/confirm",
+      "reachability": "public_human_terminal_only",
+      "operation": "accept_or_cancel_server_proposal",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "server_confirmation_token_and_idempotency_authority",
+      "reconciliation": "GET active_list_and_server_confirmation_state",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/grocery/confirm\"",
+      "evidence": [
+        "crates/heyfood-agent-runtime/tests/phase2_service_api.rs",
+        "crates/heyfood-bin/tests/phase2_one_shot.rs"
+      ],
+      "blockers": [
+        "Provide deployed identical-token replay, mismatch, stale-list, and stale-context evidence."
+      ]
+    },
+    {
+      "id": "menu-watch-create",
+      "method": "POST",
+      "path": "/v1/menu/watch",
+      "reachability": "public_human_terminal_only",
+      "operation": "create_watch_subscription",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "conflict_taxonomy_no_client_replay_key",
+      "reconciliation": "GET /v1/menu/watch",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/menu/watch\"",
+      "evidence": [
+        "crates/heyfood-agent-runtime/tests/phase2_service_api.rs",
+        "crates/heyfood-bin/tests/activated_commands.rs"
+      ],
+      "blockers": [
+        "Freeze duplicate-create identity and payload-mismatch behavior."
+      ]
+    },
+    {
+      "id": "menu-watch-delete",
+      "method": "DELETE",
+      "path": "/v1/menu/watch/{watch_id}",
+      "reachability": "public_human_terminal_only",
+      "operation": "remove_watch_subscription",
+      "client_rule": "never_blind_retry_after_dispatch",
+      "server_replay_contract": "resource_identity_no_frozen_absent_is_success_rule",
+      "reconciliation": "GET /v1/menu/watch",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/menu/watch/{}\"",
+      "evidence": [
+        "crates/heyfood-agent-runtime/tests/phase2_service_api.rs",
+        "crates/heyfood-bin/tests/activated_commands.rs"
+      ],
+      "blockers": [
+        "Freeze whether repeated delete of an absent watch is success-equivalent."
+      ]
+    },
+    {
+      "id": "health-oura-authorize",
+      "method": "POST",
+      "path": "/v1/integrations/authorize",
+      "reachability": "compiled_deferred_public_dispatch_rejects_before_credentials",
+      "operation": "start_provider_authorization",
+      "client_rule": "unreachable_in_supported_product",
+      "server_replay_contract": "not_evaluated",
+      "reconciliation": "not_applicable_while_deferred",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/integrations/authorize\"",
+      "evidence": [
+        "crates/heyfood-bin/tests/fail_closed.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "health-oura-sync",
+      "method": "POST",
+      "path": "/v1/integrations/oura/sync",
+      "reachability": "compiled_deferred_public_dispatch_rejects_before_credentials",
+      "operation": "synchronize_provider_data",
+      "client_rule": "unreachable_in_supported_product",
+      "server_replay_contract": "not_evaluated",
+      "reconciliation": "not_applicable_while_deferred",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/integrations/oura/sync\"",
+      "evidence": [
+        "crates/heyfood-bin/tests/fail_closed.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "health-oura-disconnect",
+      "method": "DELETE",
+      "path": "/v1/integrations/oura",
+      "reachability": "compiled_deferred_public_dispatch_rejects_before_credentials",
+      "operation": "disconnect_provider",
+      "client_rule": "unreachable_in_supported_product",
+      "server_replay_contract": "not_evaluated",
+      "reconciliation": "not_applicable_while_deferred",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/integrations/oura\"",
+      "evidence": [
+        "crates/heyfood-bin/tests/fail_closed.rs"
+      ],
+      "blockers": []
+    }
+  ],
+  "summary": {
+    "dispatches_total": 24,
+    "public_or_feature_reachable": 21,
+    "compiled_deferred": 3,
+    "rows_with_open_server_contract_blockers": 12,
+    "phase0_client_inventory_complete": true,
+    "phase_exit_authorized": false
+  }
+}

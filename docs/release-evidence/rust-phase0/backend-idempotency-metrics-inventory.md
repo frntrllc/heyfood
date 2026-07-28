@@ -1,5 +1,11 @@
 # Backend idempotency and release-metrics inventory
 
+> Historical Phase 0 backend observation. The current Rust call-site inventory
+> is `docs/release-evidence/agent-native-phase0/dg-r2-dispatch-inventory.json`;
+> it covers all 24 currently compiled POST/PUT/DELETE routes and has a
+> source-anchor parity gate. This document remains useful background but is no
+> longer the complete current-client endpoint list.
+
 **Python client contract:** `fixtures/contracts/called-endpoints.json`, final
 oracle `73494a57468dac83b4904ce6c390e36926f5c6fe` (27 endpoints).
 

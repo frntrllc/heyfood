@@ -113,15 +113,15 @@
     },
     {
       "id": "AN-P0-09-dg-r2-post-inventory",
-      "status": "in_progress",
+      "status": "satisfied",
       "owner": "runtime-and-security",
       "evidence": [
+        "docs/release-evidence/agent-native-phase0/dg-r2-dispatch-inventory.json",
+        "crates/heyfood-agent-runtime/tests/agent_phase0_dg_r2_inventory.rs",
         "docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md",
         "docs/release-evidence/rust-phase2/dg-r2-status.md"
       ],
-      "blockers": [
-        "Existing DG-R2 status is incomplete and must be reconciled to every currently reachable POST and DELETE before agent tool design."
-      ]
+      "blockers": []
     },
     {
       "id": "AN-P0-10-exact-review",
@@ -136,8 +136,8 @@
   ],
   "summary": {
     "requirements_total": 10,
-    "satisfied": 3,
-    "in_progress_or_draft": 6,
+    "satisfied": 4,
+    "in_progress_or_draft": 5,
     "pending": 1,
     "unresolved_p0_p1_findings": null,
     "phase_exit_authorized": false
