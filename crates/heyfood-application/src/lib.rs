@@ -15,7 +15,7 @@ pub mod supervisor;
 pub use ensure_session::{EnsureSession, EnsureSessionError, EnsureSessionOutcome};
 pub use grocery::{
     GroceryCacheKey, GroceryItemReferenceCache, GroceryListSnapshot, GroceryMutationIntent,
-    GroceryPort, PreparedGroceryMutation,
+    GroceryPort, PreparedGroceryMutation, ReadActiveGroceryList,
 };
 pub use health::{
     HealthAuthorization, HealthConnection, HealthContext, HealthManagementOutcome, HealthPort,

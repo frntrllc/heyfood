@@ -1,0 +1,573 @@
+{
+  "schema_version": 1,
+  "baseline": {
+    "repository": "https://github.com/frntrllc/heyfood",
+    "commit": "d68091a9cf6341c2c9120ba9251a6e0dd79a9616",
+    "product_version": "0.5.0"
+  },
+  "status": "phase0_in_progress",
+  "global_process_controls": [
+    "--json",
+    "--raw",
+    "--no-color",
+    "--no-banner",
+    "--verbose",
+    "--no-input"
+  ],
+  "audiences": [
+    "agent_safe",
+    "human_terminal_only",
+    "agent_unsupported"
+  ],
+  "phase0_decision": "No current product-state mutation is agent_safe. Agent-safe mutation remains outside this program; MCP is the sole planned agent mutation path.",
+  "root_default": {
+    "audience": "human_terminal_only",
+    "operation_class": "interactive",
+    "input_transport": "attached_terminal",
+    "output_transport": "attached_terminal",
+    "network": "conditional_authentication_and_conversation",
+    "status": "active"
+  },
+  "policies": {
+    "interactive": {
+      "audience": "human_terminal_only",
+      "operation_class": "interactive",
+      "input_transport": "attached_terminal",
+      "output_transport": "attached_terminal",
+      "network": "authenticated",
+      "retry": "never_blind_retry",
+      "product_state": "may_mutate_through_explicit_tui_workflows",
+      "phase0_gap": null
+    },
+    "auth_handoff": {
+      "audience": "human_terminal_only",
+      "operation_class": "authorization",
+      "input_transport": "arguments_plus_independent_browser_or_device_approval",
+      "output_transport": "human_or_one_json_result",
+      "network": "authorization_server",
+      "retry": "protocol_specific_no_blind_retry_after_dispatch",
+      "product_state": "rotates_local_and_server_authority",
+      "phase0_gap": "Agent setup must not treat browser/device approval as product mutation consent."
+    },
+    "conversation_review_pending": {
+      "audience": "agent_unsupported",
+      "operation_class": "remote_conversation",
+      "input_transport": "arguments_or_bounded_utf8_stdin",
+      "output_transport": "human_or_one_json_result",
+      "network": "post_sse",
+      "retry": "reconcile_uncertain_never_blind_retry",
+      "product_state": "conversation_state_and_server_tools_require_audit",
+      "phase0_gap": "Prove that conversational routes cannot directly or indirectly commit a protected mutation before reclassification."
+    },
+    "human_meal_mutation": {
+      "audience": "human_terminal_only",
+      "operation_class": "mutation_via_conversation",
+      "input_transport": "arguments_or_bounded_utf8_data_stdin_plus_controlling_terminal_decision",
+      "output_transport": "human_or_one_json_result",
+      "network": "post_sse",
+      "retry": "reconcile_uncertain_never_blind_retry",
+      "product_state": "meal_memory_mutation",
+      "phase0_gap": "The current command does not yet require the separate controlling-terminal decision."
+    },
+    "grocery_read": {
+      "audience": "agent_unsupported",
+      "operation_class": "remote_read",
+      "input_transport": "arguments",
+      "output_transport": "human_or_one_json_result",
+      "network": "get",
+      "required_scopes": [
+        "grocery:read"
+      ],
+      "retry": "safe_only_before_or_as_defined_by_get_contract",
+      "product_state": "no_grocery_product_mutation_but_session_may_rotate",
+      "phase0_gap": "Application controller and agent-safe bounded presentation are not yet qualified."
+    },
+    "grocery_prepare_human": {
+      "audience": "human_terminal_only",
+      "operation_class": "prepare",
+      "input_transport": "arguments_plus_controlling_terminal_acknowledgement",
+      "output_transport": "capability_bearing_proposal_json_or_human",
+      "network": "post_prepare",
+      "required_scopes": [
+        "grocery:read",
+        "grocery:write"
+      ],
+      "retry": "dg_r2_no_blind_retry",
+      "product_state": "no_list_mutation_but_emits_commit_authority",
+      "phase0_gap": "The current command can emit GroceryMutationProposalWire without a separate controlling-terminal acknowledgement."
+    },
+    "grocery_export_human": {
+      "audience": "human_terminal_only",
+      "operation_class": "remote_read_and_optional_sensitive_file_write",
+      "input_transport": "arguments",
+      "output_transport": "stdout_or_owner_only_atomic_file",
+      "network": "get",
+      "required_scopes": [
+        "grocery:read"
+      ],
+      "retry": "safe_read_with_fail_closed_file_commit",
+      "product_state": "no_remote_mutation_local_file_optional",
+      "phase0_gap": "Arbitrary output paths are not part of the planned agent-safe surface."
+    },
+    "grocery_confirm_human": {
+      "audience": "human_terminal_only",
+      "operation_class": "confirm_or_cancel",
+      "input_transport": "proposal_json_stdin_plus_distinct_controlling_terminal_review_and_decision",
+      "output_transport": "contracted_json_result",
+      "network": "post_mutation",
+      "required_scopes": [
+        "grocery:read",
+        "grocery:write"
+      ],
+      "retry": "reconcile_uncertain_never_blind_retry",
+      "product_state": "grocery_list_mutation_on_accept",
+      "phase0_gap": "The current command accepts --decision plus proposal stdin without a separate controlling-terminal ceremony."
+    },
+    "watch_read": {
+      "audience": "agent_unsupported",
+      "operation_class": "remote_read",
+      "input_transport": "arguments",
+      "output_transport": "human_or_one_json_result",
+      "network": "get",
+      "required_scopes": [
+        "menu:watch"
+      ],
+      "retry": "safe_only_before_or_as_defined_by_get_contract",
+      "product_state": "no_menu_watch_product_mutation_but_session_may_rotate",
+      "phase0_gap": "Application port/controller and bounded agent result are absent."
+    },
+    "watch_mutation_human": {
+      "audience": "human_terminal_only",
+      "operation_class": "mutation",
+      "input_transport": "arguments_plus_controlling_terminal_decision",
+      "output_transport": "human_or_one_json_result",
+      "network": "post_or_delete",
+      "required_scopes": [
+        "menu:watch"
+      ],
+      "retry": "reconcile_uncertain_never_blind_retry",
+      "product_state": "menu_watch_subscription_mutation",
+      "phase0_gap": "The current commands do not yet require the separate controlling-terminal decision."
+    },
+    "completion": {
+      "audience": "agent_unsupported",
+      "operation_class": "local_read",
+      "input_transport": "arguments",
+      "output_transport": "shell_source_stdout",
+      "network": "none",
+      "retry": "not_applicable",
+      "product_state": "none",
+      "phase0_gap": "Completion is not a one-JSON-result agent discovery contract."
+    },
+    "deferred_health": {
+      "audience": "agent_unsupported",
+      "operation_class": "deferred",
+      "input_transport": "rejected_before_credential_access",
+      "output_transport": "typed_error",
+      "network": "none",
+      "retry": "not_applicable",
+      "product_state": "none",
+      "phase0_gap": null
+    },
+    "unavailable_legacy": {
+      "audience": "agent_unsupported",
+      "operation_class": "unavailable",
+      "input_transport": "rejected",
+      "output_transport": "typed_error",
+      "network": "none",
+      "retry": "not_applicable",
+      "product_state": "none",
+      "phase0_gap": null
+    }
+  },
+  "commands": [
+    {
+      "path": "ask",
+      "visibility": "active",
+      "policy": "conversation_review_pending"
+    },
+    {
+      "path": "reply",
+      "visibility": "active",
+      "policy": "conversation_review_pending"
+    },
+    {
+      "path": "chat",
+      "visibility": "active",
+      "policy": "interactive"
+    },
+    {
+      "path": "log",
+      "visibility": "active",
+      "policy": "human_meal_mutation"
+    },
+    {
+      "path": "item",
+      "visibility": "active",
+      "policy": "conversation_review_pending"
+    },
+    {
+      "path": "daily",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "profile",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "onboard",
+      "visibility": "hidden",
+      "policy": "interactive"
+    },
+    {
+      "path": "login",
+      "visibility": "active",
+      "policy": "auth_handoff"
+    },
+    {
+      "path": "register",
+      "visibility": "active",
+      "policy": "auth_handoff"
+    },
+    {
+      "path": "logout",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "status",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "doctor",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "search",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "menu",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "get-menu",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "recommend",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "grocery",
+      "visibility": "active",
+      "policy": "grocery_read"
+    },
+    {
+      "path": "grocery show",
+      "visibility": "active",
+      "policy": "grocery_read",
+      "aliases": [
+        "grocery list"
+      ]
+    },
+    {
+      "path": "grocery add",
+      "visibility": "active",
+      "policy": "grocery_prepare_human"
+    },
+    {
+      "path": "grocery remove",
+      "visibility": "active",
+      "policy": "grocery_prepare_human"
+    },
+    {
+      "path": "grocery state",
+      "visibility": "active",
+      "policy": "grocery_prepare_human"
+    },
+    {
+      "path": "grocery exclusions",
+      "visibility": "active",
+      "policy": "grocery_read"
+    },
+    {
+      "path": "grocery never",
+      "visibility": "active",
+      "policy": "grocery_prepare_human"
+    },
+    {
+      "path": "grocery export",
+      "visibility": "active",
+      "policy": "grocery_export_human"
+    },
+    {
+      "path": "grocery confirm",
+      "visibility": "active",
+      "policy": "grocery_confirm_human"
+    },
+    {
+      "path": "health",
+      "visibility": "hidden",
+      "policy": "deferred_health"
+    },
+    {
+      "path": "health status",
+      "visibility": "hidden",
+      "policy": "deferred_health"
+    },
+    {
+      "path": "health show",
+      "visibility": "hidden",
+      "policy": "deferred_health"
+    },
+    {
+      "path": "health connect",
+      "visibility": "hidden",
+      "policy": "deferred_health"
+    },
+    {
+      "path": "health sync",
+      "visibility": "hidden",
+      "policy": "deferred_health"
+    },
+    {
+      "path": "health disconnect",
+      "visibility": "hidden",
+      "policy": "deferred_health"
+    },
+    {
+      "path": "watch",
+      "visibility": "active",
+      "policy": "watch_read"
+    },
+    {
+      "path": "watch show",
+      "visibility": "active",
+      "policy": "watch_read",
+      "aliases": [
+        "watch list"
+      ]
+    },
+    {
+      "path": "watch add",
+      "visibility": "active",
+      "policy": "watch_mutation_human",
+      "aliases": [
+        "watch create"
+      ]
+    },
+    {
+      "path": "watch remove",
+      "visibility": "active",
+      "policy": "watch_mutation_human",
+      "aliases": [
+        "watch rm",
+        "watch delete"
+      ]
+    },
+    {
+      "path": "recipes",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "recipes search",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "recipes save",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "recipes saved",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "location",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "location show",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "location set",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "location clear",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "context",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "context list",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "context show",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "context use",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "context set",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "config",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "config path",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "config show",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "config validate",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "members",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "members list",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "household",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "household list",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "household current",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "household use",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "household label",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "conversation",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "conversation list",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "conversation resume",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "conversation clear",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "voice",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "voice devices",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "voice status",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "voice set",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "voice reset",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "account",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "account delete",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "channels",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "channels list",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "channels disconnect",
+      "visibility": "hidden",
+      "policy": "unavailable_legacy"
+    },
+    {
+      "path": "completion",
+      "visibility": "active",
+      "policy": "completion"
+    }
+  ]
+}

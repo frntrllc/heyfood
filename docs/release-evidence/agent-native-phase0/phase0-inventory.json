@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "program": "heyfood-agent-native",
+  "phase": 0,
+  "status": "in_progress",
+  "baseline": {
+    "repository": "https://github.com/frntrllc/heyfood",
+    "main_commit": "d68091a9cf6341c2c9120ba9251a6e0dd79a9616",
+    "approved_plan_digest_sha256": "65c99ae05458731271887182155215d9b679e76d42cd83252ada39844e1db112",
+    "plan_commit": "a16a39c7d1ef4d85402eb08cb8f1ccfa8a041efe"
+  },
+  "requirements": [
+    {
+      "id": "AN-P0-01-command-authority-inventory",
+      "status": "satisfied",
+      "owner": "lead-rust",
+      "evidence": [
+        "docs/release-evidence/agent-native-phase0/command-authority-inventory.json",
+        "crates/heyfood-cli/tests/agent_phase0_inventory.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "AN-P0-02-contract-reconciliation",
+      "status": "in_progress",
+      "owner": "cli-contract",
+      "evidence": [
+        "docs/CLI_CONTRACT.md",
+        "docs/COMMAND_GRAMMAR.md",
+        "docs/CAPABILITY_STATUS.md",
+        "docs/JSON_SCHEMAS.md"
+      ],
+      "blockers": [
+        "Human Grocery proposal creation and confirmation require a versioned controlling-terminal transport contract.",
+        "Meal log and Menu Watch mutation require equivalent audience/transport enforcement."
+      ]
+    },
+    {
+      "id": "AN-P0-03-threat-model",
+      "status": "draft_complete_review_pending",
+      "owner": "security",
+      "evidence": [
+        "docs/AGENT_THREAT_MODEL.md",
+        "docs/AGENT_APPROVAL_CONTRACT.md"
+      ],
+      "blockers": [
+        "Independent security review is pending.",
+        "The companion hello.food out-of-band approval contract is not implemented or production-proven."
+      ]
+    },
+    {
+      "id": "AN-P0-04-application-boundaries",
+      "status": "in_progress",
+      "owner": "lead-rust",
+      "evidence": [
+        "docs/architecture/0001-agent-native-application-boundaries.md",
+        "docs/release-evidence/agent-native-phase0/application-seam-inventory.md"
+      ],
+      "blockers": [
+        "GroceryPort has no production HttpService adapter and current one-shot/panel orchestration calls HttpService directly.",
+        "The deployed active-list wire lacks the context fingerprint required by the provisional GroceryListSnapshot, so the read and mutation-authority seams must be separated or reconciled without inventing authority.",
+        "Menu Watch has no application port/controller.",
+        "Capability/status has no application port/controller.",
+        "Household context and presentation orchestration remain in heyfood-bin."
+      ]
+    },
+    {
+      "id": "AN-P0-05-thin-composition-proof",
+      "status": "satisfied",
+      "owner": "lead-rust",
+      "evidence": [
+        "crates/heyfood-application/src/grocery.rs",
+        "crates/heyfood-bin/tests/agent_phase0_thin_proof.rs",
+        "docs/release-evidence/agent-native-phase0/thin-proof-manifest.json"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "AN-P0-06-manifest-and-mcp-contract-freeze",
+      "status": "draft_complete_review_pending",
+      "owner": "rust-and-agent-integration",
+      "evidence": [
+        "docs/plans/2026-07-27-heyfood-agent-native-interface-plan.md",
+        "schemas/v1/heyfood-agent-manifest.schema.json",
+        "docs/AGENT_MCP_CONTRACT.md",
+        "crates/heyfood-cli/tests/agent_phase0_manifest_schema.rs"
+      ],
+      "blockers": [
+        "Independent Rust and agent-integration review is pending.",
+        "Protocol framing implementation and conformance fixtures remain Phase 3 work."
+      ]
+    },
+    {
+      "id": "AN-P0-07-host-setup-matrix",
+      "status": "draft_complete_review_pending",
+      "owner": "agent-integration",
+      "evidence": [
+        "docs/release-evidence/agent-native-phase0/host-setup-matrix.md",
+        "docs/release-evidence/agent-native-phase0/host-capability-evidence.json"
+      ],
+      "blockers": [
+        "Independent agent-integration review is pending.",
+        "Phase 5 must establish any public compatibility range beyond the two exact development versions."
+      ]
+    },
+    {
+      "id": "AN-P0-08-contributor-guidance",
+      "status": "satisfied",
+      "owner": "documentation",
+      "evidence": [
+        "AGENTS.md",
+        "CLAUDE.md"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "AN-P0-09-dg-r2-post-inventory",
+      "status": "in_progress",
+      "owner": "runtime-and-security",
+      "evidence": [
+        "docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md",
+        "docs/release-evidence/rust-phase2/dg-r2-status.md"
+      ],
+      "blockers": [
+        "Existing DG-R2 status is incomplete and must be reconciled to every currently reachable POST and DELETE before agent tool design."
+      ]
+    },
+    {
+      "id": "AN-P0-10-exact-review",
+      "status": "pending",
+      "owner": "independent-reviewers",
+      "evidence": [],
+      "blockers": [
+        "Ordinary CI must be green at one exact product SHA.",
+        "Independent Rust architecture and security reviews must close all P0 and P1 findings."
+      ]
+    }
+  ],
+  "summary": {
+    "requirements_total": 10,
+    "satisfied": 3,
+    "in_progress_or_draft": 6,
+    "pending": 1,
+    "unresolved_p0_p1_findings": null,
+    "phase_exit_authorized": false
+  },
+  "review": {
+    "status": "not_requested",
+    "reviewed_product_sha": null,
+    "reviewed_evidence_digest": null
+  }
+}

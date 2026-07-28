@@ -1,0 +1,16 @@
+{
+  "schema_version": 0,
+  "proof_only": true,
+  "public_command": false,
+  "baseline_commit": "d68091a9cf6341c2c9120ba9251a6e0dd79a9616",
+  "purpose": "Prove deterministic embedding and inward dependency direction before agent-manifest v1 is frozen.",
+  "capabilities": [
+    {
+      "name": "grocery_active_list_read",
+      "status": "internal_proof",
+      "product_mutation": false,
+      "credential_side_effect_possible": true,
+      "cancellable": true
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "observed_date": "2026-07-27",
+  "mutation_performed": false,
+  "hosts": [
+    {
+      "name": "codex",
+      "executable": "/Applications/ChatGPT.app/Contents/Resources/codex",
+      "version": "codex-cli 0.145.0-alpha.18",
+      "verified_help_surfaces": [
+        "codex plugin",
+        "codex plugin add",
+        "codex plugin remove",
+        "codex mcp",
+        "codex mcp add",
+        "codex mcp remove"
+      ],
+      "mcp_scopes": {
+        "user": "host_owned_cli",
+        "project": "trusted_project_config_no_observed_scope_flag"
+      }
+    },
+    {
+      "name": "claude",
+      "executable": "/opt/homebrew/bin/claude",
+      "version": "2.1.128 (Claude Code)",
+      "verified_help_surfaces": [
+        "claude plugin",
+        "claude plugin install",
+        "claude plugin uninstall",
+        "claude mcp",
+        "claude mcp add",
+        "claude mcp remove"
+      ],
+      "mcp_scopes": {
+        "local": "host_owned_cli",
+        "user": "host_owned_cli",
+        "project": "host_owned_cli"
+      }
+    }
+  ],
+  "public_compatibility_claim": false,
+  "phase5_exact_host_qualification_required": true
+}

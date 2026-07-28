@@ -2,7 +2,7 @@
 //! Phase-A authority. Runtime adapters remain capability-gated and must not
 //! activate before the production canary gate passes.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use heyfood_core::{
     AccountId, ContextFingerprint, FrozenGroceryPreconditions, GroceryCapability,
@@ -66,6 +66,41 @@ pub trait GroceryPort: Send + Sync {
         command: GroceryConfirmationCommand,
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<GroceryListSnapshot, PortError>>;
+}
+
+/// Renderer-neutral active-list read shared by future CLI, TUI, and MCP
+/// adapters.
+///
+/// This Phase 0 controller deliberately exposes no proposal or confirmation
+/// authority. The caller supplies already-reconciled account credentials and a
+/// cancellation token owned by the surrounding operation supervisor.
+#[derive(Clone)]
+pub struct ReadActiveGroceryList {
+    port: Arc<dyn GroceryPort>,
+}
+
+impl ReadActiveGroceryList {
+    #[must_use]
+    pub fn new(port: Arc<dyn GroceryPort>) -> Self {
+        Self { port }
+    }
+
+    pub async fn execute(
+        &self,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> Result<GroceryListSnapshot, PortError> {
+        if cancellation.is_cancelled() {
+            return Err(PortError::new(
+                "grocery_read_cancelled_before_dispatch",
+                "Grocery read was cancelled before dispatch",
+            ));
+        }
+        self.port
+            .read_active_list(credentials, operation_id, cancellation)
+            .await
+    }
 }
 
 /// Exact ownership key for the short-lived item-index convenience cache.
