@@ -139,8 +139,14 @@ fn snapshot() -> GroceryListSnapshot {
 }
 
 fn assert_internal_manifest() {
+    let text = std::str::from_utf8(PROOF_MANIFEST).expect("proof manifest UTF-8");
+    let normalized = text.replace("\r\n", "\n");
+    assert!(
+        !normalized.contains('\r'),
+        "proof manifest contains a non-line-ending carriage return"
+    );
     assert_eq!(
-        format!("{:x}", Sha256::digest(PROOF_MANIFEST)),
+        format!("{:x}", Sha256::digest(normalized.as_bytes())),
         PROOF_MANIFEST_SHA256
     );
     let manifest: serde_json::Value =
