@@ -985,9 +985,27 @@ fn install_host(
         .map_err(|error| SetupError::new("agent_setup_stage", error.to_string()))?;
     harden_open_directory(&stage_directory, &stage)?;
     let staged = write_skill_files(&stage_directory, &stage);
+    // Windows capability directory handles intentionally deny delete sharing.
+    // Close the staged tree before the parent-relative rename, then validate
+    // the exact closed tree that will be committed.
+    drop(stage_directory);
     if let Err(error) = staged {
         let _ = anchored_parent.directory.remove_dir_all(&stage_name);
         return Err(error);
+    }
+    match inspect_skill(&stage) {
+        Ok(Some(files)) if files == expected_file_digests() => {}
+        Ok(_) => {
+            let _ = anchored_parent.directory.remove_dir_all(&stage_name);
+            return Err(SetupError::new(
+                "agent_setup_stage",
+                "staged Agent Skill bytes do not match the embedded package",
+            ));
+        }
+        Err(error) => {
+            let _ = anchored_parent.directory.remove_dir_all(&stage_name);
+            return Err(error);
+        }
     }
     let backup_name = OsString::from(format!(".heyfood.{}.backup", std::process::id()));
     let replacing = plan.action == "replace";
@@ -1219,7 +1237,13 @@ fn sync_anchored_directory(directory: &CapDir) -> std::io::Result<()> {
     }
     #[cfg(windows)]
     {
-        directory.try_clone()?.into_std_file().sync_all()
+        // Windows exposes no portable directory-fsync operation, and cap-std
+        // deliberately holds directories without write access. Every receipt
+        // byte is flushed before the same-volume atomic rename; the receipt
+        // reconciliation protocol treats any crash at that boundary as
+        // uncertain. This matches the product persistence durability policy.
+        let _ = directory;
+        Ok(())
     }
     #[cfg(not(any(unix, windows)))]
     {

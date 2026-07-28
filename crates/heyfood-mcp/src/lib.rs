@@ -16,11 +16,13 @@ use heyfood_application::{
 };
 use heyfood_core::{GroceryCapability, OperationId, SessionCredentials};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ClientNotification, ErrorCode, ErrorData,
+    CallToolRequestParams, CallToolResult, ClientNotification, ClientRequest, ErrorCode, ErrorData,
     Implementation, JsonRpcMessage, ListToolsResult, PaginatedRequestParams, RequestId,
-    ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
+    ServerCapabilities, ServerInfo, ServerResult, Tool, ToolAnnotations,
 };
-use rmcp::service::{RequestContext, RxJsonRpcMessage, TxJsonRpcMessage};
+use rmcp::service::{
+    NotificationContext, RequestContext, RxJsonRpcMessage, Service, TxJsonRpcMessage,
+};
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -266,11 +268,19 @@ impl ServerHandler for HeyfoodMcpServer {
 }
 
 pub async fn serve_stdio(server: HeyfoodMcpServer) -> Result<(), McpServeError> {
-    let transport = BoundedStdioTransport::new(tokio::io::stdin(), tokio::io::stdout());
-    let running = server
-        .serve(transport)
-        .await
-        .map_err(|_| McpServeError::Startup)?;
+    let inflight = Arc::new(StdMutex::new(HashMap::new()));
+    let transport = BoundedStdioTransport::with_registry(
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+        inflight.clone(),
+    );
+    let running = BoundedMcpService {
+        inner: server,
+        inflight,
+    }
+    .serve(transport)
+    .await
+    .map_err(|_| McpServeError::Startup)?;
     running
         .waiting()
         .await
@@ -1090,9 +1100,13 @@ pub struct BoundedStdioTransport<R, W> {
 struct InflightRequest {
     _permit: OwnedSemaphorePermit,
     cancellation_seen: bool,
+    cancellation: Option<CancellationToken>,
+    response_started: bool,
 }
 
-fn complete_request(
+type RequestRegistry = Arc<StdMutex<HashMap<RequestId, InflightRequest>>>;
+
+fn complete_response(
     inflight: &StdMutex<HashMap<RequestId, InflightRequest>>,
     request_id: &RequestId,
 ) {
@@ -1102,22 +1116,78 @@ fn complete_request(
         .remove(request_id);
 }
 
+fn begin_response(
+    inflight: &StdMutex<HashMap<RequestId, InflightRequest>>,
+    request_id: &RequestId,
+) {
+    if let Some(request) = inflight
+        .lock()
+        .expect("MCP request registry lock poisoned")
+        .get_mut(request_id)
+    {
+        request.response_started = true;
+    }
+}
+
+fn bind_cancellation(
+    inflight: &StdMutex<HashMap<RequestId, InflightRequest>>,
+    request_id: &RequestId,
+    cancellation: CancellationToken,
+) {
+    let mut inflight = inflight.lock().expect("MCP request registry lock poisoned");
+    if let Some(request) = inflight.get_mut(request_id) {
+        request.cancellation = Some(cancellation.clone());
+        if request.cancellation_seen && !request.response_started {
+            cancellation.cancel();
+        }
+    }
+}
+
 fn admit_cancellation(
     inflight: &StdMutex<HashMap<RequestId, InflightRequest>>,
     request_id: &RequestId,
 ) -> bool {
-    inflight
-        .lock()
-        .expect("MCP request registry lock poisoned")
-        .get_mut(request_id)
-        .is_some_and(|request| {
-            if request.cancellation_seen {
-                false
-            } else {
-                request.cancellation_seen = true;
-                true
-            }
-        })
+    let mut inflight = inflight.lock().expect("MCP request registry lock poisoned");
+    let Some(request) = inflight.get_mut(request_id) else {
+        return false;
+    };
+    if request.cancellation_seen || request.response_started {
+        return false;
+    }
+    request.cancellation_seen = true;
+    if let Some(cancellation) = request.cancellation.as_ref() {
+        cancellation.cancel();
+    }
+    true
+}
+
+#[derive(Clone)]
+struct BoundedMcpService {
+    inner: HeyfoodMcpServer,
+    inflight: RequestRegistry,
+}
+
+impl Service<RoleServer> for BoundedMcpService {
+    async fn handle_request(
+        &self,
+        request: ClientRequest,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ServerResult, ErrorData> {
+        bind_cancellation(&self.inflight, &context.id, context.ct.clone());
+        Service::<RoleServer>::handle_request(&self.inner, request, context).await
+    }
+
+    async fn handle_notification(
+        &self,
+        notification: ClientNotification,
+        context: NotificationContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        Service::<RoleServer>::handle_notification(&self.inner, notification, context).await
+    }
+
+    fn get_info(&self) -> ServerInfo {
+        Service::<RoleServer>::get_info(&self.inner)
+    }
 }
 
 impl<R, W> BoundedStdioTransport<R, W>
@@ -1127,12 +1197,16 @@ where
 {
     #[must_use]
     pub fn new(read: R, write: W) -> Self {
+        Self::with_registry(read, write, Arc::new(StdMutex::new(HashMap::new())))
+    }
+
+    fn with_registry(read: R, write: W, inflight: RequestRegistry) -> Self {
         Self {
             read: BufReader::with_capacity(16 * 1024, read),
             line: Vec::with_capacity(16 * 1024),
             write: Arc::new(Mutex::new(Some(write))),
             request_slots: Arc::new(Semaphore::new(MAX_OUTSTANDING_REQUESTS)),
-            inflight: Arc::new(StdMutex::new(HashMap::new())),
+            inflight,
             initialized_seen: false,
         }
     }
@@ -1187,12 +1261,15 @@ where
             JsonRpcMessage::Error(error) => error.id.clone(),
             JsonRpcMessage::Request(_) | JsonRpcMessage::Notification(_) => None,
         };
+        if let Some(id) = completed.as_ref() {
+            begin_response(&inflight, id);
+        }
         async move {
             let encoded = serde_json::to_vec(&item)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
             let result = write_encoded_frame(write, encoded).await;
             if let Some(id) = completed {
-                complete_request(&inflight, &id);
+                complete_response(&inflight, &id);
             }
             result
         }
@@ -1288,6 +1365,8 @@ where
                                 InflightRequest {
                                     _permit: permit,
                                     cancellation_seen: false,
+                                    cancellation: None,
+                                    response_started: false,
                                 },
                             );
                             false
@@ -1327,10 +1406,12 @@ where
                             let Some(request_id) = cancelled.params.request_id.as_ref() else {
                                 continue;
                             };
-                            let first = admit_cancellation(&self.inflight, request_id);
-                            if first {
-                                return Some(message);
-                            }
+                            let _ = admit_cancellation(&self.inflight, request_id);
+                            // The bounded service owns and cancels the exact
+                            // request token. Passing this notification onward
+                            // would make rmcp 2.2 discard the terminal response
+                            // before `Transport::send`, stranding the request
+                            // ID and its admission permit.
                         }
                         ClientNotification::ProgressNotification(_)
                         | ClientNotification::RootsListChangedNotification(_)
@@ -1610,7 +1691,7 @@ mod tests {
 
     #[test]
     fn initialize_instructions_cover_every_agent_safety_boundary() {
-        let instructions = server().get_info().instructions.unwrap();
+        let instructions = ServerHandler::get_info(&server()).instructions.unwrap();
         for required in [
             "no mutation",
             "confirmation",
@@ -1819,23 +1900,16 @@ mod tests {
         ));
         assert!(matches!(
             rmcp::transport::Transport::<RoleServer>::receive(&mut transport).await,
-            Some(JsonRpcMessage::Notification(notification))
-                if matches!(
-                    notification.notification,
-                    ClientNotification::CancelledNotification(_)
-                )
-        ));
-        assert!(matches!(
-            rmcp::transport::Transport::<RoleServer>::receive(&mut transport).await,
             Some(JsonRpcMessage::Request(request)) if request.id == RequestId::Number(2)
         ));
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn request_completion_and_cancellation_leave_no_stale_registry_state() {
+    async fn request_binding_and_cancellation_are_atomic_in_either_order() {
         for sequence in 0..256 {
             let request_id = RequestId::Number(sequence);
             let inflight = Arc::new(StdMutex::new(HashMap::new()));
+            let cancellation = CancellationToken::new();
             let permit = Arc::new(Semaphore::new(1))
                 .try_acquire_owned()
                 .expect("test request permit");
@@ -1844,17 +1918,20 @@ mod tests {
                 InflightRequest {
                     _permit: permit,
                     cancellation_seen: false,
+                    cancellation: None,
+                    response_started: false,
                 },
             );
             let barrier = Arc::new(std::sync::Barrier::new(2));
 
             std::thread::scope(|scope| {
-                let completion_registry = inflight.clone();
-                let completion_id = request_id.clone();
-                let completion_barrier = barrier.clone();
+                let binding_registry = inflight.clone();
+                let binding_id = request_id.clone();
+                let binding_cancellation = cancellation.clone();
+                let binding_barrier = barrier.clone();
                 scope.spawn(move || {
-                    completion_barrier.wait();
-                    complete_request(&completion_registry, &completion_id);
+                    binding_barrier.wait();
+                    bind_cancellation(&binding_registry, &binding_id, binding_cancellation);
                 });
 
                 let cancellation_registry = inflight.clone();
@@ -1866,9 +1943,151 @@ mod tests {
                 });
             });
 
+            assert!(cancellation.is_cancelled());
+            assert_eq!(inflight.lock().unwrap().len(), 1);
+            complete_response(&inflight, &request_id);
             assert!(inflight.lock().unwrap().is_empty());
-            assert!(!admit_cancellation(&inflight, &request_id));
         }
+    }
+
+    #[test]
+    fn cancellation_cannot_release_a_response_already_owned_by_the_sink() {
+        let request_id = RequestId::Number(1);
+        let inflight = StdMutex::new(HashMap::new());
+        let permit = Arc::new(Semaphore::new(1))
+            .try_acquire_owned()
+            .expect("test request permit");
+        inflight.lock().unwrap().insert(
+            request_id.clone(),
+            InflightRequest {
+                _permit: permit,
+                cancellation_seen: false,
+                cancellation: Some(CancellationToken::new()),
+                response_started: false,
+            },
+        );
+
+        begin_response(&inflight, &request_id);
+        assert!(!admit_cancellation(&inflight, &request_id));
+        assert_eq!(inflight.lock().unwrap().len(), 1);
+        complete_response(&inflight, &request_id);
+        assert!(inflight.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn repeated_protocol_cancellation_recovers_all_transport_capacity() {
+        let entered = Arc::new(Notify::new());
+        let service = Arc::new(BlockingService {
+            calls: AtomicUsize::new(0),
+            cancelled: AtomicBool::new(false),
+            entered: entered.clone(),
+            release: Arc::new(Semaphore::new(0)),
+        });
+        let server = HeyfoodMcpServer::new(service.clone(), Arc::new(FakeSessions));
+        let inflight = Arc::new(StdMutex::new(HashMap::new()));
+        let (mut input_writer, input_reader) = tokio::io::duplex(32 * 1024);
+        let (output_writer, output_reader) = tokio::io::duplex(32 * 1024);
+        let transport =
+            BoundedStdioTransport::with_registry(input_reader, output_writer, inflight.clone());
+        let running = tokio::spawn({
+            let inflight = inflight.clone();
+            async move {
+                BoundedMcpService {
+                    inner: server,
+                    inflight,
+                }
+                .serve(transport)
+                .await
+                .expect("test MCP service starts")
+                .waiting()
+                .await
+                .expect("test MCP service joins")
+            }
+        });
+        let mut output_reader = BufReader::new(output_reader);
+
+        input_writer
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"capacity-test\",\"version\":\"1\"}}}\n",
+            )
+            .await
+            .unwrap();
+        let mut response = String::new();
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            output_reader.read_line(&mut response),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(response.contains("\"id\":0"));
+        input_writer
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}\n",
+            )
+            .await
+            .unwrap();
+
+        for sequence in 1..=(MAX_OUTSTANDING_REQUESTS * 2) {
+            input_writer
+                .write_all(
+                    format!(
+                        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"{TOOL_GET_CAPABILITIES}\",\"arguments\":{{}}}}}}\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(1), entered.notified())
+                .await
+                .unwrap();
+            input_writer
+                .write_all(
+                    b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":1,\"reason\":\"capacity test\"}}\n",
+                )
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    if inflight.lock().unwrap().is_empty() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("cancellation {sequence} retained transport capacity"));
+            response.clear();
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                output_reader.read_line(&mut response),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(response.contains("\"id\":1"));
+        }
+
+        input_writer
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"ping\",\"params\":{}}\n")
+            .await
+            .unwrap();
+        response.clear();
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            output_reader.read_line(&mut response),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(response.contains("\"id\":99"));
+        assert_eq!(service.calls.load(Ordering::SeqCst), 16);
+
+        drop(input_writer);
+        tokio::time::timeout(Duration::from_secs(1), running)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test(start_paused = true)]

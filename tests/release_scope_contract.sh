@@ -57,12 +57,22 @@ protected_slice="$CASE_DIR/protected-ci.yml"
 sed -n '/^  protected-candidate-preflight:/,$p' "$CANDIDATE_WORKFLOW" >"$protected_slice"
 macos_signer="$ROOT/packaging/macos/sign-and-notarize.sh"
 archive_smoke="$ROOT/scripts/release/smoke-archive.sh"
+agent_setup_smoke="$ROOT/scripts/release/agent-setup-smoke.sh"
 
 [[ -x "$macos_signer" ]] ||
   fail "the macOS signing tool must be executable"
 [[ "$(git -C "$ROOT" ls-files --stage -- packaging/macos/sign-and-notarize.sh |
   awk '{print $1}')" == "100755" ]] ||
   fail "Git must record the macOS signing tool with mode 100755"
+
+# shellcheck disable=SC2016 # These are literal source patterns, not expansions.
+create_smoke_root_line=$(line_of "$agent_setup_smoke" 'mkdir -p -- "$root"')
+# shellcheck disable=SC2016 # These are literal source patterns, not expansions.
+canonicalize_smoke_root_line=$(line_of "$agent_setup_smoke" 'root=$(cd "$root" && pwd -P)')
+if [[ -z "$create_smoke_root_line" || -z "$canonicalize_smoke_root_line" ||
+  "$create_smoke_root_line" -ge "$canonicalize_smoke_root_line" ]]; then
+  fail "agent setup archive smoke must create its fresh root before canonicalizing it"
+fi
 
 capture_line=$(line_of "$macos_signer" 'security list-keychains -d user |')
 create_line=$(line_of "$macos_signer" 'security create-keychain')

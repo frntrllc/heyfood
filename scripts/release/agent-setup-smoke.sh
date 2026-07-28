@@ -17,6 +17,7 @@ case "$binary:$root" in
     ;;
 esac
 binary="$(cd "$(dirname "$binary")" && pwd -P)/$(basename "$binary")"
+mkdir -p -- "$root"
 root=$(cd "$root" && pwd -P)
 
 home="$root/home"
