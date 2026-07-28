@@ -12,6 +12,7 @@ pub mod one_shot_turn;
 pub mod ports;
 pub mod run_turn;
 pub mod state_writer;
+pub mod status;
 pub mod supervisor;
 
 pub use capability::{
@@ -50,6 +51,10 @@ pub use run_turn::{
 pub use state_writer::{
     CommitError, CommitOutcome, Mutation, MutationClass, MutationMetadata, MutationProposal,
     OperationSnapshot, SerializedStateWriter,
+};
+pub use status::{
+    OptionalCapabilityStatus, ProfileReadinessStatus, ReadStatus, StatusPort, StatusSnapshot,
+    VoiceReadinessStatus,
 };
 pub use supervisor::{OperationSupervisor, SupervisorError, WorkflowLease};
 

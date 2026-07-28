@@ -9,7 +9,7 @@
 | Session refresh | `EnsureSession`, `CredentialPort` | Composition and scope routing remain in `heyfood-bin` | Retain; expose only through composed controllers |
 | Grocery | Deployed `GroceryReadPort`, renderer-neutral display/exclusion snapshots, and production read controllers; provisional authority-bearing `GroceryPort` plus internal `ReadActiveGroceryList` proof | Prepare/confirm still call concrete `HttpService`; the deployed active-list response cannot satisfy the authority-bearing port | Display read extraction complete; keep mutation authority separate until the backend supplies the frozen context fingerprint |
 | Menu Watch | `MenuWatchPort`; renderer-neutral snapshots and create request; list/create/remove controllers; production `HttpService` adapter | Argument parsing and human/JSON rendering remain in CLI/bin | Controller extraction complete; direct create/remove now require distinct controlling-terminal review before credentials or network |
-| Capability/status | `CapabilityPort`, renderer-neutral `CapabilitySnapshot`, and `DiscoverCapabilities`; `HttpService` implements the production adapter | Scope interpretation, profile/status composition, voice readiness, and panel text remain in the binary | Discovery extraction complete; define the composed status controller without moving rendering into application |
+| Capability/status | `CapabilityPort`, `StatusPort`, renderer-neutral capability/status snapshots, `DiscoverCapabilities`, and `ReadStatus`; `HttpService` implements both production adapters | Human panel text remains in the binary | Controller extraction complete; rendering remains presentation-owned |
 | Household/profile context | `TurnContext` only | Imported-state parsing and profile downloads are in binary | Extract only the context assembly needed by shared workflows |
 | Registration/login | Registration runtime plus binary orchestration | Browser/device handoff and durable replacement remain composition-owned | Inventory only; agent setup must not redefine auth |
 | Health | Provider-neutral types/port retained | Hidden runtime paths exist but public dispatch fails closed | Keep deferred and absent from agent tools |
@@ -18,17 +18,19 @@
 
 - `heyfood-application` does not depend on runtime, platform, CLI, TUI, or bin.
 - `heyfood-agent-runtime` implements `ServicePort`, `CapabilityPort`,
-  `GroceryReadPort`, and `MenuWatchPort`; Grocery prepare/confirm operations
-  remain inherent `HttpService` methods.
+  `StatusPort`, `GroceryReadPort`, and `MenuWatchPort`; Grocery prepare/confirm
+  operations remain inherent `HttpService` methods.
 - `heyfood-bin::OneShotExecutor` still accepts `&HttpService` for Grocery
   prepare/confirm, preventing a fake authority-bearing Grocery service without
   exercising the concrete runtime type.
 - `InteractiveTurnDriver` has an object-safe conversational service and a
   second optional concrete `HttpService` specifically for panels and other
   workflows.
-- One-shot Grocery dispatch plus the interactive Status and Grocery panels now
-  discover service capabilities through `DiscoverCapabilities`; the existing
-  renderer and operation behavior remain unchanged.
+- One-shot Grocery dispatch plus the interactive Grocery panel discover service
+  capabilities through `DiscoverCapabilities`. The interactive Status panel
+  now uses `ReadStatus`, which composes capability discovery, authorization
+  scopes, profile consent, and local voice readiness into a typed snapshot.
+  Existing renderer and operation behavior remain unchanged.
 - One-shot Grocery list/exclusion reads, item-reference refreshes, and the
   interactive Grocery panel route through the deployed display-read
   controllers. Runtime conversion preserves the frozen JSON shape, including
@@ -51,7 +53,7 @@
 The internal authority-bearing Grocery fake-port controller proves object-safe
 dependency direction and cancellation only. The deployed display-read seam
 has a production HTTP adapter, exact JSON mapping evidence, and pre-dispatch
-cancellation tests. Capability discovery also has a production adapter and
-both cancellation and forwarding tests. The next Grocery increment must obtain
-or freeze the real mutation-authority shape; it must not infer authority from
-display data.
+cancellation tests. Capability and composed status discovery have production
+adapters plus cancellation and composition tests. The next Grocery increment
+must obtain or freeze the real mutation-authority shape; it must not infer
+authority from display data.

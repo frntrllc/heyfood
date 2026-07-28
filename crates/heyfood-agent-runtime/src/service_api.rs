@@ -5,6 +5,7 @@ use heyfood_application::{
     GroceryDisplayList, GroceryDisplayMemberFlag, GroceryDisplaySafety, GroceryDisplaySource,
     GroceryExclusions, GroceryReadPort, MenuWatchChangeEvent, MenuWatchChangeSummary,
     MenuWatchList, MenuWatchPort, MenuWatchSnapshot, PortError, RegistrationAvailability,
+    StatusPort,
 };
 use heyfood_core::{
     AddItemsRequestWire, ApplicationCapabilitiesWire, AuthorizationServerMetadataWire,
@@ -914,6 +915,26 @@ impl CapabilityPort for HttpService {
             self.discover_capabilities(cancellation)
                 .await
                 .map(capability_snapshot_from_wire)
+        })
+    }
+}
+
+impl StatusPort for HttpService {
+    fn profile_consent_granted(
+        &self,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<bool, PortError>> {
+        Box::pin(async move {
+            self.profile_consent_status(&credentials, operation_id, cancellation)
+                .await
+                .map(|document| {
+                    document
+                        .get("has_consent")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                })
         })
     }
 }

@@ -8,8 +8,9 @@ use heyfood_agent_runtime::{GroceryExport, HttpService};
 use heyfood_application::{
     AudioCapturePort, CapabilitySnapshot, CreateMenuWatch, CreateMenuWatchRequest,
     DiscoverCapabilities, EnsureSession, EnsureSessionError, EnsureSessionOutcome, ListMenuWatches,
-    ReadActiveGroceryDisplay, ReadGroceryExclusions, RefreshPolicy, RemoveMenuWatch,
-    RunTurnOutcome, ServicePort, TurnContext, TurnRequest, execute_one_shot_turn,
+    OptionalCapabilityStatus, ProfileReadinessStatus, ReadActiveGroceryDisplay,
+    ReadGroceryExclusions, ReadStatus, RefreshPolicy, RemoveMenuWatch, RunTurnOutcome, ServicePort,
+    TurnContext, TurnRequest, VoiceReadinessStatus, execute_one_shot_turn,
 };
 use heyfood_cli::{
     AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, MenuWatchCommand,
@@ -2419,56 +2420,47 @@ async fn run_interactive_panel(
 
     match panel {
         PanelRequest::Status => {
-            let capabilities = DiscoverCapabilities::new(service.as_ref())
-                .execute(cancellation.child_token())
+            let status = ReadStatus::new(service.as_ref())
+                .execute(
+                    credentials,
+                    authorization_scope,
+                    environment.native_voice_available,
+                    cancellation,
+                )
                 .await
                 .map_err(panel_error)?;
-            let profile = if authorization_has_scope(authorization_scope, "profile:read") {
-                let consent = service
-                    .profile_consent_status(
-                        &credentials,
-                        OperationId::new(),
-                        cancellation.child_token(),
-                    )
-                    .await
-                    .map_err(panel_error)?;
-                if consent
-                    .get("has_consent")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                {
+            let profile = match status.profile {
+                ProfileReadinessStatus::NotAuthorized => "not authorized",
+                ProfileReadinessStatus::AuthorizedConsentGranted => {
                     "authorized · sync consent granted"
-                } else {
+                }
+                ProfileReadinessStatus::AuthorizedConsentNotGranted => {
                     "authorized · sync consent not granted"
                 }
-            } else {
-                "not authorized"
             };
-            let grocery = match (
-                capabilities.grocery.is_usable(),
-                authorization_has_scope(authorization_scope, "grocery:read"),
-            ) {
-                (true, true) => "available · authorized",
-                (true, false) => "available · authorization required",
-                _ => "not advertised by service",
+            let grocery = match status.grocery {
+                OptionalCapabilityStatus::Authorized => "available · authorized",
+                OptionalCapabilityStatus::AuthorizationRequired => {
+                    "available · authorization required"
+                }
+                OptionalCapabilityStatus::NotAdvertised => "not advertised by service",
             };
-            let menu_watch = if authorization_has_scope(authorization_scope, "menu:watch") {
-                "authorized · create/list/remove available"
-            } else {
-                "authorization required"
+            let menu_watch = match status.menu_watch {
+                OptionalCapabilityStatus::Authorized => "authorized · create/list/remove available",
+                OptionalCapabilityStatus::AuthorizationRequired
+                | OptionalCapabilityStatus::NotAdvertised => "authorization required",
             };
-            let voice = match (
-                environment.native_voice_available,
-                authorization_has_scope(authorization_scope, "audio:transcribe"),
-            ) {
-                (true, true) => {
+            let voice = match status.voice {
+                VoiceReadinessStatus::AuthorizedCaptureAvailable => {
                     "native capture available · transcription authorized · permission checked on use"
                 }
-                (true, false) => "native capture available · transcription authorization required",
-                (false, true) => {
+                VoiceReadinessStatus::AuthorizationRequiredCaptureAvailable => {
+                    "native capture available · transcription authorization required"
+                }
+                VoiceReadinessStatus::AuthorizedCaptureUnavailable => {
                     "transcription authorized · native capture unavailable in this artifact"
                 }
-                (false, false) => {
+                VoiceReadinessStatus::AuthorizationRequiredCaptureUnavailable => {
                     "transcription authorization required · native capture unavailable in this artifact"
                 }
             };
