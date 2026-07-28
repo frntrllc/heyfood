@@ -229,9 +229,20 @@ pub enum AgentCommand {
 
 #[derive(Clone, Debug, Args)]
 pub struct AgentGuideArgs {
+    /// Output format for the embedded guide.
+    #[arg(long, value_enum, default_value_t = AgentGuideFormat::Markdown)]
+    pub format: AgentGuideFormat,
+
     /// Print the normative safety contract instead of the integration guide.
     #[arg(long)]
     pub safety: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum AgentGuideFormat {
+    /// Markdown suitable for an agent instruction context.
+    #[default]
+    Markdown,
 }
 
 #[derive(Clone, Debug, Args)]

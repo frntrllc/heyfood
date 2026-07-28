@@ -12,6 +12,7 @@
     "manifest_schema_version",
     "manifest_sha256",
     "embedded",
+    "checks",
     "network_accessed",
     "credentials_accessed",
     "product_state_mutated",
@@ -50,6 +51,9 @@
         "manifest_schema_sha256",
         "schema_index_schema_sha256",
         "doctor_schema_sha256",
+        "guide_schema_sha256",
+        "schema_result_schema_sha256",
+        "cli_error_schema_sha256",
         "public_output_schema_sha256",
         "proposal_presentation_schema_sha256"
       ],
@@ -69,11 +73,45 @@
         "doctor_schema_sha256": {
           "$ref": "#/$defs/sha256"
         },
+        "guide_schema_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "schema_result_schema_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cli_error_schema_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
         "public_output_schema_sha256": {
           "$ref": "#/$defs/sha256"
         },
         "proposal_presentation_schema_sha256": {
           "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+          },
+          "status": {
+            "enum": [
+              "pass",
+              "fail"
+            ]
+          }
         }
       }
     },

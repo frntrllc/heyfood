@@ -12,6 +12,9 @@ concurrency:
   group: native-release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  HEYFOOD_DISTRIBUTION_CHANNEL: release
+
 jobs:
   validate:
     name: Validate exact release commit
@@ -113,6 +116,14 @@ jobs:
           test "$($binary --version)" = "heyfood $VERSION"
           "$binary" --help >/dev/null
           "$binary" register --help >/dev/null
+          "$binary" agent describe |
+            jq -e \
+              --arg commit "$GITHUB_SHA" \
+              --arg tree "$(git rev-parse 'HEAD^{tree}')" \
+              '.build.distribution_channel == "release"
+               and .build.dirty == false
+               and .build.source_commit == $commit
+               and .build.source_tree == $tree'
       - name: Install deterministic archive tooling
         if: runner.os == 'macOS'
         run: brew install gnu-tar

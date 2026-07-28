@@ -19,6 +19,9 @@ concurrency:
   group: rust-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  HEYFOOD_DISTRIBUTION_CHANNEL: candidate
+
 jobs:
   compile:
     name: Compile / ${{ matrix.os }}
@@ -80,9 +83,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes dbus-x11 gnome-keyring libdbus-1-dev pkg-config
-      - name: Test the default product feature set on macOS and Windows
-        if: runner.os != 'Linux'
+      - name: Test the default product feature set on macOS
+        if: runner.os == 'macOS'
         run: cargo test --locked --workspace --all-targets
+      - name: Test the default product feature set on Windows without the process-global console case
+        if: runner.os == 'Windows'
+        run: cargo test --locked --workspace --all-targets -- --skip qualification_pty_signal_and_restoration_matrix
+      - name: Test the process-global Windows console case in isolation
+        if: runner.os == 'Windows'
+        run: cargo test --locked --package heyfood-bin --test phase0_qualification qualification_pty_signal_and_restoration_matrix -- --exact --test-threads=1 --nocapture
       - name: Test the default product feature set on Linux
         if: runner.os == 'Linux'
         run: |
@@ -90,8 +99,15 @@ jobs:
             printf "\n" | gnome-keyring-daemon --unlock
             cargo test --locked --workspace --all-targets
           '
-      - name: Test the secondary portable feature set
+      - name: Test the secondary portable feature set on macOS and Linux
+        if: runner.os != 'Windows'
         run: cargo test --locked --workspace --all-targets --no-default-features
+      - name: Test the secondary portable feature set on Windows without the process-global console case
+        if: runner.os == 'Windows'
+        run: cargo test --locked --workspace --all-targets --no-default-features -- --skip qualification_pty_signal_and_restoration_matrix
+      - name: Test the portable process-global Windows console case in isolation
+        if: runner.os == 'Windows'
+        run: cargo test --locked --package heyfood-bin --test phase0_qualification --no-default-features qualification_pty_signal_and_restoration_matrix -- --exact --test-threads=1 --nocapture
 
   dependency-dag:
     name: Dependency DAG / ${{ matrix.os }}
@@ -161,6 +177,19 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - run: cargo xtask verify-phase1-evidence
+
+  agent-phase1-evidence:
+    name: Agent-native Phase 1 inventory / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - run: cargo xtask verify-agent-phase1-evidence
 
   phase0-qualification:
     name: Internal PTY, signal, restoration vertical / ${{ matrix.os }}

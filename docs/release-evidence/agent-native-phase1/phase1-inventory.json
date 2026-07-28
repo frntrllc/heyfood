@@ -4,6 +4,41 @@
   "phase": 1,
   "release_line": "0.6.0",
   "status": "product_complete_review_pending",
+  "lineage": {
+    "repository": "https://github.com/frntrllc/heyfood",
+    "branch": "codex/agent-native-integration-plan",
+    "product_sha": null,
+    "product_tree": null
+  },
+  "contract_bundle": {
+    "sha256": "39b0bb225827c781ba12ba765acfd3294ac6d11040fa1f7074b9d4a8302169e7",
+    "files": [
+      ".gitattributes",
+      ".github/workflows/ci.yml",
+      ".github/workflows/release.yml",
+      ".github/workflows/rust-ci.yml",
+      "README.md",
+      "crates/heyfood-agent-contract/Cargo.toml",
+      "crates/heyfood-agent-contract/build.rs",
+      "crates/heyfood-agent-contract/src/lib.rs",
+      "crates/heyfood-bin/src/agent_discovery.rs",
+      "crates/heyfood-bin/tests/agent_phase1_discovery.rs",
+      "crates/heyfood-cli/src/lib.rs",
+      "crates/heyfood-cli/tests/agent_phase0_manifest_schema.rs",
+      "docs/AGENT_INTEGRATION.md",
+      "docs/AGENT_SAFETY.md",
+      "docs/COMMAND_GRAMMAR.md",
+      "fixtures/agent/manifest-v1-golden.json",
+      "schemas/v1/agent-proposal-presentation.schema.json",
+      "schemas/v1/heyfood-agent-doctor.schema.json",
+      "schemas/v1/heyfood-agent-guide.schema.json",
+      "schemas/v1/heyfood-agent-manifest.schema.json",
+      "schemas/v1/heyfood-agent-schema-index.schema.json",
+      "schemas/v1/heyfood-agent-schema-result.schema.json",
+      "schemas/v1/heyfood-cli-error.schema.json",
+      "schemas/v1/heyfood-output.schema.json"
+    ]
+  },
   "requirements": [
     {
       "id": "AN-P1-01-contract-crate",
@@ -34,6 +69,9 @@
         "schemas/v1/heyfood-agent-manifest.schema.json",
         "schemas/v1/heyfood-agent-schema-index.schema.json",
         "schemas/v1/heyfood-agent-doctor.schema.json",
+        "schemas/v1/heyfood-agent-guide.schema.json",
+        "schemas/v1/heyfood-agent-schema-result.schema.json",
+        "schemas/v1/heyfood-cli-error.schema.json",
         "schemas/v1/heyfood-output.schema.json",
         "schemas/v1/agent-proposal-presentation.schema.json"
       ],
@@ -43,7 +81,7 @@
       "id": "AN-P1-04-command-parity",
       "status": "satisfied",
       "evidence": [
-        "crates/heyfood-cli/tests/agent_phase0_inventory.rs",
+        "docs/release-evidence/agent-native-phase0/command-authority-inventory.json",
         "crates/heyfood-cli/tests/agent_phase0_manifest_schema.rs"
       ],
       "blockers": []
@@ -63,7 +101,7 @@
       "status": "qualification_pending",
       "evidence": [],
       "blockers": [
-        "Exact installed candidate archives must pass macOS, Linux, and ordinary Windows semantic discovery qualification."
+        "Exact candidate archives must pass macOS, Linux, and ordinary Windows semantic discovery qualification."
       ]
     },
     {
@@ -75,6 +113,72 @@
       ]
     }
   ],
+  "qualification": {
+    "hosted": {
+      "status": "pending",
+      "run_url": null,
+      "successes": 0,
+      "expected_skips": 0,
+      "failures": null
+    },
+    "schemas": {
+      "draft": "2020-12",
+      "public_schema_count": 8,
+      "meta_schemas_validated": true,
+      "generated_instances_validated": [
+        "manifest",
+        "schema-index",
+        "doctor",
+        "guide",
+        "schema-result-index",
+        "schema-result-selected",
+        "error"
+      ]
+    },
+    "artifacts": {
+      "status": "pending",
+      "maximum_growth_bytes": 1048576,
+      "targets": [
+        {
+          "target": "aarch64-apple-darwin",
+          "baseline_v0_5_0_bytes": 2923971,
+          "candidate_v0_6_0_bytes": null,
+          "growth_bytes": null,
+          "sha256": null,
+          "installed_semantics": "pending"
+        },
+        {
+          "target": "x86_64-apple-darwin",
+          "baseline_v0_5_0_bytes": 3189074,
+          "candidate_v0_6_0_bytes": null,
+          "growth_bytes": null,
+          "sha256": null,
+          "installed_semantics": "pending"
+        },
+        {
+          "target": "aarch64-unknown-linux-gnu",
+          "baseline_v0_5_0_bytes": 3227966,
+          "candidate_v0_6_0_bytes": null,
+          "growth_bytes": null,
+          "sha256": null,
+          "installed_semantics": "pending"
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "baseline_v0_5_0_bytes": 3468910,
+          "candidate_v0_6_0_bytes": null,
+          "growth_bytes": null,
+          "sha256": null,
+          "installed_semantics": "pending"
+        }
+      ]
+    }
+  },
+  "review": {
+    "status": "pending",
+    "exact_product_sha": null,
+    "reviewers": []
+  },
   "release_gates": {
     "phase2": "blocked_until_phase1_go",
     "publication": "not_authorized_by_phase1"

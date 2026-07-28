@@ -19,6 +19,9 @@ concurrency:
   group: native-cli-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  HEYFOOD_DISTRIBUTION_CHANNEL: candidate
+
 jobs:
   installer-contract:
     name: Installer / ${{ matrix.context }}
@@ -351,6 +354,15 @@ jobs:
           export SOURCE_DATE_EPOCH
           SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
           cargo build --locked --release --package heyfood-bin --target "$TARGET"
+          binary="target/$TARGET/release/heyfood"
+          "$binary" agent describe |
+            jq -e \
+              --arg commit "$GITHUB_SHA" \
+              --arg tree "$(git rev-parse 'HEAD^{tree}')" \
+              '.build.distribution_channel == "candidate"
+               and .build.dirty == false
+               and .build.source_commit == $commit
+               and .build.source_tree == $tree'
       - name: Sign and notarize the macOS executable
         if: runner.os == 'macOS'
         shell: bash

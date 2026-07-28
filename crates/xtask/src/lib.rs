@@ -58,6 +58,15 @@ pub struct Phase1EvidenceReport {
     pub hosted_status: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentPhase1EvidenceReport {
+    pub requirements: usize,
+    pub blockers: usize,
+    pub hosted_status: String,
+    pub artifact_status: String,
+    pub review_status: String,
+}
+
 const FROZEN_COMPATIBILITY_SHA: &str = "73494a57468dac83b4904ce6c390e36926f5c6fe";
 const FROZEN_COMPATIBILITY_TREE: &str = "4c265cd9ae0623442dd8eba1f6f4388c4ebf5adf";
 const FROZEN_COMPATIBILITY_DIGEST: &str =
@@ -1896,6 +1905,443 @@ pub fn verify_phase1_evidence(root: &Path) -> Result<Phase1EvidenceReport, Strin
         blockers,
         review_status: review_status.to_owned(),
         hosted_status: hosted_status.to_owned(),
+    })
+}
+
+/// Validate the agent-native Phase 1 evidence independently from the
+/// historical Rust transition Phase 1 ledger.
+pub fn verify_agent_phase1_evidence(root: &Path) -> Result<AgentPhase1EvidenceReport, String> {
+    let document = read_json(
+        root,
+        "docs/release-evidence/agent-native-phase1/phase1-inventory.json",
+    )?;
+    let inventory = document.object("agent-native Phase 1 inventory")?;
+    exact_keys(
+        inventory,
+        &[
+            "schema_version",
+            "program",
+            "phase",
+            "release_line",
+            "status",
+            "lineage",
+            "contract_bundle",
+            "requirements",
+            "qualification",
+            "review",
+            "release_gates",
+        ],
+        "agent-native Phase 1 inventory",
+    )?;
+    expect_usize(
+        inventory,
+        "schema_version",
+        1,
+        "agent-native Phase 1 inventory",
+    )?;
+    expect_string(
+        inventory,
+        "program",
+        "heyfood-agent-native",
+        "agent-native Phase 1 inventory",
+    )?;
+    expect_usize(inventory, "phase", 1, "agent-native Phase 1 inventory")?;
+    expect_string(
+        inventory,
+        "release_line",
+        "0.6.0",
+        "agent-native Phase 1 inventory",
+    )?;
+    let status = required_string(inventory, "status", "agent-native Phase 1 inventory")?;
+    if !matches!(status, "product_complete_review_pending" | "approved") {
+        return Err(format!("invalid agent-native Phase 1 status {status:?}"));
+    }
+
+    let lineage = field(inventory, "lineage", "agent-native Phase 1 inventory")?
+        .object("agent-native Phase 1 lineage")?;
+    exact_keys(
+        lineage,
+        &["repository", "branch", "product_sha", "product_tree"],
+        "agent-native Phase 1 lineage",
+    )?;
+    expect_string(
+        lineage,
+        "repository",
+        "https://github.com/frntrllc/heyfood",
+        "agent-native Phase 1 lineage",
+    )?;
+    required_nonempty_string(lineage, "branch", "agent-native Phase 1 lineage")?;
+    let product_pending = null_fields(lineage, &["product_sha", "product_tree"])?;
+    if !product_pending {
+        let product_sha = required_string(lineage, "product_sha", "agent-native Phase 1 lineage")?;
+        let product_tree =
+            required_string(lineage, "product_tree", "agent-native Phase 1 lineage")?;
+        validate_git_sha(product_sha, "agent-native Phase 1 product SHA")?;
+        validate_git_sha(product_tree, "agent-native Phase 1 product tree")?;
+        let actual_tree = Command::new("git")
+            .args(["rev-parse", &format!("{product_sha}^{{tree}}")])
+            .current_dir(root)
+            .output()
+            .map_err(|error| format!("cannot inspect agent-native product tree: {error}"))?;
+        if !actual_tree.status.success()
+            || String::from_utf8_lossy(&actual_tree.stdout).trim() != product_tree
+        {
+            return Err(
+                "agent-native Phase 1 product tree does not match its product SHA".to_owned(),
+            );
+        }
+        let ancestry = Command::new("git")
+            .args(["merge-base", "--is-ancestor", product_sha, "HEAD"])
+            .current_dir(root)
+            .status()
+            .map_err(|error| format!("cannot inspect agent-native product ancestry: {error}"))?;
+        if !ancestry.success() {
+            return Err(
+                "agent-native Phase 1 product SHA is not an ancestor of evidence HEAD".to_owned(),
+            );
+        }
+    } else if status == "approved" {
+        return Err(
+            "approved agent-native Phase 1 evidence requires exact product lineage".to_owned(),
+        );
+    }
+
+    let bundle = field(
+        inventory,
+        "contract_bundle",
+        "agent-native Phase 1 inventory",
+    )?
+    .object("agent-native Phase 1 contract bundle")?;
+    exact_keys(
+        bundle,
+        &["sha256", "files"],
+        "agent-native Phase 1 contract bundle",
+    )?;
+    let expected_bundle =
+        required_string(bundle, "sha256", "agent-native Phase 1 contract bundle")?;
+    validate_sha256(
+        expected_bundle,
+        "agent-native Phase 1 contract bundle digest",
+    )?;
+    let bundle_files = field(bundle, "files", "agent-native Phase 1 contract bundle")?
+        .array("agent-native Phase 1 contract bundle files")?;
+    if bundle_files.is_empty() {
+        return Err("agent-native Phase 1 contract bundle must not be empty".to_owned());
+    }
+    let mut previous = None;
+    let mut bundle_payload = Vec::new();
+    for file in bundle_files {
+        let relative = file.string("agent-native Phase 1 contract bundle file")?;
+        if previous.is_some_and(|value| value >= relative) {
+            return Err(
+                "agent-native Phase 1 contract bundle paths must be unique and sorted".to_owned(),
+            );
+        }
+        previous = Some(relative);
+        let path = safe_relative_path(relative)?;
+        let bytes = fs::read(root.join(&path)).map_err(|error| {
+            format!(
+                "cannot read contract bundle file {}: {error}",
+                path.display()
+            )
+        })?;
+        let normalized = std::str::from_utf8(&bytes)
+            .map_err(|error| {
+                format!(
+                    "contract bundle file {} is not UTF-8: {error}",
+                    path.display()
+                )
+            })?
+            .replace("\r\n", "\n");
+        bundle_payload.extend_from_slice(&(relative.len() as u64).to_be_bytes());
+        bundle_payload.extend_from_slice(relative.as_bytes());
+        bundle_payload.extend_from_slice(&(normalized.len() as u64).to_be_bytes());
+        bundle_payload.extend_from_slice(normalized.as_bytes());
+    }
+    let actual_bundle = sha256::digest_hex(&bundle_payload);
+    if actual_bundle != expected_bundle {
+        return Err(format!(
+            "agent-native Phase 1 contract bundle digest mismatch: declared {expected_bundle}, actual {actual_bundle}"
+        ));
+    }
+
+    let requirements = field(inventory, "requirements", "agent-native Phase 1 inventory")?
+        .array("agent-native Phase 1 requirements")?;
+    if requirements.len() != 7 {
+        return Err("agent-native Phase 1 must contain exactly seven requirements".to_owned());
+    }
+    let mut requirement_ids = BTreeSet::new();
+    let mut blockers = 0;
+    for (index, requirement) in requirements.iter().enumerate() {
+        let context = format!("agent-native Phase 1 requirements[{index}]");
+        let requirement = requirement.object(&context)?;
+        exact_keys(
+            requirement,
+            &["id", "status", "evidence", "blockers"],
+            &context,
+        )?;
+        let id = required_nonempty_string(requirement, "id", &context)?;
+        if !requirement_ids.insert(id) {
+            return Err(format!("duplicate agent-native requirement {id:?}"));
+        }
+        let requirement_status = required_string(requirement, "status", &context)?;
+        if !matches!(
+            requirement_status,
+            "satisfied" | "qualification_pending" | "review_pending"
+        ) {
+            return Err(format!(
+                "{context} has invalid status {requirement_status:?}"
+            ));
+        }
+        let evidence = field(requirement, "evidence", &context)?.array(&context)?;
+        for path in evidence {
+            required_path_exists(root, path.string(&context)?, &context)?;
+        }
+        let requirement_blockers = field(requirement, "blockers", &context)?.array(&context)?;
+        if requirement_status == "satisfied"
+            && (!requirement_blockers.is_empty() || evidence.is_empty())
+        {
+            return Err(format!("{context} satisfied state is inconsistent"));
+        }
+        blockers += requirement_blockers.len();
+    }
+
+    let qualification = field(inventory, "qualification", "agent-native Phase 1 inventory")?
+        .object("agent-native Phase 1 qualification")?;
+    exact_keys(
+        qualification,
+        &["hosted", "schemas", "artifacts"],
+        "agent-native Phase 1 qualification",
+    )?;
+    let hosted = field(
+        qualification,
+        "hosted",
+        "agent-native Phase 1 qualification",
+    )?
+    .object("agent-native Phase 1 hosted qualification")?;
+    exact_keys(
+        hosted,
+        &[
+            "status",
+            "run_url",
+            "successes",
+            "expected_skips",
+            "failures",
+        ],
+        "agent-native Phase 1 hosted qualification",
+    )?;
+    let hosted_status = required_string(
+        hosted,
+        "status",
+        "agent-native Phase 1 hosted qualification",
+    )?;
+    if !matches!(hosted_status, "pending" | "passed") {
+        return Err("agent-native hosted qualification must be pending or passed".to_owned());
+    }
+    field(hosted, "successes", "hosted")?.usize("hosted successes")?;
+    field(hosted, "expected_skips", "hosted")?.usize("hosted expected skips")?;
+    if hosted_status == "passed" {
+        required_nonempty_string(hosted, "run_url", "agent-native hosted qualification")?;
+        expect_usize(hosted, "failures", 0, "agent-native hosted qualification")?;
+    } else if !null_fields(hosted, &["run_url", "failures"])? {
+        return Err(
+            "pending hosted qualification must not claim a run or failure count".to_owned(),
+        );
+    }
+
+    let schemas = field(
+        qualification,
+        "schemas",
+        "agent-native Phase 1 qualification",
+    )?
+    .object("agent-native Phase 1 schema qualification")?;
+    exact_keys(
+        schemas,
+        &[
+            "draft",
+            "public_schema_count",
+            "meta_schemas_validated",
+            "generated_instances_validated",
+        ],
+        "agent-native Phase 1 schema qualification",
+    )?;
+    expect_string(
+        schemas,
+        "draft",
+        "2020-12",
+        "agent-native Phase 1 schema qualification",
+    )?;
+    expect_usize(
+        schemas,
+        "public_schema_count",
+        8,
+        "agent-native Phase 1 schema qualification",
+    )?;
+    if !field(schemas, "meta_schemas_validated", "schemas")?.boolean("schemas")? {
+        return Err("agent-native Phase 1 must validate every public meta-schema".to_owned());
+    }
+    let instances = field(schemas, "generated_instances_validated", "schemas")?
+        .array("generated schema instances")?;
+    let instance_names = instances
+        .iter()
+        .map(|value| value.string("generated schema instance"))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let required_instances = BTreeSet::from([
+        "manifest",
+        "schema-index",
+        "doctor",
+        "guide",
+        "schema-result-index",
+        "schema-result-selected",
+        "error",
+    ]);
+    if instance_names != required_instances {
+        return Err("agent-native generated schema-instance matrix is incomplete".to_owned());
+    }
+
+    let artifacts = field(
+        qualification,
+        "artifacts",
+        "agent-native Phase 1 qualification",
+    )?
+    .object("agent-native Phase 1 artifact qualification")?;
+    exact_keys(
+        artifacts,
+        &["status", "maximum_growth_bytes", "targets"],
+        "agent-native Phase 1 artifact qualification",
+    )?;
+    let artifact_status = required_string(
+        artifacts,
+        "status",
+        "agent-native Phase 1 artifact qualification",
+    )?;
+    if !matches!(artifact_status, "pending" | "passed") {
+        return Err("agent-native artifact qualification must be pending or passed".to_owned());
+    }
+    let maximum_growth =
+        field(artifacts, "maximum_growth_bytes", "artifacts")?.usize("maximum artifact growth")?;
+    let targets = field(artifacts, "targets", "artifacts")?.array("artifact targets")?;
+    if targets.len() != 4 {
+        return Err("agent-native Phase 1 must measure exactly four release targets".to_owned());
+    }
+    let expected_targets = BTreeSet::from([
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+    ]);
+    let mut target_names = BTreeSet::new();
+    for (index, target) in targets.iter().enumerate() {
+        let context = format!("agent-native artifact target[{index}]");
+        let target = target.object(&context)?;
+        exact_keys(
+            target,
+            &[
+                "target",
+                "baseline_v0_5_0_bytes",
+                "candidate_v0_6_0_bytes",
+                "growth_bytes",
+                "sha256",
+                "installed_semantics",
+            ],
+            &context,
+        )?;
+        target_names.insert(required_nonempty_string(target, "target", &context)?);
+        let baseline = field(target, "baseline_v0_5_0_bytes", &context)?.usize(&context)?;
+        if artifact_status == "passed" {
+            let candidate = field(target, "candidate_v0_6_0_bytes", &context)?.usize(&context)?;
+            let growth = field(target, "growth_bytes", &context)?.usize(&context)?;
+            if candidate.saturating_sub(baseline) != growth || growth > maximum_growth {
+                return Err(format!(
+                    "{context} artifact growth is inconsistent or unaccepted"
+                ));
+            }
+            validate_sha256(
+                required_string(target, "sha256", &context)?,
+                &format!("{context}.sha256"),
+            )?;
+            expect_string(target, "installed_semantics", "passed", &context)?;
+        } else if !null_fields(
+            target,
+            &["candidate_v0_6_0_bytes", "growth_bytes", "sha256"],
+        )? || required_string(target, "installed_semantics", &context)? != "pending"
+        {
+            return Err(format!("{context} pending artifact state is inconsistent"));
+        }
+    }
+    if target_names != expected_targets {
+        return Err("agent-native Phase 1 artifact target set is incorrect".to_owned());
+    }
+
+    let review = field(inventory, "review", "agent-native Phase 1 inventory")?
+        .object("agent-native Phase 1 review")?;
+    exact_keys(
+        review,
+        &["status", "exact_product_sha", "reviewers"],
+        "agent-native Phase 1 review",
+    )?;
+    let review_status = required_string(review, "status", "agent-native Phase 1 review")?;
+    let reviewers = field(review, "reviewers", "agent-native Phase 1 review")?
+        .array("agent-native Phase 1 reviewers")?;
+    if review_status == "approved" {
+        let exact_product_sha =
+            required_string(review, "exact_product_sha", "agent-native Phase 1 review")?;
+        validate_git_sha(exact_product_sha, "agent-native Phase 1 reviewed SHA")?;
+        if field(lineage, "product_sha", "lineage")?.string("product SHA")? != exact_product_sha
+            || reviewers.len() < 2
+        {
+            return Err("agent-native approval is not bound to two exact-SHA reviews".to_owned());
+        }
+    } else if review_status == "pending" {
+        if !matches!(
+            field(review, "exact_product_sha", "agent-native Phase 1 review")?,
+            Json::Null
+        ) || !reviewers.is_empty()
+        {
+            return Err("pending agent-native review must not claim reviewers or a SHA".to_owned());
+        }
+    } else {
+        return Err(format!(
+            "invalid agent-native review status {review_status:?}"
+        ));
+    }
+
+    let gates = field(inventory, "release_gates", "agent-native Phase 1 inventory")?
+        .object("agent-native Phase 1 release gates")?;
+    exact_keys(
+        gates,
+        &["phase2", "publication"],
+        "agent-native Phase 1 release gates",
+    )?;
+    let complete = status == "approved"
+        && !product_pending
+        && blockers == 0
+        && hosted_status == "passed"
+        && artifact_status == "passed"
+        && review_status == "approved";
+    expect_string(
+        gates,
+        "phase2",
+        if complete {
+            "authorized"
+        } else {
+            "blocked_until_phase1_go"
+        },
+        "agent-native Phase 1 release gates",
+    )?;
+    expect_string(
+        gates,
+        "publication",
+        "not_authorized_by_phase1",
+        "agent-native Phase 1 release gates",
+    )?;
+
+    Ok(AgentPhase1EvidenceReport {
+        requirements: requirements.len(),
+        blockers,
+        hosted_status: hosted_status.to_owned(),
+        artifact_status: artifact_status.to_owned(),
+        review_status: review_status.to_owned(),
     })
 }
 

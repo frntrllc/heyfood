@@ -50,7 +50,7 @@ contract without repository access, credentials, or a network connection:
 
 ```bash
 heyfood agent describe
-heyfood agent guide
+heyfood agent guide --format markdown
 heyfood agent schema --list
 heyfood agent doctor
 ```

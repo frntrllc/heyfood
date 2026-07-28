@@ -142,9 +142,12 @@ grep -Fq 'os: [ubuntu-22.04, macos-15, windows-2025]' "$CANDIDATE_WORKFLOW" ||
   fail "ordinary Windows CI must remain enabled"
 grep -Fq 'Package, smoke, and reproduce the Windows release archive' "$CANDIDATE_WORKFLOW" ||
   fail "ordinary Windows packaging qualification must remain enabled"
-grep -Fq 'Test the default product feature set on macOS and Windows' \
+grep -Fq 'Test the default product feature set on Windows without the process-global console case' \
   "$ROOT/.github/workflows/rust-ci.yml" ||
   fail "ordinary Rust Windows tests must remain enabled"
+grep -Fq 'Test the process-global Windows console case in isolation' \
+  "$ROOT/.github/workflows/rust-ci.yml" ||
+  fail "ordinary Rust Windows console lifecycle tests must remain enabled"
 
 distribution="$CASE_DIR/distribution"
 mkdir "$distribution"

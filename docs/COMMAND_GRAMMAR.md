@@ -22,8 +22,8 @@ completion    print shell completion syntax
 
 ```bash
 heyfood agent describe
-heyfood agent guide
-heyfood agent guide --safety
+heyfood agent guide --format markdown
+heyfood agent guide --format markdown --safety
 heyfood agent schema --list
 heyfood agent schema manifest
 heyfood agent doctor

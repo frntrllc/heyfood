@@ -3,7 +3,7 @@
 use std::process::ExitCode;
 
 use heyfood_cli::AgentCommand;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// Run one local agent-discovery command before any credential or network setup.
 #[must_use]
@@ -57,24 +57,16 @@ fn write_json(document: &Value) {
 
 fn failure(
     machine: bool,
-    code: &'static str,
+    kind: &'static str,
     message: &'static str,
-    action: &'static str,
+    hint: &'static str,
 ) -> ExitCode {
+    let rendered = heyfood_cli::render_error(kind, message, Some(hint), machine)
+        .expect("the stable error envelope is serializable");
     if machine {
-        write_json(&json!({
-            "schema_version": 1,
-            "ok": false,
-            "error": {
-                "code": code,
-                "message": message,
-                "retryable": false,
-                "outcome_uncertain": false,
-                "action": action
-            }
-        }));
+        print!("{rendered}");
     } else {
-        eprintln!("heyfood: {message}\n\n{action}");
+        eprint!("{rendered}");
     }
     ExitCode::FAILURE
 }

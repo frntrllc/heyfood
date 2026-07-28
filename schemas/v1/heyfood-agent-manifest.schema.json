@@ -148,7 +148,7 @@
         },
         "additive_optional_fields": {
           "type": "boolean",
-          "const": true
+          "const": false
         }
       }
     },
@@ -292,6 +292,8 @@
         "output_family",
         "output_schema_id",
         "output_schema_sha256",
+        "error_schema_id",
+        "error_schema_sha256",
         "exit_behavior",
         "operation_class",
         "network",
@@ -342,7 +344,9 @@
             "utf8_stdin",
             "arguments_or_utf8_stdin",
             "attached_terminal",
-            "data_stdin_plus_controlling_terminal"
+            "arguments_or_utf8_stdin_plus_controlling_terminal",
+            "arguments_plus_controlling_terminal",
+            "json_stdin_plus_controlling_terminal"
           ]
         },
         "output_family": {
@@ -367,10 +371,17 @@
             }
           ]
         },
+        "error_schema_id": {
+          "const": "https://hey.food/schemas/v1/heyfood-cli-error.schema.json"
+        },
+        "error_schema_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
         "exit_behavior": {
           "type": "string",
           "enum": [
             "one_json_value",
+            "raw_markdown_or_one_json_value",
             "human_terminal",
             "shell_source",
             "typed_rejection"
@@ -569,6 +580,33 @@
                   "local_read",
                   "remote_read"
                 ]
+              }
+            }
+          }
+        }
+        ,
+        {
+          "if": {
+            "properties": {
+              "output_schema_id": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "output_schema_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "output_schema_sha256": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "output_schema_sha256": {
+                "$ref": "#/$defs/sha256"
               }
             }
           }

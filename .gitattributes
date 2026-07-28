@@ -4,3 +4,6 @@
 /fixtures/contracts/**/*.json text eol=lf
 /fixtures/contracts/**/*.py text eol=lf
 /schemas/**/*.json text eol=lf
+/fixtures/agent/**/*.json text eol=lf
+/docs/AGENT_INTEGRATION.md text eol=lf
+/docs/AGENT_SAFETY.md text eol=lf

@@ -801,7 +801,7 @@ Deliverables:
 5. Add JSON Schema validation, golden fixtures, digest fixtures, output limits,
    allowlist/no-commit-authority tests, and cross-platform
    deterministic-output tests.
-6. Document additive compatibility and agent-manifest schema versioning.
+6. Document closed-schema compatibility and agent-manifest schema versioning.
 
 Exit gate:
 
@@ -1090,9 +1090,10 @@ not qualify the integration.
 
 - The agent-manifest schema, Agent Skill compatibility range, and MCP tool
   protocol are versioned independently.
-- Additive optional manifest/result fields are compatible within a schema
-  version. Removing or changing a command/tool/field/meaning requires a new
-  schema or protocol version plus migration guidance.
+- Agent manifest schema v1 is closed and rejects unknown fields. Adding,
+  removing, or changing a manifest field or meaning requires a new manifest
+  schema version plus migration guidance. Result and tool schemas declare
+  their compatibility policy and version independently.
 - Human help text and TUI layout are not parsed as machine contracts.
 - Skills and plugins declare the minimum and maximum compatible heyfood
   manifest versions. Incompatibility fails with an upgrade instruction, not a

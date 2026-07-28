@@ -14,6 +14,11 @@ pub const SCHEMA_INDEX_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-agent-schema-index.schema.json");
 pub const DOCTOR_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-agent-doctor.schema.json");
+pub const GUIDE_SCHEMA: &str = include_str!("../../../schemas/v1/heyfood-agent-guide.schema.json");
+pub const SCHEMA_RESULT_SCHEMA: &str =
+    include_str!("../../../schemas/v1/heyfood-agent-schema-result.schema.json");
+pub const CLI_ERROR_SCHEMA: &str =
+    include_str!("../../../schemas/v1/heyfood-cli-error.schema.json");
 pub const PUBLIC_OUTPUT_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-output.schema.json");
 pub const PROPOSAL_PRESENTATION_SCHEMA: &str =
@@ -24,6 +29,10 @@ pub const MANIFEST_SCHEMA_ID: &str =
 pub const SCHEMA_INDEX_SCHEMA_ID: &str =
     "https://hey.food/schemas/v1/heyfood-agent-schema-index.schema.json";
 pub const DOCTOR_SCHEMA_ID: &str = "https://hey.food/schemas/v1/heyfood-agent-doctor.schema.json";
+pub const GUIDE_SCHEMA_ID: &str = "https://hey.food/schemas/v1/heyfood-agent-guide.schema.json";
+pub const SCHEMA_RESULT_SCHEMA_ID: &str =
+    "https://hey.food/schemas/v1/heyfood-agent-schema-result.schema.json";
+pub const CLI_ERROR_SCHEMA_ID: &str = "https://hey.food/schemas/v1/heyfood-cli-error.schema.json";
 pub const PUBLIC_OUTPUT_SCHEMA_ID: &str =
     "https://github.com/frntrllc/heyfood/blob/main/schemas/v1/heyfood-output.schema.json";
 pub const PROPOSAL_PRESENTATION_SCHEMA_ID: &str =
@@ -37,6 +46,9 @@ pub enum EmbeddedSchema {
     Manifest,
     SchemaIndex,
     Doctor,
+    Guide,
+    SchemaResult,
+    CliError,
     PublicOutput,
     ProposalPresentation,
 }
@@ -48,6 +60,9 @@ impl EmbeddedSchema {
             Self::Manifest => "manifest",
             Self::SchemaIndex => "schema-index",
             Self::Doctor => "doctor",
+            Self::Guide => "guide",
+            Self::SchemaResult => "schema-result",
+            Self::CliError => "error",
             Self::PublicOutput => "output",
             Self::ProposalPresentation => "proposal-presentation",
         }
@@ -59,6 +74,9 @@ impl EmbeddedSchema {
             Self::Manifest => MANIFEST_SCHEMA_ID,
             Self::SchemaIndex => SCHEMA_INDEX_SCHEMA_ID,
             Self::Doctor => DOCTOR_SCHEMA_ID,
+            Self::Guide => GUIDE_SCHEMA_ID,
+            Self::SchemaResult => SCHEMA_RESULT_SCHEMA_ID,
+            Self::CliError => CLI_ERROR_SCHEMA_ID,
             Self::PublicOutput => PUBLIC_OUTPUT_SCHEMA_ID,
             Self::ProposalPresentation => PROPOSAL_PRESENTATION_SCHEMA_ID,
         }
@@ -70,16 +88,22 @@ impl EmbeddedSchema {
             Self::Manifest => MANIFEST_SCHEMA,
             Self::SchemaIndex => SCHEMA_INDEX_SCHEMA,
             Self::Doctor => DOCTOR_SCHEMA,
+            Self::Guide => GUIDE_SCHEMA,
+            Self::SchemaResult => SCHEMA_RESULT_SCHEMA,
+            Self::CliError => CLI_ERROR_SCHEMA,
             Self::PublicOutput => PUBLIC_OUTPUT_SCHEMA,
             Self::ProposalPresentation => PROPOSAL_PRESENTATION_SCHEMA,
         }
     }
 }
 
-pub const PUBLIC_SCHEMAS: [EmbeddedSchema; 5] = [
+pub const PUBLIC_SCHEMAS: [EmbeddedSchema; 8] = [
     EmbeddedSchema::Manifest,
     EmbeddedSchema::SchemaIndex,
     EmbeddedSchema::Doctor,
+    EmbeddedSchema::Guide,
+    EmbeddedSchema::SchemaResult,
+    EmbeddedSchema::CliError,
     EmbeddedSchema::PublicOutput,
     EmbeddedSchema::ProposalPresentation,
 ];
@@ -93,7 +117,9 @@ struct CommandContract {
     input_channel: &'static str,
     output_family: &'static str,
     output_schema_id: Option<&'static str>,
-    output_schema_sha256: Option<&'static str>,
+    output_schema_sha256: Option<String>,
+    error_schema_id: &'static str,
+    error_schema_sha256: String,
     exit_behavior: &'static str,
     operation_class: &'static str,
     network: bool,
@@ -109,8 +135,16 @@ struct CommandContract {
     examples: &'static [&'static str],
 }
 
+impl CommandContract {
+    fn with_output_schema(mut self, schema: EmbeddedSchema) -> Self {
+        self.output_schema_id = Some(schema.id());
+        self.output_schema_sha256 = Some(sha256_hex(schema.document().as_bytes()));
+        self
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-const fn command(
+fn command(
     path: &'static str,
     purpose: &'static str,
     audience: &'static str,
@@ -137,6 +171,8 @@ const fn command(
         output_family,
         output_schema_id: None,
         output_schema_sha256: None,
+        error_schema_id: CLI_ERROR_SCHEMA_ID,
+        error_schema_sha256: sha256_hex(CLI_ERROR_SCHEMA.as_bytes()),
         exit_behavior,
         operation_class,
         network,
@@ -183,7 +219,8 @@ fn commands() -> Vec<CommandContract> {
             "none",
             "none",
             &["heyfood agent"],
-        ),
+        )
+        .with_output_schema(EmbeddedSchema::Manifest),
         command(
             "agent describe",
             "Describe the exact installed agent contract.",
@@ -201,14 +238,15 @@ fn commands() -> Vec<CommandContract> {
             "none",
             "none",
             &["heyfood agent describe"],
-        ),
+        )
+        .with_output_schema(EmbeddedSchema::Manifest),
         command(
             "agent guide",
-            "Print the embedded agent integration guide.",
+            "Print the embedded agent integration or safety guide.",
             "agent_safe",
-            "none",
-            "agent_guide_v1",
-            "one_json_value",
+            "arguments",
+            "markdown_or_agent_guide_v1",
+            "raw_markdown_or_one_json_value",
             "local_read",
             false,
             false,
@@ -218,8 +256,12 @@ fn commands() -> Vec<CommandContract> {
             "none",
             "none",
             "none",
-            &["heyfood agent guide"],
-        ),
+            &[
+                "heyfood agent guide --format markdown",
+                "heyfood --json agent guide --format markdown --safety",
+            ],
+        )
+        .with_output_schema(EmbeddedSchema::Guide),
         command(
             "agent schema",
             "Print one embedded agent JSON Schema.",
@@ -236,8 +278,12 @@ fn commands() -> Vec<CommandContract> {
             "none",
             "none",
             "none",
-            &["heyfood agent schema manifest"],
-        ),
+            &[
+                "heyfood agent schema --list",
+                "heyfood agent schema manifest",
+            ],
+        )
+        .with_output_schema(EmbeddedSchema::SchemaResult),
         command(
             "agent doctor",
             "Inspect the local integration without credentials or network.",
@@ -255,7 +301,8 @@ fn commands() -> Vec<CommandContract> {
             "none",
             "none",
             &["heyfood agent doctor"],
-        ),
+        )
+        .with_output_schema(EmbeddedSchema::Doctor),
         command(
             "ask",
             "Ask the hosted conversational service.",
@@ -314,7 +361,7 @@ fn commands() -> Vec<CommandContract> {
             "log",
             "Log a meal after a human terminal decision.",
             "human_terminal_only",
-            "data_stdin_plus_controlling_terminal",
+            "arguments_or_utf8_stdin_plus_controlling_terminal",
             "agent_turn_result_v1",
             "one_json_value",
             "mutation",
@@ -358,7 +405,7 @@ fn commands() -> Vec<CommandContract> {
             false,
             true,
             NONE,
-            "no_blind_retry",
+            "reconcile_before_retry",
             "none",
             "independent_browser_or_device",
             "required",
@@ -376,7 +423,7 @@ fn commands() -> Vec<CommandContract> {
             false,
             true,
             NONE,
-            "no_blind_retry",
+            "reconcile_before_retry",
             "none",
             "independent_browser_or_device",
             "required",
@@ -386,7 +433,7 @@ fn commands() -> Vec<CommandContract> {
             "grocery",
             "Read the active Grocery list.",
             "agent_unsupported",
-            "none",
+            "arguments",
             "grocery_list_v1",
             "one_json_value",
             "remote_read",
@@ -404,7 +451,7 @@ fn commands() -> Vec<CommandContract> {
             "grocery show",
             "Read the active Grocery list.",
             "agent_unsupported",
-            "none",
+            "arguments",
             "grocery_list_v1",
             "one_json_value",
             "remote_read",
@@ -422,7 +469,7 @@ fn commands() -> Vec<CommandContract> {
             "grocery exclusions",
             "Read Grocery exclusions.",
             "agent_unsupported",
-            "none",
+            "arguments",
             "grocery_exclusions_v1",
             "one_json_value",
             "remote_read",
@@ -440,12 +487,12 @@ fn commands() -> Vec<CommandContract> {
             "grocery add",
             "Prepare Grocery additions for human review.",
             "human_terminal_only",
-            "data_stdin_plus_controlling_terminal",
+            "arguments_plus_controlling_terminal",
             "grocery_mutation_proposal_v1",
             "one_json_value",
             "prepare",
             true,
-            true,
+            false,
             true,
             GROCERY_WRITE,
             "no_blind_retry",
@@ -458,12 +505,12 @@ fn commands() -> Vec<CommandContract> {
             "grocery remove",
             "Prepare Grocery removals for human review.",
             "human_terminal_only",
-            "data_stdin_plus_controlling_terminal",
+            "arguments_plus_controlling_terminal",
             "grocery_mutation_proposal_v1",
             "one_json_value",
             "prepare",
             true,
-            true,
+            false,
             true,
             GROCERY_WRITE,
             "no_blind_retry",
@@ -476,12 +523,12 @@ fn commands() -> Vec<CommandContract> {
             "grocery state",
             "Prepare Grocery state changes for human review.",
             "human_terminal_only",
-            "data_stdin_plus_controlling_terminal",
+            "arguments_plus_controlling_terminal",
             "grocery_mutation_proposal_v1",
             "one_json_value",
             "prepare",
             true,
-            true,
+            false,
             true,
             GROCERY_WRITE,
             "no_blind_retry",
@@ -494,12 +541,12 @@ fn commands() -> Vec<CommandContract> {
             "grocery never",
             "Prepare an exclusion change for human review.",
             "human_terminal_only",
-            "data_stdin_plus_controlling_terminal",
+            "arguments_plus_controlling_terminal",
             "grocery_mutation_proposal_v1",
             "one_json_value",
             "prepare",
             true,
-            true,
+            false,
             true,
             GROCERY_WRITE,
             "no_blind_retry",
@@ -513,7 +560,7 @@ fn commands() -> Vec<CommandContract> {
             "Export a Grocery list to a human-selected path.",
             "agent_unsupported",
             "arguments",
-            "grocery_export_v1",
+            "grocery_export_or_write_receipt_v1",
             "one_json_value",
             "remote_read",
             true,
@@ -530,7 +577,7 @@ fn commands() -> Vec<CommandContract> {
             "grocery confirm",
             "Commit or cancel an exact Grocery proposal after human terminal review.",
             "human_terminal_only",
-            "data_stdin_plus_controlling_terminal",
+            "json_stdin_plus_controlling_terminal",
             "grocery_mutation_result_v1",
             "one_json_value",
             "confirm",
@@ -538,7 +585,7 @@ fn commands() -> Vec<CommandContract> {
             true,
             true,
             GROCERY_WRITE,
-            "no_blind_retry",
+            "reconcile_before_retry",
             "attached_terminal",
             "controlling_terminal",
             "none",
@@ -548,7 +595,7 @@ fn commands() -> Vec<CommandContract> {
             "watch",
             "Read Menu Watch subscriptions.",
             "agent_unsupported",
-            "none",
+            "arguments",
             "menu_watch_list_v1",
             "one_json_value",
             "remote_read",
@@ -566,7 +613,7 @@ fn commands() -> Vec<CommandContract> {
             "watch show",
             "Read Menu Watch subscriptions.",
             "agent_unsupported",
-            "none",
+            "arguments",
             "menu_watch_list_v1",
             "one_json_value",
             "remote_read",
@@ -584,15 +631,15 @@ fn commands() -> Vec<CommandContract> {
             "watch add",
             "Create a Menu Watch after human terminal review.",
             "human_terminal_only",
-            "data_stdin_plus_controlling_terminal",
-            "menu_watch_v1",
+            "arguments_plus_controlling_terminal",
+            "menu_watch_snapshot_v1",
             "one_json_value",
             "mutation",
             true,
             true,
             true,
             WATCH,
-            "no_blind_retry",
+            "reconcile_before_retry",
             "attached_terminal",
             "controlling_terminal",
             "none",
@@ -602,15 +649,15 @@ fn commands() -> Vec<CommandContract> {
             "watch remove",
             "Remove a Menu Watch after human terminal review.",
             "human_terminal_only",
-            "data_stdin_plus_controlling_terminal",
-            "menu_watch_result_v1",
+            "arguments_plus_controlling_terminal",
+            "menu_watch_delete_receipt_v1",
             "one_json_value",
             "mutation",
             true,
             true,
             true,
             WATCH,
-            "no_blind_retry",
+            "reconcile_before_retry",
             "attached_terminal",
             "controlling_terminal",
             "none",
@@ -662,7 +709,7 @@ pub fn manifest() -> Value {
             "mcp_protocol_version": 1,
             "minimum_skill_manifest_version": 1,
             "maximum_skill_manifest_version": 1,
-            "additive_optional_fields": true
+            "additive_optional_fields": false
         },
         "automation_surfaces": {
             "one_shot_json": "active",
@@ -773,22 +820,110 @@ pub fn embedded_digests() -> Value {
         "manifest_schema_sha256": sha256_hex(MANIFEST_SCHEMA.as_bytes()),
         "schema_index_schema_sha256": sha256_hex(SCHEMA_INDEX_SCHEMA.as_bytes()),
         "doctor_schema_sha256": sha256_hex(DOCTOR_SCHEMA.as_bytes()),
+        "guide_schema_sha256": sha256_hex(GUIDE_SCHEMA.as_bytes()),
+        "schema_result_schema_sha256": sha256_hex(SCHEMA_RESULT_SCHEMA.as_bytes()),
+        "cli_error_schema_sha256": sha256_hex(CLI_ERROR_SCHEMA.as_bytes()),
         "public_output_schema_sha256": sha256_hex(PUBLIC_OUTPUT_SCHEMA.as_bytes()),
         "proposal_presentation_schema_sha256": sha256_hex(PROPOSAL_PRESENTATION_SCHEMA.as_bytes()),
+    })
+}
+
+fn is_lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn doctor_check(id: &'static str, passed: bool) -> Value {
+    json!({
+        "id": id,
+        "status": if passed { "pass" } else { "fail" }
     })
 }
 
 #[must_use]
 pub fn doctor_document() -> Value {
     let manifest = manifest();
+    let canonical_manifest = canonical_json(&manifest);
+    let manifest_round_trip = serde_json::from_str::<Value>(&canonical_manifest)
+        .is_ok_and(|decoded| decoded == manifest)
+        && canonical_manifest.len() <= MAX_MANIFEST_BYTES;
+
+    let schemas_valid = PUBLIC_SCHEMAS.into_iter().all(|schema| {
+        schema.document().len() <= MAX_SCHEMA_BYTES
+            && serde_json::from_str::<Value>(schema.document()).is_ok_and(|document| {
+                document["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+                    && document["$id"] == schema.id()
+            })
+    });
+
+    let index = schema_index();
+    let index_exact = index["schemas"].as_array().is_some_and(|entries| {
+        entries.len() == PUBLIC_SCHEMAS.len()
+            && entries.iter().zip(PUBLIC_SCHEMAS).all(|(entry, schema)| {
+                entry["name"] == schema.name()
+                    && entry["id"] == schema.id()
+                    && entry["sha256"] == sha256_hex(schema.document().as_bytes())
+                    && entry["bytes"] == schema.document().len()
+            })
+    });
+
+    let command_bindings = manifest["commands"].as_array().is_some_and(|contracts| {
+        contracts.iter().all(|contract| {
+            let error_bound = contract["error_schema_id"] == CLI_ERROR_SCHEMA_ID
+                && contract["error_schema_sha256"] == sha256_hex(CLI_ERROR_SCHEMA.as_bytes());
+            let output_bound = if contract["audience"] == "agent_safe" {
+                contract["output_schema_id"]
+                    .as_str()
+                    .and_then(schema_by_name)
+                    .is_some_and(|schema| {
+                        contract["output_schema_sha256"] == sha256_hex(schema.document().as_bytes())
+                    })
+            } else {
+                contract["output_schema_id"].is_null() && contract["output_schema_sha256"].is_null()
+            };
+            error_bound && output_bound
+        })
+    });
+
+    let embedded_guides = !GUIDE.is_empty()
+        && !SAFETY.is_empty()
+        && GUIDE.len() <= MAX_SCHEMA_BYTES
+        && SAFETY.len() <= MAX_SCHEMA_BYTES;
+    let build = &manifest["build"];
+    let build_identity = build["source_commit"]
+        .as_str()
+        .is_some_and(|value| is_lower_hex(value, 40))
+        && build["source_tree"]
+            .as_str()
+            .is_some_and(|value| is_lower_hex(value, 40))
+        && build["build_input_digest_sha256"]
+            .as_str()
+            .is_some_and(|value| is_lower_hex(value, 64))
+        && matches!(
+            build["distribution_channel"].as_str(),
+            Some("development" | "candidate" | "release")
+        );
+
+    let checks = vec![
+        doctor_check("manifest_round_trip", manifest_round_trip),
+        doctor_check("public_schemas", schemas_valid),
+        doctor_check("schema_index", index_exact),
+        doctor_check("command_schema_bindings", command_bindings),
+        doctor_check("embedded_guides", embedded_guides),
+        doctor_check("build_identity", build_identity),
+    ];
+    let ok = checks.iter().all(|check| check["status"] == "pass");
     json!({
         "schema_version": 1,
-        "ok": true,
+        "ok": ok,
         "binary_version": env!("CARGO_PKG_VERSION"),
         "target": env!("HEYFOOD_BUILD_TARGET"),
         "manifest_schema_version": manifest["schema_version"],
-        "manifest_sha256": sha256_hex(canonical_json(&manifest).as_bytes()),
+        "manifest_sha256": sha256_hex(canonical_manifest.as_bytes()),
         "embedded": embedded_digests(),
+        "checks": checks,
         "network_accessed": false,
         "credentials_accessed": false,
         "product_state_mutated": false,
@@ -822,6 +957,9 @@ mod tests {
             EmbeddedSchema::Manifest,
             EmbeddedSchema::SchemaIndex,
             EmbeddedSchema::Doctor,
+            EmbeddedSchema::Guide,
+            EmbeddedSchema::SchemaResult,
+            EmbeddedSchema::CliError,
             EmbeddedSchema::PublicOutput,
             EmbeddedSchema::ProposalPresentation,
         ] {
@@ -831,6 +969,46 @@ mod tests {
         }
         assert!(GUIDE.len() <= MAX_SCHEMA_BYTES);
         assert!(SAFETY.len() <= MAX_SCHEMA_BYTES);
+    }
+
+    #[test]
+    fn every_public_schema_and_generated_instance_passes_draft_2020_12_validation() {
+        for schema in PUBLIC_SCHEMAS {
+            let document: Value = serde_json::from_str(schema.document()).unwrap();
+            jsonschema::draft202012::meta::validate(&document).unwrap_or_else(|error| {
+                panic!("{} meta-schema validation: {error}", schema.name())
+            });
+        }
+
+        let cases = [
+            (EmbeddedSchema::Manifest, manifest()),
+            (EmbeddedSchema::SchemaIndex, schema_index()),
+            (EmbeddedSchema::Doctor, doctor_document()),
+            (EmbeddedSchema::Guide, guide_document()),
+            (EmbeddedSchema::Guide, safety_document()),
+            (EmbeddedSchema::SchemaResult, schema_index()),
+            (
+                EmbeddedSchema::SchemaResult,
+                schema_document(EmbeddedSchema::Manifest),
+            ),
+            (
+                EmbeddedSchema::CliError,
+                json!({
+                    "ok": false,
+                    "error": {
+                        "type": "agent_schema_unknown",
+                        "message": "The requested schema is not public.",
+                        "hint": "List public schemas first."
+                    }
+                }),
+            ),
+        ];
+        for (schema, instance) in cases {
+            let document: Value = serde_json::from_str(schema.document()).unwrap();
+            jsonschema::draft202012::validate(&document, &instance).unwrap_or_else(|error| {
+                panic!("{} generated-instance validation: {error}", schema.name())
+            });
+        }
     }
 
     #[test]
@@ -848,6 +1026,9 @@ mod tests {
                 "manifest",
                 "schema-index",
                 "doctor",
+                "guide",
+                "schema-result",
+                "error",
                 "output",
                 "proposal-presentation"
             ]

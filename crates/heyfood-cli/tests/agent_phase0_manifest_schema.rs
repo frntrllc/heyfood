@@ -1,7 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use clap::Command;
-use heyfood_cli::CommandLine;
+use clap::{Command, Parser};
+use heyfood_cli::{AgentCommand, AgentGuideFormat, CommandLine};
 use serde_json::Value;
 
 const SCHEMA: &str = include_str!(concat!(
@@ -31,6 +31,10 @@ const APPROVAL_PROTOCOL_CONTRACT: &str = include_str!(concat!(
 const MCP_ENVIRONMENT_POLICY: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/release-evidence/agent-native-phase0/mcp-environment-policy.json"
+));
+const PHASE0_AUTHORITY: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/release-evidence/agent-native-phase0/command-authority-inventory.json"
 ));
 fn enum_values<'a>(schema: &'a Value, pointer: &str) -> BTreeSet<&'a str> {
     schema
@@ -99,6 +103,176 @@ fn runtime_manifest_validates_and_exactly_matches_active_command_authority() {
 }
 
 #[test]
+fn runtime_manifest_preserves_every_phase0_authority_row_field_by_field() {
+    let authority: Value = serde_json::from_str(PHASE0_AUTHORITY).expect("Phase 0 authority");
+    let manifest = heyfood_agent_contract::manifest();
+    let rows = manifest["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| (row["path"].as_str().unwrap(), row))
+        .collect::<BTreeMap<_, _>>();
+
+    for command in authority["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|command| command["visibility"] == "active")
+    {
+        let path = command["path"].as_str().unwrap();
+        let policy_name = command["policy"].as_str().unwrap();
+        let policy = &authority["policies"][policy_name];
+        let row = rows.get(path).unwrap_or_else(|| panic!("missing {path}"));
+
+        let expected_input = match policy["input_transport"].as_str().unwrap() {
+            "arguments_or_bounded_utf8_stdin" => "arguments_or_utf8_stdin",
+            "attached_terminal" => "attached_terminal",
+            "arguments_or_bounded_utf8_data_stdin_plus_controlling_terminal_decision" => {
+                "arguments_or_utf8_stdin_plus_controlling_terminal"
+            }
+            "arguments_plus_independent_browser_or_device_approval" => "attached_terminal",
+            "arguments_plus_controlling_terminal_acknowledgement"
+            | "arguments_plus_controlling_terminal_decision" => {
+                "arguments_plus_controlling_terminal"
+            }
+            "proposal_json_stdin_plus_distinct_controlling_terminal_review_and_decision" => {
+                "json_stdin_plus_controlling_terminal"
+            }
+            "arguments" => "arguments",
+            other => panic!("unmapped Phase 0 input transport {other}"),
+        };
+        let expected_operation = match policy["operation_class"].as_str().unwrap() {
+            "remote_conversation"
+            | "remote_read_via_post"
+            | "remote_read_and_optional_sensitive_file_write" => "remote_read",
+            "mutation_via_conversation" => "mutation",
+            "confirm_or_cancel" => "confirm",
+            other => other,
+        };
+        let expected_retry = match policy["retry"].as_str().unwrap() {
+            "not_applicable" => "not_applicable",
+            "safe_only_before_or_as_defined_by_get_contract"
+            | "safe_read_with_fail_closed_file_commit" => "safe_read",
+            "never_blind_retry" | "no_automatic_retry" | "dg_r2_no_blind_retry" => "no_blind_retry",
+            "reconcile_uncertain_never_blind_retry"
+            | "protocol_specific_no_blind_retry_after_dispatch" => "reconcile_before_retry",
+            other => panic!("unmapped Phase 0 retry class {other}"),
+        };
+        let expected_output = match path {
+            "chat" => "human_terminal",
+            "login" => "login_result_v1",
+            "register" => "registration_result_v1",
+            "completion" => "shell_completion",
+            _ => policy["json_output_family"].as_str().unwrap(),
+        };
+        let expected_mutation = matches!(
+            path,
+            "log" | "grocery confirm" | "watch add" | "watch remove"
+        );
+        let expected_confirmation = if policy["controlling_terminal"]
+            .as_str()
+            .unwrap()
+            .starts_with("required_exact_")
+        {
+            "attached_terminal"
+        } else {
+            "none"
+        };
+        let expected_interactivity = match path {
+            "chat" => "attached_terminal",
+            "login" | "register" => "independent_browser_or_device",
+            "log" | "grocery add" | "grocery remove" | "grocery state" | "grocery never"
+            | "grocery confirm" | "watch add" | "watch remove" => "controlling_terminal",
+            _ => "none",
+        };
+
+        assert_eq!(row["status"], "active", "{path} status");
+        assert_eq!(row["audience"], policy["audience"], "{path} audience");
+        assert_eq!(row["input_channel"], expected_input, "{path} input");
+        assert_eq!(row["output_family"], expected_output, "{path} output");
+        assert_eq!(
+            row["exit_behavior"],
+            if path == "chat" {
+                "human_terminal"
+            } else if path == "completion" {
+                "shell_source"
+            } else {
+                "one_json_value"
+            },
+            "{path} exit"
+        );
+        assert_eq!(row["operation_class"], expected_operation, "{path} class");
+        assert_eq!(
+            row["network"],
+            policy["network"] != "none",
+            "{path} network"
+        );
+        assert_eq!(
+            row["product_state_mutation"], expected_mutation,
+            "{path} mutation"
+        );
+        assert_eq!(
+            row["credential_side_effect_possible"],
+            policy["network"] != "none",
+            "{path} credential side effect"
+        );
+        assert_eq!(
+            row["required_scopes"], policy["required_scopes"],
+            "{path} scopes"
+        );
+        assert_eq!(row["retry_class"], expected_retry, "{path} retry");
+        assert_eq!(
+            row["human_confirmation"], expected_confirmation,
+            "{path} confirmation"
+        );
+        assert_eq!(
+            row["interactivity"], expected_interactivity,
+            "{path} interactivity"
+        );
+        assert_eq!(
+            row["browser_handoff"],
+            if matches!(path, "login" | "register") {
+                "required"
+            } else {
+                "none"
+            },
+            "{path} browser"
+        );
+        assert!(row["output_schema_id"].is_null(), "{path} success schema");
+        assert!(
+            row["output_schema_sha256"].is_null(),
+            "{path} success digest"
+        );
+        assert_eq!(
+            row["error_schema_id"],
+            heyfood_agent_contract::CLI_ERROR_SCHEMA_ID,
+            "{path} error schema"
+        );
+        assert_eq!(
+            row["error_schema_sha256"],
+            heyfood_agent_contract::sha256_hex(heyfood_agent_contract::CLI_ERROR_SCHEMA.as_bytes()),
+            "{path} error digest"
+        );
+    }
+}
+
+#[test]
+fn guide_format_is_typed_and_matches_the_approved_spelling() {
+    let parsed = CommandLine::try_parse_from([
+        "heyfood", "agent", "guide", "--format", "markdown", "--safety",
+    ])
+    .unwrap();
+    let Some(heyfood_cli::Command::Agent {
+        command: Some(AgentCommand::Guide(arguments)),
+    }) = parsed.command
+    else {
+        panic!("agent guide must parse to the typed discovery command");
+    };
+    assert_eq!(arguments.format, AgentGuideFormat::Markdown);
+    assert!(arguments.safety);
+}
+
+#[test]
 fn embedded_build_provenance_cannot_claim_container_artifact_digests() {
     let schema: Value = serde_json::from_str(SCHEMA).expect("manifest schema JSON");
     let build = schema
@@ -163,6 +337,8 @@ fn command_contract_requires_authority_retry_and_side_effect_metadata() {
         "input_channel",
         "output_schema_id",
         "output_schema_sha256",
+        "error_schema_id",
+        "error_schema_sha256",
         "operation_class",
         "product_state_mutation",
         "credential_side_effect_possible",
@@ -514,7 +690,7 @@ fn schema_freezes_cross_field_authority_invariants() {
         .pointer("/$defs/command/allOf")
         .and_then(Value::as_array)
         .expect("command cross-field rules");
-    assert_eq!(rules.len(), 4);
+    assert_eq!(rules.len(), 5);
 
     let encoded = serde_json::to_string(rules).unwrap();
     for invariant in [

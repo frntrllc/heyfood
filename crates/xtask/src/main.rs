@@ -100,6 +100,19 @@ fn main() {
                 )
             })
         }
+        Some("verify-agent-phase1-evidence") => {
+            no_extra_arguments(&mut arguments);
+            xtask::verify_agent_phase1_evidence(root).map(|report| {
+                format!(
+                    "Agent-native Phase 1 inventory valid: {} requirements, {} blockers, hosted {}, artifacts {}, review {}",
+                    report.requirements,
+                    report.blockers,
+                    report.hosted_status,
+                    report.artifact_status,
+                    report.review_status
+                )
+            })
+        }
         Some("evaluate-post-release") => {
             let evidence_directory = required_option(&mut arguments, "--evidence-dir");
             let rubric = required_option(&mut arguments, "--rubric");

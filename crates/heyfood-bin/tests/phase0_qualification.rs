@@ -1152,13 +1152,11 @@ exit $child.ExitCode
         .env("HEYFOOD_QUALIFICATION_RESULT_FILE", &result_path)
         .spawn()
         .expect("spawn Windows console host");
-    // The PowerShell host independently bounds readiness (8s), result
-    // publication (8s), and post-result exit (5s). Leave explicit headroom
-    // around those nested deadlines for cold pwsh/Add-Type startup, console
-    // allocation, and process launch on a contended Windows runner. Add-Type
-    // can take tens of seconds while the parallel Windows matrix is linking,
-    // so its bootstrap is bounded separately from the signal/result deadlines.
-    let status = wait_for_process_child(&mut child, Duration::from_secs(90));
+    // This process-global console ceremony is isolated by CI from the broad
+    // debug suite. The PowerShell host independently bounds readiness (8s),
+    // result publication (8s), and post-result exit (5s); the outer deadline
+    // leaves headroom for cold pwsh/Add-Type startup without hiding a hang.
+    let status = wait_for_process_child(&mut child, Duration::from_secs(45));
     assert!(
         status.success(),
         "Windows console host or signal child failed: {status}"

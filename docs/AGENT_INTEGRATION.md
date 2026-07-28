@@ -22,7 +22,7 @@ Begin without network access:
 ```bash
 heyfood agent describe
 heyfood agent doctor
-heyfood agent guide
+heyfood agent guide --format markdown
 ```
 
 Read `automation_surfaces`, capability status, command audience, required
@@ -80,10 +80,11 @@ cancels, the host cancels, stdin closes, or the parent process exits.
 
 ## Compatibility
 
-Manifest, guide, skill, and MCP protocol versions are independent. Additive
-optional fields are compatible within manifest schema v1. A consumer must
-fail with an upgrade instruction when the installed manifest is outside its
-declared compatibility range.
+Manifest, guide, skill, and MCP protocol versions are independent. Manifest
+schema v1 is closed: unknown fields are not compatible additions. Adding or
+removing a manifest field requires a new manifest schema version. A consumer
+must fail with an upgrade instruction when the installed manifest is outside
+its declared compatibility range.
 
 This guide describes only the exact binary that embeds it. Public support
 claims require installed-artifact qualification for the named host, version,

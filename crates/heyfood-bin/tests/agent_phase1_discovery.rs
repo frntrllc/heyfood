@@ -49,8 +49,11 @@ fn describe_is_deterministic_ansi_free_and_offline() {
 #[test]
 fn guide_and_safety_are_exact_embedded_bytes_without_network() {
     let service = TcpListener::bind("127.0.0.1:0").unwrap();
-    let guide = agent(&["agent", "guide"], &service);
-    let safety = agent(&["agent", "guide", "--safety"], &service);
+    let guide = agent(&["agent", "guide", "--format", "markdown"], &service);
+    let safety = agent(
+        &["agent", "guide", "--format", "markdown", "--safety"],
+        &service,
+    );
     assert!(guide.status.success());
     assert!(safety.status.success());
     assert_eq!(guide.stdout, heyfood_agent_contract::GUIDE.as_bytes());
@@ -75,6 +78,12 @@ fn schemas_are_exact_embedded_bytes_without_network() {
             heyfood_agent_contract::EmbeddedSchema::SchemaIndex,
         ),
         ("doctor", heyfood_agent_contract::EmbeddedSchema::Doctor),
+        ("guide", heyfood_agent_contract::EmbeddedSchema::Guide),
+        (
+            "schema-result",
+            heyfood_agent_contract::EmbeddedSchema::SchemaResult,
+        ),
+        ("error", heyfood_agent_contract::EmbeddedSchema::CliError),
         (
             "output",
             heyfood_agent_contract::EmbeddedSchema::PublicOutput,
@@ -114,9 +123,12 @@ fn unknown_schema_is_a_typed_runtime_error_without_clap_topology_leakage() {
     assert!(output.stderr.is_empty());
     let error: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(error["ok"], false);
-    assert_eq!(error["error"]["code"], "agent_schema_unknown");
-    assert_eq!(error["error"]["retryable"], false);
-    assert_eq!(error["error"]["outcome_uncertain"], false);
+    assert_eq!(error["error"]["type"], "agent_schema_unknown");
+    assert!(error["error"]["hint"].as_str().is_some());
+    assert!(error["error"].get("code").is_none());
+    assert!(error["error"].get("action").is_none());
+    assert!(error["error"].get("retryable").is_none());
+    assert!(error["error"].get("outcome_uncertain").is_none());
     assert_no_network(&service);
 }
 
@@ -133,6 +145,13 @@ fn doctor_is_local_bounded_and_credential_free() {
     assert_eq!(doctor["credentials_accessed"], false);
     assert_eq!(doctor["product_state_mutated"], false);
     assert_eq!(doctor["tui_automation_supported"], false);
+    assert!(
+        doctor["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|check| check["status"] == "pass")
+    );
     assert!(doctor.get("executable").is_none());
     assert_no_network(&service);
 }
