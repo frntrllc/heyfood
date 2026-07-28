@@ -130,7 +130,8 @@
       "owner": "independent-reviewers",
       "evidence": [
         "docs/release-evidence/agent-native-phase0/phase0-checkpoint.json",
-        "docs/release-evidence/agent-native-phase0/phase0-review-e3be760.json"
+        "docs/release-evidence/agent-native-phase0/phase0-review-e3be760.json",
+        "docs/release-evidence/agent-native-phase0/phase0-remediation-checkpoint.json"
       ],
       "blockers": [
         "Ordinary CI must be green at one exact product SHA.",
@@ -147,8 +148,9 @@
     "phase_exit_authorized": false
   },
   "review": {
-    "status": "request_changes_remediation_in_progress",
+    "status": "remediation_ready_for_re_review",
     "reviewed_product_sha": "e3be760aaa58f5cd16ec623954d36e042b9ca46e",
+    "review_candidate_product_sha": "c26c196fd9c685761d7ab0209be6ad17a94f163f",
     "reviewed_evidence_digest": "4b5933de5e6ad1a6bce46f4872d41a8ff6f5ccd16f28c0b1fa8094c8178957af"
   }
 }

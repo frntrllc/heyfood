@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "status": "ready_for_independent_re_review_not_phase_exit",
+  "previous_review": {
+    "product_commit": "e3be760aaa58f5cd16ec623954d36e042b9ca46e",
+    "evidence_head": "82f608cebddd3ba1a96ac3900e4ff90107970a65",
+    "verdict": "request_changes",
+    "record": "docs/release-evidence/agent-native-phase0/phase0-review-e3be760.json"
+  },
+  "product": {
+    "commit": "c26c196fd9c685761d7ab0209be6ad17a94f163f",
+    "tree": "4834ce6c471b8963d0af52a41eb7798320691f65",
+    "baseline": "d68091a9cf6341c2c9120ba9251a6e0dd79a9616"
+  },
+  "remediation": [
+    {
+      "finding": "Complete Grocery human review",
+      "evidence": [
+        "crates/heyfood-bin/src/main.rs",
+        "crates/heyfood-bin/tests/activated_commands.rs"
+      ],
+      "result": "Complete structured preview and frozen preconditions are terminal-safe; token and idempotency authority remain hidden."
+    },
+    {
+      "finding": "Mutation-relevant log and Menu Watch arguments",
+      "evidence": [
+        "crates/heyfood-bin/src/main.rs"
+      ],
+      "result": "Household selector and confirm_menu_url state are displayed and unit tested."
+    },
+    {
+      "finding": "Command authority inventory completeness and accuracy",
+      "evidence": [
+        "docs/release-evidence/agent-native-phase0/command-authority-inventory.json",
+        "crates/heyfood-cli/tests/agent_phase0_inventory.rs"
+      ],
+      "result": "All 75 paths, aliases, global controls, per-command arguments, scopes, network calls, retry, JSON/error families, terminal, and local/remote effects are joined and parity tested; item and export classifications are corrected."
+    },
+    {
+      "finding": "Manifest v1 stable core and cross-field safety",
+      "evidence": [
+        "schemas/v1/heyfood-agent-manifest.schema.json",
+        "fixtures/agent/manifest-v1-golden.json",
+        "crates/heyfood-cli/tests/agent_phase0_manifest_schema.rs"
+      ],
+      "result": "Automation surfaces, interactivity/browser handoff, required-nullable fields, SSE bounds, and authority/retry invariants are frozen."
+    },
+    {
+      "finding": "Implementable out-of-band approval freeze",
+      "evidence": [
+        "docs/AGENT_APPROVAL_CONTRACT.md",
+        "schemas/v1/agent-proposal-presentation.schema.json",
+        "schemas/v1/agent-approval-protocol.schema.json"
+      ],
+      "result": "Allowlisted presentation, canonical digest, backend-generated 256-bit session binding, exact endpoints, legal states, atomic single-use consume, and reconciliation are frozen."
+    },
+    {
+      "finding": "Future MCP environment isolation",
+      "evidence": [
+        "docs/AGENT_MCP_CONTRACT.md",
+        "docs/release-evidence/agent-native-phase0/mcp-environment-policy.json",
+        "docs/release-evidence/agent-native-phase0/host-setup-matrix.md"
+      ],
+      "result": "MCP is fixed to production origin/native account-bound storage, rejects every inherited HEYFOOD variable before credentials, and records an empty environment plus policy digest."
+    },
+    {
+      "finding": "Adapter-independent Grocery capability gate",
+      "evidence": [
+        "crates/heyfood-application/src/grocery.rs"
+      ],
+      "result": "Display and exclusion controllers reject unavailable/unsupported capability before port dispatch."
+    },
+    {
+      "finding": "Stale seam evidence status",
+      "evidence": [
+        "docs/release-evidence/agent-native-phase0/application-seam-inventory.md"
+      ],
+      "result": "Status now records Phase 0 extraction complete with exact-SHA review pending."
+    }
+  ],
+  "local_verification": [
+    {
+      "command": "cargo test --workspace --all-features --locked",
+      "status": "passed"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+      "status": "passed"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "status": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "status": "passed"
+    },
+    {
+      "command": "jq empty on Phase 0, v1 schema, and agent fixture JSON",
+      "status": "passed"
+    }
+  ],
+  "product_tree_evidence_digests_sha256": {
+    "phase0_inventory": "e67aa57f1f46700eea0a42815f07a93923bf70026380e4a2945a189821657905",
+    "command_authority_inventory": "efcc518289bc44a6e4d01bc4e8968c8f353fb701721fd1dbfaa3fc399bb99418",
+    "agent_manifest_schema": "32be421aba80ba0021da8d53d51a8cad58623a6f350f5a18744f3a7fe0270acc",
+    "proposal_presentation_schema": "22f11ca3ff14032316cb0bc087e0cc0ab233e5103ac46780796a7fde3c6925d4",
+    "approval_protocol_schema": "ee1ae7a91b50d4f2ee6cbf1cd4ae2f317f95dde25dbf87bae6c3e37a8bbbe458",
+    "mcp_environment_policy": "43635cc8717cc343a43cfb53b2a40bc7a5b2a1b0fabb1f366dc4a8996cc184c1",
+    "approval_contract": "5559465d94436fe788a53cc4f3de5b0b652382dd0c801d4448fc58a2827457a1",
+    "threat_model": "eb1cb8deb49c7b118e7020e999a167781a1c666bf584925d0da077a3e450f5a5"
+  },
+  "remaining_external_gates": [
+    "Hosted ordinary CI must pass at the exact product commit.",
+    "Exact installed-archive controlling-terminal qualification and the Windows CONIN$/CONOUT$ path remain pending.",
+    "Independent exact-SHA Rust architecture and agent/security re-review must close all P0/P1 findings."
+  ],
+  "public_agent_surface_enabled": false,
+  "phase_exit_authorized": false
+}
