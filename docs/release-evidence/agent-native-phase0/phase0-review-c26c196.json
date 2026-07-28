@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "reviewed_product_commit": "c26c196fd9c685761d7ab0209be6ad17a94f163f",
+  "reviewed_product_tree": "4834ce6c471b8963d0af52a41eb7798320691f65",
+  "reviewed_evidence_commit": "cf5d8c6eec1a5f1873b696a795c312b3cf2c5a60",
+  "checkpoint_sha256": "6dbe6fea0fd6f7ff0467446b45277df3d9884fa9299dc1e76e80d38e3a0a5dbf",
+  "verdict": "request_changes",
+  "phase0_exit_authorized": false,
+  "phase1_authorized": false,
+  "findings": {
+    "p0": [],
+    "p1": [
+      {
+        "id": "AN-P0-R2-01-command-route-authority",
+        "summary": "The command authority inventory names the wrong conversational endpoint and collapses endpoint-distinct Grocery reads and prepares into shared placeholder policies.",
+        "required_remediation": "Record exact per-command routes and add parity assertions that join mutating and POST-as-read calls to the DG-R2 inventory and runtime source anchors."
+      },
+      {
+        "id": "AN-P0-R2-02-approval-wire-completeness",
+        "summary": "The approval protocol schema does not define the complete prepare, browser-decision, observe, commit, cancel, and error wire required by the normative endpoint contract.",
+        "required_remediation": "Freeze strict versioned request, response, and error envelopes; define exact headers, CSRF/browser trust, idempotency and conflict semantics; and validate lifecycle and negative fixtures."
+      }
+    ],
+    "p2": []
+  },
+  "closed_prior_findings": [
+    "complete human Grocery proposal and precondition review",
+    "Menu Watch menu identity confirmation review",
+    "meal household selector review",
+    "item and Grocery export authority classification",
+    "Grocery application capability gate",
+    "manifest stable-core, cross-field, nullable, and SSE constraints",
+    "fail-closed MCP environment policy",
+    "stale application-seam status"
+  ],
+  "independent_verification": {
+    "rust_architecture_specialist": "request_changes",
+    "agent_integration_security_specialist": "request_changes",
+    "workspace_tests": "passed",
+    "strict_clippy": "passed",
+    "formatting": "passed",
+    "diff_check": "passed",
+    "reviewers_modified_files": false
+  },
+  "external_gates_remaining": [
+    "hosted CI at the replacement exact product SHA",
+    "installed-archive Unix controlling-terminal qualification",
+    "installed-archive Windows CONIN$/CONOUT$ qualification"
+  ]
+}
