@@ -27,7 +27,8 @@
     "expected_skips": 3,
     "failures": 0,
     "release_set_artifact_id": 8679917944,
-    "release_set_artifact_sha256": "ac4e65141793d1e7c4277110136a7300460a717b269bc139d00fcbe22a061ac1",
+    "release_set_artifact_sha256": "06bf8632929dd34540a0cc7dd0e9b61fdd611bc582af4bae49603043ce33934c",
+    "release_set_manifest_sha256": "ac4e65141793d1e7c4277110136a7300460a717b269bc139d00fcbe22a061ac1",
     "targets": [
       {
         "target": "aarch64-apple-darwin",
