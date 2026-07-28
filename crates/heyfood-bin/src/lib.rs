@@ -8,8 +8,8 @@ use heyfood_agent_runtime::{GroceryExport, HttpService};
 use heyfood_application::{
     AudioCapturePort, CapabilitySnapshot, CreateMenuWatch, CreateMenuWatchRequest,
     DiscoverCapabilities, EnsureSession, EnsureSessionError, EnsureSessionOutcome, ListMenuWatches,
-    RefreshPolicy, RemoveMenuWatch, RunTurnOutcome, ServicePort, TurnContext, TurnRequest,
-    execute_one_shot_turn,
+    ReadActiveGroceryDisplay, ReadGroceryExclusions, RefreshPolicy, RemoveMenuWatch,
+    RunTurnOutcome, ServicePort, TurnContext, TurnRequest, execute_one_shot_turn,
 };
 use heyfood_cli::{
     AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, MenuWatchCommand,
@@ -440,11 +440,10 @@ impl<'a> OneShotExecutor<'a> {
         HttpService::require_grocery_v1(&capabilities)?;
         match command {
             GroceryCommand::List => {
-                let list = self
-                    .service
-                    .grocery_list(
-                        &capabilities,
-                        self.credentials,
+                let list = ReadActiveGroceryDisplay::new(self.service)
+                    .execute(
+                        capabilities,
+                        self.credentials.clone(),
                         OperationId::new(),
                         cancellation,
                     )
@@ -548,11 +547,10 @@ impl<'a> OneShotExecutor<'a> {
                 Ok(render_grocery_proposal(&proposal, self.output_mode))
             }
             GroceryCommand::Exclusions => {
-                let exclusions = self
-                    .service
-                    .grocery_exclusions(
-                        &capabilities,
-                        self.credentials,
+                let exclusions = ReadGroceryExclusions::new(self.service)
+                    .execute(
+                        capabilities,
+                        self.credentials.clone(),
                         OperationId::new(),
                         cancellation,
                     )
@@ -833,11 +831,10 @@ impl<'a> OneShotExecutor<'a> {
     ) -> Result<(GroceryEntityId, GroceryListVersion, Vec<String>), OneShotError> {
         let list_id = parse_list_id(requested_list_id)?;
         let version = parse_list_version(requested_version)?;
-        let list = self
-            .service
-            .grocery_list(
-                capabilities,
-                self.credentials,
+        let list = ReadActiveGroceryDisplay::new(self.service)
+            .execute(
+                capabilities.clone(),
+                self.credentials.clone(),
                 OperationId::new(),
                 cancellation,
             )
@@ -2484,22 +2481,17 @@ async fn run_interactive_panel(
                 .execute(cancellation.child_token())
                 .await
                 .map_err(panel_error)?;
-            let list = service
-                .grocery_list(
-                    &capabilities,
-                    &credentials,
+            let list = ReadActiveGroceryDisplay::new(service.as_ref())
+                .execute(
+                    capabilities.clone(),
+                    credentials.clone(),
                     OperationId::new(),
                     cancellation.child_token(),
                 )
                 .await
                 .map_err(panel_error)?;
-            let exclusions = service
-                .grocery_exclusions(
-                    &capabilities,
-                    &credentials,
-                    OperationId::new(),
-                    cancellation,
-                )
+            let exclusions = ReadGroceryExclusions::new(service.as_ref())
+                .execute(capabilities, credentials, OperationId::new(), cancellation)
                 .await
                 .map_err(panel_error)?;
             let mut output = render_grocery_list(&list, OutputMode::HumanPlain);

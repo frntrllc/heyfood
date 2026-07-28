@@ -80,7 +80,7 @@
       ],
       "retry": "safe_only_before_or_as_defined_by_get_contract",
       "product_state": "no_grocery_product_mutation_but_session_may_rotate",
-      "phase0_gap": "Application controller and agent-safe bounded presentation are not yet qualified."
+      "phase0_gap": "Application display-read controller extraction is complete; the bounded agent presentation remains Phase 1 work."
     },
     "grocery_prepare_human": {
       "audience": "human_terminal_only",

@@ -8,11 +8,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use heyfood_application::{MenuWatchList, MenuWatchSnapshot, render_household_menu};
+use heyfood_application::{
+    GroceryDisplayList, GroceryExclusions, MenuWatchList, MenuWatchSnapshot, render_household_menu,
+};
 use heyfood_core::{
-    ExclusionListResponseWire, GroceryDecisionWire, GroceryItemStateWire, GroceryListWire,
-    GroceryMutationProposalWire, GrocerySafetyStatus, HealthContextWire, HealthFreshnessStatus,
-    HealthProvider, ProfileStatus, WatchWeekday, terminal_safe_text,
+    GroceryDecisionWire, GroceryItemStateWire, GroceryMutationProposalWire, GrocerySafetyStatus,
+    HealthContextWire, HealthFreshnessStatus, HealthProvider, ProfileStatus, WatchWeekday,
+    terminal_safe_text,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -818,7 +820,7 @@ pub fn error_document(kind: &str, message: &str, uncertain: bool) -> Value {
 }
 
 #[must_use]
-pub fn render_grocery_list(list: &GroceryListWire, mode: OutputMode) -> String {
+pub fn render_grocery_list(list: &GroceryDisplayList, mode: OutputMode) -> String {
     if mode == OutputMode::Json {
         return render_json(list).expect("Grocery list DTO is serializable");
     }
@@ -928,10 +930,7 @@ const fn grocery_safety_label(status: GrocerySafetyStatus) -> &'static str {
 }
 
 #[must_use]
-pub fn render_grocery_exclusions(
-    exclusions: &ExclusionListResponseWire,
-    mode: OutputMode,
-) -> String {
+pub fn render_grocery_exclusions(exclusions: &GroceryExclusions, mode: OutputMode) -> String {
     if mode == OutputMode::Json {
         return render_json(exclusions).expect("Grocery exclusions DTO is serializable");
     }

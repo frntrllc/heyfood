@@ -19,8 +19,11 @@ pub use capability::{
 };
 pub use ensure_session::{EnsureSession, EnsureSessionError, EnsureSessionOutcome};
 pub use grocery::{
-    GroceryCacheKey, GroceryItemReferenceCache, GroceryListSnapshot, GroceryMutationIntent,
-    GroceryPort, PreparedGroceryMutation, ReadActiveGroceryList,
+    GroceryCacheKey, GroceryDisplayItem, GroceryDisplayList, GroceryDisplayMemberFlag,
+    GroceryDisplaySafety, GroceryDisplaySource, GroceryExclusions, GroceryItemReferenceCache,
+    GroceryListSnapshot, GroceryMutationIntent, GroceryPort, GroceryReadPort,
+    PreparedGroceryMutation, ReadActiveGroceryDisplay, ReadActiveGroceryList,
+    ReadGroceryExclusions,
 };
 pub use health::{
     HealthAuthorization, HealthConnection, HealthContext, HealthManagementOutcome, HealthPort,

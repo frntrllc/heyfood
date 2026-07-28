@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
 
 use clap::{CommandFactory, Parser};
-use heyfood_application::{MenuWatchList, MenuWatchSnapshot};
+use heyfood_application::{
+    GroceryDisplayItem, GroceryDisplayList, GroceryDisplayMemberFlag, GroceryDisplaySafety,
+    GroceryDisplaySource, GroceryExclusions, MenuWatchList, MenuWatchSnapshot,
+};
 use heyfood_cli::{
     Command, CommandLine, CompletionShell, GroceryCommand, GroceryDecisionArgument,
     MenuWatchCommand, OutputMode, WatchWeekdayArgument, render_grocery_exclusions,
@@ -13,6 +16,63 @@ use heyfood_core::{
     RestaurantId, WatchCadenceWire, WatchHour, WatchWeekday,
 };
 use serde_json::json;
+
+fn display_list(wire: GroceryListWire) -> GroceryDisplayList {
+    GroceryDisplayList {
+        id: wire.id,
+        title: wire.title,
+        state: wire.state,
+        version: wire.version,
+        items: wire
+            .items
+            .into_iter()
+            .map(|item| GroceryDisplayItem {
+                id: item.id,
+                requested_name: item.requested_name,
+                canonical_name: item.canonical_name,
+                quantity: item.quantity,
+                unit: item.unit,
+                package_quantity: item.package_quantity,
+                note: item.note,
+                state: item.state,
+                intended_for: item.intended_for,
+                sources: item
+                    .sources
+                    .into_iter()
+                    .map(|source| GroceryDisplaySource {
+                        source_type: source.source_type,
+                        source_ref: source.source_ref,
+                        source_detail: source.source_detail,
+                    })
+                    .collect(),
+                safety: item.safety.map(|safety| GroceryDisplaySafety {
+                    basis: safety.basis,
+                    status: safety.status,
+                    member_flags: safety
+                        .member_flags
+                        .into_iter()
+                        .map(|flag| GroceryDisplayMemberFlag {
+                            member_id: flag.member_id,
+                            status: flag.status,
+                            reason: flag.reason,
+                            substitutions: flag.substitutions,
+                        })
+                        .collect(),
+                    model_version: safety.model_version,
+                    rules_version: safety.rules_version,
+                    confidence: safety.confidence,
+                    context_hash: safety.context_hash,
+                    context_hash_version: safety.context_hash_version,
+                    label_hint: safety.label_hint,
+                }),
+                created_at: item.created_at,
+                updated_at: item.updated_at,
+            })
+            .collect(),
+        created_at: wire.created_at,
+        updated_at: wire.updated_at,
+    }
+}
 
 #[test]
 fn command_tree_retains_hidden_compatibility_and_authorized_phase2_families() {
@@ -313,7 +373,7 @@ fn human_grocery_renderer_removes_terminal_controls() {
         "updated_at": "2026-07-21T12:00:00Z"
     }))
     .unwrap();
-    let plain = render_grocery_list(&list, OutputMode::HumanPlain);
+    let plain = render_grocery_list(&display_list(list), OutputMode::HumanPlain);
     assert!(!plain.contains('\u{1b}'));
     assert!(plain.contains("List[2J"));
     assert!(plain.contains("milk[31m"));
@@ -326,7 +386,7 @@ fn grocery_renderer_surfaces_stable_ids_provenance_member_flags_and_substitution
     ))
     .unwrap();
     let list: GroceryListWire = serde_json::from_value(fixture["list"].clone()).unwrap();
-    let output = render_grocery_list(&list, OutputMode::HumanPlain);
+    let output = render_grocery_list(&display_list(list), OutputMode::HumanPlain);
     assert!(output.contains("id:i2"));
     assert!(output.contains("source: recipe:dahl-001"));
     assert!(output.contains("maya-uuid: risky"));
@@ -336,7 +396,12 @@ fn grocery_renderer_surfaces_stable_ids_provenance_member_flags_and_substitution
     let exclusions = ExclusionListResponseWire {
         exclusions: vec!["pork\u{1b}[2J".into(), "raw onion".into()],
     };
-    let rendered = render_grocery_exclusions(&exclusions, OutputMode::HumanPlain);
+    let rendered = render_grocery_exclusions(
+        &GroceryExclusions {
+            exclusions: exclusions.exclusions,
+        },
+        OutputMode::HumanPlain,
+    );
     assert!(!rendered.contains('\u{1b}'));
     assert!(rendered.contains("pork[2J"));
 }

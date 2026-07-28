@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
 use heyfood_application::{
-    CapabilitySnapshot, DiscoverCapabilities, ListMenuWatches, RegistrationAvailability,
+    CapabilitySnapshot, DiscoverCapabilities, ListMenuWatches, ReadActiveGroceryDisplay,
+    ReadGroceryExclusions, RegistrationAvailability,
 };
 use heyfood_core::{
     AccountId, AddItemsRequestWire, CredentialVersion, ExclusionMutationRequestWire,
@@ -146,13 +147,46 @@ async fn respond(socket: &mut TcpStream, status: u16, body: Value) {
     socket.write_all(&body).await.unwrap();
 }
 
-fn list_fixture() -> Value {
+fn display_list_fixture() -> Value {
     json!({
         "id": "00000000-0000-4000-8000-000000000123",
         "title": "Grocery List",
         "state": "active",
         "version": 4,
-        "items": [],
+        "items": [{
+            "id": "item-1",
+            "requested_name": "bread",
+            "canonical_name": "whole wheat bread",
+            "quantity": 1.0,
+            "unit": "loaf",
+            "package_quantity": 1,
+            "note": null,
+            "state": "active",
+            "intended_for": "member-a",
+            "sources": [{
+                "source_type": "recipe",
+                "source_ref": "recipe-1",
+                "source_detail": "weekly plan"
+            }],
+            "safety": {
+                "basis": "ingredient",
+                "status": "risky",
+                "member_flags": [{
+                    "member_id": "member-a",
+                    "status": "avoid",
+                    "reason": "contains wheat",
+                    "substitutions": ["gluten-free bread"]
+                }],
+                "model_version": "model-1",
+                "rules_version": "rules-1",
+                "confidence": 0.97,
+                "context_hash": "context-hash",
+                "context_hash_version": 1,
+                "label_hint": "Verify the product label."
+            },
+            "created_at": "2026-07-21T12:00:00Z",
+            "updated_at": "2026-07-21T12:00:00Z"
+        }],
         "created_at": "2026-07-21T12:00:00Z",
         "updated_at": "2026-07-21T12:00:00Z"
     })
@@ -275,7 +309,7 @@ async fn capability_discovery_gates_typed_grocery_reads() {
                 .to_ascii_lowercase()
                 .contains("authorization: bearer session-access")
         );
-        respond(&mut socket, 200, list_fixture()).await;
+        respond(&mut socket, 200, display_list_fixture()).await;
 
         let (mut socket, _) = listener.accept().await.unwrap();
         let request = read_request(&mut socket).await;
@@ -292,20 +326,22 @@ async fn capability_discovery_gates_typed_grocery_reads() {
         .execute(CancellationToken::new())
         .await
         .unwrap();
-    let list = service
-        .grocery_list(
-            &advertised,
-            &credentials(),
+    let list = ReadActiveGroceryDisplay::new(&service)
+        .execute(
+            advertised.clone(),
+            credentials(),
             OperationId::new(),
             CancellationToken::new(),
         )
         .await
         .unwrap();
     assert_eq!(list.version, 4);
-    let exclusions = service
-        .grocery_exclusions(
-            &advertised,
-            &credentials(),
+    assert_eq!(serde_json::to_value(&list).unwrap(), display_list_fixture());
+    assert_eq!(list.items[0].safety.as_ref().unwrap().member_flags.len(), 1);
+    let exclusions = ReadGroceryExclusions::new(&service)
+        .execute(
+            advertised,
+            credentials(),
             OperationId::new(),
             CancellationToken::new(),
         )

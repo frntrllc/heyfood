@@ -1,9 +1,10 @@
 //! Contract-derived Phase 2 REST operations.
 
 use heyfood_application::{
-    BoxFuture, CapabilityPort, CapabilitySnapshot, CreateMenuWatchRequest, MenuWatchChangeEvent,
-    MenuWatchChangeSummary, MenuWatchList, MenuWatchPort, MenuWatchSnapshot, PortError,
-    RegistrationAvailability,
+    BoxFuture, CapabilityPort, CapabilitySnapshot, CreateMenuWatchRequest, GroceryDisplayItem,
+    GroceryDisplayList, GroceryDisplayMemberFlag, GroceryDisplaySafety, GroceryDisplaySource,
+    GroceryExclusions, GroceryReadPort, MenuWatchChangeEvent, MenuWatchChangeSummary,
+    MenuWatchList, MenuWatchPort, MenuWatchSnapshot, PortError, RegistrationAvailability,
 };
 use heyfood_core::{
     AddItemsRequestWire, ApplicationCapabilitiesWire, AuthorizationServerMetadataWire,
@@ -964,6 +965,38 @@ impl MenuWatchPort for HttpService {
     }
 }
 
+impl GroceryReadPort for HttpService {
+    fn read_active_display(
+        &self,
+        capabilities: CapabilitySnapshot,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<GroceryDisplayList, PortError>> {
+        Box::pin(async move {
+            self.grocery_list(&capabilities, &credentials, operation_id, cancellation)
+                .await
+                .map(grocery_display_from_wire)
+        })
+    }
+
+    fn read_exclusions(
+        &self,
+        capabilities: CapabilitySnapshot,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<GroceryExclusions, PortError>> {
+        Box::pin(async move {
+            self.grocery_exclusions(&capabilities, &credentials, operation_id, cancellation)
+                .await
+                .map(|wire| GroceryExclusions {
+                    exclusions: wire.exclusions,
+                })
+        })
+    }
+}
+
 fn capability_snapshot_from_wire(wire: ApplicationCapabilitiesWire) -> CapabilitySnapshot {
     let grocery = GroceryCapability::from_advertised(wire.application_version("grocery"));
     let registration = match wire.self_registration.status {
@@ -1032,6 +1065,63 @@ fn menu_watch_snapshot_from_wire(wire: MenuWatchResponseWire) -> MenuWatchSnapsh
                 price_decreases: change.summary.price_decreases,
             },
         }),
+    }
+}
+
+fn grocery_display_from_wire(wire: GroceryListWire) -> GroceryDisplayList {
+    GroceryDisplayList {
+        id: wire.id,
+        title: wire.title,
+        state: wire.state,
+        version: wire.version,
+        items: wire
+            .items
+            .into_iter()
+            .map(|item| GroceryDisplayItem {
+                id: item.id,
+                requested_name: item.requested_name,
+                canonical_name: item.canonical_name,
+                quantity: item.quantity,
+                unit: item.unit,
+                package_quantity: item.package_quantity,
+                note: item.note,
+                state: item.state,
+                intended_for: item.intended_for,
+                sources: item
+                    .sources
+                    .into_iter()
+                    .map(|source| GroceryDisplaySource {
+                        source_type: source.source_type,
+                        source_ref: source.source_ref,
+                        source_detail: source.source_detail,
+                    })
+                    .collect(),
+                safety: item.safety.map(|safety| GroceryDisplaySafety {
+                    basis: safety.basis,
+                    status: safety.status,
+                    member_flags: safety
+                        .member_flags
+                        .into_iter()
+                        .map(|flag| GroceryDisplayMemberFlag {
+                            member_id: flag.member_id,
+                            status: flag.status,
+                            reason: flag.reason,
+                            substitutions: flag.substitutions,
+                        })
+                        .collect(),
+                    model_version: safety.model_version,
+                    rules_version: safety.rules_version,
+                    confidence: safety.confidence,
+                    context_hash: safety.context_hash,
+                    context_hash_version: safety.context_hash_version,
+                    label_hint: safety.label_hint,
+                }),
+                created_at: item.created_at,
+                updated_at: item.updated_at,
+            })
+            .collect(),
+        created_at: wire.created_at,
+        updated_at: wire.updated_at,
     }
 }
 
