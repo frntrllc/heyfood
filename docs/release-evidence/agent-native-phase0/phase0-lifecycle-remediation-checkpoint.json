@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "status": "ready_for_fourth_independent_review_not_phase_exit",
+  "previous_review": {
+    "product_commit": "f3ddd84d3a65ccd2b87015110bbb33fab3f753b8",
+    "product_tree": "f452f1e7f26c59bd08d07f4d61e1842cb8ca4d6a",
+    "evidence_head": "c7cea8c6fce9ce25099eadc1e1641cbac55299c7",
+    "checkpoint_sha256": "5f28051816bd88c7f0582ef7c69b6626e5293615151faaed5001eef152891f7c",
+    "verdict": "request_changes",
+    "record": "docs/release-evidence/agent-native-phase0/phase0-review-f3ddd84.json",
+    "p0": 0,
+    "p1": 3,
+    "p2": 0
+  },
+  "product": {
+    "commit": "796ba0afe3ca68c6ecaf0e876520111f99243355",
+    "tree": "5b6a5fea91f074006699faa754ad6cc62316e434",
+    "baseline": "d68091a9cf6341c2c9120ba9251a6e0dd79a9616"
+  },
+  "remediation": [
+    {
+      "finding": "AN-P0-R3-01-menu-watch-authority",
+      "evidence": [
+        "docs/release-evidence/agent-native-phase0/command-authority-inventory.json",
+        "crates/heyfood-cli/tests/agent_phase0_inventory.rs"
+      ],
+      "result": "Menu Watch creation and removal now have separate authority records, exact POST and DELETE routes, exact effects, and exact terminal confirmation language. The inventory test verifies exact network-call equality for every active networked path and complete coverage of the active command set."
+    },
+    {
+      "finding": "AN-P0-R3-02-approval-lifecycle-integrity",
+      "evidence": [
+        "docs/AGENT_APPROVAL_CONTRACT.md",
+        "schemas/v1/agent-approval-protocol.schema.json",
+        "schemas/v1/agent-proposal-presentation.schema.json",
+        "fixtures/agent/approval-protocol-v1-lifecycle.json",
+        "crates/heyfood-cli/tests/agent_phase0_manifest_schema.rs"
+      ],
+      "result": "The lifecycle fixture now separates committed, cancelled, and human-declined approvals; binds proposal, human view, decision, observation, and receipt identities; freezes legal transitions; and demonstrates uncertain dispatch reconciliation before commit. Schema conditionals and negative tests reject illegal receipt, cancellation, and reconciliation combinations."
+    },
+    {
+      "finding": "AN-P0-R3-03-idempotency-namespace",
+      "evidence": [
+        "docs/AGENT_APPROVAL_CONTRACT.md",
+        "schemas/v1/agent-approval-protocol.schema.json",
+        "fixtures/agent/approval-protocol-v1-lifecycle.json",
+        "crates/heyfood-cli/tests/agent_phase0_manifest_schema.rs"
+      ],
+      "result": "Proposal, commit, and cancellation use distinct request identifiers. The frozen idempotency namespace includes account subject, backend session, approval session when present, HTTP method, canonical path, and Idempotency-Key; canonicalization rejects ambiguous paths. Fixture cases cover accepted distinct-stage keys, byte-equivalent same-endpoint replay, and mismatched-payload conflict."
+    }
+  ],
+  "local_verification": [
+    {
+      "command": "cargo test --workspace --all-features --locked",
+      "status": "passed"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+      "status": "passed"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "status": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "status": "passed"
+    },
+    {
+      "command": "jq empty on all Phase 0 evidence, v1 schema, and agent fixture JSON",
+      "status": "passed"
+    }
+  ],
+  "product_tree_evidence_digests_sha256": {
+    "phase0_inventory": "dc295618f386e949354729ff214e31f191259ec831a18705c19789a906d5c774",
+    "command_authority_inventory": "1e821a49b4040a8597e7e46bf8c74f9bd4336455b270fc2159b02d3be0fa97df",
+    "dg_r2_dispatch_inventory": "3854eac006152fdad0360ad18ac1a5707941a3eaf98bc94540263975c87b7f2f",
+    "approval_contract": "70874ffd03d4f588cbc76abc887c1604ac5938f90d30190bd35fb075545a97c0",
+    "approval_protocol_schema": "0d0c26d8d6cbe34192eaf3db109874f2a357aa32fc8490b9e64468054a44b29b",
+    "proposal_presentation_schema": "22f11ca3ff14032316cb0bc087e0cc0ab233e5103ac46780796a7fde3c6925d4",
+    "approval_lifecycle_fixture": "d70fa58b15849308dcda4ae0ec4afdfa5a063f13d82438c06c4fb2259562982a",
+    "command_inventory_tests": "8a200edcaa36105de2501c99829b6d95630f18020259bc6461f0e37ad1ffd4c3",
+    "approval_protocol_tests": "2fa2cf6aa09d22ae58aea9ec2de9d34666b50305b59d5d8ca5642903300a6490",
+    "previous_review_record": "2ae4dc96fbbba84c43d935ba490a5084ecaf225e75feaec2d97a657ce7783819"
+  },
+  "remaining_external_gates": [
+    "Hosted ordinary CI must pass at the exact product commit.",
+    "Exact installed-archive controlling-terminal qualification and the Windows CONIN$/CONOUT$ path remain pending.",
+    "Independent exact-SHA Rust architecture and agent/security review must close all three remaining P1 findings."
+  ],
+  "public_agent_surface_enabled": false,
+  "phase_exit_authorized": false,
+  "phase1_authorized": false
+}
