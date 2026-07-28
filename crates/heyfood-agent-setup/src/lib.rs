@@ -1046,46 +1046,59 @@ fn install_host(
     }
     #[cfg(windows)]
     let published_stage = {
-        stage_commit_handle
-            .publish(&plan.skill_path, false)
-            .map_err(|error| {
-                let _ = rollback_staged_commit(
+        let published = if hit_test_failpoint("skill_commit_publish") {
+            Err(std::io::Error::other("injected skill publish failure"))
+        } else {
+            stage_commit_handle.publish(&plan.skill_path, false)
+        };
+        match published {
+            Ok(published) => published,
+            Err(error) => {
+                return Err(rollback_staged_commit_or_uncertain(
                     &anchored_parent.directory,
                     skill_name,
                     &stage_name,
                     &backup_name,
                     replacing,
-                );
-                SetupError::new("agent_setup_commit", error.to_string())
-            })?
+                    SetupError::new("agent_setup_commit", error.to_string()),
+                ));
+            }
+        }
     };
     #[cfg(not(windows))]
-    if let Err(error) =
-        anchored_parent
-            .directory
-            .rename(&stage_name, &anchored_parent.directory, skill_name)
     {
-        let _ = rollback_staged_commit(
-            &anchored_parent.directory,
-            skill_name,
-            &stage_name,
-            &backup_name,
-            replacing,
-        );
-        return Err(SetupError::new("agent_setup_commit", error.to_string()));
+        let published = if hit_test_failpoint("skill_commit_publish") {
+            Err(std::io::Error::other("injected skill publish failure"))
+        } else {
+            anchored_parent
+                .directory
+                .rename(&stage_name, &anchored_parent.directory, skill_name)
+        };
+        if let Err(error) = published {
+            return Err(rollback_staged_commit_or_uncertain(
+                &anchored_parent.directory,
+                skill_name,
+                &stage_name,
+                &backup_name,
+                replacing,
+                SetupError::new("agent_setup_commit", error.to_string()),
+            ));
+        }
     }
+    #[cfg(windows)]
+    let published_identity = published_stage.identity();
+    #[cfg(windows)]
+    drop(published_stage);
     let committed_directory = match anchored_parent.directory.open_dir_nofollow(skill_name) {
         Ok(directory) => directory,
         Err(error) => {
-            #[cfg(windows)]
-            drop(published_stage);
-            let _ = rollback_installed_skill(
+            return Err(rollback_installed_skill_or_uncertain(
                 &anchored_parent.directory,
                 skill_name,
                 &backup_name,
                 replacing,
-            );
-            return Err(SetupError::new("agent_setup_commit", error.to_string()));
+                SetupError::new("agent_setup_commit", error.to_string()),
+            ));
         }
     };
     #[cfg(windows)]
@@ -1093,22 +1106,24 @@ fn install_host(
         .try_clone()
         .map(CapDir::into_std_file)
         .and_then(|directory| heyfood_windows_file::file_identity(&directory));
-    #[cfg(windows)]
-    let published_identity = published_stage.identity();
     let mut committed_files = BTreeMap::new();
-    let committed_inspection =
-        inspect_directory(&committed_directory, Path::new(""), &mut committed_files);
+    let committed_inspection = if hit_test_failpoint("skill_post_publish_validation") {
+        Err(SetupError::new(
+            "agent_setup_stage",
+            "injected post-publish validation failure",
+        ))
+    } else {
+        inspect_directory(&committed_directory, Path::new(""), &mut committed_files)
+    };
     drop(committed_directory);
-    #[cfg(windows)]
-    drop(published_stage);
     if let Err(error) = committed_inspection {
-        let _ = rollback_installed_skill(
+        return Err(rollback_installed_skill_or_uncertain(
             &anchored_parent.directory,
             skill_name,
             &backup_name,
             replacing,
-        );
-        return Err(error);
+            error,
+        ));
     }
     #[cfg(windows)]
     let committed_identity_matches = match (committed_identity, published_identity) {
@@ -1116,38 +1131,38 @@ fn install_host(
             committed == staged_identity && published == staged_identity
         }
         (Err(error), _) | (_, Err(error)) => {
-            let _ = rollback_installed_skill(
+            return Err(rollback_installed_skill_or_uncertain(
                 &anchored_parent.directory,
                 skill_name,
                 &backup_name,
                 replacing,
-            );
-            return Err(SetupError::new("agent_setup_commit", error.to_string()));
+                SetupError::new("agent_setup_commit", error.to_string()),
+            ));
         }
     };
     #[cfg(windows)]
     if !committed_identity_matches {
-        let _ = rollback_installed_skill(
+        return Err(rollback_installed_skill_or_uncertain(
             &anchored_parent.directory,
             skill_name,
             &backup_name,
             replacing,
-        );
-        return Err(SetupError::new(
-            "agent_setup_redirect",
-            "committed Agent Skill identity changed during final inspection",
+            SetupError::new(
+                "agent_setup_redirect",
+                "committed Agent Skill identity changed during final inspection",
+            ),
         ));
     }
     if committed_files != expected_file_digests() {
-        let _ = rollback_installed_skill(
+        return Err(rollback_installed_skill_or_uncertain(
             &anchored_parent.directory,
             skill_name,
             &backup_name,
             replacing,
-        );
-        return Err(SetupError::new(
-            "agent_setup_stage",
-            "committed Agent Skill bytes do not match the embedded package",
+            SetupError::new(
+                "agent_setup_stage",
+                "committed Agent Skill bytes do not match the embedded package",
+            ),
         ));
     }
 
@@ -1321,6 +1336,12 @@ fn rollback_installed_skill(
     backup_name: &std::ffi::OsStr,
     replacing: bool,
 ) -> Result<(), SetupError> {
+    if hit_test_failpoint("skill_installed_rollback_remove") {
+        return Err(SetupError::new(
+            "agent_setup_rollback",
+            "injected installed skill rollback failure",
+        ));
+    }
     parent
         .remove_dir_all(skill_name)
         .map_err(|error| SetupError::new("agent_setup_rollback", error.to_string()))?;
@@ -1330,6 +1351,23 @@ fn rollback_installed_skill(
             .map_err(|error| SetupError::new("agent_setup_rollback", error.to_string()))?;
     }
     Ok(())
+}
+
+fn rollback_installed_skill_or_uncertain(
+    parent: &CapDir,
+    skill_name: &std::ffi::OsStr,
+    backup_name: &std::ffi::OsStr,
+    replacing: bool,
+    original: SetupError,
+) -> SetupError {
+    if rollback_installed_skill(parent, skill_name, backup_name, replacing).is_err() {
+        SetupError::uncertain(
+            "agent_setup_validation_rollback",
+            "installed Agent Skill validation failed and the prior state could not be restored",
+        )
+    } else {
+        original
+    }
 }
 
 fn rollback_staged_commit(
@@ -1345,11 +1383,35 @@ fn rollback_staged_commit(
             .map_err(|error| SetupError::new("agent_setup_rollback", error.to_string()))?;
     }
     if replacing {
+        if hit_test_failpoint("skill_stage_rollback_restore") {
+            return Err(SetupError::new(
+                "agent_setup_rollback",
+                "injected staged skill rollback failure",
+            ));
+        }
         parent
             .rename(backup_name, parent, skill_name)
             .map_err(|error| SetupError::new("agent_setup_rollback", error.to_string()))?;
     }
     Ok(())
+}
+
+fn rollback_staged_commit_or_uncertain(
+    parent: &CapDir,
+    skill_name: &std::ffi::OsStr,
+    stage_name: &std::ffi::OsStr,
+    backup_name: &std::ffi::OsStr,
+    replacing: bool,
+    original: SetupError,
+) -> SetupError {
+    if rollback_staged_commit(parent, skill_name, stage_name, backup_name, replacing).is_err() {
+        SetupError::uncertain(
+            "agent_setup_commit_rollback",
+            "Agent Skill commit failed and the prior state could not be restored",
+        )
+    } else {
+        original
+    }
 }
 
 fn sync_anchored_directory(directory: &CapDir) -> std::io::Result<()> {
@@ -3241,6 +3303,80 @@ mod tests {
                     prior_receipt
                 );
                 assert!(installed.hosts[0].skill_path.is_dir());
+            }
+        }
+    }
+
+    #[test]
+    fn failed_skill_publish_restores_prior_replacement_or_reports_uncertainty() {
+        for rollback_fails in [false, true] {
+            let root = scratch(if rollback_fails {
+                "publish-rollback-uncertain"
+            } else {
+                "publish-rollback"
+            });
+            let environment = environment(&root);
+            let mut initial = options(SetupMode::DryRun, SetupOperation::Install);
+            initial.target = SetupTarget::Codex;
+            let installed =
+                execute_with_environment(&authorize(initial, &environment), &environment).unwrap();
+            let prior_receipt = fs::read(&installed.hosts[0].receipt_path).unwrap();
+            fs::write(&environment.heyfood_executable, b"replacement-binary").unwrap();
+            let mut replace = options(SetupMode::DryRun, SetupOperation::Install);
+            replace.target = SetupTarget::Codex;
+            replace.replace = true;
+            set_test_failpoints(if rollback_fails {
+                &["skill_commit_publish", "skill_stage_rollback_restore"]
+            } else {
+                &["skill_commit_publish"]
+            });
+            let error = execute_with_environment(&authorize(replace, &environment), &environment)
+                .unwrap_err();
+            assert_eq!(error.uncertain, rollback_fails);
+            if rollback_fails {
+                assert_eq!(error.kind, "agent_setup_commit_rollback");
+            } else {
+                assert_eq!(error.kind, "agent_setup_commit");
+                assert!(installed.hosts[0].skill_path.is_dir());
+                assert_eq!(
+                    fs::read(&installed.hosts[0].receipt_path).unwrap(),
+                    prior_receipt
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn failed_post_publish_validation_removes_install_or_reports_uncertainty() {
+        for rollback_fails in [false, true] {
+            let root = scratch(if rollback_fails {
+                "validation-rollback-uncertain"
+            } else {
+                "validation-rollback"
+            });
+            let environment = environment(&root);
+            let mut install = options(SetupMode::DryRun, SetupOperation::Install);
+            install.target = SetupTarget::Codex;
+            let skill_path = build_plan(&install, &environment).unwrap().hosts[0]
+                .skill_path
+                .clone();
+            let reviewed = authorize(install, &environment);
+            set_test_failpoints(if rollback_fails {
+                &[
+                    "skill_post_publish_validation",
+                    "skill_installed_rollback_remove",
+                ]
+            } else {
+                &["skill_post_publish_validation"]
+            });
+            let error = execute_with_environment(&reviewed, &environment).unwrap_err();
+            assert_eq!(error.uncertain, rollback_fails);
+            if rollback_fails {
+                assert_eq!(error.kind, "agent_setup_validation_rollback");
+                assert!(skill_path.is_dir());
+            } else {
+                assert_eq!(error.kind, "agent_setup_stage");
+                assert!(!skill_path.exists());
             }
         }
     }
