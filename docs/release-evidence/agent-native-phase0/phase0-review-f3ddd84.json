@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "reviewed_product_commit": "f3ddd84d3a65ccd2b87015110bbb33fab3f753b8",
+  "reviewed_product_tree": "f452f1e7f26c59bd08d07f4d61e1842cb8ca4d6a",
+  "reviewed_evidence_commit": "c7cea8c6fce9ce25099eadc1e1641cbac55299c7",
+  "checkpoint_sha256": "5f28051816bd88c7f0582ef7c69b6626e5293615151faaed5001eef152891f7c",
+  "verdict": "request_changes",
+  "phase0_exit_authorized": false,
+  "phase1_authorized": false,
+  "findings": {
+    "p0": [],
+    "p1": [
+      {
+        "id": "AN-P0-R3-01-watch-route-authority",
+        "summary": "Watch add and remove share one policy containing both POST create and DELETE remove, so neither joined per-command authority row is exact.",
+        "required_remediation": "Split create/remove policies and assert exact calls for every active networked command path."
+      },
+      {
+        "id": "AN-P0-R3-02-approval-lifecycle-integrity",
+        "summary": "The lifecycle fixture changes one frozen presentation and emits committed and cancelled receipts for the same approval; tests validate envelopes independently rather than validating linkage and legal transitions.",
+        "required_remediation": "Use separate commit, cancel, and decline lifecycles; enforce exact presentation/digest/session/operation linkage, observation receipt invariants, legal transitions, and terminal exclusivity."
+      },
+      {
+        "id": "AN-P0-R3-03-idempotency-namespace",
+        "summary": "Proposal creation and commit both use operation_id as the Idempotency-Key although their request bodies differ, while replay rules do not define endpoint scoping.",
+        "required_remediation": "Freeze distinct request identities and an exact account/session/method/path idempotency namespace; prove normal lifecycle success and conflicting same-endpoint replay rejection."
+      }
+    ],
+    "p2": []
+  },
+  "closed_findings": [
+    "conversation authority uses POST /v1/agent/converse and joins DG-R2/runtime source",
+    "strict request/result/error envelope registry",
+    "fixed production and approval origins",
+    "bound MCP header names and browser cookie/CSRF/nonces",
+    "typed uncertain outcomes and no-blind-retry rule"
+  ],
+  "independent_verification": {
+    "rust_architecture_specialist": "request_changes_with_two_p1",
+    "agent_integration_security_specialist": "request_changes_with_three_p1",
+    "workspace_tests": "passed",
+    "strict_clippy": "passed",
+    "formatting": "passed",
+    "diff_check": "passed",
+    "reviewers_modified_files": false
+  },
+  "external_gates_remaining": [
+    "hosted CI at the replacement exact product SHA",
+    "installed-archive Unix controlling-terminal qualification",
+    "installed-archive Windows CONIN$/CONOUT$ qualification"
+  ]
+}
