@@ -1,6 +1,7 @@
 # heyfood local MCP contract
 
-**Status:** v1 read/discovery contract implemented in the `v0.6.0` release candidate; public support is pending exact-byte qualification and publication
+**Status:** v1 read/discovery contract supported in the qualified public
+`v0.6.0` release
 
 ## Transport
 
