@@ -9,8 +9,17 @@ envelopes are:
 
 - `schemas/v1/agent-proposal-presentation.schema.json`
 - `schemas/v1/agent-approval-protocol.schema.json`
+- `fixtures/agent/approval-protocol-v1-lifecycle.json`
 
 Any incompatible field or state transition requires a new protocol version.
+
+The approval schema's top-level `oneOf` is the complete JSON-envelope
+registry. Every request and result uses `schema_version: 1`, has a unique
+`kind`, rejects unknown fields, and is capped by the MCP frame limits. The
+external `AgentProposalPresentation` reference resolves to the exact v1 schema
+above. An implementation rejects an unknown kind, field, enum value, schema
+version, or unresolved schema reference before credential access or approval
+state change.
 
 ## Identity and session binding
 
@@ -65,26 +74,126 @@ reference. It is not a capability: requests still require the matching
 authenticated account and approval session, and possession alone cannot
 approve, cancel, consume, or commit.
 
+## Transport, headers, browser trust, and CSRF
+
+Bound MCP backend JSON endpoints use only `https://api.hello.food`, TLS, and
+`Content-Type: application/json`. Alternate origins, redirects, query
+parameters, userinfo, fragments, proxy-derived origin overrides, and
+environment-selected origins are rejected. Every MCP call requires the normal
+account-bound `Authorization: Bearer <account-bound-session>` header.
+
+`POST /v1/agent-approval/sessions` also requires `Idempotency-Key` equal to
+the body's `session_request_id`. Every bound MCP endpoint requires:
+
+```text
+X-Heyfood-Agent-Approval-Session: <approval_session_id UUID>
+X-Heyfood-Agent-Approval-Binding: <43-character base64url token>
+```
+
+The backend compares the authenticated account, its backend session, the
+approval-session UUID, and a hash of the binding token in constant time before
+reading or changing a proposal; the binding is account and session scoped.
+The token is never accepted in a JSON body, path, query, cookie, URL, or
+model-visible result. Proposal create and commit also require
+`Idempotency-Key` equal to `operation_id`; cancel requires it equal to
+`cancel_request_id`. The bound observation GET omits
+`Idempotency-Key`. Missing, duplicated, comma-joined, or conflicting security
+headers fail closed.
+
+The human page is a separate trust boundary at exactly
+`https://auth.hello.food`. It establishes a fresh, independently
+authenticated, host-only `__Host-heyfood-agent-approval` cookie with
+`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, and no `Domain`. The
+proposal GET issues a new `decision_nonce` and CSRF token bound server-side to
+that cookie, account subject, approval reference, proposal digest, and expiry.
+The decision POST requires:
+
+```text
+Content-Type: application/json
+Origin: https://auth.hello.food
+Sec-Fetch-Site: same-origin
+X-Heyfood-CSRF-Token: <43-character base64url token>
+```
+
+It also requires the authenticated cookie and matching one-use
+`decision_nonce` in the strict `human_decision_request` body. The page rejects
+missing or conflicting `Origin`, cross-site Fetch Metadata, query-supplied
+CSRF or decisions, stale/non-matching cookie state, alternate redirect
+targets, and reused nonces. Responses use `Cache-Control: no-store`,
+`Referrer-Policy: no-referrer`, a nonce-based script policy, and
+`frame-ancestors 'none'`. A host permission prompt, MCP elicitation result,
+model text, form-mode response, or browser-open event never substitutes for
+this decision POST.
+
+## Versioned wire envelopes
+
+| Step | Request/body | Result |
+|---|---|---|
+| Create session | `session_create_request` plus account auth and matching idempotency header | `session_created`; its binding token stays inside locked MCP process memory |
+| Freeze proposal | `proposal_create_request` plus bound MCP headers and matching `operation_id` idempotency header | `proposal_created` with internal `approval_id`, allowlisted `presentation`, and fixed-origin `approval_url` |
+| Render human page | No JSON body; authenticated cookie and exact path reference | `human_proposal_view` for page bootstrap only; never returned to MCP/model |
+| Record decision | `human_decision_request` plus the exact browser headers/cookie above | `human_decision_result` |
+| Observe/reconcile | No JSON body; bound MCP headers | `approval_observation` |
+| Commit | `commit_request` plus bound MCP headers and matching `operation_id` idempotency header | `commit_receipt` or an observation/error requiring reconciliation |
+| Cancel | `cancel_request` plus bound MCP headers and matching `cancel_request_id` idempotency header | `cancellation_receipt` |
+| Any failure | N/A | strict `protocol_error`; never an HTML body or untyped success |
+
+`approval_id` is internal transport state. The MCP implementation retains it
+beside the binding token and uses it to observe, commit, or cancel. It is not
+included in `AgentProposalPresentation` or an MCP tool result.
+
 ## Backend records and endpoints
 
-All endpoints are fixed to the production hello.food origin and require the
-normal account-bound session. MCP-only endpoints additionally require the
-session binding token.
+MCP endpoints use the production API origin and both binding headers where
+shown. Human endpoints use the authentication origin and the browser boundary
+above.
 
-| Method and path | Caller | Effect |
+| Origin, method, and path | Caller | Effect |
 |---|---|---|
-| `POST /v1/agent-approval/sessions` | local MCP | Create a backend-generated approval session |
-| `POST /v1/agent-approval/proposals` | bound MCP | Store one immutable server proposal and return its allowlisted presentation plus HTTPS approval URL |
-| `GET /v1/agent-approval/proposals/{approval_reference}` | authenticated human page | Render the exact stored proposal for the matching account |
-| `POST /v1/agent-approval/proposals/{approval_reference}/decision` | authenticated human page | Record one accept or decline using compare-and-swap |
-| `GET /v1/agent-approval/approvals/{approval_id}` | bound MCP | Observe status or reconcile an uncertain operation |
-| `POST /v1/agent-approval/approvals/{approval_id}/commit` | bound MCP | Atomically consume one approval and accept one backend commit |
-| `POST /v1/agent-approval/approvals/{approval_id}/cancel` | bound MCP | Cancel a still-pending approval without product mutation |
+| `https://api.hello.food` `POST /v1/agent-approval/sessions` | local MCP | Consume `session_create_request`; create and return `session_created` |
+| `https://api.hello.food` `POST /v1/agent-approval/proposals` | bound MCP | Consume `proposal_create_request`; store one immutable proposal and return `proposal_created` |
+| `https://auth.hello.food` `GET /agent-approval/{approval_reference}` | authenticated human page | Return `human_proposal_view` for the exact stored proposal and matching account |
+| `https://auth.hello.food` `POST /agent-approval/{approval_reference}/decision` | authenticated human page | Consume `human_decision_request`; compare-and-swap one decision and return `human_decision_result` |
+| `https://api.hello.food` `GET /v1/agent-approval/approvals/{approval_id}` | bound MCP | Return `approval_observation` for status or reconciliation |
+| `https://api.hello.food` `POST /v1/agent-approval/approvals/{approval_id}/commit` | bound MCP | Consume `commit_request`; atomically consume one approval and return `commit_receipt` |
+| `https://api.hello.food` `POST /v1/agent-approval/approvals/{approval_id}/cancel` | bound MCP | Consume `cancel_request`; cancel without product mutation and return `cancellation_receipt` |
 
 The approval URL is `https://auth.hello.food/agent-approval/{approval_reference}`.
 It contains no account identifier, proposal data, digest, decision, session
 identity, binding token, commit token, bearer credential, or redirect target.
 Query parameters and alternate origins are rejected.
+
+## Errors, conflicts, replay, and retry
+
+Every error is the schema's strict `protocol_error`; success HTTP statuses
+never carry an error envelope, and error statuses never carry a success
+envelope. Error codes map as follows:
+
+| Code | HTTP | Meaning and next action |
+|---|---:|---|
+| `invalid_request` | 400 | Reject before state change |
+| `unauthenticated` | 401 | Account authentication missing/invalid; no retry inside the operation |
+| `forbidden` | 403 | Binding, account, session, CSRF, origin, or browser trust mismatch |
+| `approval_not_found` | 404 | No matching record within the authenticated and bound namespace |
+| `approval_conflict` | 409 | Digest, operation, state, idempotency payload, or decision replay conflicts |
+| `approval_expired` | 410 | Terminal expiry; prepare a new proposal only as a new user operation |
+| `rate_limited` | 429 | No automatic retry; any delay hint is handled outside this operation |
+| `internal_before_dispatch` | 500 | Server proves no state transition began; still no automatic retry |
+| `outcome_uncertain` | 503 | Dispatch may have occurred; reconcile by observation/resource state |
+
+All errors set `retry_allowed: false`. Only `outcome_uncertain` may set
+`outcome_uncertain: true`, and it identifies `observe_approval` or
+`observe_resource_state`. No error includes binding tokens, CSRF tokens,
+cookies, bearer credentials, proposal internals, stack traces, or whether a
+record exists outside the authenticated account/session namespace.
+
+An idempotency-key replay with byte-identical RFC 8785/JCS request content
+returns the original result. Reuse with different content returns
+`approval_conflict`. An identical already-recorded human decision returns the
+original `human_decision_result`; a conflicting decision or reused
+`decision_nonce` returns `approval_conflict`. Committed, declined, cancelled,
+expired, and invalidated records are terminal. Clients never retry a POST
+after dispatch without first executing the prescribed observation.
 
 ## State machine
 

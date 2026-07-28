@@ -2,16 +2,46 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://hey.food/schemas/v1/agent-approval-protocol.schema.json",
   "title": "hello.food agent approval protocol v1",
-  "description": "Internal authenticated wire envelopes for session-bound, single-use out-of-band approval.",
+  "description": "Strict internal request, result, receipt, and error envelopes for session-bound, single-use out-of-band approval. HTTP header requirements are defined by bound_mcp_headers and browser_decision_headers and are normative with AGENT_APPROVAL_CONTRACT.md.",
   "oneOf": [
     {
+      "$ref": "#/$defs/session_create_request"
+    },
+    {
       "$ref": "#/$defs/session_created"
+    },
+    {
+      "$ref": "#/$defs/proposal_create_request"
+    },
+    {
+      "$ref": "#/$defs/proposal_created"
+    },
+    {
+      "$ref": "#/$defs/human_proposal_view"
+    },
+    {
+      "$ref": "#/$defs/human_decision_request"
+    },
+    {
+      "$ref": "#/$defs/human_decision_result"
     },
     {
       "$ref": "#/$defs/approval_observation"
     },
     {
+      "$ref": "#/$defs/commit_request"
+    },
+    {
       "$ref": "#/$defs/commit_receipt"
+    },
+    {
+      "$ref": "#/$defs/cancel_request"
+    },
+    {
+      "$ref": "#/$defs/cancellation_receipt"
+    },
+    {
+      "$ref": "#/$defs/protocol_error"
     }
   ],
   "$defs": {
@@ -27,6 +57,167 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{43}$"
     },
+    "date_time": {
+      "type": "string",
+      "format": "date-time",
+      "maxLength": 64
+    },
+    "safe_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f-\\u009f\\u2028\\u2029]*$"
+    },
+    "mutation_family": {
+      "enum": [
+        "grocery",
+        "meal_log",
+        "menu_watch"
+      ]
+    },
+    "approval_status": {
+      "enum": [
+        "prepared",
+        "awaiting_human",
+        "approved",
+        "declined",
+        "expired",
+        "invalidated",
+        "cancelled",
+        "committing",
+        "committed",
+        "reconciliation_required"
+      ]
+    },
+    "reconciliation": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        null,
+        "observe_approval",
+        "observe_resource_state",
+        "support_required"
+      ]
+    },
+    "session_create_headers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorization",
+        "idempotency_key"
+      ],
+      "properties": {
+        "authorization": {
+          "const": "Bearer <account-bound-session>"
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/uuid"
+        }
+      },
+      "description": "Normative session-creation HTTP headers. Wire names are Authorization and Idempotency-Key."
+    },
+    "bound_mcp_headers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorization",
+        "x_heyfood_agent_approval_session",
+        "x_heyfood_agent_approval_binding"
+      ],
+      "properties": {
+        "authorization": {
+          "const": "Bearer <account-bound-session>"
+        },
+        "x_heyfood_agent_approval_session": {
+          "$ref": "#/$defs/uuid"
+        },
+        "x_heyfood_agent_approval_binding": {
+          "$ref": "#/$defs/opaque_256"
+        }
+      },
+      "description": "Normative bound observation HTTP headers. Wire names are Authorization, X-Heyfood-Agent-Approval-Session, and X-Heyfood-Agent-Approval-Binding."
+    },
+    "bound_mcp_mutation_headers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorization",
+        "x_heyfood_agent_approval_session",
+        "x_heyfood_agent_approval_binding",
+        "idempotency_key"
+      ],
+      "properties": {
+        "authorization": {
+          "const": "Bearer <account-bound-session>"
+        },
+        "x_heyfood_agent_approval_session": {
+          "$ref": "#/$defs/uuid"
+        },
+        "x_heyfood_agent_approval_binding": {
+          "$ref": "#/$defs/opaque_256"
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/uuid"
+        }
+      },
+      "description": "Normative bound proposal/commit/cancel HTTP headers. Wire names are Authorization, X-Heyfood-Agent-Approval-Session, X-Heyfood-Agent-Approval-Binding, and Idempotency-Key."
+    },
+    "browser_decision_headers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "content_type",
+        "origin",
+        "sec_fetch_site",
+        "x_heyfood_csrf_token"
+      ],
+      "properties": {
+        "content_type": {
+          "const": "application/json"
+        },
+        "origin": {
+          "const": "https://auth.hello.food"
+        },
+        "sec_fetch_site": {
+          "const": "same-origin"
+        },
+        "x_heyfood_csrf_token": {
+          "$ref": "#/$defs/opaque_256"
+        }
+      },
+      "description": "Normative browser header model. The request also requires the independently authenticated __Host-heyfood-agent-approval cookie; the CSRF token is server-bound to that cookie and is never accepted from a URL."
+    },
+    "session_create_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "session_request_id",
+        "mcp_client_nonce",
+        "mcp_server_nonce"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "session_create_request"
+        },
+        "session_request_id": {
+          "$ref": "#/$defs/uuid",
+          "description": "Also supplied as Idempotency-Key for session creation."
+        },
+        "mcp_client_nonce": {
+          "$ref": "#/$defs/opaque_256"
+        },
+        "mcp_server_nonce": {
+          "$ref": "#/$defs/opaque_256"
+        }
+      }
+    },
     "session_created": {
       "type": "object",
       "additionalProperties": false,
@@ -35,6 +226,7 @@
         "kind",
         "approval_session_id",
         "session_binding_token",
+        "mcp_session_digest_sha256",
         "expires_at"
       ],
       "properties": {
@@ -51,10 +243,195 @@
           "$ref": "#/$defs/opaque_256",
           "description": "Backend-generated secret held only in MCP process memory and never returned through a tool result."
         },
+        "mcp_session_digest_sha256": {
+          "$ref": "#/$defs/sha256",
+          "description": "Backend digest binding the authenticated subject, backend session, MCP nonces, approval session, and binding-token hash."
+        },
         "expires_at": {
+          "$ref": "#/$defs/date_time"
+        }
+      }
+    },
+    "proposal_create_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "approval_session_id",
+        "operation_id",
+        "mutation_family",
+        "server_proposal_reference",
+        "expected_proposal_digest_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "proposal_create_request"
+        },
+        "approval_session_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid",
+          "description": "Also supplied as Idempotency-Key for proposal creation."
+        },
+        "mutation_family": {
+          "$ref": "#/$defs/mutation_family"
+        },
+        "server_proposal_reference": {
           "type": "string",
-          "format": "date-time",
-          "maxLength": 64
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Opaque reference to an already prepared server proposal; never a confirmation or commit capability."
+        },
+        "expected_proposal_digest_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "proposal_created": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "approval_id",
+        "approval_session_id",
+        "operation_id",
+        "presentation",
+        "approval_url"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "proposal_created"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/uuid",
+          "description": "Internal identifier used only by the bound MCP transport."
+        },
+        "approval_session_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "presentation": {
+          "$ref": "https://hey.food/schemas/v1/agent-proposal-presentation.schema.json"
+        },
+        "approval_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://auth\\.hello\\.food/agent-approval/[A-Za-z0-9_-]{43}$",
+          "maxLength": 104
+        }
+      }
+    },
+    "human_proposal_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "approval_id",
+        "presentation",
+        "decision_nonce",
+        "csrf_token"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "human_proposal_view"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "presentation": {
+          "$ref": "https://hey.food/schemas/v1/agent-proposal-presentation.schema.json"
+        },
+        "decision_nonce": {
+          "$ref": "#/$defs/opaque_256"
+        },
+        "csrf_token": {
+          "$ref": "#/$defs/opaque_256",
+          "description": "Submitted only in X-Heyfood-CSRF-Token and bound to the authenticated __Host-heyfood-agent-approval cookie."
+        }
+      }
+    },
+    "human_decision_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "approval_id",
+        "proposal_digest_sha256",
+        "decision_nonce",
+        "decision"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "human_decision_request"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "proposal_digest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "decision_nonce": {
+          "$ref": "#/$defs/opaque_256"
+        },
+        "decision": {
+          "enum": [
+            "accept",
+            "decline"
+          ]
+        }
+      }
+    },
+    "human_decision_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "approval_id",
+        "proposal_digest_sha256",
+        "status",
+        "recorded_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "human_decision_result"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "proposal_digest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "status": {
+          "enum": [
+            "approved",
+            "declined"
+          ]
+        },
+        "recorded_at": {
+          "$ref": "#/$defs/date_time"
         }
       }
     },
@@ -66,10 +443,12 @@
         "kind",
         "approval_id",
         "approval_session_id",
+        "operation_id",
         "proposal_digest_sha256",
         "status",
         "expires_at",
         "commit_receipt",
+        "cancellation_receipt",
         "reconciliation"
       ],
       "properties": {
@@ -85,27 +464,17 @@
         "approval_session_id": {
           "$ref": "#/$defs/uuid"
         },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
         "proposal_digest_sha256": {
           "$ref": "#/$defs/sha256"
         },
         "status": {
-          "enum": [
-            "prepared",
-            "awaiting_human",
-            "approved",
-            "declined",
-            "expired",
-            "invalidated",
-            "cancelled",
-            "committing",
-            "committed",
-            "reconciliation_required"
-          ]
+          "$ref": "#/$defs/approval_status"
         },
         "expires_at": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64
+          "$ref": "#/$defs/date_time"
         },
         "commit_receipt": {
           "oneOf": [
@@ -117,17 +486,47 @@
             }
           ]
         },
-        "reconciliation": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "enum": [
-            null,
-            "observe_approval",
-            "observe_resource_state",
-            "support_required"
+        "cancellation_receipt": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/cancellation_receipt"
+            },
+            {
+              "type": "null"
+            }
           ]
+        },
+        "reconciliation": {
+          "$ref": "#/$defs/reconciliation"
+        }
+      }
+    },
+    "commit_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "approval_session_id",
+        "operation_id",
+        "proposal_digest_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "commit_request"
+        },
+        "approval_session_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid",
+          "description": "Must equal the proposal operation and the Idempotency-Key header."
+        },
+        "proposal_digest_sha256": {
+          "$ref": "#/$defs/sha256"
         }
       }
     },
@@ -160,9 +559,7 @@
           "$ref": "#/$defs/sha256"
         },
         "committed_at": {
-          "type": "string",
-          "format": "date-time",
-          "maxLength": 64
+          "$ref": "#/$defs/date_time"
         },
         "resource_references": {
           "type": "array",
@@ -174,6 +571,302 @@
           }
         }
       }
+    },
+    "cancel_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "approval_session_id",
+        "cancel_request_id",
+        "proposal_digest_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "cancel_request"
+        },
+        "approval_session_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "cancel_request_id": {
+          "$ref": "#/$defs/uuid",
+          "description": "Also supplied as Idempotency-Key for cancellation."
+        },
+        "proposal_digest_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "cancellation_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "approval_id",
+        "cancel_request_id",
+        "proposal_digest_sha256",
+        "cancelled_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "cancellation_receipt"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "cancel_request_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "proposal_digest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cancelled_at": {
+          "$ref": "#/$defs/date_time"
+        }
+      }
+    },
+    "protocol_error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "code",
+        "message",
+        "http_status",
+        "outcome_uncertain",
+        "retry_allowed",
+        "reconciliation",
+        "approval_id",
+        "operation_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "protocol_error"
+        },
+        "code": {
+          "enum": [
+            "invalid_request",
+            "unauthenticated",
+            "forbidden",
+            "approval_not_found",
+            "approval_conflict",
+            "approval_expired",
+            "rate_limited",
+            "outcome_uncertain",
+            "internal_before_dispatch"
+          ]
+        },
+        "message": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "http_status": {
+          "enum": [
+            400,
+            401,
+            403,
+            404,
+            409,
+            410,
+            429,
+            500,
+            503
+          ]
+        },
+        "outcome_uncertain": {
+          "type": "boolean"
+        },
+        "retry_allowed": {
+          "const": false
+        },
+        "reconciliation": {
+          "$ref": "#/$defs/reconciliation"
+        },
+        "approval_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operation_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "code": {
+                  "const": "invalid_request"
+                },
+                "http_status": {
+                  "const": 400
+                },
+                "outcome_uncertain": {
+                  "const": false
+                },
+                "reconciliation": {
+                  "const": null
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "const": "unauthenticated"
+                },
+                "http_status": {
+                  "const": 401
+                },
+                "outcome_uncertain": {
+                  "const": false
+                },
+                "reconciliation": {
+                  "const": null
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "const": "forbidden"
+                },
+                "http_status": {
+                  "const": 403
+                },
+                "outcome_uncertain": {
+                  "const": false
+                },
+                "reconciliation": {
+                  "const": null
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "const": "approval_not_found"
+                },
+                "http_status": {
+                  "const": 404
+                },
+                "outcome_uncertain": {
+                  "const": false
+                },
+                "reconciliation": {
+                  "const": null
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "const": "approval_conflict"
+                },
+                "http_status": {
+                  "const": 409
+                },
+                "outcome_uncertain": {
+                  "const": false
+                },
+                "reconciliation": {
+                  "const": "observe_approval"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "const": "approval_expired"
+                },
+                "http_status": {
+                  "const": 410
+                },
+                "outcome_uncertain": {
+                  "const": false
+                },
+                "reconciliation": {
+                  "const": null
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "const": "rate_limited"
+                },
+                "http_status": {
+                  "const": 429
+                },
+                "outcome_uncertain": {
+                  "const": false
+                },
+                "reconciliation": {
+                  "const": null
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "const": "internal_before_dispatch"
+                },
+                "http_status": {
+                  "const": 500
+                },
+                "outcome_uncertain": {
+                  "const": false
+                },
+                "reconciliation": {
+                  "const": null
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "const": "outcome_uncertain"
+                },
+                "http_status": {
+                  "const": 503
+                },
+                "outcome_uncertain": {
+                  "const": true
+                },
+                "reconciliation": {
+                  "enum": [
+                    "observe_approval",
+                    "observe_resource_state"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
     }
   }
 }

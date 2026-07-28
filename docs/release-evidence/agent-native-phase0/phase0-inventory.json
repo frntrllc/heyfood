@@ -12,13 +12,15 @@
   "requirements": [
     {
       "id": "AN-P0-01-command-authority-inventory",
-      "status": "satisfied",
+      "status": "remediation_ready_for_re_review",
       "owner": "lead-rust",
       "evidence": [
         "docs/release-evidence/agent-native-phase0/command-authority-inventory.json",
         "crates/heyfood-cli/tests/agent_phase0_inventory.rs"
       ],
-      "blockers": []
+      "blockers": [
+        "The second exact-SHA reviews identified route-authority inaccuracies; the replacement exact product must pass independent re-review."
+      ]
     },
     {
       "id": "AN-P0-02-contract-reconciliation",
@@ -43,7 +45,8 @@
         "docs/AGENT_THREAT_MODEL.md",
         "docs/AGENT_APPROVAL_CONTRACT.md",
         "schemas/v1/agent-proposal-presentation.schema.json",
-        "schemas/v1/agent-approval-protocol.schema.json"
+        "schemas/v1/agent-approval-protocol.schema.json",
+        "fixtures/agent/approval-protocol-v1-lifecycle.json"
       ],
       "blockers": [
         "Independent security review of the frozen companion hello.food out-of-band approval contract is pending; endpoint implementation and production proof remain Phase 4 gates."
@@ -81,7 +84,8 @@
         "docs/AGENT_MCP_CONTRACT.md",
         "crates/heyfood-cli/tests/agent_phase0_manifest_schema.rs",
         "schemas/v1/agent-proposal-presentation.schema.json",
-        "schemas/v1/agent-approval-protocol.schema.json"
+        "schemas/v1/agent-approval-protocol.schema.json",
+        "fixtures/agent/approval-protocol-v1-lifecycle.json"
       ],
       "blockers": [
         "Independent Rust and agent-integration review is pending.",
@@ -131,7 +135,8 @@
       "evidence": [
         "docs/release-evidence/agent-native-phase0/phase0-checkpoint.json",
         "docs/release-evidence/agent-native-phase0/phase0-review-e3be760.json",
-        "docs/release-evidence/agent-native-phase0/phase0-remediation-checkpoint.json"
+        "docs/release-evidence/agent-native-phase0/phase0-remediation-checkpoint.json",
+        "docs/release-evidence/agent-native-phase0/phase0-review-c26c196.json"
       ],
       "blockers": [
         "Ordinary CI must be green at one exact product SHA.",
@@ -141,16 +146,16 @@
   ],
   "summary": {
     "requirements_total": 10,
-    "satisfied": 5,
-    "in_progress_or_draft": 4,
+    "satisfied": 4,
+    "in_progress_or_draft": 5,
     "pending": 1,
-    "unresolved_p0_p1_findings": 6,
+    "unresolved_p0_p1_findings": 2,
     "phase_exit_authorized": false
   },
   "review": {
-    "status": "remediation_ready_for_re_review",
-    "reviewed_product_sha": "e3be760aaa58f5cd16ec623954d36e042b9ca46e",
-    "review_candidate_product_sha": "c26c196fd9c685761d7ab0209be6ad17a94f163f",
-    "reviewed_evidence_digest": "4b5933de5e6ad1a6bce46f4872d41a8ff6f5ccd16f28c0b1fa8094c8178957af"
+    "status": "second_remediation_in_progress",
+    "reviewed_product_sha": "c26c196fd9c685761d7ab0209be6ad17a94f163f",
+    "review_candidate_product_sha": null,
+    "reviewed_evidence_digest": "6dbe6fea0fd6f7ff0467446b45277df3d9884fa9299dc1e76e80d38e3a0a5dbf"
   }
 }

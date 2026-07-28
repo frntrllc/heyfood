@@ -100,7 +100,7 @@
     "network": "conditional_authentication_and_conversation",
     "network_calls": [
       "conditional authorization",
-      "POST /v1/channel/converse"
+      "POST /v1/agent/converse"
     ],
     "required_scopes": [],
     "json_output_family": null,
@@ -124,7 +124,7 @@
       "network": "authenticated",
       "network_calls": [
         "conditional authorization",
-        "POST /v1/channel/converse"
+        "POST /v1/agent/converse"
       ],
       "retry": "never_blind_retry",
       "product_state": "may_mutate_through_explicit_tui_workflows",
@@ -172,7 +172,7 @@
       "output_transport": "human_or_one_json_result",
       "network": "post_sse",
       "network_calls": [
-        "POST /v1/channel/converse"
+        "POST /v1/agent/converse"
       ],
       "retry": "reconcile_uncertain_never_blind_retry",
       "product_state": "conversation_state_and_server_tools_require_audit",
@@ -196,7 +196,7 @@
       "output_transport": "human_or_one_json_result",
       "network": "post_sse",
       "network_calls": [
-        "POST /v1/channel/converse"
+        "POST /v1/agent/converse"
       ],
       "retry": "reconcile_uncertain_never_blind_retry",
       "product_state": "meal_memory_mutation",
@@ -241,22 +241,21 @@
       "controlling_terminal": "not_used",
       "phase0_gap": "Dedicated bounded agent presentation remains Phase 1 work."
     },
-    "grocery_read": {
+    "grocery_list_read": {
       "audience": "agent_unsupported",
       "operation_class": "remote_read",
       "input_transport": "arguments",
       "output_transport": "human_or_one_json_result",
       "network": "get",
       "network_calls": [
-        "GET /v1/grocery/list",
-        "GET /v1/grocery/exclusions"
+        "GET /v1/grocery/list"
       ],
       "required_scopes": [
         "grocery:read"
       ],
       "retry": "safe_only_before_or_as_defined_by_get_contract",
       "product_state": "no_grocery_product_mutation_but_session_may_rotate",
-      "json_output_family": "grocery_list_or_exclusions_v1",
+      "json_output_family": "grocery_list_v1",
       "error_output_family": "one_json_error_or_human_stderr",
       "error_types": [
         "grocery_capability",
@@ -268,14 +267,122 @@
       "controlling_terminal": "not_used",
       "phase0_gap": "Application display-read controller extraction is complete; the bounded agent presentation remains Phase 1 work."
     },
-    "grocery_prepare_human": {
+    "grocery_exclusions_read": {
+      "audience": "agent_unsupported",
+      "operation_class": "remote_read",
+      "input_transport": "arguments",
+      "output_transport": "human_or_one_json_result",
+      "network": "get",
+      "network_calls": [
+        "GET /v1/grocery/exclusions"
+      ],
+      "required_scopes": [
+        "grocery:read"
+      ],
+      "retry": "safe_only_before_or_as_defined_by_get_contract",
+      "product_state": "no_grocery_product_mutation_but_session_may_rotate",
+      "json_output_family": "grocery_exclusions_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "grocery_capability",
+        "grocery_contract",
+        "scope_required"
+      ],
+      "local_side_effects": "session_rotation",
+      "remote_side_effects": "none",
+      "controlling_terminal": "not_used",
+      "phase0_gap": "Application display-read controller extraction is complete; the bounded agent presentation remains Phase 1 work."
+    },
+    "grocery_prepare_add_human": {
       "audience": "human_terminal_only",
       "operation_class": "prepare",
       "input_transport": "arguments_plus_controlling_terminal_acknowledgement",
       "output_transport": "capability_bearing_proposal_json_or_human",
       "network": "post_prepare",
       "network_calls": [
-        "POST one exact Grocery prepare endpoint"
+        "POST /v1/grocery/items"
+      ],
+      "required_scopes": [
+        "grocery:read",
+        "grocery:write"
+      ],
+      "retry": "dg_r2_no_blind_retry",
+      "product_state": "no_list_mutation_but_emits_commit_authority",
+      "json_output_family": "grocery_mutation_proposal_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "human_terminal_required",
+        "human_confirmation_declined",
+        "grocery_outcome_uncertain"
+      ],
+      "local_side_effects": "session_rotation",
+      "remote_side_effects": "server_pending_proposal_only",
+      "controlling_terminal": "required_exact_PREPARE",
+      "phase0_gap": null
+    },
+    "grocery_prepare_remove_human": {
+      "audience": "human_terminal_only",
+      "operation_class": "prepare",
+      "input_transport": "arguments_plus_controlling_terminal_acknowledgement",
+      "output_transport": "capability_bearing_proposal_json_or_human",
+      "network": "post_prepare",
+      "network_calls": [
+        "POST /v1/grocery/items/remove"
+      ],
+      "required_scopes": [
+        "grocery:read",
+        "grocery:write"
+      ],
+      "retry": "dg_r2_no_blind_retry",
+      "product_state": "no_list_mutation_but_emits_commit_authority",
+      "json_output_family": "grocery_mutation_proposal_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "human_terminal_required",
+        "human_confirmation_declined",
+        "grocery_outcome_uncertain"
+      ],
+      "local_side_effects": "session_rotation",
+      "remote_side_effects": "server_pending_proposal_only",
+      "controlling_terminal": "required_exact_PREPARE",
+      "phase0_gap": null
+    },
+    "grocery_prepare_state_human": {
+      "audience": "human_terminal_only",
+      "operation_class": "prepare",
+      "input_transport": "arguments_plus_controlling_terminal_acknowledgement",
+      "output_transport": "capability_bearing_proposal_json_or_human",
+      "network": "post_prepare",
+      "network_calls": [
+        "POST /v1/grocery/items/state"
+      ],
+      "required_scopes": [
+        "grocery:read",
+        "grocery:write"
+      ],
+      "retry": "dg_r2_no_blind_retry",
+      "product_state": "no_list_mutation_but_emits_commit_authority",
+      "json_output_family": "grocery_mutation_proposal_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "human_terminal_required",
+        "human_confirmation_declined",
+        "grocery_outcome_uncertain"
+      ],
+      "local_side_effects": "session_rotation",
+      "remote_side_effects": "server_pending_proposal_only",
+      "controlling_terminal": "required_exact_PREPARE",
+      "phase0_gap": null
+    },
+    "grocery_prepare_exclusion_human": {
+      "audience": "human_terminal_only",
+      "operation_class": "prepare",
+      "input_transport": "arguments_plus_controlling_terminal_acknowledgement",
+      "output_transport": "capability_bearing_proposal_json_or_human",
+      "network": "post_prepare",
+      "network_calls": [
+        "POST /v1/grocery/exclusions",
+        "POST /v1/grocery/exclusions/remove"
       ],
       "required_scopes": [
         "grocery:read",
@@ -551,12 +658,12 @@
     {
       "path": "grocery",
       "visibility": "active",
-      "policy": "grocery_read"
+      "policy": "grocery_list_read"
     },
     {
       "path": "grocery show",
       "visibility": "active",
-      "policy": "grocery_read",
+      "policy": "grocery_list_read",
       "aliases": [
         "grocery list"
       ]
@@ -564,27 +671,27 @@
     {
       "path": "grocery add",
       "visibility": "active",
-      "policy": "grocery_prepare_human"
+      "policy": "grocery_prepare_add_human"
     },
     {
       "path": "grocery remove",
       "visibility": "active",
-      "policy": "grocery_prepare_human"
+      "policy": "grocery_prepare_remove_human"
     },
     {
       "path": "grocery state",
       "visibility": "active",
-      "policy": "grocery_prepare_human"
+      "policy": "grocery_prepare_state_human"
     },
     {
       "path": "grocery exclusions",
       "visibility": "active",
-      "policy": "grocery_read"
+      "policy": "grocery_exclusions_read"
     },
     {
       "path": "grocery never",
       "visibility": "active",
-      "policy": "grocery_prepare_human"
+      "policy": "grocery_prepare_exclusion_human"
     },
     {
       "path": "grocery export",

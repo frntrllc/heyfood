@@ -8,6 +8,22 @@ const INVENTORY: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/release-evidence/agent-native-phase0/command-authority-inventory.json"
 ));
+const DG_R2_INVENTORY: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/release-evidence/agent-native-phase0/dg-r2-dispatch-inventory.json"
+));
+const AGENT_RUNTIME: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../heyfood-agent-runtime/src/lib.rs"
+));
+const SERVICE_API: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../heyfood-agent-runtime/src/service_api.rs"
+));
+const REGISTRATION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../heyfood-agent-runtime/src/registration.rs"
+));
 
 fn command_paths(command: &Command, prefix: &str, paths: &mut BTreeSet<String>) {
     for subcommand in command.get_subcommands() {
@@ -282,6 +298,105 @@ fn reviewed_policy_corrections_remain_frozen() {
         export["local_side_effects"],
         "optional_owner_only_atomic_file_write_and_session_rotation"
     );
+}
+
+#[test]
+fn command_network_authority_matches_dg_r2_and_runtime_routes() {
+    let document = parsed_inventory();
+    let policies = document["policies"].as_object().expect("policies");
+    let commands = document["commands"].as_array().expect("commands");
+    let policy_for = |path: &str| {
+        let policy_name = commands
+            .iter()
+            .find(|command| command["path"] == path)
+            .and_then(|command| command["policy"].as_str())
+            .unwrap_or_else(|| panic!("missing command {path}"));
+        &policies[policy_name]
+    };
+
+    let expected = BTreeMap::from([
+        ("ask", vec!["POST /v1/agent/converse"]),
+        ("reply", vec!["POST /v1/agent/converse"]),
+        ("log", vec!["POST /v1/agent/converse"]),
+        ("item", vec!["POST /v1/channel/tools/explain_item"]),
+        ("grocery", vec!["GET /v1/grocery/list"]),
+        ("grocery show", vec!["GET /v1/grocery/list"]),
+        ("grocery exclusions", vec!["GET /v1/grocery/exclusions"]),
+        ("grocery add", vec!["POST /v1/grocery/items"]),
+        ("grocery remove", vec!["POST /v1/grocery/items/remove"]),
+        ("grocery state", vec!["POST /v1/grocery/items/state"]),
+        (
+            "grocery never",
+            vec![
+                "POST /v1/grocery/exclusions",
+                "POST /v1/grocery/exclusions/remove",
+            ],
+        ),
+        ("grocery confirm", vec!["POST /v1/grocery/confirm"]),
+    ]);
+
+    for (path, calls) in expected {
+        assert_eq!(
+            policy_for(path)["network_calls"],
+            serde_json::json!(calls),
+            "authority route mismatch for {path}"
+        );
+    }
+
+    let dg_r2: Value = serde_json::from_str(DG_R2_INVENTORY).expect("DG-R2 inventory JSON");
+    let dg_r2_routes = dg_r2["dispatches"]
+        .as_array()
+        .expect("DG-R2 dispatches")
+        .iter()
+        .map(|row| {
+            format!(
+                "{} {}",
+                row["method"].as_str().expect("method"),
+                row["path"].as_str().expect("path")
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let dg_r2_rows = dg_r2["dispatches"].as_array().expect("DG-R2 dispatches");
+
+    for policy in policies.values() {
+        for call in policy["network_calls"]
+            .as_array()
+            .expect("network_calls")
+            .iter()
+            .filter_map(Value::as_str)
+        {
+            let Some((method, route)) = call.split_once(' ') else {
+                continue;
+            };
+            if matches!(method, "POST" | "PUT" | "DELETE") && route.starts_with('/') {
+                assert!(
+                    dg_r2_routes.contains(call),
+                    "command authority route is absent from DG-R2: {call}"
+                );
+                let row = dg_r2_rows
+                    .iter()
+                    .find(|row| {
+                        row["method"].as_str() == Some(method)
+                            && row["path"].as_str() == Some(route)
+                    })
+                    .expect("joined DG-R2 row");
+                let source = match row["source"].as_str().expect("DG-R2 source") {
+                    "crates/heyfood-agent-runtime/src/lib.rs" => AGENT_RUNTIME,
+                    "crates/heyfood-agent-runtime/src/service_api.rs" => SERVICE_API,
+                    "crates/heyfood-agent-runtime/src/registration.rs" => REGISTRATION,
+                    other => panic!("unknown runtime source {other}"),
+                };
+                let anchor = row["source_anchor"].as_str().expect("DG-R2 source anchor");
+                assert!(
+                    source.contains(anchor),
+                    "DG-R2/runtime source anchor is stale for {call}: {anchor}"
+                );
+            }
+        }
+    }
+
+    assert!(!INVENTORY.contains("/v1/channel/converse"));
+    assert!(!INVENTORY.contains("one exact Grocery prepare endpoint"));
 }
 
 #[test]

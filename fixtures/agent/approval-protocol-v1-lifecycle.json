@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "contract": "agent_approval_protocol_v1",
+  "envelopes": [
+    {
+      "schema_version": 1,
+      "kind": "session_create_request",
+      "session_request_id": "00000000-0000-4000-8000-000000000001",
+      "mcp_client_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "mcp_server_nonce": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+    },
+    {
+      "schema_version": 1,
+      "kind": "session_created",
+      "approval_session_id": "00000000-0000-4000-8000-000000000002",
+      "session_binding_token": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+      "mcp_session_digest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expires_at": "2026-07-27T19:15:00Z"
+    },
+    {
+      "schema_version": 1,
+      "kind": "proposal_create_request",
+      "approval_session_id": "00000000-0000-4000-8000-000000000002",
+      "operation_id": "00000000-0000-4000-8000-000000000003",
+      "mutation_family": "grocery",
+      "server_proposal_reference": "grocery-proposal-01",
+      "expected_proposal_digest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "schema_version": 1,
+      "kind": "proposal_created",
+      "approval_id": "00000000-0000-4000-8000-000000000004",
+      "approval_session_id": "00000000-0000-4000-8000-000000000002",
+      "operation_id": "00000000-0000-4000-8000-000000000003",
+      "presentation": {
+        "schema_version": 1,
+        "mutation_family": "grocery",
+        "operation": "add_items",
+        "approval_reference": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+        "proposal_digest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "expires_at": "2026-07-27T19:15:00Z",
+        "display": {
+          "title": "Review grocery change",
+          "summary": "Add one screened item to the active list.",
+          "fields": [
+            {
+              "label": "Household",
+              "value": "Current household"
+            }
+          ]
+        },
+        "resource_references": [
+          {
+            "kind": "grocery_list",
+            "id": "00000000-0000-4000-8000-000000000005"
+          }
+        ],
+        "preconditions": [
+          {
+            "kind": "resource_version",
+            "resource_id": "00000000-0000-4000-8000-000000000005",
+            "version": 7,
+            "digest_sha256": null
+          }
+        ],
+        "items": []
+      },
+      "approval_url": "https://auth.hello.food/agent-approval/DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    },
+    {
+      "schema_version": 1,
+      "kind": "human_proposal_view",
+      "approval_id": "00000000-0000-4000-8000-000000000004",
+      "presentation": {
+        "schema_version": 1,
+        "mutation_family": "grocery",
+        "operation": "add_items",
+        "approval_reference": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+        "proposal_digest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "expires_at": "2026-07-27T19:15:00Z",
+        "display": {
+          "title": "Review grocery change",
+          "summary": "Add one screened item to the active list.",
+          "fields": []
+        },
+        "resource_references": [],
+        "preconditions": [],
+        "items": []
+      },
+      "decision_nonce": "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+      "csrf_token": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+    },
+    {
+      "schema_version": 1,
+      "kind": "human_decision_request",
+      "approval_id": "00000000-0000-4000-8000-000000000004",
+      "proposal_digest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "decision_nonce": "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+      "decision": "accept"
+    },
+    {
+      "schema_version": 1,
+      "kind": "human_decision_result",
+      "approval_id": "00000000-0000-4000-8000-000000000004",
+      "proposal_digest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "approved",
+      "recorded_at": "2026-07-27T19:05:00Z"
+    },
+    {
+      "schema_version": 1,
+      "kind": "approval_observation",
+      "approval_id": "00000000-0000-4000-8000-000000000004",
+      "approval_session_id": "00000000-0000-4000-8000-000000000002",
+      "operation_id": "00000000-0000-4000-8000-000000000003",
+      "proposal_digest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "approved",
+      "expires_at": "2026-07-27T19:15:00Z",
+      "commit_receipt": null,
+      "cancellation_receipt": null,
+      "reconciliation": null
+    },
+    {
+      "schema_version": 1,
+      "kind": "commit_request",
+      "approval_session_id": "00000000-0000-4000-8000-000000000002",
+      "operation_id": "00000000-0000-4000-8000-000000000003",
+      "proposal_digest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "schema_version": 1,
+      "kind": "commit_receipt",
+      "approval_id": "00000000-0000-4000-8000-000000000004",
+      "operation_id": "00000000-0000-4000-8000-000000000003",
+      "proposal_digest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "committed_at": "2026-07-27T19:06:00Z",
+      "resource_references": [
+        "grocery_list:00000000-0000-4000-8000-000000000005@8"
+      ]
+    },
+    {
+      "schema_version": 1,
+      "kind": "cancel_request",
+      "approval_session_id": "00000000-0000-4000-8000-000000000002",
+      "cancel_request_id": "00000000-0000-4000-8000-000000000006",
+      "proposal_digest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "schema_version": 1,
+      "kind": "cancellation_receipt",
+      "approval_id": "00000000-0000-4000-8000-000000000004",
+      "cancel_request_id": "00000000-0000-4000-8000-000000000006",
+      "proposal_digest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "cancelled_at": "2026-07-27T19:06:00Z"
+    },
+    {
+      "schema_version": 1,
+      "kind": "protocol_error",
+      "code": "outcome_uncertain",
+      "message": "The commit may have been accepted; observe approval state before continuing.",
+      "http_status": 503,
+      "outcome_uncertain": true,
+      "retry_allowed": false,
+      "reconciliation": "observe_approval",
+      "approval_id": "00000000-0000-4000-8000-000000000004",
+      "operation_id": "00000000-0000-4000-8000-000000000003"
+    }
+  ],
+  "transport_examples": {
+    "session_create_headers": {
+      "authorization": "Bearer <account-bound-session>",
+      "idempotency_key": "00000000-0000-4000-8000-000000000001"
+    },
+    "bound_mcp_headers": {
+      "authorization": "Bearer <account-bound-session>",
+      "x_heyfood_agent_approval_session": "00000000-0000-4000-8000-000000000002",
+      "x_heyfood_agent_approval_binding": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    "bound_mcp_mutation_headers": {
+      "authorization": "Bearer <account-bound-session>",
+      "x_heyfood_agent_approval_session": "00000000-0000-4000-8000-000000000002",
+      "x_heyfood_agent_approval_binding": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+      "idempotency_key": "00000000-0000-4000-8000-000000000003"
+    },
+    "browser_decision_headers": {
+      "content_type": "application/json",
+      "origin": "https://auth.hello.food",
+      "sec_fetch_site": "same-origin",
+      "x_heyfood_csrf_token": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+    }
+  },
+  "negative_cases": [
+    {
+      "id": "alternate_approval_origin",
+      "rule": "approval_url_fixed_origin",
+      "value": "https://example.invalid/agent-approval/DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+      "expected": "invalid_request"
+    },
+    {
+      "id": "approval_url_query_injection",
+      "rule": "approval_url_has_no_query",
+      "value": "https://auth.hello.food/agent-approval/DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD?decision=accept",
+      "expected": "invalid_request"
+    },
+    {
+      "id": "model_supplied_commit_decision",
+      "rule": "commit_request_rejects_unknown_fields",
+      "field": "decision",
+      "expected": "invalid_request"
+    },
+    {
+      "id": "binding_token_in_json",
+      "rule": "request_bodies_reject_binding_token",
+      "field": "session_binding_token",
+      "expected": "invalid_request"
+    },
+    {
+      "id": "missing_browser_csrf_header",
+      "rule": "browser_decision_headers_are_complete",
+      "field": "x_heyfood_csrf_token",
+      "expected": "forbidden"
+    },
+    {
+      "id": "cross_session_binding",
+      "rule": "binding_is_account_and_session_scoped",
+      "expected": "forbidden"
+    },
+    {
+      "id": "conflicting_decision_replay",
+      "rule": "decision_nonce_is_single_use",
+      "expected": "approval_conflict"
+    },
+    {
+      "id": "blind_retry_after_uncertain_commit",
+      "rule": "uncertain_outcome_requires_observation",
+      "expected": "outcome_uncertain"
+    }
+  ]
+}
