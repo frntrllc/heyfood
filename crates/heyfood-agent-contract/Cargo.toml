@@ -1,0 +1,26 @@
+[package]
+name = "heyfood-agent-contract"
+description = "Deterministic offline agent contracts embedded in heyfood."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[features]
+default = []
+native-credentials = []
+native-audio = []
+
+[dependencies]
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2 = { workspace = true, features = ["std"] }
+
+[build-dependencies]
+sha2 = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

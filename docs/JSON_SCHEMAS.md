@@ -49,10 +49,10 @@ price fit, and menu freshness. It is neither a probability nor a safety status.
 Recipe `dietary_match_hint` is likewise compatibility ranking unless the result
 contains a separate explicit safety assessment.
 
-## Agent-native contract freezes
+## Agent-native contracts
 
-Phase 0 defines three draft-2020-12 schemas without enabling a public agent
-command:
+The v0.6.0 source candidate exposes its public installed contracts through
+`heyfood agent schema --list`. The public allowlist contains:
 
 - `schemas/v1/heyfood-agent-manifest.schema.json` freezes network-free
   discovery, supported automation surfaces, interactivity/browser behavior,
@@ -61,10 +61,15 @@ command:
 - `schemas/v1/agent-proposal-presentation.schema.json` is the complete
   additional-properties-forbidden allowlist that may be shown to a model or
   human during a future agent proposal flow.
-- `schemas/v1/agent-approval-protocol.schema.json` freezes the internal
-  backend-generated session binding, approval observation, and commit receipt
-  envelopes.
+- `schemas/v1/heyfood-agent-schema-index.schema.json` freezes the name,
+  identifier, digest, and size inventory for public schemas.
+- `schemas/v1/heyfood-agent-doctor.schema.json` freezes privacy-safe offline
+  diagnostics.
+- `schemas/v1/heyfood-output.schema.json` remains the existing public result
+  family contract.
 
-The golden manifest fixture is
-`fixtures/agent/manifest-v1-golden.json`. These schemas are implementation
-contracts, not claims that Skill, setup, or MCP support is currently active.
+`schemas/v1/agent-approval-protocol.schema.json` remains an internal
+backend/implementation freeze and is intentionally absent from installed
+schema discovery because it describes commit authority. The golden manifest
+fixture is `fixtures/agent/manifest-v1-golden.json`. Self-description does not
+by itself claim Skill, setup, or MCP support.

@@ -90,6 +90,11 @@ pub type Cli = CommandLine;
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum Command {
+    /// Inspect and configure the supported agent integration.
+    Agent {
+        #[command(subcommand)]
+        command: Option<AgentCommand>,
+    },
     /// Ask the hosted agent a one-shot question.
     Ask(AskArgs),
     /// Reply to an explicit conversation ID.
@@ -139,10 +144,10 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<GroceryCommand>,
     },
-    /// Health integrations are deferred from the supported v0.5.0 contract.
+    /// Health integrations are deferred from the supported v0.6.0 contract.
     #[command(
         hide = true,
-        about = "Health integrations are deferred from the supported v0.5.0 contract."
+        about = "Health integrations are deferred from the supported v0.6.0 contract."
     )]
     Health {
         #[command(subcommand)]
@@ -208,6 +213,36 @@ pub enum Command {
         #[arg(value_enum)]
         shell: CompletionShell,
     },
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum AgentCommand {
+    /// Describe the exact installed agent contract as deterministic JSON.
+    Describe,
+    /// Print the embedded integration or safety guide.
+    Guide(AgentGuideArgs),
+    /// Print one embedded JSON Schema.
+    Schema(AgentSchemaArgs),
+    /// Run credential-free, network-free local integration diagnostics.
+    Doctor,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct AgentGuideArgs {
+    /// Print the normative safety contract instead of the integration guide.
+    #[arg(long)]
+    pub safety: bool,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct AgentSchemaArgs {
+    /// List every public embedded schema and its digest.
+    #[arg(long, conflicts_with = "schema")]
+    pub list: bool,
+
+    /// Public schema name or exact schema identifier.
+    #[arg(value_name = "NAME_OR_ID")]
+    pub schema: Option<String>,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -532,19 +567,19 @@ impl From<GroceryDecisionArgument> for GroceryDecisionWire {
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum HealthCommand {
-    /// Retained for future compatibility; unavailable in v0.5.0.
+    /// Retained for future compatibility; unavailable in v0.6.0.
     #[command(hide = true)]
     Status,
-    /// Retained for future compatibility; unavailable in v0.5.0.
+    /// Retained for future compatibility; unavailable in v0.6.0.
     #[command(hide = true)]
     Show,
-    /// Retained for future compatibility; unavailable in v0.5.0.
+    /// Retained for future compatibility; unavailable in v0.6.0.
     #[command(hide = true)]
     Connect(HealthProviderArgs),
-    /// Retained for future compatibility; unavailable in v0.5.0.
+    /// Retained for future compatibility; unavailable in v0.6.0.
     #[command(hide = true)]
     Sync(HealthProviderArgs),
-    /// Retained for future compatibility; unavailable in v0.5.0.
+    /// Retained for future compatibility; unavailable in v0.6.0.
     #[command(hide = true)]
     Disconnect(HealthDisconnectArgs),
 }

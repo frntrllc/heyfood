@@ -123,6 +123,8 @@ fn inventory_covers_global_controls_arguments_and_aliases() {
     let mut clap_arguments = BTreeMap::new();
     let mut clap_aliases = BTreeMap::new();
     command_metadata(&command, "", &mut clap_arguments, &mut clap_aliases);
+    clap_arguments.retain(|path, _| path != "agent" && !path.starts_with("agent "));
+    clap_aliases.retain(|path, _| path != "agent" && !path.starts_with("agent "));
 
     let inventoried_arguments = document["command_arguments"]
         .as_object()
@@ -186,6 +188,7 @@ fn inventory_covers_the_exact_clap_command_tree() {
 
     let mut clap_paths = BTreeSet::new();
     command_paths(&CommandLine::command_tree(), "", &mut clap_paths);
+    clap_paths.retain(|path| path != "agent" && !path.starts_with("agent "));
 
     assert_eq!(
         inventory_paths, clap_paths,
@@ -502,8 +505,17 @@ fn deferred_and_hidden_topology_is_never_agent_safe() {
 }
 
 #[test]
-fn phase0_does_not_publish_agent_or_mcp_commands() {
+fn phase1_publishes_only_offline_agent_discovery_not_mcp() {
     let command = CommandLine::command_tree();
-    assert!(command.find_subcommand("agent").is_none());
+    let agent = command
+        .find_subcommand("agent")
+        .expect("Phase 1 agent discovery command");
+    assert_eq!(
+        agent
+            .get_subcommands()
+            .map(clap::Command::get_name)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["describe", "doctor", "guide", "schema"])
+    );
     assert!(command.find_subcommand("mcp").is_none());
 }

@@ -6,6 +6,7 @@ legacy Python behavior or hidden compatibility topology.
 ## Active top-level commands
 
 ```text
+agent         inspect the exact installed agent integration contract offline
 register      create and connect a hello.food account
 login         connect an existing account or replace this machine's authorization
 ask           ask the hosted agent a one-shot question
@@ -16,6 +17,21 @@ grocery       read, prepare, export, and confirm Grocery operations
 watch         create, list, and remove recurring Menu Watch subscriptions
 completion    print shell completion syntax
 ```
+
+## Offline agent discovery
+
+```bash
+heyfood agent describe
+heyfood agent guide
+heyfood agent guide --safety
+heyfood agent schema --list
+heyfood agent schema manifest
+heyfood agent doctor
+```
+
+These commands do not read credentials, contact hello.food, mutate product
+state, or start the TUI. Schema lookup accepts only a public name or exact
+identifier from `--list`; unknown names return a typed runtime error.
 
 ## Text input
 

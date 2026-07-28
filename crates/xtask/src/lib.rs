@@ -2137,9 +2137,9 @@ fn validate_metadata(metadata: &Metadata) -> Result<(), String> {
         .iter()
         .filter(|package| workspace_ids.contains(&package.id))
     {
-        if package.version.to_string() != "0.5.0" {
+        if package.version.to_string() != "0.6.0" {
             return Err(format!(
-                "{} has internal version {}; expected exact workspace version 0.5.0",
+                "{} has internal version {}; expected exact workspace version 0.6.0",
                 package.name, package.version
             ));
         }
@@ -2174,9 +2174,9 @@ fn validate_metadata(metadata: &Metadata) -> Result<(), String> {
             .iter()
             .filter(|dependency| workspace_names.contains(dependency.name.as_str()))
         {
-            if dependency.req.to_string() != "=0.5.0" {
+            if dependency.req.to_string() != "=0.6.0" {
                 return Err(format!(
-                    "{} -> {} must use exact internal version =0.5.0; found {}",
+                    "{} -> {} must use exact internal version =0.6.0; found {}",
                     package.name, dependency.name, dependency.req
                 ));
             }
@@ -2207,6 +2207,7 @@ fn validate_metadata(metadata: &Metadata) -> Result<(), String> {
 
 fn expected_workspace_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
     BTreeMap::from([
+        ("heyfood-agent-contract", BTreeSet::new()),
         ("heyfood-core", BTreeSet::new()),
         ("heyfood-application", BTreeSet::from(["heyfood-core"])),
         (
@@ -2227,7 +2228,11 @@ fn expected_workspace_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static
         ),
         (
             "heyfood-cli",
-            BTreeSet::from(["heyfood-application", "heyfood-core"]),
+            BTreeSet::from([
+                "heyfood-agent-contract",
+                "heyfood-application",
+                "heyfood-core",
+            ]),
         ),
         (
             "heyfood-tui",
@@ -2238,6 +2243,7 @@ fn expected_workspace_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static
         (
             "heyfood-bin",
             BTreeSet::from([
+                "heyfood-agent-contract",
                 "heyfood-agent-runtime",
                 "heyfood-application",
                 "heyfood-cli",

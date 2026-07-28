@@ -43,6 +43,23 @@ GitHub Releases and the hosted installer are the supported public binary
 distribution paths. Building a reviewed source revision remains available for
 contributors.
 
+## Agent discovery
+
+The v0.6.0 source candidate can explain its exact installed automation
+contract without repository access, credentials, or a network connection:
+
+```bash
+heyfood agent describe
+heyfood agent guide
+heyfood agent schema --list
+heyfood agent doctor
+```
+
+Agents must use this self-description rather than scrape the interactive TUI
+or infer authority from `--help`. Codex/Claude setup and the local read-only
+MCP server are separately qualified increments and are not implied by the
+Phase 1 command family.
+
 ## Connect an account
 
 The supported public `v0.5.0` artifact predates the account-neutral first-run

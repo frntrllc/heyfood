@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use clap::Command;
+use heyfood_cli::CommandLine;
 use serde_json::Value;
 
 const SCHEMA: &str = include_str!(concat!(
@@ -30,7 +32,6 @@ const MCP_ENVIRONMENT_POLICY: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/release-evidence/agent-native-phase0/mcp-environment-policy.json"
 ));
-
 fn enum_values<'a>(schema: &'a Value, pointer: &str) -> BTreeSet<&'a str> {
     schema
         .pointer(pointer)
@@ -39,6 +40,21 @@ fn enum_values<'a>(schema: &'a Value, pointer: &str) -> BTreeSet<&'a str> {
         .iter()
         .map(|value| value.as_str().expect("enum values are strings"))
         .collect()
+}
+
+fn visible_command_paths(command: &Command, prefix: &str, paths: &mut BTreeSet<String>) {
+    for subcommand in command
+        .get_subcommands()
+        .filter(|subcommand| !subcommand.is_hide_set())
+    {
+        let path = if prefix.is_empty() {
+            subcommand.get_name().to_owned()
+        } else {
+            format!("{prefix} {}", subcommand.get_name())
+        };
+        assert!(paths.insert(path.clone()), "duplicate visible path {path}");
+        visible_command_paths(subcommand, &path, paths);
+    }
 }
 
 #[test]
@@ -56,6 +72,30 @@ fn manifest_schema_freezes_public_status_and_audience_vocabulary() {
         !SCHEMA.contains("\"hidden\""),
         "hidden topology is never a public manifest status"
     );
+}
+
+#[test]
+fn runtime_manifest_validates_and_exactly_matches_active_command_authority() {
+    let schema: Value = serde_json::from_str(SCHEMA).expect("manifest schema JSON");
+    let proposal_schema: Value =
+        serde_json::from_str(PROPOSAL_PRESENTATION_SCHEMA).expect("proposal schema JSON");
+    let manifest = heyfood_agent_contract::manifest();
+    validate_schema_instance(&schema, &proposal_schema, &schema, &manifest)
+        .expect("runtime manifest must validate against the embedded schema");
+
+    let mut active_paths = BTreeSet::new();
+    visible_command_paths(&CommandLine::command_tree(), "", &mut active_paths);
+    let manifest_paths = manifest["commands"]
+        .as_array()
+        .expect("manifest commands")
+        .iter()
+        .map(|command| command["path"].as_str().expect("manifest path").to_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(manifest_paths, active_paths);
+
+    let encoded = heyfood_agent_contract::canonical_json(&manifest);
+    assert!(encoded.len() <= heyfood_agent_contract::MAX_MANIFEST_BYTES);
+    assert!(!encoded.contains('\u{1b}'));
 }
 
 #[test]
@@ -174,6 +214,12 @@ fn value_has_type(instance: &Value, expected: &str) -> bool {
 
 fn string_matches_pattern(value: &str, pattern: &str) -> bool {
     match pattern {
+        "^[0-9a-f]{40}$" => {
+            value.len() == 40
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        }
         "^[0-9a-f]{64}$" => {
             value.len() == 64
                 && value
@@ -193,6 +239,31 @@ fn string_matches_pattern(value: &str, pattern: &str) -> bool {
                     .bytes()
                     .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
         }
+        "^[a-z][a-z0-9_.-]{0,127}$" => {
+            (1..=128).contains(&value.len())
+                && value.as_bytes()[0].is_ascii_lowercase()
+                && value.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'_' | b'.' | b'-')
+                })
+        }
+        "^[a-z][a-z0-9:_-]{0,127}$" => {
+            (1..=128).contains(&value.len())
+                && value.as_bytes()[0].is_ascii_lowercase()
+                && value.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b':' | b'_' | b'-')
+                })
+        }
+        "^[a-z][a-z0-9-]*( [a-z][a-z0-9-]*)*$" => value.split(' ').all(|segment| {
+            !segment.is_empty()
+                && segment.as_bytes()[0].is_ascii_lowercase()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        }),
         "^https://auth\\.hello\\.food/agent-approval/[A-Za-z0-9_-]{43}$" => value
             .strip_prefix("https://auth.hello.food/agent-approval/")
             .is_some_and(|reference| {
@@ -402,6 +473,8 @@ fn validate_schema_instance(
 fn golden_manifest_contains_every_required_nullable_and_surface_field() {
     let schema: Value = serde_json::from_str(SCHEMA).expect("manifest schema JSON");
     let golden: Value = serde_json::from_str(GOLDEN).expect("golden manifest JSON");
+    let mut runtime = heyfood_agent_contract::manifest();
+    runtime["build"] = golden["build"].clone();
 
     assert_required_object(&schema, "/required", &golden);
     assert_required_object(&schema, "/$defs/build/required", &golden["build"]);
@@ -427,6 +500,10 @@ fn golden_manifest_contains_every_required_nullable_and_surface_field() {
     assert_eq!(
         golden["automation_surfaces"]["tui_automation"],
         "unsupported"
+    );
+    assert_eq!(
+        runtime, golden,
+        "the golden fixture must contain the complete current semantic surface"
     );
 }
 

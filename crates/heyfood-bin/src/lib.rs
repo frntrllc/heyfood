@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod agent_discovery;
+
 use std::{fmt, io, sync::Arc, time::Duration};
 
 use heyfood_agent_runtime::HttpService;
@@ -2454,7 +2456,7 @@ async fn run_interactive_panel(
                 }
             };
             Ok(format!(
-                "Session: active\nService: reachable\nProfile: {profile}\nGrocery: {grocery}\nMenu Watch: {menu_watch}\nHealth integrations: deferred from v0.5.0\nVoice: {voice}"
+                "Session: active\nService: reachable\nProfile: {profile}\nGrocery: {grocery}\nMenu Watch: {menu_watch}\nHealth integrations: deferred from v0.6.0\nVoice: {voice}"
             ))
         }
         PanelRequest::Grocery => {
@@ -4230,7 +4232,7 @@ mod tests {
         assert!(status.contains("Profile: authorized · sync consent granted"));
         assert!(status.contains("Grocery: available · authorized"));
         assert!(status.contains("Menu Watch: authorized · create/list/remove available"));
-        assert!(status.contains("Health integrations: deferred from v0.5.0"));
+        assert!(status.contains("Health integrations: deferred from v0.6.0"));
         assert!(status.contains(
             "Voice: native capture available · transcription authorized · permission checked on use"
         ));

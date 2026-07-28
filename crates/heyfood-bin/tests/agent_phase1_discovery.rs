@@ -1,0 +1,138 @@
+use std::net::TcpListener;
+use std::process::Command;
+
+use serde_json::Value;
+
+fn agent(arguments: &[&str], service: &TcpListener) -> std::process::Output {
+    let address = service.local_addr().expect("local fixture address");
+    Command::new(env!("CARGO_BIN_EXE_heyfood"))
+        .args(arguments)
+        .env("HEYFOOD_API_URL", format!("http://{address}/"))
+        .env("HEYFOOD_AUTH_URL", format!("http://{address}/"))
+        .env("HEYFOOD_API_KEY", "must-not-be-read")
+        .env("HEYFOOD_CREDENTIAL_STORE", "invalid-must-not-be-read")
+        .output()
+        .expect("run installed discovery command")
+}
+
+fn assert_no_network(service: &TcpListener) {
+    service.set_nonblocking(true).unwrap();
+    let error = service
+        .accept()
+        .expect_err("offline discovery must not open a socket");
+    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+}
+
+#[test]
+fn describe_is_deterministic_ansi_free_and_offline() {
+    let service = TcpListener::bind("127.0.0.1:0").unwrap();
+    let first = agent(&["agent", "describe"], &service);
+    let second = agent(&["--json", "agent", "describe"], &service);
+
+    assert!(first.status.success(), "{:?}", first.stderr);
+    assert!(second.status.success(), "{:?}", second.stderr);
+    assert!(first.stderr.is_empty());
+    assert!(second.stderr.is_empty());
+    assert_eq!(first.stdout, second.stdout);
+    assert!(!first.stdout.contains(&0x1b));
+    let manifest: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(manifest["schema_version"], 1);
+    assert_eq!(manifest["product"], "heyfood");
+    assert_eq!(manifest["binary_version"], heyfood_core::VERSION);
+    assert_eq!(
+        manifest["automation_surfaces"]["tui_automation"],
+        "unsupported"
+    );
+    assert_no_network(&service);
+}
+
+#[test]
+fn guide_and_safety_are_exact_embedded_bytes_without_network() {
+    let service = TcpListener::bind("127.0.0.1:0").unwrap();
+    let guide = agent(&["agent", "guide"], &service);
+    let safety = agent(&["agent", "guide", "--safety"], &service);
+    assert!(guide.status.success());
+    assert!(safety.status.success());
+    assert_eq!(guide.stdout, heyfood_agent_contract::GUIDE.as_bytes());
+    assert_eq!(safety.stdout, heyfood_agent_contract::SAFETY.as_bytes());
+
+    let machine = agent(&["--json", "agent", "guide"], &service);
+    let document: Value = serde_json::from_slice(&machine.stdout).unwrap();
+    assert_eq!(document["content"], heyfood_agent_contract::GUIDE);
+    assert_eq!(
+        document["sha256"],
+        heyfood_agent_contract::sha256_hex(heyfood_agent_contract::GUIDE.as_bytes())
+    );
+    assert_no_network(&service);
+}
+
+#[test]
+fn schemas_are_exact_embedded_bytes_without_network() {
+    let cases = [
+        ("manifest", heyfood_agent_contract::EmbeddedSchema::Manifest),
+        (
+            "schema-index",
+            heyfood_agent_contract::EmbeddedSchema::SchemaIndex,
+        ),
+        ("doctor", heyfood_agent_contract::EmbeddedSchema::Doctor),
+        (
+            "output",
+            heyfood_agent_contract::EmbeddedSchema::PublicOutput,
+        ),
+        (
+            "proposal-presentation",
+            heyfood_agent_contract::EmbeddedSchema::ProposalPresentation,
+        ),
+    ];
+    for (name, schema) in cases {
+        let service = TcpListener::bind("127.0.0.1:0").unwrap();
+        let output = agent(&["agent", "schema", name], &service);
+        assert!(output.status.success(), "{name}: {:?}", output.stderr);
+        assert_eq!(output.stdout, schema.document().as_bytes(), "{name}");
+        let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(document["$id"], schema.id());
+        assert_no_network(&service);
+    }
+
+    let service = TcpListener::bind("127.0.0.1:0").unwrap();
+    let output = agent(&["agent", "schema", "--list"], &service);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let index: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(index, heyfood_agent_contract::schema_index());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("approval-protocol"));
+    assert_no_network(&service);
+}
+
+#[test]
+fn unknown_schema_is_a_typed_runtime_error_without_clap_topology_leakage() {
+    let service = TcpListener::bind("127.0.0.1:0").unwrap();
+    let output = agent(
+        &["--json", "agent", "schema", "approval-protocol"],
+        &service,
+    );
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error["ok"], false);
+    assert_eq!(error["error"]["code"], "agent_schema_unknown");
+    assert_eq!(error["error"]["retryable"], false);
+    assert_eq!(error["error"]["outcome_uncertain"], false);
+    assert_no_network(&service);
+}
+
+#[test]
+fn doctor_is_local_bounded_and_credential_free() {
+    let service = TcpListener::bind("127.0.0.1:0").unwrap();
+    let output = agent(&["agent", "doctor"], &service);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert!(output.stderr.is_empty());
+    assert!(output.stdout.len() < 16 * 1024);
+    let doctor: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(doctor["ok"], true);
+    assert_eq!(doctor["network_accessed"], false);
+    assert_eq!(doctor["credentials_accessed"], false);
+    assert_eq!(doctor["product_state_mutated"], false);
+    assert_eq!(doctor["tui_automation_supported"], false);
+    assert!(doctor.get("executable").is_none());
+    assert_no_network(&service);
+}

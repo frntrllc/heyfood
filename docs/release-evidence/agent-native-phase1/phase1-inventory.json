@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "program": "heyfood-agent-native",
+  "phase": 1,
+  "release_line": "0.6.0",
+  "status": "product_complete_review_pending",
+  "requirements": [
+    {
+      "id": "AN-P1-01-contract-crate",
+      "status": "satisfied",
+      "evidence": [
+        "crates/heyfood-agent-contract/Cargo.toml",
+        "crates/heyfood-agent-contract/src/lib.rs",
+        "crates/heyfood-agent-contract/build.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "AN-P1-02-offline-discovery",
+      "status": "satisfied",
+      "evidence": [
+        "crates/heyfood-cli/src/lib.rs",
+        "crates/heyfood-bin/src/agent_discovery.rs",
+        "crates/heyfood-bin/tests/agent_phase1_discovery.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "AN-P1-03-embedded-contracts",
+      "status": "satisfied",
+      "evidence": [
+        "docs/AGENT_INTEGRATION.md",
+        "docs/AGENT_SAFETY.md",
+        "schemas/v1/heyfood-agent-manifest.schema.json",
+        "schemas/v1/heyfood-agent-schema-index.schema.json",
+        "schemas/v1/heyfood-agent-doctor.schema.json",
+        "schemas/v1/heyfood-output.schema.json",
+        "schemas/v1/agent-proposal-presentation.schema.json"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "AN-P1-04-command-parity",
+      "status": "satisfied",
+      "evidence": [
+        "crates/heyfood-cli/tests/agent_phase0_inventory.rs",
+        "crates/heyfood-cli/tests/agent_phase0_manifest_schema.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "AN-P1-05-contract-validation",
+      "status": "satisfied",
+      "evidence": [
+        "crates/heyfood-agent-contract/src/lib.rs",
+        "crates/heyfood-cli/tests/agent_phase0_manifest_schema.rs",
+        "crates/heyfood-bin/tests/agent_phase1_discovery.rs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "AN-P1-06-cross-platform-installed-artifact",
+      "status": "qualification_pending",
+      "evidence": [],
+      "blockers": [
+        "Exact installed candidate archives must pass macOS, Linux, and ordinary Windows semantic discovery qualification."
+      ]
+    },
+    {
+      "id": "AN-P1-07-exact-sha-review",
+      "status": "review_pending",
+      "evidence": [],
+      "blockers": [
+        "Independent Rust and agent-integration review of the exact product SHA is required."
+      ]
+    }
+  ],
+  "release_gates": {
+    "phase2": "blocked_until_phase1_go",
+    "publication": "not_authorized_by_phase1"
+  }
+}

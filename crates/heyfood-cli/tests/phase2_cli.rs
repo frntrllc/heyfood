@@ -82,6 +82,7 @@ fn command_tree_retains_hidden_compatibility_and_authorized_phase2_families() {
         .collect::<BTreeSet<_>>();
     let expected = BTreeSet::from([
         "account",
+        "agent",
         "ask",
         "channels",
         "chat",
@@ -120,7 +121,7 @@ fn command_tree_retains_hidden_compatibility_and_authorized_phase2_families() {
 }
 
 #[test]
-fn v050_help_and_completions_hide_deferred_health_integrations() {
+fn release_help_and_completions_hide_deferred_health_integrations() {
     let mut command = CommandLine::command();
     let root_help = command.render_long_help().to_string();
     assert!(
@@ -132,7 +133,7 @@ fn v050_help_and_completions_hide_deferred_health_integrations() {
     let health_help = CommandLine::try_parse_from(["heyfood", "health", "--help"])
         .unwrap_err()
         .to_string();
-    assert!(health_help.contains("deferred from the supported v0.5.0 contract"));
+    assert!(health_help.contains("deferred from the supported v0.6.0 contract"));
     assert!(!health_help.contains("connect"));
     assert!(!health_help.contains("sync"));
 

@@ -1,8 +1,9 @@
 # heyfood native CLI contract
 
 This document defines the process interface for the current Rust public cut.
-Its active product commands are `register`, `login`, `chat`, `onboard`, `ask`,
-`reply`, `log`, `item`, `grocery`, and `watch`. An interactive bare `heyfood`
+Its active product commands are `agent`, `register`, `login`, `chat`,
+`onboard`, `ask`, `reply`, `log`, `item`, `grocery`, and `watch`. An
+interactive bare `heyfood`
 invocation opens the same native TUI as `heyfood chat`.
 Human rendering may improve between compatible releases; machine-facing changes
 follow the compatibility policy below.
@@ -13,6 +14,7 @@ The following commands perform native product work:
 
 | Command | Contract |
 |---|---|
+| `agent` | Describes the exact installed executable, prints its embedded integration/safety guides and public schemas, and runs bounded local diagnostics without credentials or network access. |
 | `register` | Explicitly starts create-account device authorization, exchanges the approved grant, validates the response contract, and persists the complete native session. |
 | `login` | Connects an existing account on a fresh machine; on a connected machine, explicitly signs in again and atomically replaces the native grant with the canonical supported scope set. Refresh is never used to change authority. |
 | `chat` | Opens the authenticated interactive Rust TUI. |
@@ -23,6 +25,13 @@ The following commands perform native product work:
 | `item` | Sends a food or menu-item assessment through the hosted-agent turn endpoint. |
 | `grocery` | Reads, prepares, exports, and explicitly confirms Grocery v1 operations after capability discovery. |
 | `watch` | Creates, lists, and removes recurring Menu Watch subscriptions. |
+
+`agent`, `agent describe`, `agent guide`, `agent schema`, and `agent doctor`
+dispatch before credential discovery or network initialization. Their JSON is
+ANSI-free and deterministic for an exact build. `agent schema --list` is the
+authoritative allowlist: internal approval/commit schemas are deliberately not
+exposed. `agent doctor` reports only bounded build/contract facts and never
+prints a user-specific executable or configuration path.
 
 Health integrations are deferred from the supported `v0.5.0` contract.
 `health` is hidden from root help and generated shell completion, `/health` is

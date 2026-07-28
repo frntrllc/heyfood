@@ -14,23 +14,27 @@ path = "src/main.rs"
 
 [features]
 default = ["native-credentials"]
-native-credentials = ["heyfood-platform/native-credentials"]
-native-audio = ["heyfood-voice/native-audio"]
+native-credentials = [
+    "heyfood-agent-contract/native-credentials",
+    "heyfood-platform/native-credentials",
+]
+native-audio = ["heyfood-agent-contract/native-audio", "heyfood-voice/native-audio"]
 
 [dependencies]
-heyfood-agent-runtime = { version = "=0.5.0", path = "../heyfood-agent-runtime" }
-heyfood-application = { version = "=0.5.0", path = "../heyfood-application" }
-heyfood-cli = { version = "=0.5.0", path = "../heyfood-cli" }
-heyfood-core = { version = "=0.5.0", path = "../heyfood-core" }
-heyfood-platform = { version = "=0.5.0", path = "../heyfood-platform" }
-heyfood-tui = { version = "=0.5.0", path = "../heyfood-tui" }
-heyfood-voice = { version = "=0.5.0", path = "../heyfood-voice" }
+heyfood-agent-contract = { version = "=0.6.0", path = "../heyfood-agent-contract" }
+heyfood-agent-runtime = { version = "=0.6.0", path = "../heyfood-agent-runtime" }
+heyfood-application = { version = "=0.6.0", path = "../heyfood-application" }
+heyfood-cli = { version = "=0.6.0", path = "../heyfood-cli" }
+heyfood-core = { version = "=0.6.0", path = "../heyfood-core" }
+heyfood-platform = { version = "=0.6.0", path = "../heyfood-platform" }
+heyfood-tui = { version = "=0.6.0", path = "../heyfood-tui" }
+heyfood-voice = { version = "=0.6.0", path = "../heyfood-voice" }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tokio-util = { workspace = true, features = ["rt"] }
 
 [target.'cfg(windows)'.dependencies]
-heyfood-platform = { version = "=0.5.0", path = "../heyfood-platform", features = ["native-credentials"] }
+heyfood-platform = { version = "=0.6.0", path = "../heyfood-platform", features = ["native-credentials"] }
 
 [dev-dependencies]
 clap = { workspace = true, features = ["derive", "std"] }
@@ -44,7 +48,7 @@ tokio-util = { workspace = true, features = ["rt"] }
 unicode-width.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
-heyfood-platform = { version = "=0.5.0", path = "../heyfood-platform", features = ["qualification-credentials"] }
+heyfood-platform = { version = "=0.6.0", path = "../heyfood-platform", features = ["qualification-credentials"] }
 
 [lints]
 workspace = true
