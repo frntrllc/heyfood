@@ -50,6 +50,7 @@ approval prompts are not trusted mutation approvers.
 | Credential disclosure | Token appears in MCP result, logs, command arguments, evidence, or crash output | Native credential port only; structured redaction; no credential-reading tool | Sentinel scans and panic/error tests |
 | Configuration takeover | Setup overwrites a user's `AGENTS.md`, plugin, or MCP configuration | Dry-run default, host-owned setup mechanisms, expected-digest replacement, atomic fallback adapter | Conflict, link, crash, concurrent, rollback tests |
 | Executable substitution | Host config launches bare `heyfood` from attacker-controlled `PATH` | Verified absolute executable identity in setup receipt | Replacement and PATH-substitution tests |
+| Environment substitution | Project/host exports `HEYFOOD_API_URL`, API key, state root, CA, or file credential-store override before launching the trusted binary | MCP rejects every inherited `HEYFOOD_*` variable before credential access and constructs fixed production/native configuration | Origin, key, CA, store, state, debug, and unknown-prefix negative tests |
 | Cross-account state | Split credentials or stale local context are reused | Existing account-bound native credential and imported-state checks | Split/cross-account fixture tests |
 | Resource exhaustion | Huge JSON-RPC frame, event flood, slow reader, unbounded queue | Frozen frame/result/event/page/concurrency limits and cancellation | Oversize, flood, slow-reader, and shutdown tests |
 | Terminal corruption | Agent drives the TUI or abandoned child owns raw mode | TUI automation unsupported; MCP is stdio JSON-RPC; bounded child cleanup | PTY/ConPTY restoration and parent-death tests |
@@ -72,10 +73,11 @@ hard failure.
 
 ## Residual Phase 0 risks
 
-- Positive installed-artifact qualification of the separate
-  controlling-terminal ceremony remains outstanding, including the Windows
-  `CONIN$`/`CONOUT$` path. Negative public-binary tests already prove
-  missing-terminal rejection occurs before credential or network access.
+- The public Unix binary PTY test proves proposal stdin remains distinct from
+  the controlling-terminal decision. Exact installed-archive qualification
+  remains outstanding, including the Windows `CONIN$`/`CONOUT$` path.
+  Negative public-binary tests prove missing-terminal rejection occurs before
+  credential or network access.
 - The frozen hello.food out-of-band approval protocol still requires
   independent security review. Its endpoint implementation and production
   proof are Phase 4 gates, not Phase 0 implementation.

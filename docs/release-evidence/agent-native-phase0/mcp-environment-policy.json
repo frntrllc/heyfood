@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "mode": "mcp_stdio",
+  "status": "frozen_not_implemented",
+  "service": {
+    "origin": "https://api.hello.food",
+    "network_policy": "production",
+    "origin_source": "compiled_constant",
+    "api_key_source": "none"
+  },
+  "credentials": {
+    "store": "native_account_bound",
+    "store_selection_source": "compiled_mcp_mode",
+    "legacy_file_fallback": false
+  },
+  "state": {
+    "root": "platform_default",
+    "root_selection_source": "reviewed_platform_adapter"
+  },
+  "environment": {
+    "inherited_heyfood_prefix_allowed": [],
+    "reject_prefixes_before_credential_access": [
+      "HEYFOOD_"
+    ],
+    "explicitly_rejected_examples": [
+      "HEYFOOD_API_URL",
+      "HEYFOOD_API_KEY",
+      "HEYFOOD_CA_BUNDLE",
+      "HEYFOOD_CREDENTIAL_STORE",
+      "HEYFOOD_STATE_DIR",
+      "HEYFOOD_TEST_FORCE_NO_CONTROLLING_TERMINAL"
+    ],
+    "host_registration_environment": {}
+  },
+  "receipt": {
+    "records_policy_digest": true,
+    "records_exact_empty_environment": true,
+    "contains_credentials": false
+  },
+  "required_negative_tests": [
+    "api_origin_override_rejected_before_credential_access",
+    "api_key_override_rejected_before_credential_access",
+    "credential_store_downgrade_rejected_before_credential_access",
+    "state_root_override_rejected_before_credential_access",
+    "unknown_heyfood_variable_rejected_before_credential_access",
+    "path_substitution_does_not_change_absolute_executable",
+    "setup_receipt_environment_mismatch_blocks_replacement"
+  ]
+}

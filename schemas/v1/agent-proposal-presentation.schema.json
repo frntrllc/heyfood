@@ -1,0 +1,352 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/agent-proposal-presentation.schema.json",
+  "title": "AgentProposalPresentation v1",
+  "description": "The complete allowlist of human-reviewable proposal data that an agent may observe. This is never a commit capability.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "mutation_family",
+    "operation",
+    "approval_reference",
+    "proposal_digest_sha256",
+    "expires_at",
+    "display",
+    "resource_references",
+    "preconditions",
+    "items"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "mutation_family": {
+      "enum": [
+        "grocery",
+        "meal_log",
+        "menu_watch"
+      ]
+    },
+    "operation": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+    },
+    "approval_reference": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$",
+      "description": "A server-generated lookup reference. It is account/session bound and insufficient to approve or commit."
+    },
+    "proposal_digest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "maxLength": 64
+    },
+    "display": {
+      "$ref": "#/$defs/display"
+    },
+    "resource_references": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/resource_reference"
+      }
+    },
+    "preconditions": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/precondition"
+      }
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 25,
+      "items": {
+        "$ref": "#/$defs/item"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "safe_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "pattern": "^[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f-\\u009f\\u2028\\u2029]*$"
+    },
+    "nullable_safe_text": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/safe_text"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "summary",
+        "fields"
+      ],
+      "properties": {
+        "title": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "summary": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "label",
+              "value"
+            ],
+            "properties": {
+              "label": {
+                "$ref": "#/$defs/safe_text"
+              },
+              "value": {
+                "$ref": "#/$defs/safe_text"
+              }
+            }
+          }
+        }
+      }
+    },
+    "resource_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "grocery_list",
+            "grocery_item",
+            "household_member",
+            "menu_watch",
+            "restaurant",
+            "meal"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "precondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "resource_id",
+        "version",
+        "digest_sha256"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "resource_version",
+            "household_context",
+            "proposal_expiry"
+          ]
+        },
+        "resource_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "version": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "digest_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_type",
+        "source_reference",
+        "detail"
+      ],
+      "properties": {
+        "source_type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
+        "source_reference": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256
+        },
+        "detail": {
+          "$ref": "#/$defs/nullable_safe_text"
+        }
+      }
+    },
+    "member_flag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "member_id",
+        "status",
+        "reason",
+        "substitutions"
+      ],
+      "properties": {
+        "member_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "status": {
+          "enum": [
+            "generally_safer",
+            "risky",
+            "avoid",
+            "unable_to_evaluate"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/nullable_safe_text"
+        },
+        "substitutions": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/safe_text"
+          }
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "member_flags",
+        "label_hint"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "generally_safer",
+            "risky",
+            "avoid",
+            "unable_to_evaluate"
+          ]
+        },
+        "member_flags": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/member_flag"
+          }
+        },
+        "label_hint": {
+          "$ref": "#/$defs/nullable_safe_text"
+        }
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "quantity",
+        "unit",
+        "note",
+        "intended_for",
+        "sources",
+        "safety"
+      ],
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "name": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "quantity": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "unit": {
+          "$ref": "#/$defs/nullable_safe_text"
+        },
+        "note": {
+          "$ref": "#/$defs/nullable_safe_text"
+        },
+        "intended_for": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "sources": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "safety": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/safety"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

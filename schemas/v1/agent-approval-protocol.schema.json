@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/agent-approval-protocol.schema.json",
+  "title": "hello.food agent approval protocol v1",
+  "description": "Internal authenticated wire envelopes for session-bound, single-use out-of-band approval.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/session_created"
+    },
+    {
+      "$ref": "#/$defs/approval_observation"
+    },
+    {
+      "$ref": "#/$defs/commit_receipt"
+    }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "opaque_256": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "session_created": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "approval_session_id",
+        "session_binding_token",
+        "expires_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "session_created"
+        },
+        "approval_session_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "session_binding_token": {
+          "$ref": "#/$defs/opaque_256",
+          "description": "Backend-generated secret held only in MCP process memory and never returned through a tool result."
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        }
+      }
+    },
+    "approval_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "approval_id",
+        "approval_session_id",
+        "proposal_digest_sha256",
+        "status",
+        "expires_at",
+        "commit_receipt",
+        "reconciliation"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "approval_observation"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "approval_session_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "proposal_digest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "status": {
+          "enum": [
+            "prepared",
+            "awaiting_human",
+            "approved",
+            "declined",
+            "expired",
+            "invalidated",
+            "cancelled",
+            "committing",
+            "committed",
+            "reconciliation_required"
+          ]
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        },
+        "commit_receipt": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/commit_receipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reconciliation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            null,
+            "observe_approval",
+            "observe_resource_state",
+            "support_required"
+          ]
+        }
+      }
+    },
+    "commit_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "approval_id",
+        "operation_id",
+        "proposal_digest_sha256",
+        "committed_at",
+        "resource_references"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "commit_receipt"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "proposal_digest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "committed_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        },
+        "resource_references": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      }
+    }
+  }
+}

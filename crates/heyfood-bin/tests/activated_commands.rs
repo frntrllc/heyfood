@@ -1,9 +1,11 @@
 #![cfg(not(windows))]
 
 use std::collections::BTreeSet;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use heyfood_application::CredentialPort;
 use heyfood_core::{
@@ -11,6 +13,7 @@ use heyfood_core::{
     SessionCredentials,
 };
 use heyfood_platform::{FileCredentialStore, NativeAuthStore};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -105,6 +108,103 @@ async fn run(
         child.stdin.take().unwrap().write_all(stdin).await.unwrap();
     }
     child.wait_with_output().await.unwrap()
+}
+
+fn run_confirm_with_data_stdin_and_controlling_terminal(
+    root: &Path,
+    base_url: &str,
+    proposal_path: &Path,
+) -> Vec<u8> {
+    let pty = native_pty_system();
+    let pair = pty
+        .openpty(PtySize {
+            rows: 30,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open controlling PTY");
+    let mut command = CommandBuilder::new("/bin/sh");
+    command.args([
+        "-c",
+        "exec \"$1\" --json grocery confirm --decision cancel --proposal-stdin < \"$2\"",
+        "heyfood-confirm-pty",
+    ]);
+    command.arg(env!("CARGO_BIN_EXE_heyfood"));
+    command.arg(proposal_path);
+    command.env("HEYFOOD_STATE_DIR", root);
+    command.env("HEYFOOD_CREDENTIAL_STORE", "file");
+    command.env("HEYFOOD_API_URL", base_url);
+    command.env("HEYFOOD_API_KEY", "fixture-api-key");
+    command.env("NO_PROXY", "127.0.0.1,localhost");
+    command.env("TERM", "xterm-256color");
+    command.env_remove("HEYFOOD_TEST_FORCE_NO_CONTROLLING_TERMINAL");
+
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .expect("spawn public binary with redirected data stdin");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone PTY reader");
+    let writer = Arc::new(Mutex::new(
+        pair.master.take_writer().expect("take PTY writer"),
+    ));
+    let capture = Arc::new(Mutex::new(Vec::new()));
+    let reader_capture = Arc::clone(&capture);
+    let reader_task = std::thread::spawn(move || {
+        let mut chunk = [0_u8; 4096];
+        loop {
+            let count = reader.read(&mut chunk).expect("read public binary PTY");
+            if count == 0 {
+                break;
+            }
+            reader_capture
+                .lock()
+                .expect("lock PTY capture")
+                .extend_from_slice(&chunk[..count]);
+        }
+    });
+
+    let prompt_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let observed = capture.lock().expect("lock prompt capture").clone();
+        if String::from_utf8_lossy(&observed).contains("Type CANCEL to continue:") {
+            break;
+        }
+        assert!(
+            Instant::now() < prompt_deadline,
+            "public binary never requested controlling-terminal authority: {:?}",
+            String::from_utf8_lossy(&observed)
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    {
+        let mut terminal = writer.lock().expect("lock controlling terminal");
+        terminal
+            .write_all(b"CANCEL\r")
+            .expect("write exact terminal decision");
+        terminal.flush().expect("flush terminal decision");
+    }
+
+    let exit_deadline = Instant::now() + Duration::from_secs(15);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll public binary PTY") {
+            break status;
+        }
+        if Instant::now() >= exit_deadline {
+            let _ = child.kill();
+            panic!("public binary did not exit after terminal decision");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(status.success(), "public binary PTY failed: {status:?}");
+    drop(writer);
+    drop(pair.master);
+    reader_task.join().expect("join public binary PTY reader");
+    Arc::try_unwrap(capture)
+        .expect("release PTY capture")
+        .into_inner()
+        .expect("unlock PTY capture")
 }
 
 async fn read_request(socket: &mut TcpStream) -> String {
@@ -326,6 +426,77 @@ async fn public_binary_dispatches_the_unattended_grocery_and_watch_read_routes()
         "GET /v1/menu/watch".into(),
     ]);
     assert_eq!(routes, expected);
+}
+
+#[tokio::test]
+async fn public_binary_separates_proposal_stdin_from_controlling_terminal_decision() {
+    let root = TempRoot::new("positive-human-authority");
+    initialize(&root.0, FULL_SCOPE);
+    let proposal_path = root.0.join("proposal.json");
+    std::fs::write(
+        &proposal_path,
+        serde_json::to_vec(&json!({
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "operation": "add_items",
+            "expires_at": "2026-07-21T12:05:00Z",
+            "structured_preview": {
+                "items": [{
+                    "requested_name": "milk",
+                    "quantity": 2.0,
+                    "unit": "cartons",
+                    "note": "lactose-free",
+                    "sources": [{"source_type": "manual"}]
+                }]
+            },
+            "preconditions": [
+                {"type": "list_version", "expected_version": 4},
+                {"type": "context_hash", "expected": "context-v4"}
+            ],
+            "confirmation_token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut routes = Vec::new();
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            let mut request_line = request.lines().next().unwrap().split_whitespace();
+            let method = request_line.next().unwrap();
+            let path = request_line.next().unwrap();
+            routes.push(format!("{method} {path}"));
+            let (content_type, body) = response_for(method, path);
+            respond(&mut socket, content_type, &body).await;
+        }
+        routes
+    });
+
+    let pty_root = root.0.clone();
+    let pty_url = base_url.clone();
+    let terminal = tokio::task::spawn_blocking(move || {
+        run_confirm_with_data_stdin_and_controlling_terminal(&pty_root, &pty_url, &proposal_path)
+    })
+    .await
+    .unwrap();
+    let terminal = String::from_utf8_lossy(&terminal);
+    let routes = server.await.unwrap();
+
+    assert_eq!(
+        routes,
+        vec![
+            "GET /v1/auth/capabilities".to_owned(),
+            "POST /v1/grocery/confirm".to_owned()
+        ]
+    );
+    assert!(terminal.contains("Type CANCEL to continue:"));
+    assert!(terminal.contains("\"quantity\": 2.0"));
+    assert!(terminal.contains("\"expected\": \"context-v4\""));
+    assert!(terminal.contains("\"status\":\"cancelled\""));
+    assert!(!terminal.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
 }
 
 #[tokio::test]

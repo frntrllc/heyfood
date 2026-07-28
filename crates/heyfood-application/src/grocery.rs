@@ -135,6 +135,7 @@ impl<'a> ReadActiveGroceryDisplay<'a> {
         operation_id: OperationId,
         cancellation: CancellationToken,
     ) -> Result<GroceryDisplayList, PortError> {
+        ensure_grocery_v1(&capabilities)?;
         if cancellation.is_cancelled() {
             return Err(PortError::new(
                 "grocery_read_cancelled_before_dispatch",
@@ -164,6 +165,7 @@ impl<'a> ReadGroceryExclusions<'a> {
         operation_id: OperationId,
         cancellation: CancellationToken,
     ) -> Result<GroceryExclusions, PortError> {
+        ensure_grocery_v1(&capabilities)?;
         if cancellation.is_cancelled() {
             return Err(PortError::new(
                 "grocery_exclusions_cancelled_before_dispatch",
@@ -768,7 +770,28 @@ mod tests {
         let mut unavailable = capabilities();
         unavailable.grocery = GroceryCapability::Unavailable;
 
-        let error = ExportGroceryList::new(&port)
+        let list_error = match ReadActiveGroceryDisplay::new(&port)
+            .execute(
+                unavailable.clone(),
+                credentials(),
+                OperationId::new(),
+                CancellationToken::new(),
+            )
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("unavailable Grocery read must not dispatch"),
+        };
+        let exclusions_error = ReadGroceryExclusions::new(&port)
+            .execute(
+                unavailable.clone(),
+                credentials(),
+                OperationId::new(),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        let export_error = ExportGroceryList::new(&port)
             .execute(
                 unavailable,
                 credentials(),
@@ -780,7 +803,9 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(error.code, "grocery_capability_unavailable");
+        assert_eq!(list_error.code, "grocery_capability_unavailable");
+        assert_eq!(exclusions_error.code, "grocery_capability_unavailable");
+        assert_eq!(export_error.code, "grocery_capability_unavailable");
         assert_eq!(port.calls.load(Ordering::SeqCst), 0);
     }
 }

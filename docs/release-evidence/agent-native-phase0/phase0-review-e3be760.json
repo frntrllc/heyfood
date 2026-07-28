@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "product_commit": "e3be760aaa58f5cd16ec623954d36e042b9ca46e",
+  "product_tree": "7b63eb6e029e5a4976f22696aa8e286f2fd6dc5a",
+  "evidence_head": "82f608cebddd3ba1a96ac3900e4ff90107970a65",
+  "checkpoint_digest_sha256": "4b5933de5e6ad1a6bce46f4872d41a8ff6f5ccd16f28c0b1fa8094c8178957af",
+  "verdict": "request_changes",
+  "phase_exit_authorized": false,
+  "reviews": [
+    {
+      "role": "rust_architecture",
+      "p0": 0,
+      "p1": 3,
+      "p2": 2,
+      "findings": [
+        "Grocery confirmation omitted frozen preconditions and operation-specific preview fields from the human review.",
+        "Menu Watch creation omitted confirm_menu_url from the human review.",
+        "The command authority inventory was incomplete and misclassified item and Grocery export.",
+        "Grocery display-read controllers relied on the concrete runtime adapter for capability enforcement.",
+        "Manifest cross-field authority combinations were not constrained."
+      ]
+    },
+    {
+      "role": "agent_integration_and_security",
+      "p0": 0,
+      "p1": 5,
+      "p2": 1,
+      "findings": [
+        "Future MCP launch did not freeze isolation from credential-bearing HEYFOOD environment overrides.",
+        "Meal household targeting and Menu Watch menu-identity confirmation were omitted from human review.",
+        "The command authority inventory omitted required dimensions and misclassified Grocery export.",
+        "Manifest v1 omitted stable automation/interactivity fields, required-nullable members, and SSE bounds.",
+        "The out-of-band approval contract lacked a versioned allowlist schema and implementable backend state machine.",
+        "Application seam evidence status text was stale."
+      ]
+    }
+  ],
+  "verification_passed": [
+    "cargo test --workspace --all-features --locked",
+    "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+    "cargo fmt --all -- --check",
+    "git diff --check"
+  ],
+  "remediation_required": true
+}

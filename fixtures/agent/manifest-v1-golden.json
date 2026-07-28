@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "product": "heyfood",
+  "binary_version": "0.5.0",
+  "build": {
+    "source_commit": "0000000000000000000000000000000000000001",
+    "source_tree": "0000000000000000000000000000000000000002",
+    "dirty": false,
+    "toolchain": "rustc-qualified-fixture",
+    "distribution_channel": "development",
+    "target": "x86_64-unknown-linux-gnu",
+    "features": [],
+    "build_input_digest_sha256": "0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  "compatibility": {
+    "guide_version": 1,
+    "mcp_protocol_version": 1,
+    "minimum_skill_manifest_version": 1,
+    "maximum_skill_manifest_version": 1,
+    "additive_optional_fields": true
+  },
+  "automation_surfaces": {
+    "one_shot_json": "active",
+    "mcp_stdio": "deferred",
+    "tui_automation": "unsupported"
+  },
+  "limits": {
+    "manifest_bytes": 1048576,
+    "schema_bytes": 1048576,
+    "mcp_inbound_frame_bytes": 1048576,
+    "mcp_tool_arguments_bytes": 1048576,
+    "mcp_structured_result_bytes": 4194304,
+    "sse_line_bytes": 65536,
+    "sse_event_bytes": 1048576,
+    "stream_event_count": 4096,
+    "stream_total_bytes": 4194304,
+    "outstanding_requests": 8,
+    "remote_in_flight": 1,
+    "queued_requests": 7,
+    "page_records": 100
+  },
+  "capabilities": [
+    {
+      "id": "grocery",
+      "status": "active",
+      "summary": "Read and human-terminal Grocery workflows are present.",
+      "contract_version": "v1"
+    },
+    {
+      "id": "health",
+      "status": "deferred",
+      "summary": "Health is not part of the supported release contract.",
+      "contract_version": null
+    }
+  ],
+  "commands": [
+    {
+      "path": "grocery show",
+      "purpose": "Read the active Grocery list without mutation.",
+      "status": "active",
+      "audience": "agent_unsupported",
+      "input_channel": "none",
+      "output_family": "grocery_list_v1",
+      "output_schema_id": null,
+      "output_schema_sha256": null,
+      "exit_behavior": "one_json_value",
+      "operation_class": "remote_read",
+      "network": true,
+      "product_state_mutation": false,
+      "credential_side_effect_possible": true,
+      "required_scopes": [
+        "grocery:read"
+      ],
+      "authorization_upgrade_command": "heyfood login",
+      "retry_class": "safe_read",
+      "reconciliation_command": null,
+      "human_confirmation": "none",
+      "interactivity": "none",
+      "browser_handoff": "none",
+      "examples": [
+        "heyfood --json grocery show"
+      ]
+    }
+  ]
+}

@@ -47,6 +47,12 @@ or any other response fails closed. Redirected stdin may carry meal or Grocery
 proposal data, and JSON stdout remains exactly one value; neither channel
 supplies semantic authority. The direct CLI routes are not agent-safe
 fallbacks. `--no-input` rejects these routes before opening a terminal.
+The review is the submitted intent, not a summary: meal logging includes the
+meal, type, and `--for` household selector; Menu Watch creation includes every
+schedule/source/notification field and `--confirm-menu-url`; Grocery
+confirmation includes confirmation ID, operation, expiry, the complete
+structured preview, and every frozen precondition. Confirmation tokens and
+idempotency authority remain hidden.
 
 Existing credentials missing a command's required scope fail locally with
 `authorization_scope_upgrade_required` and direct the user to `heyfood login`.

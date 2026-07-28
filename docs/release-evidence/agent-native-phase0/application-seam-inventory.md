@@ -1,7 +1,7 @@
 # Agent-native Phase 0 application seam inventory
 
 **Baseline:** `d68091a9cf6341c2c9120ba9251a6e0dd79a9616`  
-**Status:** extraction in progress
+**Status:** Phase 0 extraction complete; exact-SHA review pending
 
 | Workflow | Current application seam | Concrete orchestration still outside application | Phase 0 disposition |
 |---|---|---|---|
@@ -48,7 +48,9 @@
   open the controlling terminal separately from stdin/stdout and require exact
   command-specific phrases before credential access. Public-binary negative
   tests cover all classified routes and prove missing-terminal failure opens no
-  socket; positive exact-artifact PTY and Windows console qualification remain.
+  socket. A public Unix binary PTY test proves Grocery proposal stdin and the
+  controlling-terminal decision remain separate; exact installed-artifact and
+  Windows console qualification remain.
 - The deployed active-list REST shape does not contain the context fingerprint
   required by provisional `GroceryListSnapshot::preconditions`. A production
   `GroceryPort` adapter cannot invent it. The stronger provisional port stays

@@ -58,6 +58,9 @@ server, skill, instruction, or configuration was installed or modified.
 
 The configured MCP command must be the verified absolute executable path.
 Bare `heyfood` resolution through `PATH` is prohibited.
+The host entry supplies no environment variables. MCP startup enforces the
+frozen environment policy before credential access; a setup receipt records
+its digest and the exact empty host environment.
 
 ### Codex project scope
 
@@ -88,6 +91,9 @@ It never silently appends to project configuration.
 
 4. Uninstall uses matching `--scope user` plugin and MCP removal.
 
+The Claude entry also supplies no environment variables and is bound to the
+same frozen MCP environment-policy digest.
+
 ### Claude project scope
 
 Project setup requires an explicit existing absolute project root. Plugin
@@ -107,6 +113,7 @@ Every applied action records:
 - absolute host and heyfood executable identities;
 - marketplace/plugin identity and digest;
 - MCP name, transport, exact command/arguments, and configuration owner;
+- exact empty MCP environment plus the frozen environment-policy digest;
 - expected prior state/digest;
 - actions completed and outstanding user handoffs; and
 - uninstall/rollback operation.

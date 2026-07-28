@@ -6,14 +6,86 @@
     "product_version": "0.5.0"
   },
   "status": "phase0_in_progress",
+  "inventory_model": "Each command row joins to exactly one policy. The joined row is the per-command authority record; policies normalize identical scope, network, retry, output, error, terminal, and side-effect contracts without weakening per-command coverage.",
   "global_process_controls": [
     "--json",
     "--raw",
     "--no-color",
     "--no-banner",
     "--verbose",
-    "--no-input"
+    "--no-input",
+    "--help",
+    "--version"
   ],
+  "global_process_control_effects": {
+    "--json": "select_exactly_one_ansi_free_json_stdout_value",
+    "--raw": "hidden_deprecated_alias_for_json",
+    "--no-color": "disable_ansi_styling",
+    "--no-banner": "disable_decorative_branding",
+    "--verbose": "enable_privacy_safe_stderr_diagnostics",
+    "--no-input": "reject_missing_or_human_only_input",
+    "--help": "local_help_then_exit",
+    "--version": "local_version_then_exit"
+  },
+  "command_arguments": {
+    "account delete": ["<arguments>"],
+    "ask": ["--conversation-id", "--lat", "--latitude", "--lng", "--longitude", "<text>"],
+    "channels disconnect": ["<arguments>"],
+    "channels list": ["<arguments>"],
+    "chat": ["<arguments>"],
+    "completion": ["<shell>"],
+    "config path": ["<arguments>"],
+    "config show": ["<arguments>"],
+    "config validate": ["<arguments>"],
+    "context list": ["<arguments>"],
+    "context set": ["<arguments>"],
+    "context show": ["<arguments>"],
+    "context use": ["<arguments>"],
+    "conversation clear": ["<arguments>"],
+    "conversation list": ["<arguments>"],
+    "conversation resume": ["<arguments>"],
+    "daily": ["<arguments>"],
+    "doctor": ["<arguments>"],
+    "get-menu": ["<arguments>"],
+    "grocery add": ["--intended-for", "--list-id", "--version", "<items>"],
+    "grocery confirm": ["--decision", "--proposal-stdin"],
+    "grocery export": ["--format", "--out", "--overwrite", "<list_id>"],
+    "grocery never": ["--list-id", "--remove", "--version", "<item>"],
+    "grocery remove": ["--list-id", "--version", "<items>"],
+    "grocery state": ["--list-id", "--version", "<item>", "<state>"],
+    "health connect": ["<provider>"],
+    "health disconnect": ["--yes", "<provider>"],
+    "health sync": ["<provider>"],
+    "household current": ["<arguments>"],
+    "household label": ["<arguments>"],
+    "household list": ["<arguments>"],
+    "household use": ["<arguments>"],
+    "item": ["--at", "--restaurant", "-r", "<name>"],
+    "location clear": ["<arguments>"],
+    "location set": ["<arguments>"],
+    "location show": ["<arguments>"],
+    "log": ["--for", "--type", "<meal>"],
+    "login": ["--device", "--no-browser", "--timeout"],
+    "logout": ["<arguments>"],
+    "members list": ["<arguments>"],
+    "menu": ["<arguments>"],
+    "onboard": ["<arguments>"],
+    "profile": ["<arguments>"],
+    "recipes save": ["<arguments>"],
+    "recipes saved": ["<arguments>"],
+    "recipes search": ["<arguments>"],
+    "recommend": ["<arguments>"],
+    "register": ["--device", "--no-browser", "--no-onboard", "--timeout"],
+    "reply": ["--conversation-id", "--lat", "--latitude", "--lng", "--longitude", "<text>"],
+    "search": ["<arguments>"],
+    "status": ["<arguments>"],
+    "voice devices": ["<arguments>"],
+    "voice reset": ["<arguments>"],
+    "voice set": ["<arguments>"],
+    "voice status": ["<arguments>"],
+    "watch add": ["--confirm-menu-url", "--hour", "--menu-url", "--notify", "--tz", "--weekday", "<restaurant_id>"],
+    "watch remove": ["<watch_id>"]
+  },
   "audiences": [
     "agent_safe",
     "human_terminal_only",
@@ -26,6 +98,21 @@
     "input_transport": "attached_terminal",
     "output_transport": "attached_terminal",
     "network": "conditional_authentication_and_conversation",
+    "network_calls": [
+      "conditional authorization",
+      "POST /v1/channel/converse"
+    ],
+    "required_scopes": [],
+    "json_output_family": null,
+    "error_output_family": "human_terminal_error",
+    "error_types": [
+      "interactive_terminal_required",
+      "authorization"
+    ],
+    "local_side_effects": "terminal_mode_and_account_bound_state",
+    "remote_side_effects": "conversation_and_explicit_tui_workflows",
+    "controlling_terminal": "required",
+    "retry": "never_blind_retry",
     "status": "active"
   },
   "policies": {
@@ -35,8 +122,22 @@
       "input_transport": "attached_terminal",
       "output_transport": "attached_terminal",
       "network": "authenticated",
+      "network_calls": [
+        "conditional authorization",
+        "POST /v1/channel/converse"
+      ],
       "retry": "never_blind_retry",
       "product_state": "may_mutate_through_explicit_tui_workflows",
+      "required_scopes": [],
+      "json_output_family": null,
+      "error_output_family": "human_terminal_error",
+      "error_types": [
+        "interactive_terminal_required",
+        "tui_runtime"
+      ],
+      "local_side_effects": "terminal_mode_and_account_bound_state",
+      "remote_side_effects": "conversation_and_explicit_tui_workflows",
+      "controlling_terminal": "required",
       "phase0_gap": null
     },
     "auth_handoff": {
@@ -45,8 +146,23 @@
       "input_transport": "arguments_plus_independent_browser_or_device_approval",
       "output_transport": "human_or_one_json_result",
       "network": "authorization_server",
+      "network_calls": [
+        "GET capability and authorization metadata",
+        "POST device or loopback authorization exchange"
+      ],
       "retry": "protocol_specific_no_blind_retry_after_dispatch",
       "product_state": "rotates_local_and_server_authority",
+      "required_scopes": [],
+      "json_output_family": "registration_or_login_result_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "authorization",
+        "authorization_outcome_uncertain",
+        "credential_reconciliation"
+      ],
+      "local_side_effects": "account_bound_native_credentials_and_authorization_journal",
+      "remote_side_effects": "authorization_grant_and_session_rotation",
+      "controlling_terminal": "independent_browser_or_device_approval",
       "phase0_gap": "Agent setup must not treat browser/device approval as product mutation consent."
     },
     "conversation_review_pending": {
@@ -55,8 +171,22 @@
       "input_transport": "arguments_or_bounded_utf8_stdin",
       "output_transport": "human_or_one_json_result",
       "network": "post_sse",
+      "network_calls": [
+        "POST /v1/channel/converse"
+      ],
       "retry": "reconcile_uncertain_never_blind_retry",
       "product_state": "conversation_state_and_server_tools_require_audit",
+      "required_scopes": [],
+      "json_output_family": "agent_turn_result_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "conversation",
+        "conversation_outcome_uncertain",
+        "scope_required"
+      ],
+      "local_side_effects": "session_rotation_and_conversation_pointer",
+      "remote_side_effects": "conversation_state_and_server_tool_proposals",
+      "controlling_terminal": "not_used",
       "phase0_gap": "Prove that conversational routes cannot directly or indirectly commit a protected mutation before reclassification."
     },
     "human_meal_mutation": {
@@ -65,9 +195,51 @@
       "input_transport": "arguments_or_bounded_utf8_data_stdin_plus_controlling_terminal_decision",
       "output_transport": "human_or_one_json_result",
       "network": "post_sse",
+      "network_calls": [
+        "POST /v1/channel/converse"
+      ],
       "retry": "reconcile_uncertain_never_blind_retry",
       "product_state": "meal_memory_mutation",
+      "required_scopes": [
+        "meals:write"
+      ],
+      "json_output_family": "agent_turn_result_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "human_terminal_required",
+        "human_confirmation_declined",
+        "conversation_outcome_uncertain"
+      ],
+      "local_side_effects": "session_rotation",
+      "remote_side_effects": "meal_memory_and_conversation_state",
+      "controlling_terminal": "required_exact_LOG",
       "phase0_gap": null
+    },
+    "item_read": {
+      "audience": "agent_unsupported",
+      "operation_class": "remote_read_via_post",
+      "input_transport": "arguments",
+      "output_transport": "human_or_one_json_result",
+      "network": "post_as_read",
+      "network_calls": [
+        "POST /v1/channel/tools/explain_item"
+      ],
+      "required_scopes": [
+        "menu:read"
+      ],
+      "retry": "no_automatic_retry",
+      "product_state": "no_product_mutation_but_session_may_rotate",
+      "json_output_family": "item_explanation_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "item_explanation",
+        "restaurant_selector",
+        "scope_required"
+      ],
+      "local_side_effects": "session_rotation_and_read_only_imported_state",
+      "remote_side_effects": "none",
+      "controlling_terminal": "not_used",
+      "phase0_gap": "Dedicated bounded agent presentation remains Phase 1 work."
     },
     "grocery_read": {
       "audience": "agent_unsupported",
@@ -75,11 +247,25 @@
       "input_transport": "arguments",
       "output_transport": "human_or_one_json_result",
       "network": "get",
+      "network_calls": [
+        "GET /v1/grocery/list",
+        "GET /v1/grocery/exclusions"
+      ],
       "required_scopes": [
         "grocery:read"
       ],
       "retry": "safe_only_before_or_as_defined_by_get_contract",
       "product_state": "no_grocery_product_mutation_but_session_may_rotate",
+      "json_output_family": "grocery_list_or_exclusions_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "grocery_capability",
+        "grocery_contract",
+        "scope_required"
+      ],
+      "local_side_effects": "session_rotation_and_short_lived_item_reference_cache",
+      "remote_side_effects": "none",
+      "controlling_terminal": "not_used",
       "phase0_gap": "Application display-read controller extraction is complete; the bounded agent presentation remains Phase 1 work."
     },
     "grocery_prepare_human": {
@@ -88,25 +274,51 @@
       "input_transport": "arguments_plus_controlling_terminal_acknowledgement",
       "output_transport": "capability_bearing_proposal_json_or_human",
       "network": "post_prepare",
+      "network_calls": [
+        "POST one exact Grocery prepare endpoint"
+      ],
       "required_scopes": [
         "grocery:read",
         "grocery:write"
       ],
       "retry": "dg_r2_no_blind_retry",
       "product_state": "no_list_mutation_but_emits_commit_authority",
+      "json_output_family": "grocery_mutation_proposal_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "human_terminal_required",
+        "human_confirmation_declined",
+        "grocery_outcome_uncertain"
+      ],
+      "local_side_effects": "session_rotation",
+      "remote_side_effects": "server_pending_proposal_only",
+      "controlling_terminal": "required_exact_PREPARE",
       "phase0_gap": null
     },
-    "grocery_export_human": {
-      "audience": "human_terminal_only",
+    "grocery_export_unsupported": {
+      "audience": "agent_unsupported",
       "operation_class": "remote_read_and_optional_sensitive_file_write",
       "input_transport": "arguments",
       "output_transport": "stdout_or_owner_only_atomic_file",
       "network": "get",
+      "network_calls": [
+        "GET /v1/grocery/lists/{list_id}/export"
+      ],
       "required_scopes": [
         "grocery:read"
       ],
       "retry": "safe_read_with_fail_closed_file_commit",
       "product_state": "no_remote_mutation_local_file_optional",
+      "json_output_family": "grocery_export_or_write_receipt_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "grocery_export",
+        "sensitive_export",
+        "scope_required"
+      ],
+      "local_side_effects": "optional_owner_only_atomic_file_write_and_session_rotation",
+      "remote_side_effects": "none",
+      "controlling_terminal": "not_used",
       "phase0_gap": "Arbitrary output paths are not part of the planned agent-safe surface."
     },
     "grocery_confirm_human": {
@@ -115,12 +327,26 @@
       "input_transport": "proposal_json_stdin_plus_distinct_controlling_terminal_review_and_decision",
       "output_transport": "contracted_json_result",
       "network": "post_mutation",
+      "network_calls": [
+        "POST /v1/grocery/confirm"
+      ],
       "required_scopes": [
         "grocery:read",
         "grocery:write"
       ],
       "retry": "reconcile_uncertain_never_blind_retry",
       "product_state": "grocery_list_mutation_on_accept",
+      "json_output_family": "grocery_mutation_result_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "confirmation_input",
+        "human_terminal_required",
+        "human_confirmation_declined",
+        "grocery_outcome_uncertain"
+      ],
+      "local_side_effects": "session_rotation_and_item_reference_cache_invalidation",
+      "remote_side_effects": "single_use_grocery_commit_on_accept_or_proposal_cancel",
+      "controlling_terminal": "required_exact_ACCEPT_or_CANCEL",
       "phase0_gap": null
     },
     "watch_read": {
@@ -129,11 +355,23 @@
       "input_transport": "arguments",
       "output_transport": "human_or_one_json_result",
       "network": "get",
+      "network_calls": [
+        "GET /v1/menu/watch"
+      ],
       "required_scopes": [
         "menu:watch"
       ],
       "retry": "safe_only_before_or_as_defined_by_get_contract",
       "product_state": "no_menu_watch_product_mutation_but_session_may_rotate",
+      "json_output_family": "menu_watch_list_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "menu_watch",
+        "scope_required"
+      ],
+      "local_side_effects": "session_rotation",
+      "remote_side_effects": "none",
+      "controlling_terminal": "not_used",
       "phase0_gap": "Application port/controller extraction is complete; the bounded agent result remains Phase 1 work."
     },
     "watch_mutation_human": {
@@ -142,11 +380,25 @@
       "input_transport": "arguments_plus_controlling_terminal_decision",
       "output_transport": "human_or_one_json_result",
       "network": "post_or_delete",
+      "network_calls": [
+        "POST /v1/menu/watch",
+        "DELETE /v1/menu/watch/{watch_id}"
+      ],
       "required_scopes": [
         "menu:watch"
       ],
       "retry": "reconcile_uncertain_never_blind_retry",
       "product_state": "menu_watch_subscription_mutation",
+      "json_output_family": "menu_watch_snapshot_or_delete_receipt_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "human_terminal_required",
+        "human_confirmation_declined",
+        "menu_watch_outcome_uncertain"
+      ],
+      "local_side_effects": "session_rotation",
+      "remote_side_effects": "menu_watch_subscription_create_or_delete",
+      "controlling_terminal": "required_exact_CREATE_or_REMOVE",
       "phase0_gap": null
     },
     "completion": {
@@ -155,8 +407,18 @@
       "input_transport": "arguments",
       "output_transport": "shell_source_stdout",
       "network": "none",
+      "network_calls": [],
       "retry": "not_applicable",
       "product_state": "none",
+      "required_scopes": [],
+      "json_output_family": null,
+      "error_output_family": "human_stderr",
+      "error_types": [
+        "completion"
+      ],
+      "local_side_effects": "none",
+      "remote_side_effects": "none",
+      "controlling_terminal": "not_used",
       "phase0_gap": "Completion is not a one-JSON-result agent discovery contract."
     },
     "deferred_health": {
@@ -165,8 +427,18 @@
       "input_transport": "rejected_before_credential_access",
       "output_transport": "typed_error",
       "network": "none",
+      "network_calls": [],
       "retry": "not_applicable",
       "product_state": "none",
+      "required_scopes": [],
+      "json_output_family": null,
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "capability_deferred"
+      ],
+      "local_side_effects": "none",
+      "remote_side_effects": "none",
+      "controlling_terminal": "not_used",
       "phase0_gap": null
     },
     "unavailable_legacy": {
@@ -175,8 +447,18 @@
       "input_transport": "rejected",
       "output_transport": "typed_error",
       "network": "none",
+      "network_calls": [],
       "retry": "not_applicable",
       "product_state": "none",
+      "required_scopes": [],
+      "json_output_family": null,
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "command_unavailable"
+      ],
+      "local_side_effects": "none",
+      "remote_side_effects": "none",
+      "controlling_terminal": "not_used",
       "phase0_gap": null
     }
   },
@@ -204,7 +486,7 @@
     {
       "path": "item",
       "visibility": "active",
-      "policy": "conversation_review_pending"
+      "policy": "item_read"
     },
     {
       "path": "daily",
@@ -307,7 +589,7 @@
     {
       "path": "grocery export",
       "visibility": "active",
-      "policy": "grocery_export_human"
+      "policy": "grocery_export_unsupported"
     },
     {
       "path": "grocery confirm",

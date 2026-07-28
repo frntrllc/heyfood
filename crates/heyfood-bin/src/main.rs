@@ -888,9 +888,14 @@ fn human_review_document(
                 .unwrap_or("unspecified");
             Ok((
                 format!(
-                    "Mutation: log meal memory\nMeal: {}\nMeal type: {}",
+                    "Mutation: log meal memory\nMeal: {}\nMeal type: {}\nHousehold target selector: {}",
                     inline_human_text(&meal),
-                    inline_human_text(meal_type)
+                    inline_human_text(meal_type),
+                    arguments
+                        .checking_for
+                        .as_deref()
+                        .map(inline_human_text)
+                        .unwrap_or_else(|| "self".into())
                 ),
                 "LOG",
             ))
@@ -972,16 +977,33 @@ fn human_review_document(
                 heyfood_cli::GroceryDecisionArgument::Accept => "ACCEPT",
                 heyfood_cli::GroceryDecisionArgument::Cancel => "CANCEL",
             };
-            let proposal_review = heyfood_cli::render_grocery_proposal(
-                &proposal,
-                heyfood_cli::OutputMode::HumanPlain,
-            )
-            .lines()
-            .map(|line| format!("  │ {}", inline_human_text(line)))
-            .collect::<Vec<_>>()
-            .join("\n");
+            let preview =
+                serde_json::to_string_pretty(&proposal.structured_preview).map_err(|_| {
+                    heyfood_bin::OneShotError::new(
+                        "confirmation_input",
+                        "confirmation proposal preview could not be rendered",
+                    )
+                })?;
+            let preconditions =
+                serde_json::to_string_pretty(&proposal.preconditions).map_err(|_| {
+                    heyfood_bin::OneShotError::new(
+                        "confirmation_input",
+                        "confirmation proposal preconditions could not be rendered",
+                    )
+                })?;
+            let operation = serde_json::to_value(proposal.operation)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "grocery_mutation".into());
             Ok((
-                format!("Exact proposal:\n{proposal_review}\nRequested decision: {expected}"),
+                format!(
+                    "Exact human-visible proposal intent:\nConfirmation ID: {}\nOperation: {}\nExpires: {}\nStructured preview:\n{}\nFrozen preconditions:\n{}\nRequested decision: {expected}",
+                    proposal.confirmation_id.as_uuid().hyphenated(),
+                    inline_human_text(&operation),
+                    inline_human_text(&proposal.expires_at),
+                    terminal_safe_text(&preview),
+                    terminal_safe_text(&preconditions)
+                ),
                 expected,
             ))
         }
@@ -989,7 +1011,7 @@ fn human_review_document(
             command: Some(heyfood_cli::MenuWatchCommand::Add(arguments)),
         } => Ok((
             format!(
-                "Mutation: create a recurring Menu Watch subscription\nRestaurant: {}\nSchedule: {:?} {:02}:00\nTimezone: {}\nNotifications: {}\nMenu source: {}",
+                "Mutation: create a recurring Menu Watch subscription\nRestaurant: {}\nSchedule: {:?} {:02}:00\nTimezone: {}\nNotifications: {}\nMenu source: {}\nConfirm supplied menu identity: {}",
                 inline_human_text(&arguments.restaurant_id),
                 arguments.weekday,
                 arguments.hour,
@@ -1007,7 +1029,12 @@ fn human_review_document(
                     .menu_url
                     .as_deref()
                     .map(inline_human_text)
-                    .unwrap_or_else(|| "automatic discovery".into())
+                    .unwrap_or_else(|| "automatic discovery".into()),
+                if arguments.confirm_menu_url {
+                    "yes"
+                } else {
+                    "no"
+                }
             ),
             "CREATE",
         )),
@@ -1993,7 +2020,13 @@ mod tests {
 
     #[test]
     fn meal_review_requires_the_exact_terminal_phrase_and_sanitizes_controls() {
-        let command = parsed_command(&["heyfood", "log", "oatmeal\nforged\u{1b}[2J"]);
+        let command = parsed_command(&[
+            "heyfood",
+            "log",
+            "oatmeal\nforged\u{1b}[2J",
+            "--for",
+            "child\nforged\u{1b}[3J",
+        ]);
         let mut approved_input = Cursor::new(b"LOG\n");
         let mut review = Vec::new();
 
@@ -2002,6 +2035,7 @@ mod tests {
         let review = String::from_utf8(review).unwrap();
         assert!(review.contains("Mutation: log meal memory"));
         assert!(review.contains("Meal: oatmeal forged[2J"));
+        assert!(review.contains("Household target selector: child forged[3J"));
         assert!(!review.contains('\u{1b}'));
         assert!(!review.contains("\nforged"));
 
@@ -2019,8 +2053,20 @@ mod tests {
             "idempotency_key": "00000000-0000-4000-8000-000000000002",
             "operation": "add_items",
             "expires_at": "2026-07-21T12:05:00Z",
-            "structured_preview": {"items": []},
-            "preconditions": [{"type": "list_version", "expected_version": 4}],
+            "structured_preview": {
+                "items": [{
+                    "requested_name": "milk",
+                    "quantity": 2.0,
+                    "unit": "cartons",
+                    "note": "lactose-free",
+                    "sources": [{"source_type": "manual"}]
+                }],
+                "exclusions": ["pork"]
+            },
+            "preconditions": [
+                {"type": "list_version", "list_id": "00000000-0000-4000-8000-000000000123", "expected_version": 4},
+                {"type": "context_hash", "expected": "context-v4"}
+            ],
             "confirmation_token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }))
         .unwrap();
@@ -2030,9 +2076,53 @@ mod tests {
         review_human_only_command(&command, &proposal, &mut input, &mut review).unwrap();
 
         let review = String::from_utf8(review).unwrap();
-        assert!(review.contains("Review add_items"));
+        assert!(review.contains("Exact human-visible proposal intent"));
+        assert!(review.contains("Confirmation ID: 00000000-0000-4000-8000-000000000001"));
+        assert!(review.contains("Operation: add_items"));
+        assert!(review.contains("\"quantity\": 2.0"));
+        assert!(review.contains("\"unit\": \"cartons\""));
+        assert!(review.contains("\"note\": \"lactose-free\""));
+        assert!(review.contains("\"source_type\": \"manual\""));
+        assert!(review.contains("\"exclusions\""));
+        assert!(review.contains("\"list_id\""));
+        assert!(review.contains("\"expected_version\": 4"));
+        assert!(review.contains("\"expected\": \"context-v4\""));
         assert!(review.contains("Requested decision: ACCEPT"));
         assert!(!review.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(!review.contains("00000000-0000-4000-8000-000000000002"));
+    }
+
+    #[test]
+    fn menu_watch_review_displays_the_identity_confirmation_flag() {
+        for (argument, expected) in [
+            (None, "Confirm supplied menu identity: no"),
+            (
+                Some("--confirm-menu-url"),
+                "Confirm supplied menu identity: yes",
+            ),
+        ] {
+            let mut arguments = vec![
+                "heyfood",
+                "watch",
+                "add",
+                "0c1cb790-0000-4000-8000-000000000000",
+                "--weekday",
+                "thursday",
+                "--hour",
+                "9",
+                "--menu-url",
+                "https://restaurant.example/menu",
+            ];
+            if let Some(argument) = argument {
+                arguments.push(argument);
+            }
+            let command = parsed_command(&arguments);
+            let (review, expected_phrase) = human_review_document(&command, &[]).unwrap();
+
+            assert_eq!(expected_phrase, "CREATE");
+            assert!(review.contains(expected));
+            assert!(review.contains("Menu source: https://restaurant.example/menu"));
+        }
     }
 
     #[test]

@@ -58,6 +58,8 @@ terminal before credential access or network dispatch:
 
 The controlling terminal is opened independently from stdin and stdout.
 Arguments and redirected stdin carry data only; they never count as consent.
+The `log` review shows the meal, meal type, and exact `--for` household
+selector before `LOG` is accepted.
 Consequently these commands fail with `human_terminal_required` in unattended
 processes even when an automation host allocates ordinary pipes. Agents must
 not drive the prompt through a PTY or use these human-only commands as a
@@ -94,7 +96,10 @@ Mutation commands prepare a proposal and do not commit it. The human must type
 `PREPARE` before the capability-bearing proposal is emitted. Confirmation
 reads the proposal from stdin so authorization material does not enter shell
 history or process arguments, renders the exact proposal on the controlling
-terminal, and requires an `ACCEPT`/`CANCEL` decision matching `--decision`.
+terminal, including its confirmation ID, operation, expiry, complete
+structured preview, and every frozen precondition, and requires an
+`ACCEPT`/`CANCEL` decision matching `--decision`. The token and idempotency
+authority are never rendered.
 
 ## Deferred Health integrations
 
@@ -122,7 +127,9 @@ preference, and activation state. The TUI renders the latest account-owned
 change summary with source, freshness, and provenance. Item-level added,
 removed, modified, and price-change detail remains follow-on work and is not
 claimed by the current client. Direct creation requires `CREATE`; direct
-removal requires `REMOVE` on the controlling terminal.
+removal requires `REMOVE` on the controlling terminal. The creation review
+includes `--confirm-menu-url` because that flag is the human's explicit menu
+identity assertion.
 
 ## Global process controls
 

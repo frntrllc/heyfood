@@ -28,10 +28,11 @@
         "docs/CLI_CONTRACT.md",
         "docs/COMMAND_GRAMMAR.md",
         "docs/CAPABILITY_STATUS.md",
-        "docs/JSON_SCHEMAS.md"
+        "docs/JSON_SCHEMAS.md",
+        "crates/heyfood-bin/tests/activated_commands.rs"
       ],
       "blockers": [
-        "The positive installed-artifact controlling-terminal journey and Windows CONIN$/CONOUT$ path still require exact-artifact qualification."
+        "The public Unix binary PTY journey now proves proposal stdin plus a distinct controlling-terminal decision. Exact installed-archive qualification and the Windows CONIN$/CONOUT$ path remain pending."
       ]
     },
     {
@@ -40,7 +41,9 @@
       "owner": "security",
       "evidence": [
         "docs/AGENT_THREAT_MODEL.md",
-        "docs/AGENT_APPROVAL_CONTRACT.md"
+        "docs/AGENT_APPROVAL_CONTRACT.md",
+        "schemas/v1/agent-proposal-presentation.schema.json",
+        "schemas/v1/agent-approval-protocol.schema.json"
       ],
       "blockers": [
         "Independent security review of the frozen companion hello.food out-of-band approval contract is pending; endpoint implementation and production proof remain Phase 4 gates."
@@ -74,8 +77,11 @@
       "evidence": [
         "docs/plans/2026-07-27-heyfood-agent-native-interface-plan.md",
         "schemas/v1/heyfood-agent-manifest.schema.json",
+        "fixtures/agent/manifest-v1-golden.json",
         "docs/AGENT_MCP_CONTRACT.md",
-        "crates/heyfood-cli/tests/agent_phase0_manifest_schema.rs"
+        "crates/heyfood-cli/tests/agent_phase0_manifest_schema.rs",
+        "schemas/v1/agent-proposal-presentation.schema.json",
+        "schemas/v1/agent-approval-protocol.schema.json"
       ],
       "blockers": [
         "Independent Rust and agent-integration review is pending.",
@@ -88,7 +94,8 @@
       "owner": "agent-integration",
       "evidence": [
         "docs/release-evidence/agent-native-phase0/host-setup-matrix.md",
-        "docs/release-evidence/agent-native-phase0/host-capability-evidence.json"
+        "docs/release-evidence/agent-native-phase0/host-capability-evidence.json",
+        "docs/release-evidence/agent-native-phase0/mcp-environment-policy.json"
       ],
       "blockers": [
         "Independent agent-integration review is pending.",
@@ -122,7 +129,8 @@
       "status": "pending",
       "owner": "independent-reviewers",
       "evidence": [
-        "docs/release-evidence/agent-native-phase0/phase0-checkpoint.json"
+        "docs/release-evidence/agent-native-phase0/phase0-checkpoint.json",
+        "docs/release-evidence/agent-native-phase0/phase0-review-e3be760.json"
       ],
       "blockers": [
         "Ordinary CI must be green at one exact product SHA.",
@@ -135,12 +143,12 @@
     "satisfied": 5,
     "in_progress_or_draft": 4,
     "pending": 1,
-    "unresolved_p0_p1_findings": null,
+    "unresolved_p0_p1_findings": 6,
     "phase_exit_authorized": false
   },
   "review": {
-    "status": "ready_for_independent_review",
+    "status": "request_changes_remediation_in_progress",
     "reviewed_product_sha": "e3be760aaa58f5cd16ec623954d36e042b9ca46e",
-    "reviewed_evidence_digest": null
+    "reviewed_evidence_digest": "4b5933de5e6ad1a6bce46f4872d41a8ff6f5ccd16f28c0b1fa8094c8178957af"
   }
 }

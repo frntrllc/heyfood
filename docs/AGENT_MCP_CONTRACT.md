@@ -20,6 +20,32 @@ contract. Before protocol startup, human-output modifiers such as `--json`,
 - EOF cancels all work and exits within five seconds; and
 - the process never detaches from its parent stdio connection.
 
+## Environment and credential isolation
+
+MCP mode uses
+`docs/release-evidence/agent-native-phase0/mcp-environment-policy.json`.
+Before reading state or credentials, it rejects every inherited environment
+variable whose name starts with `HEYFOOD_`. It then constructs its service and
+credential configuration without calling the ordinary CLI environment
+readers:
+
+- service origin is the compiled `https://api.hello.food` constant under the
+  production network policy;
+- API-key environment fallback is disabled;
+- only the account-bound native credential backend is accepted;
+- legacy/file credential fallback is disabled; and
+- the state root comes from the reviewed platform default, not an inherited
+  path.
+
+The host registration contains no environment entries. The setup receipt
+records the exact empty environment and the environment-policy digest. A
+different environment, policy digest, executable, host, or scope blocks
+receipt-based replacement/uninstall and reports a conflict.
+
+Phase 3 must prove that API-origin, API-key, CA, credential-store, state-root,
+debug/test, and unknown `HEYFOOD_*` substitution fail before credential
+access, network dispatch, or stdout protocol startup.
+
 ## Initial tool set
 
 Phase 3 may advertise only these read/discovery candidates after exact schema

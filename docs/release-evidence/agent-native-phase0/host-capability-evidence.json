@@ -2,6 +2,11 @@
   "schema_version": 1,
   "observed_date": "2026-07-27",
   "mutation_performed": false,
+  "mcp_environment_policy": {
+    "path": "docs/release-evidence/agent-native-phase0/mcp-environment-policy.json",
+    "host_registration_environment": {},
+    "receipt_digest_required": true
+  },
   "hosts": [
     {
       "name": "codex",

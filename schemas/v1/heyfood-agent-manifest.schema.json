@@ -11,6 +11,7 @@
     "binary_version",
     "build",
     "compatibility",
+    "automation_surfaces",
     "limits",
     "capabilities",
     "commands"
@@ -32,6 +33,9 @@
     },
     "compatibility": {
       "$ref": "#/$defs/compatibility"
+    },
+    "automation_surfaces": {
+      "$ref": "#/$defs/automation_surfaces"
     },
     "limits": {
       "$ref": "#/$defs/limits"
@@ -148,6 +152,34 @@
         }
       }
     },
+    "automation_surfaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "one_shot_json",
+        "mcp_stdio",
+        "tui_automation"
+      ],
+      "properties": {
+        "one_shot_json": {
+          "enum": [
+            "active",
+            "deferred",
+            "unsupported"
+          ]
+        },
+        "mcp_stdio": {
+          "enum": [
+            "active",
+            "deferred",
+            "unsupported"
+          ]
+        },
+        "tui_automation": {
+          "const": "unsupported"
+        }
+      }
+    },
     "limits": {
       "type": "object",
       "additionalProperties": false,
@@ -157,6 +189,8 @@
         "mcp_inbound_frame_bytes",
         "mcp_tool_arguments_bytes",
         "mcp_structured_result_bytes",
+        "sse_line_bytes",
+        "sse_event_bytes",
         "stream_event_count",
         "stream_total_bytes",
         "outstanding_requests",
@@ -184,6 +218,12 @@
         "mcp_structured_result_bytes": {
           "const": 4194304
         },
+        "sse_line_bytes": {
+          "const": 65536
+        },
+        "sse_event_bytes": {
+          "const": 1048576
+        },
         "stream_event_count": {
           "const": 4096
         },
@@ -210,7 +250,8 @@
       "required": [
         "id",
         "status",
-        "summary"
+        "summary",
+        "contract_version"
       ],
       "properties": {
         "id": {
@@ -249,14 +290,20 @@
         "audience",
         "input_channel",
         "output_family",
+        "output_schema_id",
+        "output_schema_sha256",
         "exit_behavior",
         "operation_class",
         "network",
         "product_state_mutation",
         "credential_side_effect_possible",
         "required_scopes",
+        "authorization_upgrade_command",
         "retry_class",
+        "reconciliation_command",
         "human_confirmation",
+        "interactivity",
+        "browser_handoff",
         "examples"
       ],
       "properties": {
@@ -391,6 +438,23 @@
             "heyfood_out_of_band"
           ]
         },
+        "interactivity": {
+          "type": "string",
+          "enum": [
+            "none",
+            "attached_terminal",
+            "controlling_terminal",
+            "independent_browser_or_device"
+          ]
+        },
+        "browser_handoff": {
+          "type": "string",
+          "enum": [
+            "none",
+            "optional",
+            "required"
+          ]
+        },
         "examples": {
           "type": "array",
           "maxItems": 8,
@@ -400,7 +464,116 @@
             "maxLength": 512
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "audience": {
+                "const": "agent_safe"
+              }
+            },
+            "required": [
+              "audience"
+            ]
+          },
+          "then": {
+            "properties": {
+              "product_state_mutation": {
+                "const": false
+              },
+              "human_confirmation": {
+                "const": "none"
+              },
+              "interactivity": {
+                "const": "none"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "product_state_mutation": {
+                "const": true
+              }
+            },
+            "required": [
+              "product_state_mutation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "audience": {
+                "enum": [
+                  "human_terminal_only",
+                  "agent_unsupported"
+                ]
+              },
+              "retry_class": {
+                "enum": [
+                  "no_blind_retry",
+                  "reconcile_before_retry"
+                ]
+              },
+              "human_confirmation": {
+                "enum": [
+                  "attached_terminal",
+                  "heyfood_out_of_band"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "audience": {
+                "const": "human_terminal_only"
+              }
+            },
+            "required": [
+              "audience"
+            ]
+          },
+          "then": {
+            "properties": {
+              "interactivity": {
+                "enum": [
+                  "attached_terminal",
+                  "controlling_terminal",
+                  "independent_browser_or_device"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "retry_class": {
+                "const": "safe_read"
+              }
+            },
+            "required": [
+              "retry_class"
+            ]
+          },
+          "then": {
+            "properties": {
+              "product_state_mutation": {
+                "const": false
+              },
+              "operation_class": {
+                "enum": [
+                  "local_read",
+                  "remote_read"
+                ]
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }
