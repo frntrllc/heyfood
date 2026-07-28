@@ -58,6 +58,7 @@ sed -n '/^  protected-candidate-preflight:/,$p' "$CANDIDATE_WORKFLOW" >"$protect
 macos_signer="$ROOT/packaging/macos/sign-and-notarize.sh"
 archive_smoke="$ROOT/scripts/release/smoke-archive.sh"
 agent_setup_smoke="$ROOT/scripts/release/agent-setup-smoke.sh"
+mcp_smoke="$ROOT/scripts/release/mcp-smoke.mjs"
 
 [[ -x "$macos_signer" ]] ||
   fail "the macOS signing tool must be executable"
@@ -69,6 +70,16 @@ grep -Fq '[.commands[].path] | index("mcp serve")' "$archive_smoke" ||
 if grep -Fq '[.commands[].name] | index("mcp serve")' "$archive_smoke"; then
   fail "archive smoke must not validate the absent command name field"
 fi
+grep -Fq 'mkdirSync(join(cleanHome, "Library", "Preferences")' "$mcp_smoke" ||
+  fail "macOS MCP smoke must create the clean profile preference root"
+grep -Fq 'process.env.HEYFOOD_QUALIFICATION_KEYCHAIN' "$mcp_smoke" ||
+  fail "macOS MCP smoke must bind an externally managed qualification keychain"
+grep -Fq '["default-keychain", "-d", "user", "-s", keychain]' "$mcp_smoke" ||
+  fail "macOS MCP smoke must set the clean profile default keychain"
+grep -Fq '["list-keychains", "-d", "user", "-s", keychain]' "$mcp_smoke" ||
+  fail "macOS MCP smoke must restrict the clean profile keychain search list"
+grep -Fq '["delete-keychain", ownedMacKeychain]' "$mcp_smoke" ||
+  fail "self-contained macOS MCP smoke must destroy its ephemeral keychain"
 
 # shellcheck disable=SC2016 # These are literal source patterns, not expansions.
 create_smoke_root_line=$(line_of "$agent_setup_smoke" 'mkdir -p -- "$root"')
