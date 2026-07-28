@@ -7,6 +7,7 @@ pub mod ensure_session;
 pub mod grocery;
 pub mod health;
 pub mod household_menu;
+pub mod menu_watch;
 pub mod one_shot_turn;
 pub mod ports;
 pub mod run_turn;
@@ -25,6 +26,10 @@ pub use health::{
     HealthAuthorization, HealthConnection, HealthContext, HealthManagementOutcome, HealthPort,
 };
 pub use household_menu::render_household_menu;
+pub use menu_watch::{
+    CreateMenuWatch, CreateMenuWatchRequest, ListMenuWatches, MenuWatchChangeEvent,
+    MenuWatchChangeSummary, MenuWatchList, MenuWatchPort, MenuWatchSnapshot, RemoveMenuWatch,
+};
 pub use one_shot_turn::{
     MAX_ONE_SHOT_EVENTS, MAX_ONE_SHOT_STREAM_BYTES, OneShotTurnResult, agent_result_text,
     execute_one_shot_turn,

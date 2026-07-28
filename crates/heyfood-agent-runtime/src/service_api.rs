@@ -1,20 +1,25 @@
 //! Contract-derived Phase 2 REST operations.
 
-use heyfood_application::{BoxFuture, CapabilityPort, CapabilitySnapshot, PortError};
+use heyfood_application::{
+    BoxFuture, CapabilityPort, CapabilitySnapshot, CreateMenuWatchRequest, MenuWatchChangeEvent,
+    MenuWatchChangeSummary, MenuWatchList, MenuWatchPort, MenuWatchSnapshot, PortError,
+    RegistrationAvailability,
+};
 use heyfood_core::{
     AddItemsRequestWire, ApplicationCapabilitiesWire, AuthorizationServerMetadataWire,
-    ExclusionListResponseWire, ExclusionMutationRequestWire, GroceryEntityId, GroceryListWire,
-    GroceryMutationConfirmRequestWire, GroceryMutationProposalWire, GroceryMutationResultWire,
-    HealthContextWire, IntegrationAuthorizeRequestWire, IntegrationAuthorizeResponseWire,
-    IntegrationDisconnectResponseWire, IntegrationListWire, IntegrationRedirectTargetWire,
-    IntegrationSyncResponseWire, MenuWatchCreateRequestWire, MenuWatchId,
-    MenuWatchListResponseWire, MenuWatchResponseWire, OperationId, RemoveItemsRequestWire,
-    SessionCredentials, TRANSCRIPTION_CHANNELS, TRANSCRIPTION_CLIENT_ERROR_KINDS,
-    TRANSCRIPTION_MAX_AUDIO_BYTES, TRANSCRIPTION_MAX_DURATION_SECONDS,
-    TRANSCRIPTION_MAX_LANGUAGE_CHARACTERS, TRANSCRIPTION_MAX_REQUEST_BYTES,
-    TRANSCRIPTION_SAMPLE_WIDTH_BYTES, TRANSCRIPTION_WAV_HEADER_BYTES, Transcription,
-    TranscriptionPurpose, TranscriptionWire, UpdateItemStateRequestWire, required_text,
-    terminal_safe_text, transcription_sample_rate_supported,
+    ExclusionListResponseWire, ExclusionMutationRequestWire, GroceryCapability, GroceryEntityId,
+    GroceryListWire, GroceryMutationConfirmRequestWire, GroceryMutationProposalWire,
+    GroceryMutationResultWire, HealthContextWire, IntegrationAuthorizeRequestWire,
+    IntegrationAuthorizeResponseWire, IntegrationDisconnectResponseWire, IntegrationListWire,
+    IntegrationRedirectTargetWire, IntegrationSyncResponseWire, MenuWatchCreateRequestWire,
+    MenuWatchId, MenuWatchListResponseWire, MenuWatchResponseWire, OperationId,
+    RemoveItemsRequestWire, SelfRegistrationStatusWire, SessionCredentials, TRANSCRIPTION_CHANNELS,
+    TRANSCRIPTION_CLIENT_ERROR_KINDS, TRANSCRIPTION_MAX_AUDIO_BYTES,
+    TRANSCRIPTION_MAX_DURATION_SECONDS, TRANSCRIPTION_MAX_LANGUAGE_CHARACTERS,
+    TRANSCRIPTION_MAX_REQUEST_BYTES, TRANSCRIPTION_SAMPLE_WIDTH_BYTES,
+    TRANSCRIPTION_WAV_HEADER_BYTES, Transcription, TranscriptionPurpose, TranscriptionWire,
+    UpdateItemStateRequestWire, required_text, terminal_safe_text,
+    transcription_sample_rate_supported,
 };
 use reqwest::{Client, Method, RequestBuilder, Response, StatusCode, header};
 use serde::de::DeserializeOwned;
@@ -907,8 +912,126 @@ impl CapabilityPort for HttpService {
         Box::pin(async move {
             self.discover_capabilities(cancellation)
                 .await
-                .map(CapabilitySnapshot::from_wire)
+                .map(capability_snapshot_from_wire)
         })
+    }
+}
+
+impl MenuWatchPort for HttpService {
+    fn list(
+        &self,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<MenuWatchList, PortError>> {
+        Box::pin(async move {
+            self.menu_watch_list(&credentials, operation_id, cancellation)
+                .await
+                .map(menu_watch_list_from_wire)
+        })
+    }
+
+    fn create(
+        &self,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        request: CreateMenuWatchRequest,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<MenuWatchSnapshot, PortError>> {
+        Box::pin(async move {
+            self.menu_watch_create(
+                &credentials,
+                operation_id,
+                &menu_watch_request_to_wire(request),
+                cancellation,
+            )
+            .await
+            .map(menu_watch_snapshot_from_wire)
+        })
+    }
+
+    fn remove(
+        &self,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        watch_id: MenuWatchId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(async move {
+            self.menu_watch_delete(&credentials, operation_id, watch_id, cancellation)
+                .await
+        })
+    }
+}
+
+fn capability_snapshot_from_wire(wire: ApplicationCapabilitiesWire) -> CapabilitySnapshot {
+    let grocery = GroceryCapability::from_advertised(wire.application_version("grocery"));
+    let registration = match wire.self_registration.status {
+        SelfRegistrationStatusWire::Available => RegistrationAvailability::Available,
+        SelfRegistrationStatusWire::Disabled => RegistrationAvailability::Disabled,
+        SelfRegistrationStatusWire::Unavailable => RegistrationAvailability::Unavailable,
+    };
+    CapabilitySnapshot {
+        schema_version: wire.schema_version,
+        registration,
+        profile_readiness: wire.profile_readiness,
+        loopback_pkce: wire.authorization.loopback_pkce,
+        device_code: wire.authorization.device_code,
+        grocery,
+    }
+}
+
+fn menu_watch_request_to_wire(request: CreateMenuWatchRequest) -> MenuWatchCreateRequestWire {
+    MenuWatchCreateRequestWire {
+        restaurant_id: request.restaurant_id,
+        cadence: request.cadence,
+        notify: request.notify,
+        menu_url: request.menu_url,
+        confirm_menu_url: request.confirm_menu_url,
+        tz: request.tz,
+    }
+}
+
+fn menu_watch_list_from_wire(wire: MenuWatchListResponseWire) -> MenuWatchList {
+    MenuWatchList {
+        watches: wire
+            .watches
+            .into_iter()
+            .map(menu_watch_snapshot_from_wire)
+            .collect(),
+        count: wire.count,
+    }
+}
+
+fn menu_watch_snapshot_from_wire(wire: MenuWatchResponseWire) -> MenuWatchSnapshot {
+    MenuWatchSnapshot {
+        id: wire.id,
+        restaurant_id: wire.restaurant_id,
+        cadence: wire.cadence,
+        tz: wire.tz,
+        active: wire.active,
+        notify: wire.notify,
+        next_run_at: wire.next_run_at,
+        last_run_at: wire.last_run_at,
+        last_snapshot_id: wire.last_snapshot_id,
+        created_at: wire.created_at,
+        menu_url: wire.menu_url,
+        identity_verdict: wire.identity_verdict,
+        identity_confidence: wire.identity_confidence,
+        identity_reasoning: wire.identity_reasoning,
+        identity_confirmed: wire.identity_confirmed,
+        last_change: wire.last_change.map(|change| MenuWatchChangeEvent {
+            changed_at: change.changed_at,
+            previous_snapshot_id: change.previous_snapshot_id,
+            new_snapshot_id: change.new_snapshot_id,
+            summary: MenuWatchChangeSummary {
+                added: change.summary.added,
+                removed: change.summary.removed,
+                modified: change.summary.modified,
+                price_increases: change.summary.price_increases,
+                price_decreases: change.summary.price_decreases,
+            },
+        }),
     }
 }
 

@@ -1137,6 +1137,7 @@ version = "0.5.0"
 dependencies = [
  "heyfood-core",
  "proptest",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-util",

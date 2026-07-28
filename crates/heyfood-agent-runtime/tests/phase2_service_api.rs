@@ -1,14 +1,16 @@
 use std::time::Duration;
 
 use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
-use heyfood_application::CapabilitySnapshot;
+use heyfood_application::{
+    CapabilitySnapshot, DiscoverCapabilities, ListMenuWatches, RegistrationAvailability,
+};
 use heyfood_core::{
     AccountId, AddItemsRequestWire, CredentialVersion, ExclusionMutationRequestWire,
-    GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId, GroceryItemInputWire,
-    GroceryItemStateWire, GroceryListVersion, GroceryMutationConfirmRequestWire,
-    MenuWatchCreateRequestWire, NetworkPolicy, OperationId, RemoveItemsRequestWire, RestaurantId,
-    SensitiveString, ServiceUrl, SessionCredentials, TranscriptionPurpose,
-    UpdateItemStateRequestWire, WatchCadenceWire, WatchHour, WatchWeekday,
+    GroceryCapability, GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId,
+    GroceryItemInputWire, GroceryItemStateWire, GroceryListVersion,
+    GroceryMutationConfirmRequestWire, MenuWatchCreateRequestWire, NetworkPolicy, OperationId,
+    RemoveItemsRequestWire, RestaurantId, SensitiveString, ServiceUrl, SessionCredentials,
+    TranscriptionPurpose, UpdateItemStateRequestWire, WatchCadenceWire, WatchHour, WatchWeekday,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -56,20 +58,14 @@ fn fixture_wav() -> Vec<u8> {
 }
 
 fn capabilities(version: Option<&str>) -> CapabilitySnapshot {
-    let mut applications = serde_json::Map::new();
-    if let Some(version) = version {
-        applications.insert("grocery".into(), Value::String(version.into()));
+    CapabilitySnapshot {
+        schema_version: 1,
+        registration: RegistrationAvailability::Disabled,
+        profile_readiness: true,
+        loopback_pkce: true,
+        device_code: true,
+        grocery: GroceryCapability::from_advertised(version),
     }
-    CapabilitySnapshot::from_wire(
-        serde_json::from_value(json!({
-            "schema_version": 1,
-            "self_registration": {"status": "disabled", "regions": [], "identity_methods": []},
-            "authorization": {"loopback_pkce": true, "device_code": true, "identity_methods": []},
-            "profile_readiness": true,
-            "application_capabilities": applications,
-        }))
-        .unwrap(),
-    )
 }
 
 async fn fixture_service() -> (TcpListener, HttpService) {
@@ -193,6 +189,64 @@ fn menu_watch_create_request() -> MenuWatchCreateRequestWire {
 }
 
 #[tokio::test]
+async fn menu_watch_application_port_maps_the_frozen_nested_response() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("GET /v1/menu/watch "));
+        respond(
+            &mut socket,
+            200,
+            json!({
+                "watches": [{
+                    "id": "00000000-0000-4000-8000-000000000010",
+                    "restaurant_id": "00000000-0000-4000-8000-000000000456",
+                    "cadence": {"weekday": 3, "hour": 9},
+                    "tz": "America/Chicago",
+                    "active": true,
+                    "notify": true,
+                    "next_run_at": "2026-07-30T14:00:00Z",
+                    "last_run_at": "2026-07-24T14:05:00Z",
+                    "last_snapshot_id": "snapshot-new",
+                    "created_at": "2026-07-23T12:00:00Z",
+                    "menu_url": "https://ordering.example/abby",
+                    "identity_verdict": "verified",
+                    "identity_confidence": 0.97,
+                    "identity_reasoning": "name and location matched",
+                    "identity_confirmed": true,
+                    "last_change": {
+                        "changed_at": "2026-07-24T14:05:00Z",
+                        "previous_snapshot_id": "snapshot-old",
+                        "new_snapshot_id": "snapshot-new",
+                        "summary": {
+                            "added": 17,
+                            "removed": 12,
+                            "modified": 50,
+                            "price_increases": 50,
+                            "price_decreases": 0
+                        }
+                    }
+                }],
+                "count": 1
+            }),
+        )
+        .await;
+    });
+
+    let watches = ListMenuWatches::new(&service)
+        .execute(credentials(), OperationId::new(), CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(watches.count, 1);
+    let change = watches.watches[0].last_change.as_ref().unwrap();
+    assert_eq!(change.summary.added, 17);
+    assert_eq!(change.summary.price_increases, 50);
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn capability_discovery_gates_typed_grocery_reads() {
     let (listener, service) = fixture_service().await;
     let server = tokio::spawn(async move {
@@ -234,11 +288,10 @@ async fn capability_discovery_gates_typed_grocery_reads() {
         .await;
     });
 
-    let advertised = service
-        .discover_capabilities(CancellationToken::new())
+    let advertised = DiscoverCapabilities::new(&service)
+        .execute(CancellationToken::new())
         .await
         .unwrap();
-    let advertised = CapabilitySnapshot::from_wire(advertised);
     let list = service
         .grocery_list(
             &advertised,

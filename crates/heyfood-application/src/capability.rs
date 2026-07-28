@@ -1,6 +1,6 @@
 //! Renderer-neutral capability discovery.
 
-use heyfood_core::{ApplicationCapabilitiesWire, GroceryCapability, SelfRegistrationStatusWire};
+use heyfood_core::GroceryCapability;
 use tokio_util::sync::CancellationToken;
 
 use crate::{BoxFuture, PortError};
@@ -20,25 +20,6 @@ pub struct CapabilitySnapshot {
     pub loopback_pkce: bool,
     pub device_code: bool,
     pub grocery: GroceryCapability,
-}
-
-impl CapabilitySnapshot {
-    #[must_use]
-    pub fn from_wire(wire: ApplicationCapabilitiesWire) -> Self {
-        let registration = match wire.self_registration.status {
-            SelfRegistrationStatusWire::Available => RegistrationAvailability::Available,
-            SelfRegistrationStatusWire::Disabled => RegistrationAvailability::Disabled,
-            SelfRegistrationStatusWire::Unavailable => RegistrationAvailability::Unavailable,
-        };
-        Self {
-            schema_version: wire.schema_version,
-            registration,
-            profile_readiness: wire.profile_readiness,
-            loopback_pkce: wire.authorization.loopback_pkce,
-            device_code: wire.authorization.device_code,
-            grocery: GroceryCapability::from_advertised(wire.application_version("grocery")),
-        }
-    }
 }
 
 pub trait CapabilityPort: Send + Sync {
@@ -76,10 +57,6 @@ impl<'a> DiscoverCapabilities<'a> {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use heyfood_core::{
-        AuthorizationCapabilityWire, IdentityMethodWire, SelfRegistrationCapabilityWire,
-    };
-
     use super::*;
 
     struct FakeCapabilityPort {
@@ -107,32 +84,6 @@ mod tests {
             device_code: false,
             grocery: GroceryCapability::V1,
         }
-    }
-
-    #[test]
-    fn wire_conversion_keeps_only_renderer_neutral_capability_state() {
-        let snapshot = CapabilitySnapshot::from_wire(ApplicationCapabilitiesWire {
-            schema_version: 1,
-            self_registration: SelfRegistrationCapabilityWire {
-                status: SelfRegistrationStatusWire::Disabled,
-                regions: vec!["US".into()],
-                identity_methods: vec![IdentityMethodWire::Email],
-            },
-            authorization: AuthorizationCapabilityWire {
-                loopback_pkce: true,
-                device_code: true,
-                identity_methods: vec![IdentityMethodWire::Email],
-            },
-            profile_readiness: true,
-            application_capabilities: [("grocery".into(), "v1".into())].into_iter().collect(),
-        });
-
-        assert_eq!(snapshot.schema_version, 1);
-        assert_eq!(snapshot.registration, RegistrationAvailability::Disabled);
-        assert!(snapshot.profile_readiness);
-        assert!(snapshot.loopback_pkce);
-        assert!(snapshot.device_code);
-        assert_eq!(snapshot.grocery, GroceryCapability::V1);
     }
 
     #[tokio::test]

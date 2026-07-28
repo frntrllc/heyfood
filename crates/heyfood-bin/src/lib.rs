@@ -6,8 +6,9 @@ use std::{fmt, io, sync::Arc, time::Duration};
 
 use heyfood_agent_runtime::{GroceryExport, HttpService};
 use heyfood_application::{
-    AudioCapturePort, CapabilitySnapshot, DiscoverCapabilities, EnsureSession, EnsureSessionError,
-    EnsureSessionOutcome, RefreshPolicy, RunTurnOutcome, ServicePort, TurnContext, TurnRequest,
+    AudioCapturePort, CapabilitySnapshot, CreateMenuWatch, CreateMenuWatchRequest,
+    DiscoverCapabilities, EnsureSession, EnsureSessionError, EnsureSessionOutcome, ListMenuWatches,
+    RefreshPolicy, RemoveMenuWatch, RunTurnOutcome, ServicePort, TurnContext, TurnRequest,
     execute_one_shot_turn,
 };
 use heyfood_cli::{
@@ -19,11 +20,10 @@ use heyfood_cli::{
 use heyfood_core::{
     AddItemsRequestWire, AgentConfirmationCommandWire, AgentEvent, ExclusionMutationRequestWire,
     GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId, GroceryItemInputWire,
-    GroceryListVersion, GroceryMutationConfirmRequestWire, ImportedPythonState,
-    MenuWatchCreateRequestWire, MenuWatchId, OnboardingProfileInput, OperationId,
-    RemoveItemsRequestWire, RestaurantId, SessionCredentials, SessionSnapshot,
-    TranscriptionPurpose, UpdateItemStateRequestWire, WatchCadenceWire, WatchHour, WatchWeekday,
-    terminal_safe_text,
+    GroceryListVersion, GroceryMutationConfirmRequestWire, ImportedPythonState, MenuWatchId,
+    OnboardingProfileInput, OperationId, RemoveItemsRequestWire, RestaurantId, SessionCredentials,
+    SessionSnapshot, TranscriptionPurpose, UpdateItemStateRequestWire, WatchCadenceWire, WatchHour,
+    WatchWeekday, terminal_safe_text,
 };
 use heyfood_platform::{NativeSignalSource, SensitiveExportWriter, SignalEvent};
 use heyfood_tui::{Effect, ExitReason, PanelRequest, RuntimeEvent, TuiError, VoiceAvailability};
@@ -763,9 +763,8 @@ impl<'a> OneShotExecutor<'a> {
     ) -> Result<String, OneShotError> {
         match command {
             MenuWatchCommand::List => {
-                let watches = self
-                    .service
-                    .menu_watch_list(self.credentials, OperationId::new(), cancellation)
+                let watches = ListMenuWatches::new(self.service)
+                    .execute(self.credentials.clone(), OperationId::new(), cancellation)
                     .await?;
                 Ok(render_menu_watch_list(&watches, self.output_mode))
             }
@@ -778,12 +777,11 @@ impl<'a> OneShotExecutor<'a> {
                     .map_err(|message| OneShotError::new("menu_watch_weekday", message))?;
                 let hour = WatchHour::new(arguments.hour)
                     .map_err(|message| OneShotError::new("menu_watch_hour", message))?;
-                let watch = self
-                    .service
-                    .menu_watch_create(
-                        self.credentials,
+                let watch = CreateMenuWatch::new(self.service)
+                    .execute(
+                        self.credentials.clone(),
                         OperationId::new(),
-                        &MenuWatchCreateRequestWire {
+                        CreateMenuWatchRequest {
                             restaurant_id,
                             cadence: WatchCadenceWire { weekday, hour },
                             notify: arguments.notify,
@@ -799,8 +797,13 @@ impl<'a> OneShotExecutor<'a> {
             MenuWatchCommand::Remove(arguments) => {
                 let watch_id = MenuWatchId::parse(&arguments.watch_id)
                     .map_err(|message| OneShotError::new("menu_watch_id", message))?;
-                self.service
-                    .menu_watch_delete(self.credentials, OperationId::new(), watch_id, cancellation)
+                RemoveMenuWatch::new(self.service)
+                    .execute(
+                        self.credentials.clone(),
+                        OperationId::new(),
+                        watch_id,
+                        cancellation,
+                    )
                     .await?;
                 if self.output_mode == OutputMode::Json {
                     render_json(&json!({
@@ -2508,8 +2511,8 @@ async fn run_interactive_panel(
             Ok(output)
         }
         PanelRequest::Watch => {
-            let watches = service
-                .menu_watch_list(&credentials, OperationId::new(), cancellation)
+            let watches = ListMenuWatches::new(service.as_ref())
+                .execute(credentials, OperationId::new(), cancellation)
                 .await
                 .map_err(panel_error)?;
             Ok(render_menu_watch_list(&watches, OutputMode::HumanPlain))

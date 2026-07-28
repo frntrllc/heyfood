@@ -8,12 +8,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use heyfood_application::render_household_menu;
+use heyfood_application::{MenuWatchList, MenuWatchSnapshot, render_household_menu};
 use heyfood_core::{
     ExclusionListResponseWire, GroceryDecisionWire, GroceryItemStateWire, GroceryListWire,
     GroceryMutationProposalWire, GrocerySafetyStatus, HealthContextWire, HealthFreshnessStatus,
-    HealthProvider, MenuWatchListResponseWire, MenuWatchResponseWire, ProfileStatus, WatchWeekday,
-    terminal_safe_text,
+    HealthProvider, ProfileStatus, WatchWeekday, terminal_safe_text,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -1062,7 +1061,7 @@ pub fn render_health_context(context: &HealthContextWire, mode: OutputMode) -> S
 }
 
 #[must_use]
-pub fn render_menu_watch(watch: &MenuWatchResponseWire, mode: OutputMode) -> String {
+pub fn render_menu_watch(watch: &MenuWatchSnapshot, mode: OutputMode) -> String {
     if mode == OutputMode::Json {
         return render_json(watch).expect("Menu Watch DTO is serializable");
     }
@@ -1070,7 +1069,7 @@ pub fn render_menu_watch(watch: &MenuWatchResponseWire, mode: OutputMode) -> Str
 }
 
 #[must_use]
-pub fn render_menu_watch_list(watches: &MenuWatchListResponseWire, mode: OutputMode) -> String {
+pub fn render_menu_watch_list(watches: &MenuWatchList, mode: OutputMode) -> String {
     if mode == OutputMode::Json {
         return render_json(watches).expect("Menu Watch list DTO is serializable");
     }
@@ -1089,7 +1088,7 @@ pub fn render_menu_watch_list(watches: &MenuWatchListResponseWire, mode: OutputM
     output
 }
 
-fn render_menu_watch_entry(watch: &MenuWatchResponseWire, mode: OutputMode) -> String {
+fn render_menu_watch_entry(watch: &MenuWatchSnapshot, mode: OutputMode) -> String {
     let weekday = weekday_label(watch.cadence.weekday);
     let status = if watch.active { "active" } else { "inactive" };
     let notification = if watch.notify {
@@ -1484,36 +1483,41 @@ mod registration_tests {
 
     #[test]
     fn watch_human_output_preserves_source_identity_and_last_change() {
-        let watch: MenuWatchResponseWire = serde_json::from_value(json!({
-            "id": "00000000-0000-4000-8000-000000000010",
-            "restaurant_id": "0c1cb790-0000-4000-8000-000000000000",
-            "cadence": {"weekday": 3, "hour": 9},
-            "tz": "America/Chicago",
-            "active": true,
-            "notify": true,
-            "next_run_at": "2026-07-30T14:00:00Z",
-            "last_snapshot_id": "snapshot-new",
-            "created_at": "2026-07-23T12:00:00Z",
-            "menu_url": "https://ordering.example/abby\nforged",
-            "identity_verdict": "verified",
-            "identity_confidence": 0.97,
-            "identity_reasoning": "name and location matched\nforged",
-            "identity_confirmed": true,
-            "last_change": {
-                "changed_at": "2026-07-24T14:05:00Z",
-                "previous_snapshot_id": "snapshot-old",
-                "new_snapshot_id": "snapshot-new",
-                "summary": {
-                    "added": 17,
-                    "removed": 12,
-                    "modified": 50,
-                    "price_increases": 50,
-                    "price_decreases": 0
-                }
-            }
-        }))
-        .unwrap();
-
+        let watch = MenuWatchSnapshot {
+            id: heyfood_core::MenuWatchId::parse("00000000-0000-4000-8000-000000000010").unwrap(),
+            restaurant_id: heyfood_core::RestaurantId::parse(
+                "0c1cb790-0000-4000-8000-000000000000",
+            )
+            .unwrap(),
+            cadence: heyfood_core::WatchCadenceWire {
+                weekday: heyfood_core::WatchWeekday::new(3).unwrap(),
+                hour: heyfood_core::WatchHour::new(9).unwrap(),
+            },
+            tz: "America/Chicago".into(),
+            active: true,
+            notify: true,
+            next_run_at: "2026-07-30T14:00:00Z".into(),
+            last_run_at: None,
+            last_snapshot_id: Some("snapshot-new".into()),
+            created_at: "2026-07-23T12:00:00Z".into(),
+            menu_url: Some("https://ordering.example/abby\nforged".into()),
+            identity_verdict: Some("verified".into()),
+            identity_confidence: Some(0.97),
+            identity_reasoning: Some("name and location matched\nforged".into()),
+            identity_confirmed: Some(true),
+            last_change: Some(heyfood_application::MenuWatchChangeEvent {
+                changed_at: "2026-07-24T14:05:00Z".into(),
+                previous_snapshot_id: "snapshot-old".into(),
+                new_snapshot_id: "snapshot-new".into(),
+                summary: heyfood_application::MenuWatchChangeSummary {
+                    added: 17,
+                    removed: 12,
+                    modified: 50,
+                    price_increases: 50,
+                    price_decreases: 0,
+                },
+            }),
+        };
         let rendered = render_menu_watch(&watch, OutputMode::HumanPlain);
         for expected in [
             "  menu source: https://ordering.example/abby forged",

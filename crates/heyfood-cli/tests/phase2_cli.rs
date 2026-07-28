@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use clap::{CommandFactory, Parser};
+use heyfood_application::{MenuWatchList, MenuWatchSnapshot};
 use heyfood_cli::{
     Command, CommandLine, CompletionShell, GroceryCommand, GroceryDecisionArgument,
     MenuWatchCommand, OutputMode, WatchWeekdayArgument, render_grocery_exclusions,
@@ -8,8 +9,8 @@ use heyfood_cli::{
     write_completions,
 };
 use heyfood_core::{
-    ExclusionListResponseWire, GroceryListWire, GroceryMutationProposalWire,
-    MenuWatchListResponseWire,
+    ExclusionListResponseWire, GroceryListWire, GroceryMutationProposalWire, MenuWatchId,
+    RestaurantId, WatchCadenceWire, WatchHour, WatchWeekday,
 };
 use serde_json::json;
 
@@ -148,24 +149,30 @@ fn menu_watch_commands_are_typed_and_bounded() {
 
 #[test]
 fn menu_watch_renderer_surfaces_schedule_baseline_and_identity_evidence() {
-    let response: MenuWatchListResponseWire = serde_json::from_value(json!({
-        "watches": [{
-            "id": "00000000-0000-4000-8000-000000000010",
-            "restaurant_id": "0c1cb790-0000-4000-8000-000000000000",
-            "cadence": {"weekday": 3, "hour": 9},
-            "tz": "America/Chicago\u{1b}[2J",
-            "active": true,
-            "notify": true,
-            "next_run_at": "2026-07-30T14:00:00Z",
-            "last_run_at": null,
-            "last_snapshot_id": null,
-            "created_at": "2026-07-23T12:00:00Z",
-            "identity_verdict": "verified",
-            "identity_confidence": 0.92
+    let response = MenuWatchList {
+        watches: vec![MenuWatchSnapshot {
+            id: MenuWatchId::parse("00000000-0000-4000-8000-000000000010").unwrap(),
+            restaurant_id: RestaurantId::parse("0c1cb790-0000-4000-8000-000000000000").unwrap(),
+            cadence: WatchCadenceWire {
+                weekday: WatchWeekday::new(3).unwrap(),
+                hour: WatchHour::new(9).unwrap(),
+            },
+            tz: "America/Chicago\u{1b}[2J".into(),
+            active: true,
+            notify: true,
+            next_run_at: "2026-07-30T14:00:00Z".into(),
+            last_run_at: None,
+            last_snapshot_id: None,
+            created_at: "2026-07-23T12:00:00Z".into(),
+            menu_url: None,
+            identity_verdict: Some("verified".into()),
+            identity_confidence: Some(0.92),
+            identity_reasoning: None,
+            identity_confirmed: None,
+            last_change: None,
         }],
-        "count": 1
-    }))
-    .unwrap();
+        count: 1,
+    };
     let output = render_menu_watch_list(&response, OutputMode::HumanPlain);
     assert!(output.contains("Thursday 09:00 · active"));
     assert!(output.contains("awaiting first successful baseline"));
