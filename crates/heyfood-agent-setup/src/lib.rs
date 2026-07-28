@@ -823,7 +823,7 @@ fn harden_open_directory(directory: &CapDir, absolute_path: &Path) -> Result<(),
     {
         use std::os::unix::fs::PermissionsExt;
         directory
-            .set_symlink_permissions(
+            .set_permissions(
                 Path::new("."),
                 cap_std::fs::Permissions::from_std(fs::Permissions::from_mode(0o700)),
             )
