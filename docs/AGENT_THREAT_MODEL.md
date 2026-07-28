@@ -1,7 +1,8 @@
 # heyfood agent integration threat model
 
-**Status:** Phase 0 implementation checkpoint; independent review pending; no public agent integration is enabled
-**Baseline:** `d68091a9cf6341c2c9120ba9251a6e0dd79a9616`
+**Status:** v0.6.0 read/discovery integration qualified and public; agent
+mutations remain absent and separately gated
+**Release source:** `80d0b4b3defeb4ded45b890cd0b4bab85193e587`
 
 ## Assets and trust boundaries
 
@@ -71,21 +72,18 @@ decision must be collected on a separate controlling terminal before dispatch.
 Allocating a PTY to automate that ceremony is unsupported and a cold-agent
 hard failure.
 
-## Residual Phase 0 risks
+## Residual risks and deferred authority
 
-- The public Unix binary PTY test proves proposal stdin remains distinct from
-  the controlling-terminal decision. Exact installed-archive qualification
-  remains outstanding, including the Windows `CONIN$`/`CONOUT$` path.
-  Negative public-binary tests prove missing-terminal rejection occurs before
-  credential or network access.
-- The frozen hello.food out-of-band approval protocol still requires
-  independent security review. Its endpoint implementation and production
-  proof are Phase 4 gates, not Phase 0 implementation.
-- The application boundaries and exact-host setup matrix are implemented as
-  Phase 0 evidence, but still require independent exact-SHA review.
-- Agent Skill, setup, and read-only MCP implementation are present in the
-  v0.6.0 candidate and remain gated on exact-byte Phase 5 qualification.
-  Phase 4 mutation endpoints and tools remain absent.
+- Public macOS/Linux installed-archive qualification is complete. Windows
+  `CONIN$`/`CONOUT$` remains covered by ordinary source CI only; no Windows
+  archive or support claim ships in v0.6.0.
+- The application boundaries, exact-host setup matrix, Agent Skill, setup, and
+  read-only MCP implementation passed independent exact-SHA and exact-artifact
+  review for v0.6.0.
+- Phase 4 mutation endpoints and tools remain absent. The frozen hello.food
+  out-of-band approval protocol still requires its separate security,
+  implementation, and production qualification before any mutation tool can
+  be advertised.
 
 The machine-readable Phase 0 inventory distinguishes Phase 0 review and
 qualification blockers from intentionally deferred implementation.

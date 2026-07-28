@@ -1,9 +1,9 @@
 # heyfood agent-native interface and distribution plan
 
-**Status:** Draft v4 — Phases 0 and 1 are closed; the `v0.6.0` candidate
-implements Phases 2 and 3 and remains gated on the bounded Phase 5
-installed-artifact and independent-review requirements below. Phase 4
-mutations are neither implemented nor authorized.
+**Status:** Final v5 — the bounded read/discovery program shipped in `v0.6.0`.
+Phases 0–3 and the applicable Phase 5 installed-artifact/public-rollout gates
+are closed. Phase 4 mutations are neither implemented nor authorized and
+remain a separately gated future program.
 **Baseline:** `frntrllc/heyfood` `main` at
 `d68091a9cf6341c2c9120ba9251a6e0dd79a9616`
 **Companion contracts:** `docs/CLI_CONTRACT.md`,
@@ -12,14 +12,35 @@ mutations are neither implemented nor authorized.
 `docs/plans/2026-07-19-heyfood-rust-native-client-plan.md`
 **Primary users:** people using heyfood through a terminal, and authorized
 coding agents such as Codex or Claude Code acting under those people's control
-**Release boundary:** post-`v0.5.0`; this plan does not change the supported
-`v0.5.0` platform or capability contract
+**Released source:** `80d0b4b3defeb4ded45b890cd0b4bab85193e587`,
+tree `33abfcb2d1d72a983b0d7b75981eca985ad0035f`
+**Release boundary:** `v0.6.0` on macOS Apple Silicon, macOS Intel, Linux
+ARM64, and Linux x64
 
 **v0.6.0 release slice:** embedded self-description, receipt-bound Codex and
 Claude skill/MCP setup, and exactly six read/discovery MCP tools. The absence
 of every Phase 4 mutation tool is a required passing condition. A later
 mutation release requires separate authorization, implementation, evidence,
 and review; it is not a blocker for the read-only release slice.
+
+### v0.6.0 closure record — 2026-07-28
+
+The exact source above passed the full Rust workspace, strict Clippy,
+formatting, stable-contract checks, native credential matrices, protected
+macOS signing/notarization, four-platform installed-artifact qualification,
+and independent Rust-specialist and plan review. The immutable
+[public release](https://github.com/frntrllc/heyfood/releases/tag/v0.6.0)
+contains four attested archives plus `SHA256SUMS`; its
+[release workflow](https://github.com/frntrllc/heyfood/actions/runs/30358868346)
+and all four public download smokes passed. The hosted installer was pinned to
+these bytes by `frntrllc/hellofood` `0f15a7812a8d555ce34bf90ce380baf7b8dcd637`.
+Clean, receipt-bound user-scope setup and authenticated
+`heyfood_get_capabilities` calls passed on the qualified Codex CLI and Claude
+Code hosts.
+
+This closes only the v0.6.0 read/discovery slice. It does not authorize an
+agent mutation, TUI automation, Health, default-build voice, Windows
+distribution, or provider-token storage.
 
 ## Executive decision
 
@@ -1110,9 +1131,11 @@ not qualify the integration.
 - Skills and plugins declare the minimum and maximum compatible heyfood
   manifest versions. Incompatibility fails with an upgrade instruction, not a
   best-effort guess.
-- Phase 2/4 artifacts remain private candidates. Marketplace publication,
-  default setup activation, MCP mutation advertisement, and agent-support
-  claims require the applicable Phase 5 installed-artifact GO.
+- The Phase 2 Agent Skill and Phase 3 read-only MCP surface are embedded in
+  v0.6.0 and opt in through the qualified host-owned setup commands. Phase 4
+  mutation artifacts remain private future candidates; marketplace
+  publication, default setup activation, and MCP mutation advertisement
+  require a separate applicable Phase 5 GO.
 - Embedded guide, manifest, and schemas are built from the same source commit
   as the executable and covered by release attestations through the existing
   single-binary artifact.
@@ -1122,8 +1145,8 @@ not qualify the integration.
   token storage. Those remain independently gated product workstreams.
 - `heyfood mcp serve` is the documented long-lived JSON-RPC exception to the
   one-value JSON CLI contract; all other machine commands retain that contract.
-- `v0.5.0` remains supported as currently published; this plan does not
-  retroactively alter its archive, installer, or claims.
+- `v0.5.0` remains an immutable prior release; v0.6.0 does not retroactively
+  alter its archive or claims.
 
 ## Documentation deliverables
 
@@ -1178,23 +1201,28 @@ Phase 2 Agent Skill     Phase 3 read-only MCP
         \                  /
          \                /
           v              v
-       Phase 4 confirmed actions
+       Phase 5 read-only qualification
                     |
                     v
-       Phase 5 installed qualification
+         v0.6.0 truthful rollout
+
+Phase 4 confirmed actions (separate authorization)
                     |
                     v
-             truthful public rollout
+       future Phase 5 action qualification
 ```
 
 Phase 2 and Phase 3 may proceed in parallel after Phase 1 freezes the
-manifest/guide schema. Phase 4 requires both and a separate security GO.
+manifest/guide schema. The bounded read-only release can proceed directly to
+its Phase 5 qualification because an empty mutation set is a required gate.
+Phase 4 requires a separate authorization and security GO, followed by a new
+action-specific Phase 5 qualification.
 Documentation, schemas, and cold-agent fixtures evolve with each phase rather
 than being deferred to the release candidate.
 
 ## Definition of done
 
-The program is complete when:
+The bounded v0.6.0 read/discovery program is complete because:
 
 - an installed heyfood binary explains itself comprehensively and
   deterministically without network or repository access;
@@ -1202,10 +1230,10 @@ The program is complete when:
   supported skill/plugin mechanisms;
 - supported hosts can use typed MCP operations without shell-help
   reverse-engineering or TUI automation;
-- every mutation retains independently authenticated heyfood-controlled human
-  approval of the exact proposal, exact server preconditions, safe
-  cancellation, and uncertain-outcome reconciliation; ineligible hosts expose
-  no confirm tool;
+- no mutation tool is present or advertised; every future mutation remains
+  gated on independently authenticated heyfood-controlled approval of the
+  exact proposal, exact server preconditions, safe cancellation,
+  uncertain-outcome reconciliation, and a separate release review;
 - agent setup is opt-in, conflict-safe, reversible, and credential-free;
 - deferred capabilities remain truthful;
 - cold-agent installed-artifact tests pass across supported release targets;
