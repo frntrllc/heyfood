@@ -1208,6 +1208,29 @@ fn rollback_installed_skill(
     Ok(())
 }
 
+fn sync_anchored_directory(directory: &CapDir) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        // cap-std intentionally represents directory capabilities with O_PATH
+        // on Linux when available. Reopen "." relative to that capability to
+        // obtain a read-capable handle that supports fsync without returning
+        // to an ambient path.
+        directory.open(Path::new("."))?.into_std().sync_all()
+    }
+    #[cfg(windows)]
+    {
+        directory.try_clone()?.into_std_file().sync_all()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = directory;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "durable directory synchronization is unsupported",
+        ))
+    }
+}
+
 fn replace_private_file_anchored(path: &Path, bytes: &[u8]) -> Result<(), SetupError> {
     let parent = path.parent().ok_or_else(|| {
         SetupError::new(
@@ -1273,16 +1296,12 @@ fn replace_private_file_anchored(path: &Path, bytes: &[u8]) -> Result<(), SetupE
             "injected interruption after receipt rename",
         ));
     }
-    anchored_parent
-        .directory
-        .try_clone()
-        .and_then(|directory| directory.into_std_file().sync_all())
-        .map_err(|_| {
-            SetupError::uncertain(
-                "agent_setup_receipt_outcome_uncertain",
-                "the receipt was renamed but durable directory synchronization failed",
-            )
-        })
+    sync_anchored_directory(&anchored_parent.directory).map_err(|_| {
+        SetupError::uncertain(
+            "agent_setup_receipt_outcome_uncertain",
+            "the receipt was renamed but durable directory synchronization failed",
+        )
+    })
 }
 
 struct ReceiptExpectation<'a> {
@@ -2590,6 +2609,13 @@ mod tests {
         assert!(!first.changed);
         assert!(!environment.home_dir.exists());
         assert!(!environment.state_dir.exists());
+    }
+
+    #[test]
+    fn anchored_directory_durability_uses_a_syncable_handle() {
+        let root = scratch("directory-sync");
+        let directory = AnchoredDirectory::open(&root).unwrap();
+        sync_anchored_directory(&directory.directory).unwrap();
     }
 
     #[test]

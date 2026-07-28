@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 #![recursion_limit = "512"]
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 use std::time::Duration;
@@ -1083,9 +1083,41 @@ pub struct BoundedStdioTransport<R, W> {
     line: Vec<u8>,
     write: Arc<Mutex<Option<W>>>,
     request_slots: Arc<Semaphore>,
-    inflight: Arc<StdMutex<HashMap<RequestId, OwnedSemaphorePermit>>>,
-    cancelled: Arc<StdMutex<HashSet<RequestId>>>,
+    inflight: Arc<StdMutex<HashMap<RequestId, InflightRequest>>>,
     initialized_seen: bool,
+}
+
+struct InflightRequest {
+    _permit: OwnedSemaphorePermit,
+    cancellation_seen: bool,
+}
+
+fn complete_request(
+    inflight: &StdMutex<HashMap<RequestId, InflightRequest>>,
+    request_id: &RequestId,
+) {
+    inflight
+        .lock()
+        .expect("MCP request registry lock poisoned")
+        .remove(request_id);
+}
+
+fn admit_cancellation(
+    inflight: &StdMutex<HashMap<RequestId, InflightRequest>>,
+    request_id: &RequestId,
+) -> bool {
+    inflight
+        .lock()
+        .expect("MCP request registry lock poisoned")
+        .get_mut(request_id)
+        .is_some_and(|request| {
+            if request.cancellation_seen {
+                false
+            } else {
+                request.cancellation_seen = true;
+                true
+            }
+        })
 }
 
 impl<R, W> BoundedStdioTransport<R, W>
@@ -1101,7 +1133,6 @@ where
             write: Arc::new(Mutex::new(Some(write))),
             request_slots: Arc::new(Semaphore::new(MAX_OUTSTANDING_REQUESTS)),
             inflight: Arc::new(StdMutex::new(HashMap::new())),
-            cancelled: Arc::new(StdMutex::new(HashSet::new())),
             initialized_seen: false,
         }
     }
@@ -1151,7 +1182,6 @@ where
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
         let write = self.write.clone();
         let inflight = self.inflight.clone();
-        let cancelled = self.cancelled.clone();
         let completed = match &item {
             JsonRpcMessage::Response(response) => Some(response.id.clone()),
             JsonRpcMessage::Error(error) => error.id.clone(),
@@ -1162,14 +1192,7 @@ where
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
             let result = write_encoded_frame(write, encoded).await;
             if let Some(id) = completed {
-                inflight
-                    .lock()
-                    .expect("MCP request registry lock poisoned")
-                    .remove(&id);
-                cancelled
-                    .lock()
-                    .expect("MCP cancellation registry lock poisoned")
-                    .remove(&id);
+                complete_request(&inflight, &id);
             }
             result
         }
@@ -1260,7 +1283,13 @@ where
                         if inflight.contains_key(&id) {
                             true
                         } else {
-                            inflight.insert(id.clone(), permit);
+                            inflight.insert(
+                                id.clone(),
+                                InflightRequest {
+                                    _permit: permit,
+                                    cancellation_seen: false,
+                                },
+                            );
                             false
                         }
                     };
@@ -1298,19 +1327,7 @@ where
                             let Some(request_id) = cancelled.params.request_id.as_ref() else {
                                 continue;
                             };
-                            let active = self
-                                .inflight
-                                .lock()
-                                .expect("MCP request registry lock poisoned")
-                                .contains_key(request_id);
-                            if !active {
-                                continue;
-                            }
-                            let first = self
-                                .cancelled
-                                .lock()
-                                .expect("MCP cancellation registry lock poisoned")
-                                .insert(request_id.clone());
+                            let first = admit_cancellation(&self.inflight, request_id);
                             if first {
                                 return Some(message);
                             }
@@ -1812,6 +1829,46 @@ mod tests {
             rmcp::transport::Transport::<RoleServer>::receive(&mut transport).await,
             Some(JsonRpcMessage::Request(request)) if request.id == RequestId::Number(2)
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn request_completion_and_cancellation_leave_no_stale_registry_state() {
+        for sequence in 0..256 {
+            let request_id = RequestId::Number(sequence);
+            let inflight = Arc::new(StdMutex::new(HashMap::new()));
+            let permit = Arc::new(Semaphore::new(1))
+                .try_acquire_owned()
+                .expect("test request permit");
+            inflight.lock().unwrap().insert(
+                request_id.clone(),
+                InflightRequest {
+                    _permit: permit,
+                    cancellation_seen: false,
+                },
+            );
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+
+            std::thread::scope(|scope| {
+                let completion_registry = inflight.clone();
+                let completion_id = request_id.clone();
+                let completion_barrier = barrier.clone();
+                scope.spawn(move || {
+                    completion_barrier.wait();
+                    complete_request(&completion_registry, &completion_id);
+                });
+
+                let cancellation_registry = inflight.clone();
+                let cancellation_id = request_id.clone();
+                let cancellation_barrier = barrier.clone();
+                scope.spawn(move || {
+                    cancellation_barrier.wait();
+                    let _ = admit_cancellation(&cancellation_registry, &cancellation_id);
+                });
+            });
+
+            assert!(inflight.lock().unwrap().is_empty());
+            assert!(!admit_cancellation(&inflight, &request_id));
+        }
     }
 
     #[tokio::test(start_paused = true)]
