@@ -7,10 +7,10 @@
 |---|---|---|---|
 | Conversation | `ServicePort`, `RunTurn`, `execute_one_shot_turn` | Prompt shaping, household context, rendering, and interactive continuity remain in `heyfood-bin` | Preserve existing use case; extract context/controller ownership without changing fixtures |
 | Session refresh | `EnsureSession`, `CredentialPort` | Composition and scope routing remain in `heyfood-bin` | Retain; expose only through composed controllers |
-| Grocery | Deployed `GroceryReadPort`, renderer-neutral display/exclusion snapshots, and production read controllers; provisional authority-bearing `GroceryPort` plus internal `ReadActiveGroceryList` proof | Prepare/confirm still call concrete `HttpService`; the deployed active-list response cannot satisfy the authority-bearing port | Display read extraction complete; keep mutation authority separate until the backend supplies the frozen context fingerprint |
+| Grocery | Deployed read, export, and mutation ports with shared controllers; exact display DTOs plus opaque server-signed proposal/confirmation DTOs; provisional stronger `GroceryPort` remains separate | Argument parsing, controlling-terminal ceremony, proposal stdin, export persistence, and human/JSON rendering remain in CLI/bin | Current CLI extraction complete; do not activate the stronger provisional port until the backend supplies its frozen context fingerprint |
 | Menu Watch | `MenuWatchPort`; renderer-neutral snapshots and create request; list/create/remove controllers; production `HttpService` adapter | Argument parsing and human/JSON rendering remain in CLI/bin | Controller extraction complete; direct create/remove now require distinct controlling-terminal review before credentials or network |
 | Capability/status | `CapabilityPort`, `StatusPort`, renderer-neutral capability/status snapshots, `DiscoverCapabilities`, and `ReadStatus`; `HttpService` implements both production adapters | Human panel text remains in the binary | Controller extraction complete; rendering remains presentation-owned |
-| Household/profile context | `TurnContext` only | Imported-state parsing and profile downloads are in binary | Extract only the context assembly needed by shared workflows |
+| Household/profile context | `TurnContext`, `ServicePort`, and shared turn controllers | Imported-state parsing, profile downloads, and presentation are composition-owned | Existing conversational application seam is sufficient for Phase 0; later agent tools must reuse it |
 | Registration/login | Registration runtime plus binary orchestration | Browser/device handoff and durable replacement remain composition-owned | Inventory only; agent setup must not redefine auth |
 | Health | Provider-neutral types/port retained | Hidden runtime paths exist but public dispatch fails closed | Keep deferred and absent from agent tools |
 
@@ -18,11 +18,12 @@
 
 - `heyfood-application` does not depend on runtime, platform, CLI, TUI, or bin.
 - `heyfood-agent-runtime` implements `ServicePort`, `CapabilityPort`,
-  `StatusPort`, `GroceryReadPort`, and `MenuWatchPort`; Grocery prepare/confirm
-  operations remain inherent `HttpService` methods.
-- `heyfood-bin::OneShotExecutor` still accepts `&HttpService` for Grocery
-  prepare/confirm, preventing a fake authority-bearing Grocery service without
-  exercising the concrete runtime type.
+  `StatusPort`, `GroceryReadPort`, `GroceryExportPort`,
+  `GroceryMutationPort`, and `MenuWatchPort`.
+- `heyfood-bin::OneShotExecutor` remains the composition owner of the concrete
+  `HttpService`, but each in-scope workflow dispatches through an object-safe
+  application port/controller rather than calling a runtime operation
+  directly.
 - `InteractiveTurnDriver` has an object-safe conversational service and a
   second optional concrete `HttpService` specifically for panels and other
   workflows.
@@ -35,6 +36,10 @@
   interactive Grocery panel route through the deployed display-read
   controllers. Runtime conversion preserves the frozen JSON shape, including
   member safety, substitutions, and provenance.
+- One-shot Grocery prepare, confirmation, and export route through dedicated
+  application controllers and production adapters. The human CLI retains its
+  exact server proposal/confirmation wire and opaque signed token; no model or
+  agent surface is added.
 - One-shot Menu Watch read/create/remove and the interactive Watch panel now
   route through the same application controllers. The application snapshots
   preserve the frozen JSON representation, and the existing binary route test
@@ -46,14 +51,16 @@
   socket; positive exact-artifact PTY and Windows console qualification remain.
 - The deployed active-list REST shape does not contain the context fingerprint
   required by provisional `GroceryListSnapshot::preconditions`. A production
-  `GroceryPort` adapter cannot invent it. Phase 0 must either separate
-  renderer-neutral list reads from mutation-authority snapshots or obtain an
-  authoritative backend shape; it must not weaken the frozen preconditions.
+  `GroceryPort` adapter cannot invent it. The stronger provisional port stays
+  inactive and separate from the exact deployed human-CLI port; later work
+  must obtain an authoritative backend shape before using that stronger
+  contract.
 
 The internal authority-bearing Grocery fake-port controller proves object-safe
 dependency direction and cancellation only. The deployed display-read seam
 has a production HTTP adapter, exact JSON mapping evidence, and pre-dispatch
-cancellation tests. Capability and composed status discovery have production
-adapters plus cancellation and composition tests. The next Grocery increment
-must obtain or freeze the real mutation-authority shape; it must not infer
-authority from display data.
+cancellation tests. Deployed Grocery proposal/confirmation and export also
+have application controllers, production adapters, pre-dispatch cancellation
+tests, and existing public-binary route coverage. Capability and composed
+status discovery have production adapters plus cancellation and composition
+tests.

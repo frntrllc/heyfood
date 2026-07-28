@@ -22,7 +22,6 @@ pub use registration::{
     ReauthorizationStatus, RegistrationClient, RegistrationError, RegistrationOutcome,
     StagedReauthorization,
 };
-pub use service_api::GroceryExport;
 pub use sse::SseEventStream;
 
 /// The package version shared by the native workspace.

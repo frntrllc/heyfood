@@ -5,10 +5,12 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use heyfood_core::{
-    AccountId, ContextFingerprint, FrozenGroceryPreconditions, GroceryCapability,
-    GroceryConfirmation, GroceryConfirmationCommand, GroceryEntityId, GroceryItemStateWire,
-    GroceryListVersion, GrocerySafetyStatus, HouseholdContextHashVersion, OperationId,
-    SensitiveString, SessionCredentials,
+    AccountId, AddItemsRequestWire, ContextFingerprint, ExclusionMutationRequestWire,
+    FrozenGroceryPreconditions, GroceryCapability, GroceryConfirmation, GroceryConfirmationCommand,
+    GroceryEntityId, GroceryItemStateWire, GroceryListVersion, GroceryListWire,
+    GroceryMutationConfirmRequestWire, GroceryMutationProposalWire, GroceryMutationResultWire,
+    GrocerySafetyStatus, HouseholdContextHashVersion, OperationId, RemoveItemsRequestWire,
+    SensitiveString, SessionCredentials, UpdateItemStateRequestWire,
 };
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -74,6 +76,26 @@ pub struct GroceryDisplayList {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct GroceryExclusions {
     pub exclusions: Vec<String>,
+}
+
+#[derive(Clone, PartialEq)]
+pub enum GroceryExport {
+    Json(GroceryListWire),
+    Markdown(String),
+    Text(String),
+}
+
+impl std::fmt::Debug for GroceryExport {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Json(list) => formatter
+                .debug_struct("GroceryExport::Json")
+                .field("item_count", &list.items.len())
+                .finish(),
+            Self::Markdown(_) => formatter.write_str("GroceryExport::Markdown([REDACTED])"),
+            Self::Text(_) => formatter.write_str("GroceryExport::Text([REDACTED])"),
+        }
+    }
 }
 
 /// Deployed display-read seam. Unlike `GroceryPort`, this deliberately carries
@@ -151,6 +173,194 @@ impl<'a> ReadGroceryExclusions<'a> {
         self.port
             .read_exclusions(capabilities, credentials, operation_id, cancellation)
             .await
+    }
+}
+
+pub trait GroceryExportPort: Send + Sync {
+    fn export(
+        &self,
+        capabilities: CapabilitySnapshot,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        list_id: GroceryEntityId,
+        format: String,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<GroceryExport, PortError>>;
+}
+
+pub struct ExportGroceryList<'a> {
+    port: &'a dyn GroceryExportPort,
+}
+
+impl<'a> ExportGroceryList<'a> {
+    #[must_use]
+    pub const fn new(port: &'a dyn GroceryExportPort) -> Self {
+        Self { port }
+    }
+
+    pub async fn execute(
+        &self,
+        capabilities: CapabilitySnapshot,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        list_id: GroceryEntityId,
+        format: String,
+        cancellation: CancellationToken,
+    ) -> Result<GroceryExport, PortError> {
+        ensure_grocery_v1(&capabilities)?;
+        if cancellation.is_cancelled() {
+            return Err(PortError::new(
+                "grocery_export_cancelled_before_dispatch",
+                "Grocery export was cancelled before dispatch",
+            ));
+        }
+        self.port
+            .export(
+                capabilities,
+                credentials,
+                operation_id,
+                list_id,
+                format,
+                cancellation,
+            )
+            .await
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub enum DeployedGroceryMutationRequest {
+    Add(AddItemsRequestWire),
+    Remove(RemoveItemsRequestWire),
+    UpdateState(UpdateItemStateRequestWire),
+    AddExclusion(ExclusionMutationRequestWire),
+    RemoveExclusion(ExclusionMutationRequestWire),
+}
+
+impl std::fmt::Debug for DeployedGroceryMutationRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let operation = match self {
+            Self::Add(_) => "add",
+            Self::Remove(_) => "remove",
+            Self::UpdateState(_) => "update_state",
+            Self::AddExclusion(_) => "add_exclusion",
+            Self::RemoveExclusion(_) => "remove_exclusion",
+        };
+        formatter
+            .debug_struct("DeployedGroceryMutationRequest")
+            .field("operation", &operation)
+            .field("payload", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Exact deployed Grocery proposal/confirmation seam used by the current
+/// human-terminal CLI. The server-signed confirmation token remains opaque and
+/// this port is not an agent authorization boundary.
+pub trait GroceryMutationPort: Send + Sync {
+    fn prepare(
+        &self,
+        capabilities: CapabilitySnapshot,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        request: DeployedGroceryMutationRequest,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<GroceryMutationProposalWire, PortError>>;
+
+    fn confirm(
+        &self,
+        capabilities: CapabilitySnapshot,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        request: GroceryMutationConfirmRequestWire,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<GroceryMutationResultWire, PortError>>;
+}
+
+pub struct PrepareGroceryMutation<'a> {
+    port: &'a dyn GroceryMutationPort,
+}
+
+impl<'a> PrepareGroceryMutation<'a> {
+    #[must_use]
+    pub const fn new(port: &'a dyn GroceryMutationPort) -> Self {
+        Self { port }
+    }
+
+    pub async fn execute(
+        &self,
+        capabilities: CapabilitySnapshot,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        request: DeployedGroceryMutationRequest,
+        cancellation: CancellationToken,
+    ) -> Result<GroceryMutationProposalWire, PortError> {
+        ensure_grocery_v1(&capabilities)?;
+        if cancellation.is_cancelled() {
+            return Err(PortError::new(
+                "grocery_prepare_cancelled_before_dispatch",
+                "Grocery proposal preparation was cancelled before dispatch",
+            ));
+        }
+        self.port
+            .prepare(
+                capabilities,
+                credentials,
+                operation_id,
+                request,
+                cancellation,
+            )
+            .await
+    }
+}
+
+pub struct ConfirmGroceryMutation<'a> {
+    port: &'a dyn GroceryMutationPort,
+}
+
+impl<'a> ConfirmGroceryMutation<'a> {
+    #[must_use]
+    pub const fn new(port: &'a dyn GroceryMutationPort) -> Self {
+        Self { port }
+    }
+
+    pub async fn execute(
+        &self,
+        capabilities: CapabilitySnapshot,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        request: GroceryMutationConfirmRequestWire,
+        cancellation: CancellationToken,
+    ) -> Result<GroceryMutationResultWire, PortError> {
+        ensure_grocery_v1(&capabilities)?;
+        if cancellation.is_cancelled() {
+            return Err(PortError::new(
+                "grocery_confirm_cancelled_before_dispatch",
+                "Grocery confirmation was cancelled before dispatch",
+            ));
+        }
+        self.port
+            .confirm(
+                capabilities,
+                credentials,
+                operation_id,
+                request,
+                cancellation,
+            )
+            .await
+    }
+}
+
+fn ensure_grocery_v1(capabilities: &CapabilitySnapshot) -> Result<(), PortError> {
+    match &capabilities.grocery {
+        GroceryCapability::V1 => Ok(()),
+        GroceryCapability::Unavailable => Err(PortError::new(
+            "grocery_capability_unavailable",
+            "Grocery is not advertised by this deployment",
+        )),
+        GroceryCapability::UnsupportedVersion(_) => Err(PortError::new(
+            "grocery_capability_unsupported",
+            "Grocery advertises an unsupported contract version",
+        )),
     }
 }
 
@@ -337,7 +547,9 @@ impl GroceryItemReferenceCache {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use heyfood_core::{CredentialVersion, GroceryCapability};
+    use heyfood_core::{
+        CredentialVersion, GroceryCapability, GroceryConfirmationToken, GroceryDecisionWire,
+    };
 
     use super::*;
     use crate::RegistrationAvailability;
@@ -376,6 +588,44 @@ mod tests {
             _operation_id: OperationId,
             _cancellation: CancellationToken,
         ) -> BoxFuture<'_, Result<GroceryExclusions, PortError>> {
+            self.called()
+        }
+    }
+
+    impl GroceryExportPort for RejectingReadPort {
+        fn export(
+            &self,
+            _capabilities: CapabilitySnapshot,
+            _credentials: SessionCredentials,
+            _operation_id: OperationId,
+            _list_id: GroceryEntityId,
+            _format: String,
+            _cancellation: CancellationToken,
+        ) -> BoxFuture<'_, Result<GroceryExport, PortError>> {
+            self.called()
+        }
+    }
+
+    impl GroceryMutationPort for RejectingReadPort {
+        fn prepare(
+            &self,
+            _capabilities: CapabilitySnapshot,
+            _credentials: SessionCredentials,
+            _operation_id: OperationId,
+            _request: DeployedGroceryMutationRequest,
+            _cancellation: CancellationToken,
+        ) -> BoxFuture<'_, Result<GroceryMutationProposalWire, PortError>> {
+            self.called()
+        }
+
+        fn confirm(
+            &self,
+            _capabilities: CapabilitySnapshot,
+            _credentials: SessionCredentials,
+            _operation_id: OperationId,
+            _request: GroceryMutationConfirmRequestWire,
+            _cancellation: CancellationToken,
+        ) -> BoxFuture<'_, Result<GroceryMutationResultWire, PortError>> {
             self.called()
         }
     }
@@ -440,6 +690,97 @@ mod tests {
             exclusions_error.code,
             "grocery_exclusions_cancelled_before_dispatch"
         );
+        assert_eq!(port.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn deployed_export_and_mutation_controllers_stop_before_cancelled_dispatch() {
+        let port = RejectingReadPort {
+            calls: AtomicUsize::new(0),
+        };
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let list_id = GroceryEntityId::parse("00000000-0000-4000-8000-000000000001").unwrap();
+        let version = GroceryListVersion::new(1).unwrap();
+
+        let export_error = ExportGroceryList::new(&port)
+            .execute(
+                capabilities(),
+                credentials(),
+                OperationId::new(),
+                list_id,
+                "json".into(),
+                cancellation.child_token(),
+            )
+            .await
+            .unwrap_err();
+        let prepare_error = PrepareGroceryMutation::new(&port)
+            .execute(
+                capabilities(),
+                credentials(),
+                OperationId::new(),
+                DeployedGroceryMutationRequest::Add(AddItemsRequestWire {
+                    list_id,
+                    expected_version: version,
+                    items: Vec::new(),
+                }),
+                cancellation.child_token(),
+            )
+            .await
+            .unwrap_err();
+        let confirm_error = match ConfirmGroceryMutation::new(&port)
+            .execute(
+                capabilities(),
+                credentials(),
+                OperationId::new(),
+                GroceryMutationConfirmRequestWire {
+                    confirmation_token: GroceryConfirmationToken::parse("x".repeat(32)).unwrap(),
+                    decision: GroceryDecisionWire::Cancel,
+                },
+                cancellation,
+            )
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("cancelled Grocery confirmation must not dispatch"),
+        };
+
+        assert_eq!(
+            export_error.code,
+            "grocery_export_cancelled_before_dispatch"
+        );
+        assert_eq!(
+            prepare_error.code,
+            "grocery_prepare_cancelled_before_dispatch"
+        );
+        assert_eq!(
+            confirm_error.code,
+            "grocery_confirm_cancelled_before_dispatch"
+        );
+        assert_eq!(port.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn deployed_controllers_reject_unavailable_capability_before_dispatch() {
+        let port = RejectingReadPort {
+            calls: AtomicUsize::new(0),
+        };
+        let mut unavailable = capabilities();
+        unavailable.grocery = GroceryCapability::Unavailable;
+
+        let error = ExportGroceryList::new(&port)
+            .execute(
+                unavailable,
+                credentials(),
+                OperationId::new(),
+                GroceryEntityId::parse("00000000-0000-4000-8000-000000000001").unwrap(),
+                "json".into(),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "grocery_capability_unavailable");
         assert_eq!(port.calls.load(Ordering::SeqCst), 0);
     }
 }

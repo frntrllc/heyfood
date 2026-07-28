@@ -1,6 +1,6 @@
 # heyfood agent integration threat model
 
-**Status:** Phase 0 review draft; no public agent integration is enabled  
+**Status:** Phase 0 implementation checkpoint; independent review pending; no public agent integration is enabled
 **Baseline:** `d68091a9cf6341c2c9120ba9251a6e0dd79a9616`
 
 ## Assets and trust boundaries
@@ -72,13 +72,17 @@ hard failure.
 
 ## Residual Phase 0 risks
 
-- Current Grocery proposal and confirmation commands do not yet implement the
-  separate controlling-terminal ceremony.
-- `OneShotExecutor` still couples multiple application workflows to concrete
-  `HttpService`.
-- There is no reviewed hello.food out-of-band approval endpoint yet.
-- No Agent Skill, MCP implementation, host setup matrix, or installed-agent
-  qualification exists.
+- Positive installed-artifact qualification of the separate
+  controlling-terminal ceremony remains outstanding, including the Windows
+  `CONIN$`/`CONOUT$` path. Negative public-binary tests already prove
+  missing-terminal rejection occurs before credential or network access.
+- The frozen hello.food out-of-band approval protocol still requires
+  independent security review. Its endpoint implementation and production
+  proof are Phase 4 gates, not Phase 0 implementation.
+- The application boundaries and exact-host setup matrix are implemented as
+  Phase 0 evidence, but still require independent exact-SHA review.
+- Agent Skill, setup, and MCP implementation remain deliberately absent until
+  their later authorized phases.
 
-These are blockers, not accepted risks. The machine-readable Phase 0 inventory
-tracks their closure.
+The machine-readable Phase 0 inventory distinguishes Phase 0 review and
+qualification blockers from intentionally deferred implementation.

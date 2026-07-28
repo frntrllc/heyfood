@@ -43,23 +43,18 @@
         "docs/AGENT_APPROVAL_CONTRACT.md"
       ],
       "blockers": [
-        "Independent security review is pending.",
-        "The companion hello.food out-of-band approval contract is not implemented or production-proven."
+        "Independent security review of the frozen companion hello.food out-of-band approval contract is pending; endpoint implementation and production proof remain Phase 4 gates."
       ]
     },
     {
       "id": "AN-P0-04-application-boundaries",
-      "status": "in_progress",
+      "status": "satisfied",
       "owner": "lead-rust",
       "evidence": [
         "docs/architecture/0001-agent-native-application-boundaries.md",
         "docs/release-evidence/agent-native-phase0/application-seam-inventory.md"
       ],
-      "blockers": [
-        "Deployed Grocery display/exclusion reads now use GroceryReadPort and shared controllers; prepare/confirm still lack an authority-bearing application adapter.",
-        "The deployed active-list wire lacks the context fingerprint required by the provisional GroceryListSnapshot, so mutation authority remains deliberately separate and blocked rather than inferred from display data.",
-        "Household context and presentation orchestration remain in heyfood-bin."
-      ]
+      "blockers": []
     },
     {
       "id": "AN-P0-05-thin-composition-proof",
@@ -135,8 +130,8 @@
   ],
   "summary": {
     "requirements_total": 10,
-    "satisfied": 4,
-    "in_progress_or_draft": 5,
+    "satisfied": 5,
+    "in_progress_or_draft": 4,
     "pending": 1,
     "unresolved_p0_p1_findings": null,
     "phase_exit_authorized": false

@@ -4,13 +4,15 @@
 
 use std::{fmt, io, sync::Arc, time::Duration};
 
-use heyfood_agent_runtime::{GroceryExport, HttpService};
+use heyfood_agent_runtime::HttpService;
 use heyfood_application::{
-    AudioCapturePort, CapabilitySnapshot, CreateMenuWatch, CreateMenuWatchRequest,
-    DiscoverCapabilities, EnsureSession, EnsureSessionError, EnsureSessionOutcome, ListMenuWatches,
-    OptionalCapabilityStatus, ProfileReadinessStatus, ReadActiveGroceryDisplay,
-    ReadGroceryExclusions, ReadStatus, RefreshPolicy, RemoveMenuWatch, RunTurnOutcome, ServicePort,
-    TurnContext, TurnRequest, VoiceReadinessStatus, execute_one_shot_turn,
+    AudioCapturePort, CapabilitySnapshot, ConfirmGroceryMutation, CreateMenuWatch,
+    CreateMenuWatchRequest, DeployedGroceryMutationRequest, DiscoverCapabilities, EnsureSession,
+    EnsureSessionError, EnsureSessionOutcome, ExportGroceryList, GroceryExport, ListMenuWatches,
+    OptionalCapabilityStatus, PrepareGroceryMutation, ProfileReadinessStatus,
+    ReadActiveGroceryDisplay, ReadGroceryExclusions, ReadStatus, RefreshPolicy, RemoveMenuWatch,
+    RunTurnOutcome, ServicePort, TurnContext, TurnRequest, VoiceReadinessStatus,
+    execute_one_shot_turn,
 };
 use heyfood_cli::{
     AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, MenuWatchCommand,
@@ -438,7 +440,6 @@ impl<'a> OneShotExecutor<'a> {
         let capabilities = DiscoverCapabilities::new(self.service)
             .execute(cancellation.child_token())
             .await?;
-        HttpService::require_grocery_v1(&capabilities)?;
         match command {
             GroceryCommand::List => {
                 let list = ReadActiveGroceryDisplay::new(self.service)
@@ -480,13 +481,12 @@ impl<'a> OneShotExecutor<'a> {
                         })
                         .collect::<Result<_, OneShotError>>()?,
                 };
-                let proposal = self
-                    .service
-                    .grocery_prepare_add(
-                        &capabilities,
-                        self.credentials,
+                let proposal = PrepareGroceryMutation::new(self.service)
+                    .execute(
+                        capabilities,
+                        self.credentials.clone(),
                         OperationId::new(),
-                        &request,
+                        DeployedGroceryMutationRequest::Add(request),
                         cancellation,
                     )
                     .await?;
@@ -502,17 +502,16 @@ impl<'a> OneShotExecutor<'a> {
                         cancellation.child_token(),
                     )
                     .await?;
-                let proposal = self
-                    .service
-                    .grocery_prepare_remove(
-                        &capabilities,
-                        self.credentials,
+                let proposal = PrepareGroceryMutation::new(self.service)
+                    .execute(
+                        capabilities,
+                        self.credentials.clone(),
                         OperationId::new(),
-                        &RemoveItemsRequestWire {
+                        DeployedGroceryMutationRequest::Remove(RemoveItemsRequestWire {
                             list_id,
                             expected_version: version,
                             item_ids,
-                        },
+                        }),
                         cancellation,
                     )
                     .await?;
@@ -528,20 +527,19 @@ impl<'a> OneShotExecutor<'a> {
                         cancellation.child_token(),
                     )
                     .await?;
-                let proposal = self
-                    .service
-                    .grocery_prepare_state(
-                        &capabilities,
-                        self.credentials,
+                let proposal = PrepareGroceryMutation::new(self.service)
+                    .execute(
+                        capabilities,
+                        self.credentials.clone(),
                         OperationId::new(),
-                        &UpdateItemStateRequestWire {
+                        DeployedGroceryMutationRequest::UpdateState(UpdateItemStateRequestWire {
                             list_id,
                             expected_version: version,
                             item_id: item_ids.into_iter().next().ok_or_else(|| {
                                 OneShotError::new("grocery_item_reference", "item is required")
                             })?,
                             state: arguments.state.into(),
-                        },
+                        }),
                         cancellation,
                     )
                     .await?;
@@ -564,38 +562,30 @@ impl<'a> OneShotExecutor<'a> {
                     list_id: parse_list_id(&arguments.list.list_id)?,
                     expected_version: parse_list_version(arguments.list.version)?,
                 };
-                let proposal = if arguments.remove {
-                    self.service
-                        .grocery_prepare_remove_exclusion(
-                            &capabilities,
-                            self.credentials,
-                            OperationId::new(),
-                            &request,
-                            cancellation,
-                        )
-                        .await?
+                let request = if arguments.remove {
+                    DeployedGroceryMutationRequest::RemoveExclusion(request)
                 } else {
-                    self.service
-                        .grocery_prepare_add_exclusion(
-                            &capabilities,
-                            self.credentials,
-                            OperationId::new(),
-                            &request,
-                            cancellation,
-                        )
-                        .await?
+                    DeployedGroceryMutationRequest::AddExclusion(request)
                 };
+                let proposal = PrepareGroceryMutation::new(self.service)
+                    .execute(
+                        capabilities,
+                        self.credentials.clone(),
+                        OperationId::new(),
+                        request,
+                        cancellation,
+                    )
+                    .await?;
                 Ok(render_grocery_proposal(&proposal, self.output_mode))
             }
             GroceryCommand::Export(arguments) => {
-                let export = self
-                    .service
-                    .grocery_export(
-                        &capabilities,
-                        self.credentials,
+                let export = ExportGroceryList::new(self.service)
+                    .execute(
+                        capabilities,
+                        self.credentials.clone(),
                         OperationId::new(),
                         parse_list_id(&arguments.list_id)?,
-                        arguments.format.as_wire_value(),
+                        arguments.format.as_wire_value().to_owned(),
                         cancellation,
                     )
                     .await?;
@@ -644,13 +634,12 @@ impl<'a> OneShotExecutor<'a> {
                             "confirmation proposal stdin is invalid JSON",
                         )
                     })?;
-                let result = self
-                    .service
-                    .grocery_confirm(
-                        &capabilities,
-                        self.credentials,
+                let result = ConfirmGroceryMutation::new(self.service)
+                    .execute(
+                        capabilities,
+                        self.credentials.clone(),
                         OperationId::new(),
-                        &GroceryMutationConfirmRequestWire {
+                        GroceryMutationConfirmRequestWire {
                             confirmation_token: GroceryConfirmationToken::parse(
                                 proposal
                                     .confirmation_token

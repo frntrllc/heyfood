@@ -1,11 +1,12 @@
 //! Contract-derived Phase 2 REST operations.
 
 use heyfood_application::{
-    BoxFuture, CapabilityPort, CapabilitySnapshot, CreateMenuWatchRequest, GroceryDisplayItem,
-    GroceryDisplayList, GroceryDisplayMemberFlag, GroceryDisplaySafety, GroceryDisplaySource,
-    GroceryExclusions, GroceryReadPort, MenuWatchChangeEvent, MenuWatchChangeSummary,
-    MenuWatchList, MenuWatchPort, MenuWatchSnapshot, PortError, RegistrationAvailability,
-    StatusPort,
+    BoxFuture, CapabilityPort, CapabilitySnapshot, CreateMenuWatchRequest,
+    DeployedGroceryMutationRequest, GroceryDisplayItem, GroceryDisplayList,
+    GroceryDisplayMemberFlag, GroceryDisplaySafety, GroceryDisplaySource, GroceryExclusions,
+    GroceryExport, GroceryExportPort, GroceryMutationPort, GroceryReadPort, MenuWatchChangeEvent,
+    MenuWatchChangeSummary, MenuWatchList, MenuWatchPort, MenuWatchSnapshot, PortError,
+    RegistrationAvailability, StatusPort,
 };
 use heyfood_core::{
     AddItemsRequestWire, ApplicationCapabilitiesWire, AuthorizationServerMetadataWire,
@@ -36,26 +37,6 @@ const MAX_EXPORT_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TRANSCRIPTION_RESPONSE_BYTES: usize = 128 * 1024;
 const MAX_TRANSCRIPTION_ERROR_BYTES: usize = 16 * 1024;
 const MAX_MENU_WATCH_ERROR_BYTES: usize = 16 * 1024;
-
-#[derive(Clone, PartialEq)]
-pub enum GroceryExport {
-    Json(GroceryListWire),
-    Markdown(String),
-    Text(String),
-}
-
-impl std::fmt::Debug for GroceryExport {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Json(list) => formatter
-                .debug_struct("GroceryExport::Json")
-                .field("item_count", &list.items.len())
-                .finish(),
-            Self::Markdown(_) => formatter.write_str("GroceryExport::Markdown([REDACTED])"),
-            Self::Text(_) => formatter.write_str("GroceryExport::Text([REDACTED])"),
-        }
-    }
-}
 
 #[derive(Clone, Copy)]
 enum DispatchKind {
@@ -1014,6 +995,116 @@ impl GroceryReadPort for HttpService {
                 .map(|wire| GroceryExclusions {
                     exclusions: wire.exclusions,
                 })
+        })
+    }
+}
+
+impl GroceryExportPort for HttpService {
+    fn export(
+        &self,
+        capabilities: CapabilitySnapshot,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        list_id: GroceryEntityId,
+        format: String,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<GroceryExport, PortError>> {
+        Box::pin(async move {
+            self.grocery_export(
+                &capabilities,
+                &credentials,
+                operation_id,
+                list_id,
+                &format,
+                cancellation,
+            )
+            .await
+        })
+    }
+}
+
+impl GroceryMutationPort for HttpService {
+    fn prepare(
+        &self,
+        capabilities: CapabilitySnapshot,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        request: DeployedGroceryMutationRequest,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<GroceryMutationProposalWire, PortError>> {
+        Box::pin(async move {
+            match request {
+                DeployedGroceryMutationRequest::Add(request) => {
+                    self.grocery_prepare_add(
+                        &capabilities,
+                        &credentials,
+                        operation_id,
+                        &request,
+                        cancellation,
+                    )
+                    .await
+                }
+                DeployedGroceryMutationRequest::Remove(request) => {
+                    self.grocery_prepare_remove(
+                        &capabilities,
+                        &credentials,
+                        operation_id,
+                        &request,
+                        cancellation,
+                    )
+                    .await
+                }
+                DeployedGroceryMutationRequest::UpdateState(request) => {
+                    self.grocery_prepare_state(
+                        &capabilities,
+                        &credentials,
+                        operation_id,
+                        &request,
+                        cancellation,
+                    )
+                    .await
+                }
+                DeployedGroceryMutationRequest::AddExclusion(request) => {
+                    self.grocery_prepare_add_exclusion(
+                        &capabilities,
+                        &credentials,
+                        operation_id,
+                        &request,
+                        cancellation,
+                    )
+                    .await
+                }
+                DeployedGroceryMutationRequest::RemoveExclusion(request) => {
+                    self.grocery_prepare_remove_exclusion(
+                        &capabilities,
+                        &credentials,
+                        operation_id,
+                        &request,
+                        cancellation,
+                    )
+                    .await
+                }
+            }
+        })
+    }
+
+    fn confirm(
+        &self,
+        capabilities: CapabilitySnapshot,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        request: GroceryMutationConfirmRequestWire,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<GroceryMutationResultWire, PortError>> {
+        Box::pin(async move {
+            self.grocery_confirm(
+                &capabilities,
+                &credentials,
+                operation_id,
+                &request,
+                cancellation,
+            )
+            .await
         })
     }
 }
