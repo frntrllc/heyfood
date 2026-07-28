@@ -24,7 +24,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const PACKAGE_VERSION: &str = "0.6.0";
-const LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+// A replacement can legitimately perform up to six sequential bounded
+// host-command/probe pairs while applying and restoring MCP state. Keep lock
+// contention bounded, but longer than that 78-second host-owned budget plus
+// local filesystem verification.
+const LOCK_TIMEOUT: Duration = Duration::from_secs(120);
 const LOCK_RETRY: Duration = Duration::from_millis(10);
 const HOST_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const HOST_PROBE_OUTPUT_LIMIT: u64 = 4 * 1024;
@@ -1046,12 +1050,18 @@ fn install_host(
     }
     #[cfg(windows)]
     let published_stage = {
-        let published = if hit_test_failpoint("skill_commit_publish") {
-            Err(std::io::Error::other("injected skill publish failure"))
-        } else {
-            stage_commit_handle.publish(&plan.skill_path, false)
-        };
-        match published {
+        if hit_test_failpoint("skill_commit_publish") {
+            drop(stage_commit_handle);
+            return Err(rollback_staged_commit_or_uncertain(
+                &anchored_parent.directory,
+                skill_name,
+                &stage_name,
+                &backup_name,
+                replacing,
+                SetupError::new("agent_setup_commit", "injected skill publish failure"),
+            ));
+        }
+        match stage_commit_handle.publish(&plan.skill_path, false) {
             Ok(published) => published,
             Err(error) => {
                 return Err(rollback_staged_commit_or_uncertain(
