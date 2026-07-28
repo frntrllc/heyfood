@@ -3,21 +3,22 @@
 > [!CAUTION]
 > **Do not install or use v0.4.0 or v0.4.1.**
 > Both releases were published before release authorization and remain
-> unsupported. The current supported replacement is `v0.6.0`.
+> unsupported. The current supported replacement is `v0.5.0`.
 
 Native command-line access to personalized food and dietary guidance from
 [hello.food](https://hello.food).
 
 The CLI and interactive terminal experience are implemented in Rust. The
-supported release is `0.6.0` for macOS and Linux. The immutable `v0.4.0` and
-`v0.4.1` releases remain unsupported and must not be installed.
+supported release is `0.5.0` for macOS and Linux. `0.6.0` is a source
+candidate undergoing agent-native and installed-artifact qualification. The immutable
+`v0.4.0` and `v0.4.1` releases remain unsupported and must not be installed.
 
 See the [current capability and distribution status](docs/CAPABILITY_STATUS.md)
 before evaluating the client.
 
 ## Install
 
-Install the supported native `v0.6.0` binary on macOS or Linux:
+Install the supported native `v0.5.0` binary on macOS or Linux:
 
 ```bash
 curl -fsSL https://hey.food/install.sh | bash
@@ -46,8 +47,8 @@ contributors.
 
 ## Agent discovery
 
-The v0.6.0 binary can explain its exact installed automation contract without
-repository access, credentials, or a network connection:
+The v0.6.0 candidate can explain its exact installed automation
+contract without repository access, credentials, or a network connection:
 
 ```bash
 heyfood agent describe
@@ -66,7 +67,7 @@ heyfood --json agent setup --target all --scope user --dry-run
 
 See [Agent Skill setup](docs/AGENT_SETUP.md) for digest-bound apply, update,
 project-scope, MCP registration, and receipt-bound uninstall behavior. The
-installed integration exposes exactly six typed read/discovery MCP tools; it
+candidate exposes exactly six typed read/discovery MCP tools; it
 exposes no agent mutation, shell, file, raw API, credential, or TUI-control
 tool.
 
@@ -178,7 +179,7 @@ Account connection continues into the native Rust TUI and an authenticated bare
 stream, keeps bounded process-local prompt history, and preserves conversation
 continuity only for the lifetime of the process.
 
-The bounded `v0.6.0` release provides exactly four native archives:
+The bounded `v0.6.0` candidate release is designed to produce exactly four native archives:
 macOS Apple Silicon, macOS Intel, Linux ARM64, and Linux x64.
 Windows distribution remains deferred; ordinary Windows compile, test,
 Clippy, credential, and packaging qualification remains active in CI. Health,
@@ -196,8 +197,8 @@ validated transcript in the composer for editing before submission. Use
 readiness.
 
 Grocery, Menu Watch, profile, household, location, and status panels are
-included in `v0.6.0`. Health integrations are explicitly deferred from the
-supported `v0.6.0` contract: `health` is absent from root help and shell
+included in the `v0.6.0` candidate. Health integrations are explicitly deferred from
+the proposed `v0.6.0` contract: `health` is absent from root help and shell
 completion, `/health` is absent from TUI discovery, and fresh grants do not
 request Health or integration-management scopes. Retained internal
 provider-neutral contracts are future work, not a release capability.
