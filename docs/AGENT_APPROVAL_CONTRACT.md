@@ -94,9 +94,10 @@ The backend compares the authenticated account, its backend session, the
 approval-session UUID, and a hash of the binding token in constant time before
 reading or changing a proposal; the binding is account and session scoped.
 The token is never accepted in a JSON body, path, query, cookie, URL, or
-model-visible result. Proposal create and commit also require
-`Idempotency-Key` equal to `operation_id`; cancel requires it equal to
-`cancel_request_id`. The bound observation GET omits
+model-visible result. Proposal create requires `Idempotency-Key` equal to
+`proposal_request_id`, commit requires it equal to `commit_request_id`, and
+cancel requires it equal to `cancel_request_id`. These request IDs are
+distinct from the shared semantic `operation_id`. The bound observation GET omits
 `Idempotency-Key`. Missing, duplicated, comma-joined, or conflicting security
 headers fail closed.
 
@@ -130,11 +131,11 @@ this decision POST.
 | Step | Request/body | Result |
 |---|---|---|
 | Create session | `session_create_request` plus account auth and matching idempotency header | `session_created`; its binding token stays inside locked MCP process memory |
-| Freeze proposal | `proposal_create_request` plus bound MCP headers and matching `operation_id` idempotency header | `proposal_created` with internal `approval_id`, allowlisted `presentation`, and fixed-origin `approval_url` |
+| Freeze proposal | `proposal_create_request` plus bound MCP headers and matching `proposal_request_id` idempotency header | `proposal_created` with internal `approval_id`, echoed request/operation IDs, allowlisted `presentation`, and fixed-origin `approval_url` |
 | Render human page | No JSON body; authenticated cookie and exact path reference | `human_proposal_view` for page bootstrap only; never returned to MCP/model |
 | Record decision | `human_decision_request` plus the exact browser headers/cookie above | `human_decision_result` |
 | Observe/reconcile | No JSON body; bound MCP headers | `approval_observation` |
-| Commit | `commit_request` plus bound MCP headers and matching `operation_id` idempotency header | `commit_receipt` or an observation/error requiring reconciliation |
+| Commit | `commit_request` plus bound MCP headers and matching `commit_request_id` idempotency header | `commit_receipt` or an observation/error requiring reconciliation |
 | Cancel | `cancel_request` plus bound MCP headers and matching `cancel_request_id` idempotency header | `cancellation_receipt` |
 | Any failure | N/A | strict `protocol_error`; never an HTML body or untyped success |
 
@@ -187,13 +188,23 @@ All errors set `retry_allowed: false`. Only `outcome_uncertain` may set
 cookies, bearer credentials, proposal internals, stack traces, or whether a
 record exists outside the authenticated account/session namespace.
 
-An idempotency-key replay with byte-identical RFC 8785/JCS request content
-returns the original result. Reuse with different content returns
-`approval_conflict`. An identical already-recorded human decision returns the
-original `human_decision_result`; a conflicting decision or reused
-`decision_nonce` returns `approval_conflict`. Committed, declined, cancelled,
-expired, and invalidated records are terminal. Clients never retry a POST
-after dispatch without first executing the prescribed observation.
+The idempotency namespace is the exact tuple `(account subject, backend
+session, approval_session_id when present, HTTP method, canonical path,
+Idempotency-Key)`. Proposal, commit, and cancel request IDs are independently
+generated UUIDs and never reuse the semantic `operation_id`. A replay within
+one namespace with byte-identical RFC 8785/JCS request content returns the
+original result. The canonical path is the exact allowlisted route after UUID
+or approval-reference validation and canonical UUID serialization; encoded
+slashes, dot segments, duplicate slashes, queries, and fragments are rejected
+before namespace lookup. Reuse within that namespace with different content
+returns `approval_conflict`; a key on a different method/path is a different
+namespace but still must use its endpoint-specific request-ID field.
+
+An identical already-recorded human decision returns the original
+`human_decision_result`; a conflicting decision or reused `decision_nonce`
+returns `approval_conflict`. Committed, declined, cancelled, expired, and
+invalidated records are terminal. Clients never retry a POST after dispatch
+without first executing the prescribed observation.
 
 ## State machine
 

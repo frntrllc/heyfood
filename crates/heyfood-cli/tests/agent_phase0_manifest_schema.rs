@@ -284,6 +284,18 @@ fn validate_schema_instance(
             validate_schema_instance(schema_document, proposal_schema, branch, instance)?;
         }
     }
+    if let Some(condition) = schema.get("if") {
+        let condition_matches =
+            validate_schema_instance(schema_document, proposal_schema, condition, instance).is_ok();
+        let consequence = if condition_matches {
+            schema.get("then")
+        } else {
+            schema.get("else")
+        };
+        if let Some(consequence) = consequence {
+            validate_schema_instance(schema_document, proposal_schema, consequence, instance)?;
+        }
+    }
 
     if let Some(expected) = schema.get("type") {
         let matches = match expected {
@@ -523,6 +535,37 @@ fn schema_definition_for_kind<'a>(schema: &'a Value, kind: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("missing approval schema definition for {kind}"))
 }
 
+fn lifecycle_scenario<'a>(fixture: &'a Value, id: &str) -> &'a Value {
+    fixture["scenarios"]
+        .as_array()
+        .expect("approval lifecycle scenarios")
+        .iter()
+        .find(|scenario| scenario["id"] == id)
+        .unwrap_or_else(|| panic!("missing lifecycle scenario {id}"))
+}
+
+fn lifecycle_envelopes(fixture: &Value) -> Vec<&Value> {
+    fixture["scenarios"]
+        .as_array()
+        .expect("approval lifecycle scenarios")
+        .iter()
+        .flat_map(|scenario| {
+            scenario["envelopes"]
+                .as_array()
+                .expect("scenario envelopes")
+        })
+        .collect()
+}
+
+fn envelope_of_kind<'a>(scenario: &'a Value, kind: &str) -> &'a Value {
+    scenario["envelopes"]
+        .as_array()
+        .expect("scenario envelopes")
+        .iter()
+        .find(|envelope| envelope["kind"] == kind)
+        .unwrap_or_else(|| panic!("scenario omits {kind}"))
+}
+
 #[test]
 fn approval_lifecycle_fixture_covers_every_strict_wire_envelope() {
     let schema: Value =
@@ -544,9 +587,7 @@ fn approval_lifecycle_fixture_covers_every_strict_wire_envelope() {
                 .to_owned()
         })
         .collect::<BTreeSet<_>>();
-    let envelopes = fixture["envelopes"]
-        .as_array()
-        .expect("lifecycle envelopes");
+    let envelopes = lifecycle_envelopes(&fixture);
     let fixture_kinds = envelopes
         .iter()
         .map(|envelope| {
@@ -591,6 +632,399 @@ fn approval_lifecycle_fixture_covers_every_strict_wire_envelope() {
 }
 
 #[test]
+fn approval_lifecycles_preserve_identity_and_only_use_legal_transitions() {
+    let fixture: Value =
+        serde_json::from_str(APPROVAL_PROTOCOL_LIFECYCLE).expect("approval lifecycle JSON");
+    let legal_transitions = fixture["legal_transitions"]
+        .as_array()
+        .expect("legal transitions")
+        .iter()
+        .map(|transition| {
+            let transition = transition.as_array().expect("transition pair");
+            (
+                transition[0].as_str().expect("from state"),
+                transition[1].as_str().expect("to state"),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        legal_transitions,
+        BTreeSet::from([
+            ("approved", "committing"),
+            ("awaiting_human", "approved"),
+            ("awaiting_human", "cancelled"),
+            ("awaiting_human", "declined"),
+            ("awaiting_human", "expired"),
+            ("awaiting_human", "invalidated"),
+            ("committing", "committed"),
+            ("committing", "reconciliation_required"),
+            ("prepared", "awaiting_human"),
+            ("prepared", "cancelled"),
+            ("prepared", "expired"),
+            ("prepared", "invalidated"),
+            ("reconciliation_required", "committed"),
+            ("reconciliation_required", "invalidated"),
+        ]),
+        "the fixture must freeze exactly the normative state machine"
+    );
+    let terminal_states = BTreeSet::from([
+        "cancelled",
+        "committed",
+        "declined",
+        "expired",
+        "invalidated",
+    ]);
+    for scenario in fixture["scenarios"].as_array().expect("scenarios") {
+        let states = scenario["expected_states"]
+            .as_array()
+            .expect("expected states")
+            .iter()
+            .map(|state| state.as_str().expect("state"))
+            .collect::<Vec<_>>();
+        for transition in states.windows(2) {
+            assert!(
+                legal_transitions.contains(&(transition[0], transition[1])),
+                "scenario {} contains illegal transition {} -> {}",
+                scenario["id"].as_str().expect("scenario id"),
+                transition[0],
+                transition[1]
+            );
+        }
+        let terminal = states.last().copied().expect("terminal state");
+        assert!(
+            terminal_states.contains(terminal),
+            "scenario {} must end in one terminal state",
+            scenario["id"].as_str().expect("scenario id")
+        );
+        assert!(
+            !legal_transitions.iter().any(|(from, _)| *from == terminal),
+            "terminal state {terminal} must have no outgoing transition"
+        );
+    }
+
+    let committed = lifecycle_scenario(&fixture, "approved_commit_after_uncertain_observation");
+    let proposal_request = envelope_of_kind(committed, "proposal_create_request");
+    let proposal_created = envelope_of_kind(committed, "proposal_created");
+    let human_view = envelope_of_kind(committed, "human_proposal_view");
+    let decision_request = envelope_of_kind(committed, "human_decision_request");
+    let decision_result = envelope_of_kind(committed, "human_decision_result");
+    let commit_request = envelope_of_kind(committed, "commit_request");
+    let commit_receipt = envelope_of_kind(committed, "commit_receipt");
+    let observations = committed["envelopes"]
+        .as_array()
+        .expect("commit envelopes")
+        .iter()
+        .filter(|envelope| envelope["kind"] == "approval_observation")
+        .collect::<Vec<_>>();
+
+    assert_eq!(proposal_created["presentation"], human_view["presentation"]);
+    assert_eq!(
+        proposal_created["presentation"]["proposal_digest_sha256"],
+        proposal_request["expected_proposal_digest_sha256"]
+    );
+    assert_eq!(
+        proposal_created["presentation"]["approval_reference"],
+        proposal_created["approval_url"]
+            .as_str()
+            .expect("approval URL")
+            .rsplit_once('/')
+            .expect("approval URL reference")
+            .1
+    );
+    assert_eq!(
+        proposal_created["proposal_request_id"],
+        proposal_request["proposal_request_id"]
+    );
+    assert_eq!(
+        proposal_created["approval_session_id"],
+        proposal_request["approval_session_id"]
+    );
+    assert_eq!(
+        proposal_created["operation_id"],
+        proposal_request["operation_id"]
+    );
+    assert_eq!(
+        decision_request["approval_id"],
+        proposal_created["approval_id"]
+    );
+    assert_eq!(
+        decision_result["approval_id"],
+        proposal_created["approval_id"]
+    );
+    assert_eq!(
+        decision_request["proposal_digest_sha256"],
+        proposal_created["presentation"]["proposal_digest_sha256"]
+    );
+    assert_eq!(
+        decision_result["proposal_digest_sha256"],
+        proposal_created["presentation"]["proposal_digest_sha256"]
+    );
+    assert_eq!(
+        decision_request["decision_nonce"],
+        human_view["decision_nonce"]
+    );
+    assert_eq!(
+        commit_request["approval_session_id"],
+        proposal_created["approval_session_id"]
+    );
+    assert_eq!(
+        commit_request["operation_id"],
+        proposal_created["operation_id"]
+    );
+    assert_eq!(
+        commit_request["proposal_digest_sha256"],
+        proposal_created["presentation"]["proposal_digest_sha256"]
+    );
+    assert_ne!(
+        proposal_request["proposal_request_id"], commit_request["commit_request_id"],
+        "proposal and commit use distinct idempotency identities"
+    );
+    assert_ne!(
+        commit_request["operation_id"], commit_request["commit_request_id"],
+        "semantic operation identity is not idempotency authority"
+    );
+    assert_eq!(
+        commit_receipt["commit_request_id"],
+        commit_request["commit_request_id"]
+    );
+    assert_eq!(
+        commit_receipt["approval_id"],
+        proposal_created["approval_id"]
+    );
+    assert_eq!(
+        commit_receipt["operation_id"],
+        proposal_created["operation_id"]
+    );
+    assert_eq!(
+        commit_receipt["proposal_digest_sha256"],
+        proposal_created["presentation"]["proposal_digest_sha256"]
+    );
+    for observation in &observations {
+        assert_eq!(observation["approval_id"], proposal_created["approval_id"]);
+        assert_eq!(
+            observation["approval_session_id"],
+            proposal_created["approval_session_id"]
+        );
+        assert_eq!(
+            observation["operation_id"],
+            proposal_created["operation_id"]
+        );
+        assert_eq!(
+            observation["proposal_digest_sha256"],
+            proposal_created["presentation"]["proposal_digest_sha256"]
+        );
+        assert_eq!(observation["cancellation_receipt"], Value::Null);
+    }
+    let committed_observation = observations
+        .iter()
+        .find(|observation| observation["status"] == "committed")
+        .expect("committed observation");
+    assert_eq!(committed_observation["commit_receipt"], *commit_receipt);
+    let uncertain = envelope_of_kind(committed, "protocol_error");
+    assert_eq!(uncertain["approval_id"], proposal_created["approval_id"]);
+    assert_eq!(uncertain["operation_id"], proposal_created["operation_id"]);
+
+    let cancelled = lifecycle_scenario(&fixture, "cancelled_before_human_decision");
+    let cancelled_proposal_request = envelope_of_kind(cancelled, "proposal_create_request");
+    let cancelled_proposal = envelope_of_kind(cancelled, "proposal_created");
+    let cancel_request = envelope_of_kind(cancelled, "cancel_request");
+    let cancellation_receipt = envelope_of_kind(cancelled, "cancellation_receipt");
+    let cancelled_observation = envelope_of_kind(cancelled, "approval_observation");
+    assert_ne!(
+        cancelled_proposal["approval_id"], proposal_created["approval_id"],
+        "commit and cancel paths must use distinct approvals"
+    );
+    assert_ne!(
+        cancelled_proposal["presentation"]["proposal_digest_sha256"],
+        proposal_created["presentation"]["proposal_digest_sha256"]
+    );
+    assert_eq!(
+        cancelled_proposal["proposal_request_id"],
+        cancelled_proposal_request["proposal_request_id"]
+    );
+    assert_eq!(
+        cancelled_proposal["operation_id"],
+        cancelled_proposal_request["operation_id"]
+    );
+    assert_eq!(
+        cancelled_proposal["approval_session_id"],
+        cancelled_proposal_request["approval_session_id"]
+    );
+    assert_eq!(
+        cancelled_proposal["presentation"]["proposal_digest_sha256"],
+        cancelled_proposal_request["expected_proposal_digest_sha256"]
+    );
+    assert_eq!(
+        cancel_request["approval_session_id"],
+        cancelled_proposal["approval_session_id"]
+    );
+    assert_eq!(
+        cancel_request["proposal_digest_sha256"],
+        cancelled_proposal["presentation"]["proposal_digest_sha256"]
+    );
+    assert_eq!(
+        cancellation_receipt["cancel_request_id"],
+        cancel_request["cancel_request_id"]
+    );
+    assert_eq!(
+        cancellation_receipt["approval_id"],
+        cancelled_proposal["approval_id"]
+    );
+    assert_eq!(
+        cancellation_receipt["proposal_digest_sha256"],
+        cancelled_proposal["presentation"]["proposal_digest_sha256"]
+    );
+    assert_eq!(
+        cancelled_observation["cancellation_receipt"],
+        *cancellation_receipt
+    );
+    assert_eq!(
+        cancelled_observation["approval_id"],
+        cancelled_proposal["approval_id"]
+    );
+    assert_eq!(
+        cancelled_observation["approval_session_id"],
+        cancelled_proposal["approval_session_id"]
+    );
+    assert_eq!(
+        cancelled_observation["operation_id"],
+        cancelled_proposal["operation_id"]
+    );
+    assert_eq!(
+        cancelled_observation["proposal_digest_sha256"],
+        cancelled_proposal["presentation"]["proposal_digest_sha256"]
+    );
+    assert_eq!(cancelled_observation["commit_receipt"], Value::Null);
+
+    let declined = lifecycle_scenario(&fixture, "declined_by_authenticated_human");
+    let declined_proposal_request = envelope_of_kind(declined, "proposal_create_request");
+    let declined_proposal = envelope_of_kind(declined, "proposal_created");
+    let declined_view = envelope_of_kind(declined, "human_proposal_view");
+    let declined_request = envelope_of_kind(declined, "human_decision_request");
+    let declined_result = envelope_of_kind(declined, "human_decision_result");
+    let declined_observation = envelope_of_kind(declined, "approval_observation");
+    assert_eq!(
+        declined_proposal["presentation"],
+        declined_view["presentation"]
+    );
+    assert_eq!(declined_request["decision"], "decline");
+    assert_eq!(declined_result["status"], "declined");
+    assert_ne!(
+        declined_proposal["approval_id"],
+        proposal_created["approval_id"]
+    );
+    assert_ne!(
+        declined_proposal["approval_id"],
+        cancelled_proposal["approval_id"]
+    );
+    assert_eq!(
+        declined_proposal["proposal_request_id"],
+        declined_proposal_request["proposal_request_id"]
+    );
+    assert_eq!(
+        declined_proposal["approval_session_id"],
+        declined_proposal_request["approval_session_id"]
+    );
+    assert_eq!(
+        declined_proposal["operation_id"],
+        declined_proposal_request["operation_id"]
+    );
+    assert_eq!(
+        declined_proposal["presentation"]["proposal_digest_sha256"],
+        declined_proposal_request["expected_proposal_digest_sha256"]
+    );
+    for envelope in [
+        declined_view,
+        declined_request,
+        declined_result,
+        declined_observation,
+    ] {
+        assert_eq!(envelope["approval_id"], declined_proposal["approval_id"]);
+    }
+    assert_eq!(
+        declined_request["decision_nonce"],
+        declined_view["decision_nonce"]
+    );
+    for envelope in [declined_request, declined_result, declined_observation] {
+        assert_eq!(
+            envelope["proposal_digest_sha256"],
+            declined_proposal["presentation"]["proposal_digest_sha256"]
+        );
+    }
+    assert_eq!(
+        declined_observation["approval_session_id"],
+        declined_proposal["approval_session_id"]
+    );
+    assert_eq!(
+        declined_observation["operation_id"],
+        declined_proposal["operation_id"]
+    );
+    assert_eq!(declined_observation["commit_receipt"], Value::Null);
+    assert_eq!(declined_observation["cancellation_receipt"], Value::Null);
+}
+
+#[test]
+fn approval_observation_schema_enforces_terminal_receipt_invariants() {
+    let schema: Value =
+        serde_json::from_str(APPROVAL_PROTOCOL_SCHEMA).expect("approval protocol schema JSON");
+    let proposal_schema: Value =
+        serde_json::from_str(PROPOSAL_PRESENTATION_SCHEMA).expect("proposal schema JSON");
+    let fixture: Value =
+        serde_json::from_str(APPROVAL_PROTOCOL_LIFECYCLE).expect("approval lifecycle JSON");
+    let observation_schema = &schema["$defs"]["approval_observation"];
+
+    let committed = lifecycle_scenario(&fixture, "approved_commit_after_uncertain_observation");
+    let mut invalid_committed = committed["envelopes"]
+        .as_array()
+        .expect("commit envelopes")
+        .iter()
+        .find(|envelope| {
+            envelope["kind"] == "approval_observation" && envelope["status"] == "committed"
+        })
+        .expect("committed observation")
+        .clone();
+    invalid_committed["commit_receipt"] = Value::Null;
+    assert!(
+        validate_schema_instance(
+            &schema,
+            &proposal_schema,
+            observation_schema,
+            &invalid_committed,
+        )
+        .is_err(),
+        "committed observations require the exact commit receipt"
+    );
+
+    let cancelled = lifecycle_scenario(&fixture, "cancelled_before_human_decision");
+    let mut invalid_cancelled = envelope_of_kind(cancelled, "approval_observation").clone();
+    invalid_cancelled["cancellation_receipt"] = Value::Null;
+    assert!(
+        validate_schema_instance(
+            &schema,
+            &proposal_schema,
+            observation_schema,
+            &invalid_cancelled,
+        )
+        .is_err(),
+        "cancelled observations require the exact cancellation receipt"
+    );
+
+    let mut invalid_approved = envelope_of_kind(committed, "approval_observation").clone();
+    invalid_approved["cancellation_receipt"] =
+        envelope_of_kind(cancelled, "cancellation_receipt").clone();
+    assert!(
+        validate_schema_instance(
+            &schema,
+            &proposal_schema,
+            observation_schema,
+            &invalid_approved,
+        )
+        .is_err(),
+        "nonterminal observations cannot carry a terminal receipt"
+    );
+}
+
+#[test]
 fn approval_transport_and_negative_cases_freeze_the_authority_boundary() {
     let schema: Value =
         serde_json::from_str(APPROVAL_PROTOCOL_SCHEMA).expect("approval protocol schema JSON");
@@ -602,7 +1036,9 @@ fn approval_transport_and_negative_cases_freeze_the_authority_boundary() {
     for (definition_name, fixture_name) in [
         ("session_create_headers", "session_create_headers"),
         ("bound_mcp_headers", "bound_mcp_headers"),
-        ("bound_mcp_mutation_headers", "bound_mcp_mutation_headers"),
+        ("bound_mcp_mutation_headers", "proposal_create_headers"),
+        ("bound_mcp_mutation_headers", "commit_headers"),
+        ("bound_mcp_mutation_headers", "cancel_headers"),
         ("browser_decision_headers", "browser_decision_headers"),
     ] {
         let definition = &schema["$defs"][definition_name];
@@ -625,12 +1061,71 @@ fn approval_transport_and_negative_cases_freeze_the_authority_boundary() {
         );
     }
 
-    let proposal = fixture["envelopes"]
-        .as_array()
-        .expect("envelopes")
-        .iter()
-        .find(|envelope| envelope["kind"] == "proposal_created")
-        .expect("proposal_created fixture");
+    let commit_scenario =
+        lifecycle_scenario(&fixture, "approved_commit_after_uncertain_observation");
+    let proposal = envelope_of_kind(commit_scenario, "proposal_created");
+    let proposal_request = envelope_of_kind(commit_scenario, "proposal_create_request");
+    let commit_request = envelope_of_kind(commit_scenario, "commit_request");
+    let cancel_scenario = lifecycle_scenario(&fixture, "cancelled_before_human_decision");
+    let cancel_request = envelope_of_kind(cancel_scenario, "cancel_request");
+    assert_eq!(
+        fixture["transport_examples"]["proposal_create_headers"]["idempotency_key"],
+        proposal_request["proposal_request_id"]
+    );
+    assert_eq!(
+        fixture["transport_examples"]["commit_headers"]["idempotency_key"],
+        commit_request["commit_request_id"]
+    );
+    assert_eq!(
+        fixture["transport_examples"]["cancel_headers"]["idempotency_key"],
+        cancel_request["cancel_request_id"]
+    );
+    let endpoint_keys = BTreeSet::from([
+        proposal_request["proposal_request_id"]
+            .as_str()
+            .expect("proposal request ID"),
+        commit_request["commit_request_id"]
+            .as_str()
+            .expect("commit request ID"),
+        cancel_request["cancel_request_id"]
+            .as_str()
+            .expect("cancel request ID"),
+    ]);
+    assert_eq!(
+        endpoint_keys.len(),
+        3,
+        "normal lifecycle endpoints require distinct idempotency identities"
+    );
+    let idempotency_case = |id: &str| {
+        fixture["idempotency_cases"]
+            .as_array()
+            .expect("idempotency cases")
+            .iter()
+            .find(|case| case["id"] == id)
+            .unwrap_or_else(|| panic!("missing idempotency case {id}"))
+    };
+    let normal = idempotency_case("normal_proposal_then_commit");
+    assert_ne!(
+        normal["proposal"]["idempotency_key"],
+        normal["commit"]["idempotency_key"]
+    );
+    assert_ne!(normal["proposal"]["path"], normal["commit"]["path"]);
+    assert_eq!(normal["expected"], "both_accepted_once");
+    let identical = idempotency_case("same_endpoint_identical_replay");
+    assert_eq!(
+        identical["first_jcs_sha256"],
+        identical["replay_jcs_sha256"]
+    );
+    assert_eq!(identical["expected"], "original_result");
+    let mismatched = idempotency_case("same_endpoint_mismatched_replay");
+    assert_eq!(mismatched["method"], identical["method"]);
+    assert_eq!(mismatched["path"], identical["path"]);
+    assert_eq!(mismatched["idempotency_key"], identical["idempotency_key"]);
+    assert_ne!(
+        mismatched["first_jcs_sha256"],
+        mismatched["replay_jcs_sha256"]
+    );
+    assert_eq!(mismatched["expected"], "approval_conflict");
     let approval_url = proposal["approval_url"].as_str().expect("approval URL");
     assert!(approval_url.starts_with("https://auth.hello.food/agent-approval/"));
     assert!(!approval_url.contains('?'));
@@ -661,12 +1156,7 @@ fn approval_transport_and_negative_cases_freeze_the_authority_boundary() {
         );
     }
 
-    let commit = fixture["envelopes"]
-        .as_array()
-        .expect("envelopes")
-        .iter()
-        .find(|envelope| envelope["kind"] == "commit_request")
-        .expect("commit_request fixture");
+    let commit = commit_request;
     for field in ["decision", "session_binding_token"] {
         let mut invalid = commit.clone();
         invalid
@@ -708,10 +1198,14 @@ fn approval_transport_and_negative_cases_freeze_the_authority_boundary() {
             "approval_url_query_injection",
             "binding_token_in_json",
             "blind_retry_after_uncertain_commit",
+            "changed_frozen_presentation",
+            "commit_and_cancel_same_approval",
+            "committed_without_receipt",
             "conflicting_decision_replay",
             "cross_session_binding",
             "missing_browser_csrf_header",
             "model_supplied_commit_decision",
+            "same_endpoint_idempotency_mismatch",
         ])
     );
 
@@ -746,6 +1240,9 @@ fn approval_transport_and_negative_cases_freeze_the_authority_boundary() {
         "never retry a POST",
         "X-Heyfood-Agent-Approval-Binding",
         "__Host-heyfood-agent-approval",
+        "(account subject, backend",
+        "Proposal, commit, and cancel request IDs are independently",
+        "Reuse within that namespace with different content",
     ] {
         assert!(
             APPROVAL_PROTOCOL_CONTRACT.contains(required_rule),

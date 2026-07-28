@@ -317,8 +317,26 @@ fn command_network_authority_matches_dg_r2_and_runtime_routes() {
     let expected = BTreeMap::from([
         ("ask", vec!["POST /v1/agent/converse"]),
         ("reply", vec!["POST /v1/agent/converse"]),
+        (
+            "chat",
+            vec!["conditional authorization", "POST /v1/agent/converse"],
+        ),
         ("log", vec!["POST /v1/agent/converse"]),
         ("item", vec!["POST /v1/channel/tools/explain_item"]),
+        (
+            "login",
+            vec![
+                "GET capability and authorization metadata",
+                "POST device or loopback authorization exchange",
+            ],
+        ),
+        (
+            "register",
+            vec![
+                "GET capability and authorization metadata",
+                "POST device or loopback authorization exchange",
+            ],
+        ),
         ("grocery", vec!["GET /v1/grocery/list"]),
         ("grocery show", vec!["GET /v1/grocery/list"]),
         ("grocery exclusions", vec!["GET /v1/grocery/exclusions"]),
@@ -332,10 +350,35 @@ fn command_network_authority_matches_dg_r2_and_runtime_routes() {
                 "POST /v1/grocery/exclusions/remove",
             ],
         ),
+        (
+            "grocery export",
+            vec!["GET /v1/grocery/lists/{list_id}/export"],
+        ),
         ("grocery confirm", vec!["POST /v1/grocery/confirm"]),
+        ("watch", vec!["GET /v1/menu/watch"]),
+        ("watch show", vec!["GET /v1/menu/watch"]),
+        ("watch add", vec!["POST /v1/menu/watch"]),
+        ("watch remove", vec!["DELETE /v1/menu/watch/{watch_id}"]),
     ]);
 
-    for (path, calls) in expected {
+    let expected_paths = expected.keys().copied().collect::<BTreeSet<_>>();
+    let active_networked_paths = commands
+        .iter()
+        .filter(|command| command["visibility"] == "active")
+        .filter(|command| {
+            command["policy"]
+                .as_str()
+                .and_then(|policy| policies.get(policy))
+                .is_some_and(|policy| policy["network"] != "none")
+        })
+        .map(|command| command["path"].as_str().expect("active command path"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        expected_paths, active_networked_paths,
+        "every active networked command must have one exact path-to-calls assertion"
+    );
+
+    for (path, calls) in &expected {
         assert_eq!(
             policy_for(path)["network_calls"],
             serde_json::json!(calls),

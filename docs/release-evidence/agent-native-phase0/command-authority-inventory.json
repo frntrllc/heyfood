@@ -481,22 +481,21 @@
       "controlling_terminal": "not_used",
       "phase0_gap": "Application port/controller extraction is complete; the bounded agent result remains Phase 1 work."
     },
-    "watch_mutation_human": {
+    "watch_create_human": {
       "audience": "human_terminal_only",
       "operation_class": "mutation",
       "input_transport": "arguments_plus_controlling_terminal_decision",
       "output_transport": "human_or_one_json_result",
-      "network": "post_or_delete",
+      "network": "post",
       "network_calls": [
-        "POST /v1/menu/watch",
-        "DELETE /v1/menu/watch/{watch_id}"
+        "POST /v1/menu/watch"
       ],
       "required_scopes": [
         "menu:watch"
       ],
       "retry": "reconcile_uncertain_never_blind_retry",
       "product_state": "menu_watch_subscription_mutation",
-      "json_output_family": "menu_watch_snapshot_or_delete_receipt_v1",
+      "json_output_family": "menu_watch_snapshot_v1",
       "error_output_family": "one_json_error_or_human_stderr",
       "error_types": [
         "human_terminal_required",
@@ -504,8 +503,34 @@
         "menu_watch_outcome_uncertain"
       ],
       "local_side_effects": "session_rotation",
-      "remote_side_effects": "menu_watch_subscription_create_or_delete",
-      "controlling_terminal": "required_exact_CREATE_or_REMOVE",
+      "remote_side_effects": "menu_watch_subscription_create",
+      "controlling_terminal": "required_exact_CREATE",
+      "phase0_gap": null
+    },
+    "watch_remove_human": {
+      "audience": "human_terminal_only",
+      "operation_class": "mutation",
+      "input_transport": "arguments_plus_controlling_terminal_decision",
+      "output_transport": "human_or_one_json_result",
+      "network": "delete",
+      "network_calls": [
+        "DELETE /v1/menu/watch/{watch_id}"
+      ],
+      "required_scopes": [
+        "menu:watch"
+      ],
+      "retry": "reconcile_uncertain_never_blind_retry",
+      "product_state": "menu_watch_subscription_mutation",
+      "json_output_family": "menu_watch_delete_receipt_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "human_terminal_required",
+        "human_confirmation_declined",
+        "menu_watch_outcome_uncertain"
+      ],
+      "local_side_effects": "session_rotation",
+      "remote_side_effects": "menu_watch_subscription_remove",
+      "controlling_terminal": "required_exact_REMOVE",
       "phase0_gap": null
     },
     "completion": {
@@ -749,7 +774,7 @@
     {
       "path": "watch add",
       "visibility": "active",
-      "policy": "watch_mutation_human",
+      "policy": "watch_create_human",
       "aliases": [
         "watch create"
       ]
@@ -757,7 +782,7 @@
     {
       "path": "watch remove",
       "visibility": "active",
-      "policy": "watch_mutation_human",
+      "policy": "watch_remove_human",
       "aliases": [
         "watch rm",
         "watch delete"

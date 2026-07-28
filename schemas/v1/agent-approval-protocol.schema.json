@@ -259,6 +259,7 @@
         "schema_version",
         "kind",
         "approval_session_id",
+        "proposal_request_id",
         "operation_id",
         "mutation_family",
         "server_proposal_reference",
@@ -274,9 +275,12 @@
         "approval_session_id": {
           "$ref": "#/$defs/uuid"
         },
-        "operation_id": {
+        "proposal_request_id": {
           "$ref": "#/$defs/uuid",
-          "description": "Also supplied as Idempotency-Key for proposal creation."
+          "description": "Supplied as Idempotency-Key for proposal creation."
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
         },
         "mutation_family": {
           "$ref": "#/$defs/mutation_family"
@@ -300,6 +304,7 @@
         "kind",
         "approval_id",
         "approval_session_id",
+        "proposal_request_id",
         "operation_id",
         "presentation",
         "approval_url"
@@ -316,6 +321,9 @@
           "description": "Internal identifier used only by the bound MCP transport."
         },
         "approval_session_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "proposal_request_id": {
           "$ref": "#/$defs/uuid"
         },
         "operation_id": {
@@ -499,7 +507,120 @@
         "reconciliation": {
           "$ref": "#/$defs/reconciliation"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "committed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "commit_receipt": {
+                "$ref": "#/$defs/commit_receipt"
+              },
+              "cancellation_receipt": {
+                "type": "null"
+              },
+              "reconciliation": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "cancelled"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "commit_receipt": {
+                "type": "null"
+              },
+              "cancellation_receipt": {
+                "$ref": "#/$defs/cancellation_receipt"
+              },
+              "reconciliation": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "reconciliation_required"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "commit_receipt": {
+                "type": "null"
+              },
+              "cancellation_receipt": {
+                "type": "null"
+              },
+              "reconciliation": {
+                "enum": [
+                  "observe_approval",
+                  "observe_resource_state"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "prepared",
+                  "awaiting_human",
+                  "approved",
+                  "declined",
+                  "expired",
+                  "invalidated",
+                  "committing"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "commit_receipt": {
+                "type": "null"
+              },
+              "cancellation_receipt": {
+                "type": "null"
+              },
+              "reconciliation": {
+                "const": null
+              }
+            }
+          }
+        }
+      ]
     },
     "commit_request": {
       "type": "object",
@@ -508,6 +629,7 @@
         "schema_version",
         "kind",
         "approval_session_id",
+        "commit_request_id",
         "operation_id",
         "proposal_digest_sha256"
       ],
@@ -521,9 +643,13 @@
         "approval_session_id": {
           "$ref": "#/$defs/uuid"
         },
+        "commit_request_id": {
+          "$ref": "#/$defs/uuid",
+          "description": "Supplied as Idempotency-Key for commit."
+        },
         "operation_id": {
           "$ref": "#/$defs/uuid",
-          "description": "Must equal the proposal operation and the Idempotency-Key header."
+          "description": "Must equal the proposal operation."
         },
         "proposal_digest_sha256": {
           "$ref": "#/$defs/sha256"
@@ -537,6 +663,7 @@
         "schema_version",
         "kind",
         "approval_id",
+        "commit_request_id",
         "operation_id",
         "proposal_digest_sha256",
         "committed_at",
@@ -550,6 +677,9 @@
           "const": "commit_receipt"
         },
         "approval_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "commit_request_id": {
           "$ref": "#/$defs/uuid"
         },
         "operation_id": {

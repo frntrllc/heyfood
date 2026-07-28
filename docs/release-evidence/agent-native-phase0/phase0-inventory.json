@@ -19,7 +19,7 @@
         "crates/heyfood-cli/tests/agent_phase0_inventory.rs"
       ],
       "blockers": [
-        "The second exact-SHA reviews identified route-authority inaccuracies; the replacement exact product must pass independent re-review."
+        "The third exact-SHA reviews identified a remaining Menu Watch per-command route-authority inaccuracy; the replacement exact product must pass independent re-review."
       ]
     },
     {
@@ -136,7 +136,9 @@
         "docs/release-evidence/agent-native-phase0/phase0-checkpoint.json",
         "docs/release-evidence/agent-native-phase0/phase0-review-e3be760.json",
         "docs/release-evidence/agent-native-phase0/phase0-remediation-checkpoint.json",
-        "docs/release-evidence/agent-native-phase0/phase0-review-c26c196.json"
+        "docs/release-evidence/agent-native-phase0/phase0-review-c26c196.json",
+        "docs/release-evidence/agent-native-phase0/phase0-authority-remediation-checkpoint.json",
+        "docs/release-evidence/agent-native-phase0/phase0-review-f3ddd84.json"
       ],
       "blockers": [
         "Ordinary CI must be green at one exact product SHA.",
@@ -149,13 +151,13 @@
     "satisfied": 4,
     "in_progress_or_draft": 5,
     "pending": 1,
-    "unresolved_p0_p1_findings": 2,
+    "unresolved_p0_p1_findings": 3,
     "phase_exit_authorized": false
   },
   "review": {
-    "status": "second_remediation_in_progress",
-    "reviewed_product_sha": "c26c196fd9c685761d7ab0209be6ad17a94f163f",
+    "status": "third_remediation_in_progress",
+    "reviewed_product_sha": "f3ddd84d3a65ccd2b87015110bbb33fab3f753b8",
     "review_candidate_product_sha": null,
-    "reviewed_evidence_digest": "6dbe6fea0fd6f7ff0467446b45277df3d9884fa9299dc1e76e80d38e3a0a5dbf"
+    "reviewed_evidence_digest": "5f28051816bd88c7f0582ef7c69b6626e5293615151faaed5001eef152891f7c"
   }
 }
