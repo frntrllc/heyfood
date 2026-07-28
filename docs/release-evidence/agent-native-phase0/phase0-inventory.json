@@ -121,7 +121,9 @@
       "id": "AN-P0-10-exact-review",
       "status": "pending",
       "owner": "independent-reviewers",
-      "evidence": [],
+      "evidence": [
+        "docs/release-evidence/agent-native-phase0/phase0-checkpoint.json"
+      ],
       "blockers": [
         "Ordinary CI must be green at one exact product SHA.",
         "Independent Rust architecture and security reviews must close all P0 and P1 findings."
@@ -137,8 +139,8 @@
     "phase_exit_authorized": false
   },
   "review": {
-    "status": "not_requested",
-    "reviewed_product_sha": null,
+    "status": "ready_for_independent_review",
+    "reviewed_product_sha": "e3be760aaa58f5cd16ec623954d36e042b9ca46e",
     "reviewed_evidence_digest": null
   }
 }

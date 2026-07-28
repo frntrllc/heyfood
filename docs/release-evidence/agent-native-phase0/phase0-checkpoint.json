@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "program": "heyfood-agent-native",
+  "phase": 0,
+  "checkpoint_status": "ready_for_independent_review_not_phase_exit",
+  "product": {
+    "commit": "e3be760aaa58f5cd16ec623954d36e042b9ca46e",
+    "tree": "7b63eb6e029e5a4976f22696aa8e286f2fd6dc5a",
+    "baseline": "d68091a9cf6341c2c9120ba9251a6e0dd79a9616",
+    "plan_commit": "a16a39c7d1ef4d85402eb08cb8f1ccfa8a041efe",
+    "plan_digest_sha256": "65c99ae05458731271887182155215d9b679e76d42cd83252ada39844e1db112"
+  },
+  "implementation_commits": [
+    "21e35f0",
+    "0bfc418",
+    "14f81be",
+    "c48f03f",
+    "c5f4314",
+    "916d925",
+    "f01e0d8",
+    "e3be760"
+  ],
+  "local_verification": [
+    {
+      "command": "cargo test --workspace --all-features --locked",
+      "status": "passed"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+      "status": "passed"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "status": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "status": "passed"
+    }
+  ],
+  "product_tree_evidence_digests_sha256": {
+    "phase0_inventory": "edde7a8d8cd44b8ef894d338ad09f233cd6583bf83995f4c233b88a583a6d158",
+    "threat_model": "3e53a06e30adcd485f2ca9f55612b1129670e7c2f4ccf0abbda0cfc10a10d273",
+    "approval_contract": "eae613f734a8d7e716af87f0f5025e2981f290eba847f6676d5bcc07324d9741",
+    "agent_manifest_schema": "68aa142ec1bf33952fc1aa4702ab6a198a788ad13d90ad3a64313646de83e7f5",
+    "host_setup_matrix": "5bd172a765ad0ae1a24fd103f8c35a8150a981bb7613f254c2de18fe3b5552c5"
+  },
+  "properties": {
+    "public_agent_command_added": false,
+    "public_mcp_server_added": false,
+    "host_configuration_modified": false,
+    "installation_path_modified": false,
+    "agent_safe_product_mutations": 0,
+    "clap_command_paths_classified": 75,
+    "dg_r2_dispatches_classified": 24,
+    "application_workflows_routed": [
+      "conversation",
+      "capability",
+      "status",
+      "grocery_read",
+      "grocery_export",
+      "grocery_prepare",
+      "grocery_confirm",
+      "menu_watch_list",
+      "menu_watch_create",
+      "menu_watch_remove"
+    ]
+  },
+  "remaining_phase0_gates": [
+    "Hosted ordinary CI must pass at the exact product commit.",
+    "The positive installed-artifact controlling-terminal journey must pass on supported Unix artifacts and the Windows CONIN$/CONOUT$ path.",
+    "Independent Rust architecture, security, and agent-integration review must return zero unresolved P0/P1 findings.",
+    "The exact review verdict and evidence digest must be recorded before Phase 0 exit."
+  ],
+  "phase_exit_authorized": false
+}
