@@ -101,7 +101,7 @@ test -s "$staging/completion.bash"
 jq -e \
   '.schema_version == 1
    and .automation_surfaces.mcp_stdio == "active"
-   and ([.commands[].name] | index("mcp serve")) != null
+   and ([.commands[].path] | index("mcp serve")) != null
    and ([.capabilities[] | select(.id == "agent-mcp" and .status == "active")] | length) == 1' \
   "$staging/agent-manifest.json" >/dev/null
 "$binary" agent guide --format markdown >"$staging/agent-guide.md"

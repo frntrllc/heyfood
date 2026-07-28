@@ -984,28 +984,43 @@ fn install_host(
         .open_dir_nofollow(&stage_name)
         .map_err(|error| SetupError::new("agent_setup_stage", error.to_string()))?;
     harden_open_directory(&stage_directory, &stage)?;
-    let staged = write_skill_files(&stage_directory, &stage);
-    // Windows capability directory handles intentionally deny delete sharing.
-    // Close the staged tree before the parent-relative rename, then validate
-    // the exact closed tree that will be committed.
-    drop(stage_directory);
-    if let Err(error) = staged {
-        let _ = anchored_parent.directory.remove_dir_all(&stage_name);
-        return Err(error);
-    }
-    match inspect_skill(&stage) {
-        Ok(Some(files)) if files == expected_file_digests() => {}
-        Ok(_) => {
-            let _ = anchored_parent.directory.remove_dir_all(&stage_name);
+    #[cfg(windows)]
+    let staged_identity = stage_directory
+        .try_clone()
+        .map(CapDir::into_std_file)
+        .and_then(|directory| heyfood_windows_file::file_identity(&directory))
+        .map_err(|error| SetupError::new("agent_setup_stage", error.to_string()))?;
+    let staged = write_skill_files(&stage_directory, &stage).and_then(|()| {
+        let mut files = BTreeMap::new();
+        inspect_directory(&stage_directory, Path::new(""), &mut files)?;
+        if files != expected_file_digests() {
             return Err(SetupError::new(
                 "agent_setup_stage",
                 "staged Agent Skill bytes do not match the embedded package",
             ));
         }
-        Err(error) => {
+        Ok(())
+    });
+    // Windows capability directory handles intentionally deny delete sharing.
+    // Validate through that open capability first, then close it so Windows
+    // can acquire a delete-capable handle for the identity-pinned commit.
+    drop(stage_directory);
+    if let Err(error) = staged {
+        let _ = anchored_parent.directory.remove_dir_all(&stage_name);
+        return Err(error);
+    }
+    #[cfg(windows)]
+    let stage_commit_handle =
+        heyfood_windows_file::DirectoryRenameHandle::open(&stage).map_err(|error| {
             let _ = anchored_parent.directory.remove_dir_all(&stage_name);
-            return Err(error);
-        }
+            SetupError::new("agent_setup_commit", error.to_string())
+        })?;
+    #[cfg(windows)]
+    if stage_commit_handle.identity() != staged_identity || staged_identity.number_of_links == 0 {
+        return Err(SetupError::new(
+            "agent_setup_redirect",
+            "setup staging directory identity changed before commit",
+        ));
     }
     let backup_name = OsString::from(format!(".heyfood.{}.backup", std::process::id()));
     let replacing = plan.action == "replace";
@@ -1029,20 +1044,111 @@ fn install_host(
                 SetupError::new("agent_setup_replace", error.to_string())
             })?;
     }
+    #[cfg(windows)]
+    let published_stage = {
+        stage_commit_handle
+            .publish(&plan.skill_path, false)
+            .map_err(|error| {
+                let _ = rollback_staged_commit(
+                    &anchored_parent.directory,
+                    skill_name,
+                    &stage_name,
+                    &backup_name,
+                    replacing,
+                );
+                SetupError::new("agent_setup_commit", error.to_string())
+            })?
+    };
+    #[cfg(not(windows))]
     if let Err(error) =
         anchored_parent
             .directory
             .rename(&stage_name, &anchored_parent.directory, skill_name)
     {
-        if replacing {
-            let _ = anchored_parent.directory.rename(
-                &backup_name,
+        let _ = rollback_staged_commit(
+            &anchored_parent.directory,
+            skill_name,
+            &stage_name,
+            &backup_name,
+            replacing,
+        );
+        return Err(SetupError::new("agent_setup_commit", error.to_string()));
+    }
+    let committed_directory = match anchored_parent.directory.open_dir_nofollow(skill_name) {
+        Ok(directory) => directory,
+        Err(error) => {
+            #[cfg(windows)]
+            drop(published_stage);
+            let _ = rollback_installed_skill(
                 &anchored_parent.directory,
                 skill_name,
+                &backup_name,
+                replacing,
             );
+            return Err(SetupError::new("agent_setup_commit", error.to_string()));
         }
-        let _ = anchored_parent.directory.remove_dir_all(&stage_name);
-        return Err(SetupError::new("agent_setup_commit", error.to_string()));
+    };
+    #[cfg(windows)]
+    let committed_identity = committed_directory
+        .try_clone()
+        .map(CapDir::into_std_file)
+        .and_then(|directory| heyfood_windows_file::file_identity(&directory));
+    #[cfg(windows)]
+    let published_identity = published_stage.identity();
+    let mut committed_files = BTreeMap::new();
+    let committed_inspection =
+        inspect_directory(&committed_directory, Path::new(""), &mut committed_files);
+    drop(committed_directory);
+    #[cfg(windows)]
+    drop(published_stage);
+    if let Err(error) = committed_inspection {
+        let _ = rollback_installed_skill(
+            &anchored_parent.directory,
+            skill_name,
+            &backup_name,
+            replacing,
+        );
+        return Err(error);
+    }
+    #[cfg(windows)]
+    let committed_identity_matches = match (committed_identity, published_identity) {
+        (Ok(committed), Ok(published)) => {
+            committed == staged_identity && published == staged_identity
+        }
+        (Err(error), _) | (_, Err(error)) => {
+            let _ = rollback_installed_skill(
+                &anchored_parent.directory,
+                skill_name,
+                &backup_name,
+                replacing,
+            );
+            return Err(SetupError::new("agent_setup_commit", error.to_string()));
+        }
+    };
+    #[cfg(windows)]
+    if !committed_identity_matches {
+        let _ = rollback_installed_skill(
+            &anchored_parent.directory,
+            skill_name,
+            &backup_name,
+            replacing,
+        );
+        return Err(SetupError::new(
+            "agent_setup_redirect",
+            "committed Agent Skill identity changed during final inspection",
+        ));
+    }
+    if committed_files != expected_file_digests() {
+        let _ = rollback_installed_skill(
+            &anchored_parent.directory,
+            skill_name,
+            &backup_name,
+            replacing,
+        );
+        return Err(SetupError::new(
+            "agent_setup_stage",
+            "committed Agent Skill bytes do not match the embedded package",
+        ));
     }
 
     let project_root = normalize_project_root(options)?;
@@ -1218,6 +1324,26 @@ fn rollback_installed_skill(
     parent
         .remove_dir_all(skill_name)
         .map_err(|error| SetupError::new("agent_setup_rollback", error.to_string()))?;
+    if replacing {
+        parent
+            .rename(backup_name, parent, skill_name)
+            .map_err(|error| SetupError::new("agent_setup_rollback", error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn rollback_staged_commit(
+    parent: &CapDir,
+    skill_name: &std::ffi::OsStr,
+    stage_name: &std::ffi::OsStr,
+    backup_name: &std::ffi::OsStr,
+    replacing: bool,
+) -> Result<(), SetupError> {
+    if parent.symlink_metadata(stage_name).is_ok() {
+        parent
+            .remove_dir_all(stage_name)
+            .map_err(|error| SetupError::new("agent_setup_rollback", error.to_string()))?;
+    }
     if replacing {
         parent
             .rename(backup_name, parent, skill_name)
@@ -2530,7 +2656,7 @@ impl SetupLock {
         loop {
             match file.try_lock_exclusive() {
                 Ok(()) => return Ok(Self { file }),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(error) if lock_is_contended(&error) => {
                     if started.elapsed() >= LOCK_TIMEOUT {
                         return Err(SetupError::new(
                             "agent_setup_lock",
@@ -2545,6 +2671,21 @@ impl SetupLock {
             }
         }
     }
+}
+
+fn lock_is_contended(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        // LockFileEx reports ERROR_LOCK_VIOLATION for an occupied byte range,
+        // while Rust currently classifies Win32 error 33 as `Other`.
+        const ERROR_LOCK_VIOLATION: i32 = 33;
+        error.raw_os_error() == Some(ERROR_LOCK_VIOLATION)
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 impl Drop for SetupLock {
@@ -2640,6 +2781,14 @@ mod tests {
         let root = scratch("directory-sync");
         let directory = AnchoredDirectory::open(&root).unwrap();
         sync_anchored_directory(&directory.directory).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_lock_violation_is_retryable_contention() {
+        let error = std::io::Error::from_raw_os_error(33);
+        assert_ne!(error.kind(), std::io::ErrorKind::WouldBlock);
+        assert!(lock_is_contended(&error));
     }
 
     #[test]

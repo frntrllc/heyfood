@@ -42,6 +42,9 @@ impl TempRoot {
             std::process::id()
         ));
         fs::create_dir_all(&path).unwrap();
+        for child in ["config", "data", "cache", "appdata", "localappdata"] {
+            fs::create_dir(path.join(child)).unwrap();
+        }
         Self(path)
     }
 }

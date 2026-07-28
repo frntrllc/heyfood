@@ -64,6 +64,11 @@ agent_setup_smoke="$ROOT/scripts/release/agent-setup-smoke.sh"
 [[ "$(git -C "$ROOT" ls-files --stage -- packaging/macos/sign-and-notarize.sh |
   awk '{print $1}')" == "100755" ]] ||
   fail "Git must record the macOS signing tool with mode 100755"
+grep -Fq '[.commands[].path] | index("mcp serve")' "$archive_smoke" ||
+  fail "archive smoke must validate the documented command path field"
+if grep -Fq '[.commands[].name] | index("mcp serve")' "$archive_smoke"; then
+  fail "archive smoke must not validate the absent command name field"
+fi
 
 # shellcheck disable=SC2016 # These are literal source patterns, not expansions.
 create_smoke_root_line=$(line_of "$agent_setup_smoke" 'mkdir -p -- "$root"')

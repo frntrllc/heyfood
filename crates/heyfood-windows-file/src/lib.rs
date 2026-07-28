@@ -91,6 +91,71 @@ mod windows {
         pub number_of_links: u32,
     }
 
+    /// Pins one direct directory identity while it is atomically renamed.
+    ///
+    /// The handle is opened with delete access and remains live through
+    /// `SetFileInformationByHandle`, so replacement of the source pathname
+    /// cannot redirect the commit to a different directory.
+    pub struct DirectoryRenameHandle {
+        file: File,
+        identity: FileIdentity,
+    }
+
+    impl DirectoryRenameHandle {
+        /// Open `path` without following its final reparse point.
+        #[allow(unsafe_code)]
+        pub fn open(path: &Path) -> io::Result<Self> {
+            let wide_path = nul_terminated_wide(path.as_os_str())?;
+            // SAFETY: `wide_path` is NUL-terminated and alive for the call.
+            // DELETE is required by SetFileInformationByHandle; all sharing
+            // modes keep ordinary readers and an adversarial path rename from
+            // invalidating this identity-pinned handle.
+            let handle = unsafe {
+                CreateFileW(
+                    wide_path.as_ptr(),
+                    DELETE | FILE_READ_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                    ptr::null_mut(),
+                )
+            };
+            if handle == INVALID_HANDLE_VALUE {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: `handle` is a unique valid owned handle returned by
+            // CreateFileW and ownership transfers exactly once to `File`.
+            let file = unsafe { File::from_raw_handle(handle) };
+            verify_directory(&file)?;
+            let identity = file_identity(&file)?;
+            Ok(Self { file, identity })
+        }
+
+        pub fn identity(&self) -> FileIdentity {
+            self.identity
+        }
+
+        /// Publish this exact open directory identity at `target`.
+        pub fn publish(self, target: &Path, overwrite: bool) -> io::Result<PublishedDirectory> {
+            rename_open_file(&self.file, target, overwrite)?;
+            verify_directory(&self.file)?;
+            Ok(PublishedDirectory { file: self.file })
+        }
+    }
+
+    /// Keeps the committed directory identity pinned during final inspection.
+    pub struct PublishedDirectory {
+        file: File,
+    }
+
+    impl PublishedDirectory {
+        pub fn identity(&self) -> io::Result<FileIdentity> {
+            verify_directory(&self.file)?;
+            file_identity(&self.file)
+        }
+    }
+
     /// Inspect an already-open file without relying on Rust's unstable Windows
     /// by-handle metadata extensions.
     #[allow(unsafe_code)]
@@ -351,6 +416,7 @@ mod windows {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use std::time::{SystemTime, UNIX_EPOCH};
 
         #[test]
         #[allow(unsafe_code)]
@@ -381,11 +447,41 @@ mod windows {
             // SAFETY: the helper reserves and initializes this extra code unit.
             assert_eq!(unsafe { *file_name.add(target.len()) }, 0);
         }
+
+        #[test]
+        fn directory_rename_handle_pins_identity_through_path_substitution() {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "heyfood-windows-directory-commit-{}-{unique}",
+                std::process::id()
+            ));
+            let stage = root.join("stage");
+            let displaced = root.join("displaced");
+            let target = root.join("published");
+            fs::create_dir_all(&stage).unwrap();
+            fs::write(stage.join("pinned"), b"expected").unwrap();
+
+            let handle = DirectoryRenameHandle::open(&stage).unwrap();
+            let expected_identity = handle.identity();
+            fs::rename(&stage, &displaced).unwrap();
+            fs::create_dir(&stage).unwrap();
+            fs::write(stage.join("replacement"), b"wrong").unwrap();
+
+            let published = handle.publish(&target, false).unwrap();
+            assert_eq!(published.identity().unwrap(), expected_identity);
+            assert_eq!(fs::read(target.join("pinned")).unwrap(), b"expected");
+            assert_eq!(fs::read(stage.join("replacement")).unwrap(), b"wrong");
+            drop(published);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 }
 
 #[cfg(windows)]
 pub use windows::{
-    AtomicOwnerOnlyFile, FileIdentity, PublishedOwnerOnlyFile, file_identity,
-    open_directory_identity,
+    AtomicOwnerOnlyFile, DirectoryRenameHandle, FileIdentity, PublishedDirectory,
+    PublishedOwnerOnlyFile, file_identity, open_directory_identity,
 };
