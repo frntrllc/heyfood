@@ -1180,18 +1180,14 @@ fn wait_for_process_child(
         }
         if Instant::now() >= deadline {
             let process_id = child.id().to_string();
-            let _ = Command::new("taskkill")
+            let tree_status = Command::new("taskkill")
                 .args(["/PID", &process_id, "/T", "/F"])
-                .status();
-            if child
-                .try_wait()
-                .expect("poll terminated Windows signal child")
-                .is_none()
-            {
-                child
-                    .kill()
-                    .expect("terminate stalled Windows signal child");
-            }
+                .status()
+                .expect("invoke Windows process-tree termination");
+            assert!(
+                tree_status.success(),
+                "taskkill must terminate the PowerShell host and Rust grandchild"
+            );
             let _ = child.wait();
             panic!("Windows signal child did not exit within {timeout:?}");
         }

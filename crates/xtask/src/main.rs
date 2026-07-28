@@ -162,7 +162,7 @@ fn required_option(arguments: &mut impl Iterator<Item = String>, expected: &str)
 
 fn usage() -> ! {
     eprintln!(
-        "usage: cargo xtask <dependency-dag|verify-migration-ledger|verify-contracts|verify-grocery-contracts|import-grocery-contracts --source-repo PATH|verify-assets|verify-assets-approved|verify-phase0-evidence|verify-phase1-evidence|evaluate-post-release --evidence-dir PATH --rubric PATH --output PATH>"
+        "usage: cargo xtask <dependency-dag|verify-migration-ledger|verify-contracts|verify-grocery-contracts|import-grocery-contracts --source-repo PATH|verify-assets|verify-assets-approved|verify-phase0-evidence|verify-phase1-evidence|verify-agent-phase1-evidence|evaluate-post-release --evidence-dir PATH --rubric PATH --output PATH>"
     );
     std::process::exit(2);
 }

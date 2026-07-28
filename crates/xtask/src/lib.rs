@@ -1910,6 +1910,260 @@ pub fn verify_phase1_evidence(root: &Path) -> Result<Phase1EvidenceReport, Strin
 
 /// Validate the agent-native Phase 1 evidence independently from the
 /// historical Rust transition Phase 1 ledger.
+fn validate_agent_phase1_requirements(
+    root: &Path,
+    requirements: &[Json],
+) -> Result<(usize, bool), String> {
+    let expected_ids = BTreeSet::from([
+        "AN-P1-01-contract-crate",
+        "AN-P1-02-offline-discovery",
+        "AN-P1-03-embedded-contracts",
+        "AN-P1-04-command-parity",
+        "AN-P1-05-contract-validation",
+        "AN-P1-06-cross-platform-installed-artifact",
+        "AN-P1-07-exact-sha-review",
+    ]);
+    if requirements.len() != expected_ids.len() {
+        return Err("agent-native Phase 1 must contain exactly seven requirements".to_owned());
+    }
+    let mut requirement_ids = BTreeSet::new();
+    let mut blockers = 0;
+    let mut all_satisfied = true;
+    for (index, requirement) in requirements.iter().enumerate() {
+        let context = format!("agent-native Phase 1 requirements[{index}]");
+        let requirement = requirement.object(&context)?;
+        exact_keys(
+            requirement,
+            &["id", "status", "evidence", "blockers"],
+            &context,
+        )?;
+        let id = required_nonempty_string(requirement, "id", &context)?;
+        if !requirement_ids.insert(id) {
+            return Err(format!("duplicate agent-native requirement {id:?}"));
+        }
+        let requirement_status = required_string(requirement, "status", &context)?;
+        if !matches!(
+            requirement_status,
+            "satisfied" | "qualification_pending" | "review_pending"
+        ) {
+            return Err(format!(
+                "{context} has invalid status {requirement_status:?}"
+            ));
+        }
+        let evidence = field(requirement, "evidence", &context)?.array(&context)?;
+        for path in evidence {
+            required_path_exists(root, path.string(&context)?, &context)?;
+        }
+        let requirement_blockers = field(requirement, "blockers", &context)?.array(&context)?;
+        match requirement_status {
+            "satisfied" if requirement_blockers.is_empty() && !evidence.is_empty() => {}
+            "satisfied" => {
+                return Err(format!("{context} satisfied state is inconsistent"));
+            }
+            _ if !requirement_blockers.is_empty() => {
+                all_satisfied = false;
+            }
+            _ => {
+                return Err(format!(
+                    "{context} pending state must retain at least one blocker"
+                ));
+            }
+        }
+        blockers += requirement_blockers.len();
+    }
+    if requirement_ids != expected_ids {
+        return Err("agent-native Phase 1 requirement ID set is not authoritative".to_owned());
+    }
+    Ok((blockers, all_satisfied))
+}
+
+fn validate_agent_phase1_hosted(hosted: &BTreeMap<String, Json>) -> Result<String, String> {
+    exact_keys(
+        hosted,
+        &[
+            "status",
+            "run_url",
+            "successes",
+            "expected_skips",
+            "failures",
+            "platforms",
+        ],
+        "agent-native Phase 1 hosted qualification",
+    )?;
+    let status = required_string(
+        hosted,
+        "status",
+        "agent-native Phase 1 hosted qualification",
+    )?;
+    if !matches!(status, "pending" | "passed") {
+        return Err("agent-native hosted qualification must be pending or passed".to_owned());
+    }
+    let successes = field(hosted, "successes", "hosted")?.usize("hosted successes")?;
+    field(hosted, "expected_skips", "hosted")?.usize("hosted expected skips")?;
+    let platforms = field(hosted, "platforms", "hosted")?.array("hosted platforms")?;
+    let expected_platforms = BTreeSet::from(["linux", "macos", "windows"]);
+    let mut actual_platforms = BTreeSet::new();
+    for (index, platform) in platforms.iter().enumerate() {
+        let context = format!("agent-native hosted platforms[{index}]");
+        let platform = platform.object(&context)?;
+        exact_keys(
+            platform,
+            &["platform", "status", "run_url", "successes"],
+            &context,
+        )?;
+        actual_platforms.insert(required_nonempty_string(platform, "platform", &context)?);
+        let platform_status = required_string(platform, "status", &context)?;
+        let platform_successes = field(platform, "successes", &context)?.usize(&context)?;
+        if status == "passed" {
+            if platform_status != "passed" || platform_successes == 0 {
+                return Err(format!("{context} must contain positive passing evidence"));
+            }
+            required_nonempty_string(platform, "run_url", &context)?;
+        } else if platform_status != "pending"
+            || platform_successes != 0
+            || !matches!(field(platform, "run_url", &context)?, Json::Null)
+        {
+            return Err(format!("{context} pending state is inconsistent"));
+        }
+    }
+    if actual_platforms != expected_platforms {
+        return Err(
+            "agent-native hosted platform evidence must cover Linux, macOS, and Windows".to_owned(),
+        );
+    }
+    if status == "passed" {
+        if successes == 0 {
+            return Err("passed hosted qualification requires at least one success".to_owned());
+        }
+        required_nonempty_string(hosted, "run_url", "agent-native hosted qualification")?;
+        expect_usize(hosted, "failures", 0, "agent-native hosted qualification")?;
+    } else if successes != 0 || !null_fields(hosted, &["run_url", "failures"])? {
+        return Err("pending hosted qualification must not claim results".to_owned());
+    }
+    Ok(status.to_owned())
+}
+
+fn validate_agent_phase1_review(
+    review: &BTreeMap<String, Json>,
+    product_sha: Option<&str>,
+    product_tree: Option<&str>,
+) -> Result<String, String> {
+    exact_keys(
+        review,
+        &[
+            "status",
+            "exact_product_sha",
+            "exact_product_tree",
+            "reviewers",
+        ],
+        "agent-native Phase 1 review",
+    )?;
+    let status = required_string(review, "status", "agent-native Phase 1 review")?;
+    let reviewers = field(review, "reviewers", "agent-native Phase 1 review")?
+        .array("agent-native Phase 1 reviewers")?;
+    if status == "approved" {
+        let expected_sha = product_sha
+            .ok_or_else(|| "approved review requires exact product lineage".to_owned())?;
+        let expected_tree = product_tree
+            .ok_or_else(|| "approved review requires exact product lineage".to_owned())?;
+        expect_string(
+            review,
+            "exact_product_sha",
+            expected_sha,
+            "agent-native Phase 1 review",
+        )?;
+        expect_string(
+            review,
+            "exact_product_tree",
+            expected_tree,
+            "agent-native Phase 1 review",
+        )?;
+        let mut roles = BTreeSet::new();
+        let mut reviewer_names = BTreeSet::new();
+        for (index, reviewer) in reviewers.iter().enumerate() {
+            let context = format!("agent-native Phase 1 reviewers[{index}]");
+            let reviewer = reviewer.object(&context)?;
+            exact_keys(
+                reviewer,
+                &["role", "reviewer", "verdict", "product_sha", "product_tree"],
+                &context,
+            )?;
+            roles.insert(required_nonempty_string(reviewer, "role", &context)?);
+            reviewer_names.insert(required_nonempty_string(reviewer, "reviewer", &context)?);
+            expect_string(reviewer, "verdict", "go", &context)?;
+            expect_string(reviewer, "product_sha", expected_sha, &context)?;
+            expect_string(reviewer, "product_tree", expected_tree, &context)?;
+        }
+        if roles != BTreeSet::from(["agent_integration", "rust"])
+            || reviewer_names.len() != reviewers.len()
+            || reviewers.len() != 2
+        {
+            return Err(
+                "approval requires distinct Rust and agent-integration GO reviewers".to_owned(),
+            );
+        }
+    } else if status == "pending" {
+        if !null_fields(review, &["exact_product_sha", "exact_product_tree"])?
+            || !reviewers.is_empty()
+        {
+            return Err(
+                "pending agent-native review must not claim reviewers or lineage".to_owned(),
+            );
+        }
+    } else {
+        return Err(format!("invalid agent-native review status {status:?}"));
+    }
+    Ok(status.to_owned())
+}
+
+fn validate_agent_phase1_evidence_separation(
+    root: &Path,
+    product_sha: &str,
+    current_bundle: &Json,
+) -> Result<(), String> {
+    let changed = Command::new("git")
+        .args(["diff", "--name-only", product_sha, "HEAD", "--"])
+        .current_dir(root)
+        .output()
+        .map_err(|error| format!("cannot inspect product/evidence separation: {error}"))?;
+    if !changed.status.success() {
+        return Err("cannot inspect product/evidence separation".to_owned());
+    }
+    for path in String::from_utf8_lossy(&changed.stdout).lines() {
+        if !path.starts_with("docs/release-evidence/agent-native-phase1/") {
+            return Err(format!(
+                "evidence history changes non-evidence product path {path:?}"
+            ));
+        }
+    }
+
+    let product_inventory = Command::new("git")
+        .args([
+            "show",
+            &format!(
+                "{product_sha}:docs/release-evidence/agent-native-phase1/phase1-inventory.json"
+            ),
+        ])
+        .current_dir(root)
+        .output()
+        .map_err(|error| format!("cannot read product-bound evidence template: {error}"))?;
+    if !product_inventory.status.success() {
+        return Err("product SHA does not contain the Phase 1 evidence template".to_owned());
+    }
+    let product_inventory = std::str::from_utf8(&product_inventory.stdout)
+        .map_err(|error| format!("product evidence template is not UTF-8: {error}"))?;
+    let product_inventory = json::parse(product_inventory)?;
+    let product_bundle = field(
+        product_inventory.object("product evidence template")?,
+        "contract_bundle",
+        "product evidence template",
+    )?;
+    if product_bundle != current_bundle {
+        return Err("evidence commit changed the product-bound contract bundle".to_owned());
+    }
+    Ok(())
+}
+
 pub fn verify_agent_phase1_evidence(root: &Path) -> Result<AgentPhase1EvidenceReport, String> {
     let document = read_json(
         root,
@@ -1972,7 +2226,7 @@ pub fn verify_agent_phase1_evidence(root: &Path) -> Result<AgentPhase1EvidenceRe
     )?;
     required_nonempty_string(lineage, "branch", "agent-native Phase 1 lineage")?;
     let product_pending = null_fields(lineage, &["product_sha", "product_tree"])?;
-    if !product_pending {
+    let (product_sha, product_tree) = if !product_pending {
         let product_sha = required_string(lineage, "product_sha", "agent-native Phase 1 lineage")?;
         let product_tree =
             required_string(lineage, "product_tree", "agent-native Phase 1 lineage")?;
@@ -2000,11 +2254,23 @@ pub fn verify_agent_phase1_evidence(root: &Path) -> Result<AgentPhase1EvidenceRe
                 "agent-native Phase 1 product SHA is not an ancestor of evidence HEAD".to_owned(),
             );
         }
+        validate_agent_phase1_evidence_separation(
+            root,
+            product_sha,
+            field(
+                inventory,
+                "contract_bundle",
+                "agent-native Phase 1 inventory",
+            )?,
+        )?;
+        (Some(product_sha), Some(product_tree))
     } else if status == "approved" {
         return Err(
             "approved agent-native Phase 1 evidence requires exact product lineage".to_owned(),
         );
-    }
+    } else {
+        (None, None)
+    };
 
     let bundle = field(
         inventory,
@@ -2067,44 +2333,8 @@ pub fn verify_agent_phase1_evidence(root: &Path) -> Result<AgentPhase1EvidenceRe
 
     let requirements = field(inventory, "requirements", "agent-native Phase 1 inventory")?
         .array("agent-native Phase 1 requirements")?;
-    if requirements.len() != 7 {
-        return Err("agent-native Phase 1 must contain exactly seven requirements".to_owned());
-    }
-    let mut requirement_ids = BTreeSet::new();
-    let mut blockers = 0;
-    for (index, requirement) in requirements.iter().enumerate() {
-        let context = format!("agent-native Phase 1 requirements[{index}]");
-        let requirement = requirement.object(&context)?;
-        exact_keys(
-            requirement,
-            &["id", "status", "evidence", "blockers"],
-            &context,
-        )?;
-        let id = required_nonempty_string(requirement, "id", &context)?;
-        if !requirement_ids.insert(id) {
-            return Err(format!("duplicate agent-native requirement {id:?}"));
-        }
-        let requirement_status = required_string(requirement, "status", &context)?;
-        if !matches!(
-            requirement_status,
-            "satisfied" | "qualification_pending" | "review_pending"
-        ) {
-            return Err(format!(
-                "{context} has invalid status {requirement_status:?}"
-            ));
-        }
-        let evidence = field(requirement, "evidence", &context)?.array(&context)?;
-        for path in evidence {
-            required_path_exists(root, path.string(&context)?, &context)?;
-        }
-        let requirement_blockers = field(requirement, "blockers", &context)?.array(&context)?;
-        if requirement_status == "satisfied"
-            && (!requirement_blockers.is_empty() || evidence.is_empty())
-        {
-            return Err(format!("{context} satisfied state is inconsistent"));
-        }
-        blockers += requirement_blockers.len();
-    }
+    let (blockers, all_requirements_satisfied) =
+        validate_agent_phase1_requirements(root, requirements)?;
 
     let qualification = field(inventory, "qualification", "agent-native Phase 1 inventory")?
         .object("agent-native Phase 1 qualification")?;
@@ -2119,35 +2349,7 @@ pub fn verify_agent_phase1_evidence(root: &Path) -> Result<AgentPhase1EvidenceRe
         "agent-native Phase 1 qualification",
     )?
     .object("agent-native Phase 1 hosted qualification")?;
-    exact_keys(
-        hosted,
-        &[
-            "status",
-            "run_url",
-            "successes",
-            "expected_skips",
-            "failures",
-        ],
-        "agent-native Phase 1 hosted qualification",
-    )?;
-    let hosted_status = required_string(
-        hosted,
-        "status",
-        "agent-native Phase 1 hosted qualification",
-    )?;
-    if !matches!(hosted_status, "pending" | "passed") {
-        return Err("agent-native hosted qualification must be pending or passed".to_owned());
-    }
-    field(hosted, "successes", "hosted")?.usize("hosted successes")?;
-    field(hosted, "expected_skips", "hosted")?.usize("hosted expected skips")?;
-    if hosted_status == "passed" {
-        required_nonempty_string(hosted, "run_url", "agent-native hosted qualification")?;
-        expect_usize(hosted, "failures", 0, "agent-native hosted qualification")?;
-    } else if !null_fields(hosted, &["run_url", "failures"])? {
-        return Err(
-            "pending hosted qualification must not claim a run or failure count".to_owned(),
-        );
-    }
+    let hosted_status = validate_agent_phase1_hosted(hosted)?;
 
     let schemas = field(
         qualification,
@@ -2275,36 +2477,7 @@ pub fn verify_agent_phase1_evidence(root: &Path) -> Result<AgentPhase1EvidenceRe
 
     let review = field(inventory, "review", "agent-native Phase 1 inventory")?
         .object("agent-native Phase 1 review")?;
-    exact_keys(
-        review,
-        &["status", "exact_product_sha", "reviewers"],
-        "agent-native Phase 1 review",
-    )?;
-    let review_status = required_string(review, "status", "agent-native Phase 1 review")?;
-    let reviewers = field(review, "reviewers", "agent-native Phase 1 review")?
-        .array("agent-native Phase 1 reviewers")?;
-    if review_status == "approved" {
-        let exact_product_sha =
-            required_string(review, "exact_product_sha", "agent-native Phase 1 review")?;
-        validate_git_sha(exact_product_sha, "agent-native Phase 1 reviewed SHA")?;
-        if field(lineage, "product_sha", "lineage")?.string("product SHA")? != exact_product_sha
-            || reviewers.len() < 2
-        {
-            return Err("agent-native approval is not bound to two exact-SHA reviews".to_owned());
-        }
-    } else if review_status == "pending" {
-        if !matches!(
-            field(review, "exact_product_sha", "agent-native Phase 1 review")?,
-            Json::Null
-        ) || !reviewers.is_empty()
-        {
-            return Err("pending agent-native review must not claim reviewers or a SHA".to_owned());
-        }
-    } else {
-        return Err(format!(
-            "invalid agent-native review status {review_status:?}"
-        ));
-    }
+    let review_status = validate_agent_phase1_review(review, product_sha, product_tree)?;
 
     let gates = field(inventory, "release_gates", "agent-native Phase 1 inventory")?
         .object("agent-native Phase 1 release gates")?;
@@ -2315,7 +2488,7 @@ pub fn verify_agent_phase1_evidence(root: &Path) -> Result<AgentPhase1EvidenceRe
     )?;
     let complete = status == "approved"
         && !product_pending
-        && blockers == 0
+        && all_requirements_satisfied
         && hosted_status == "passed"
         && artifact_status == "passed"
         && review_status == "approved";
@@ -3511,13 +3684,18 @@ mod tests {
     use super::{
         FROZEN_COMPATIBILITY_DIGEST, FROZEN_COMPATIBILITY_SHA, FROZEN_COMPATIBILITY_TREE,
         GROCERY_CONTRACTS, GROCERY_PHASE_A_FILES, GROCERY_PHASE_A_PROVENANCE_TARGET,
-        GROCERY_PHASE_A_TARGET_ROOT, import_grocery_contracts, validate_dependency_dag,
-        validate_grok_pattern_provenance, validate_health_contract_provenance, verify_assets,
-        verify_assets_approved, verify_grocery_contracts, verify_migration_ledger,
-        verify_phase0_evidence, verify_phase1_evidence, verify_stable_contracts,
+        GROCERY_PHASE_A_TARGET_ROOT, import_grocery_contracts,
+        validate_agent_phase1_evidence_separation, validate_agent_phase1_hosted,
+        validate_agent_phase1_requirements, validate_agent_phase1_review, validate_dependency_dag,
+        validate_grok_pattern_provenance, validate_health_contract_provenance,
+        verify_agent_phase1_evidence, verify_assets, verify_assets_approved,
+        verify_grocery_contracts, verify_migration_ledger, verify_phase0_evidence,
+        verify_phase1_evidence, verify_stable_contracts,
     };
+    use crate::json::Json;
     use std::fs;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn root() -> PathBuf {
@@ -3598,6 +3776,187 @@ mod tests {
         assert_eq!(phase1.blockers, 0);
         assert_eq!(phase1.hosted_status, "passed");
         assert_eq!(phase1.review_status, "approved");
+    }
+
+    fn agent_phase1_inventory() -> Json {
+        super::read_json(
+            &root(),
+            "docs/release-evidence/agent-native-phase1/phase1-inventory.json",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn checked_in_agent_phase1_evidence_is_machine_gated_while_pending() {
+        let evidence = verify_agent_phase1_evidence(&root()).unwrap();
+        assert_eq!(evidence.requirements, 7);
+        assert_eq!(evidence.blockers, 2);
+        assert_eq!(evidence.hosted_status, "pending");
+        assert_eq!(evidence.artifact_status, "pending");
+        assert_eq!(evidence.review_status, "pending");
+    }
+
+    #[test]
+    fn agent_phase1_gate_rejects_wrong_ids_and_empty_pending_blockers() {
+        let document = agent_phase1_inventory();
+        let inventory = document.object("inventory").unwrap();
+        let original = inventory
+            .get("requirements")
+            .unwrap()
+            .array("requirements")
+            .unwrap();
+
+        let mut wrong_ids = original.to_vec();
+        let Json::Object(first) = &mut wrong_ids[0] else {
+            panic!("requirement must be an object");
+        };
+        first.insert(
+            "id".to_owned(),
+            Json::String("AN-P1-99-invented".to_owned()),
+        );
+        assert!(
+            validate_agent_phase1_requirements(&root(), &wrong_ids)
+                .unwrap_err()
+                .contains("ID set")
+        );
+
+        let mut empty_blockers = original.to_vec();
+        let Json::Object(pending) = &mut empty_blockers[5] else {
+            panic!("requirement must be an object");
+        };
+        pending.insert("blockers".to_owned(), Json::Array(Vec::new()));
+        assert!(
+            validate_agent_phase1_requirements(&root(), &empty_blockers)
+                .unwrap_err()
+                .contains("at least one blocker")
+        );
+    }
+
+    #[test]
+    fn agent_phase1_gate_rejects_zero_successes_and_untyped_reviewers() {
+        let document = agent_phase1_inventory();
+        let inventory = document.object("inventory").unwrap();
+        let qualification = inventory
+            .get("qualification")
+            .unwrap()
+            .object("qualification")
+            .unwrap();
+        let mut hosted = qualification
+            .get("hosted")
+            .unwrap()
+            .object("hosted")
+            .unwrap()
+            .clone();
+        hosted.insert("status".to_owned(), Json::String("passed".to_owned()));
+        hosted.insert(
+            "run_url".to_owned(),
+            Json::String("https://github.example/run".to_owned()),
+        );
+        hosted.insert("successes".to_owned(), Json::Number("0".to_owned()));
+        hosted.insert("failures".to_owned(), Json::Number("0".to_owned()));
+        let Json::Array(platforms) = hosted.get_mut("platforms").unwrap() else {
+            panic!("platforms must be an array");
+        };
+        for platform in platforms {
+            let Json::Object(platform) = platform else {
+                panic!("platform must be an object");
+            };
+            platform.insert("status".to_owned(), Json::String("passed".to_owned()));
+            platform.insert(
+                "run_url".to_owned(),
+                Json::String("https://github.example/run".to_owned()),
+            );
+            platform.insert("successes".to_owned(), Json::Number("1".to_owned()));
+        }
+        assert!(
+            validate_agent_phase1_hosted(&hosted)
+                .unwrap_err()
+                .contains("at least one success")
+        );
+
+        let mut review = inventory
+            .get("review")
+            .unwrap()
+            .object("review")
+            .unwrap()
+            .clone();
+        let fake_sha = "1111111111111111111111111111111111111111";
+        let fake_tree = "2222222222222222222222222222222222222222";
+        review.insert("status".to_owned(), Json::String("approved".to_owned()));
+        review.insert(
+            "exact_product_sha".to_owned(),
+            Json::String(fake_sha.to_owned()),
+        );
+        review.insert(
+            "exact_product_tree".to_owned(),
+            Json::String(fake_tree.to_owned()),
+        );
+        review.insert(
+            "reviewers".to_owned(),
+            Json::Array(vec![Json::Null, Json::Null]),
+        );
+        assert!(validate_agent_phase1_review(&review, Some(fake_sha), Some(fake_tree)).is_err());
+    }
+
+    #[test]
+    fn agent_phase1_gate_rejects_an_intervening_product_change() {
+        let scratch = scratch("agent-phase1-evidence-separation");
+        fs::create_dir_all(scratch.join("docs/release-evidence/agent-native-phase1")).unwrap();
+        fs::write(
+            scratch.join("docs/release-evidence/agent-native-phase1/phase1-inventory.json"),
+            "{\"contract_bundle\":{}}\n",
+        )
+        .unwrap();
+        fs::write(scratch.join("product.txt"), "product-v1\n").unwrap();
+        for arguments in [
+            vec!["init"],
+            vec!["config", "user.name", "heyfood test"],
+            vec!["config", "user.email", "test@hey.food"],
+            vec!["add", "."],
+            vec!["commit", "-m", "product"],
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(arguments)
+                    .current_dir(&scratch)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let product_sha = String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&scratch)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        fs::write(scratch.join("product.txt"), "product-v2\n").unwrap();
+        fs::write(
+            scratch.join("docs/release-evidence/agent-native-phase1/review.json"),
+            "{}\n",
+        )
+        .unwrap();
+        for arguments in [vec!["add", "."], vec!["commit", "-m", "invalid evidence"]] {
+            assert!(
+                Command::new("git")
+                    .args(arguments)
+                    .current_dir(&scratch)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let error = validate_agent_phase1_evidence_separation(
+            &scratch,
+            product_sha.trim(),
+            &Json::Object(Default::default()),
+        )
+        .unwrap_err();
+        assert!(error.contains("non-evidence product path"));
+        fs::remove_dir_all(scratch).unwrap();
     }
 
     #[test]

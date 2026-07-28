@@ -76,8 +76,10 @@ fn main() {
         println!("cargo:rerun-if-changed={}", root.join(relative).display());
     }
     for relative in [
+        ".cargo",
         ".github",
         "agent-integrations",
+        "assets",
         "crates",
         "docs",
         "fixtures",
@@ -88,6 +90,7 @@ fn main() {
         "Cargo.lock",
         "README.md",
         "install.sh",
+        "rust-toolchain.toml",
     ] {
         println!("cargo:rerun-if-changed={}", root.join(relative).display());
     }

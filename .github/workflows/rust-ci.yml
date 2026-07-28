@@ -120,6 +120,16 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - run: cargo xtask dependency-dag
 
+  agent-build-provenance:
+    name: Agent build provenance / ubuntu-latest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Linux native credential build dependencies
+        run: sudo apt-get update && sudo apt-get install --yes libdbus-1-dev pkg-config
+      - name: Prove incremental dirty compiled inputs change artifact identity
+        run: bash tests/agent_build_provenance_contract.sh
+
   stable-contracts:
     name: Stable contracts / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
