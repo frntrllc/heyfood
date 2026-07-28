@@ -1,6 +1,6 @@
 # heyfood agent integration threat model
 
-**Status:** Phase 0 implementation checkpoint; independent review pending; no public agent integration is enabled
+**Status:** v1 read/discovery integration supported in `v0.6.0`; agent mutations remain absent
 **Baseline:** `d68091a9cf6341c2c9120ba9251a6e0dd79a9616`
 
 ## Assets and trust boundaries
@@ -71,21 +71,20 @@ decision must be collected on a separate controlling terminal before dispatch.
 Allocating a PTY to automate that ceremony is unsupported and a cold-agent
 hard failure.
 
-## Residual Phase 0 risks
+## Residual risks and deferrals
 
-- The public Unix binary PTY test proves proposal stdin remains distinct from
-  the controlling-terminal decision. Exact installed-archive qualification
-  remains outstanding, including the Windows `CONIN$`/`CONOUT$` path.
-  Negative public-binary tests prove missing-terminal rejection occurs before
-  credential or network access.
+- The public macOS/Linux archive qualification proves proposal stdin remains
+  distinct from the controlling-terminal decision. Negative public-binary
+  tests prove missing-terminal rejection occurs before credential or network
+  access. Windows distribution and its installed `CONIN$`/`CONOUT$`
+  qualification remain deferred.
 - The frozen hello.food out-of-band approval protocol still requires
   independent security review. Its endpoint implementation and production
   proof are Phase 4 gates, not Phase 0 implementation.
-- The application boundaries and exact-host setup matrix are implemented as
-  Phase 0 evidence, but still require independent exact-SHA review.
-- Agent Skill, setup, and read-only MCP implementation are present in the
-  v0.6.0 candidate and remain gated on exact-byte Phase 5 qualification.
-  Phase 4 mutation endpoints and tools remain absent.
+- The application boundaries, exact-host setup matrix, Agent Skill, setup, and
+  read-only MCP implementation passed exact-SHA and exact-byte Phase 5
+  qualification for v0.6.0.
+- Phase 4 mutation endpoints and tools remain absent.
 
 The machine-readable Phase 0 inventory distinguishes Phase 0 review and
 qualification blockers from intentionally deferred implementation.

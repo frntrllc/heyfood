@@ -42,8 +42,14 @@ impl TempRoot {
             std::process::id()
         ));
         fs::create_dir_all(&path).unwrap();
-        for child in ["config", "data", "cache", "appdata", "localappdata"] {
-            fs::create_dir(path.join(child)).unwrap();
+        for child in [
+            "config",
+            "data",
+            "cache",
+            "AppData/Roaming",
+            "AppData/Local",
+        ] {
+            fs::create_dir_all(path.join(child)).unwrap();
         }
         Self(path)
     }
@@ -158,8 +164,8 @@ fn clean_profile_discovers_the_exact_protocol_and_gets_a_typed_auth_handoff() {
         .env("XDG_CONFIG_HOME", root.0.join("config"))
         .env("XDG_DATA_HOME", root.0.join("data"))
         .env("XDG_CACHE_HOME", root.0.join("cache"))
-        .env("APPDATA", root.0.join("appdata"))
-        .env("LOCALAPPDATA", root.0.join("localappdata"))
+        .env("APPDATA", root.0.join("AppData").join("Roaming"))
+        .env("LOCALAPPDATA", root.0.join("AppData").join("Local"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

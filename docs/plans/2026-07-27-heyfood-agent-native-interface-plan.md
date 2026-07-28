@@ -1,9 +1,9 @@
 # heyfood agent-native interface and distribution plan
 
-**Status:** Draft v4 — Phases 0 and 1 are closed; the `v0.6.0` candidate
-implements Phases 2 and 3 and remains gated on the bounded Phase 5
-installed-artifact and independent-review requirements below. Phase 4
-mutations are neither implemented nor authorized.
+**Status:** v0.6.0 read-only release slice complete — Phases 0 through 3 and
+the applicable Phase 5 source, installed-artifact, and independent-review
+requirements are closed. Phase 4 mutations are neither implemented nor
+authorized.
 **Baseline:** `frntrllc/heyfood` `main` at
 `d68091a9cf6341c2c9120ba9251a6e0dd79a9616`
 **Companion contracts:** `docs/CLI_CONTRACT.md`,
@@ -12,8 +12,8 @@ mutations are neither implemented nor authorized.
 `docs/plans/2026-07-19-heyfood-rust-native-client-plan.md`
 **Primary users:** people using heyfood through a terminal, and authorized
 coding agents such as Codex or Claude Code acting under those people's control
-**Release boundary:** post-`v0.5.0`; this plan does not change the supported
-`v0.5.0` platform or capability contract
+**Release boundary:** `v0.6.0` supersedes `v0.5.0` as the hosted-installer
+default without changing the supported macOS/Linux platform boundary
 
 **v0.6.0 release slice:** embedded self-description, receipt-bound Codex and
 Claude skill/MCP setup, and exactly six read/discovery MCP tools. The absence
@@ -1110,9 +1110,10 @@ not qualify the integration.
 - Skills and plugins declare the minimum and maximum compatible heyfood
   manifest versions. Incompatibility fails with an upgrade instruction, not a
   best-effort guess.
-- Phase 2/4 artifacts remain private candidates. Marketplace publication,
-  default setup activation, MCP mutation advertisement, and agent-support
-  claims require the applicable Phase 5 installed-artifact GO.
+- Phase 2 read-only artifacts are supported in v0.6.0 after their Phase 5
+  installed-artifact GO. Phase 4 artifacts remain private candidates;
+  marketplace publication, default setup activation, or MCP mutation
+  advertisement require a separate applicable Phase 5 GO.
 - Embedded guide, manifest, and schemas are built from the same source commit
   as the executable and covered by release attestations through the existing
   single-binary artifact.
@@ -1122,8 +1123,9 @@ not qualify the integration.
   token storage. Those remain independently gated product workstreams.
 - `heyfood mcp serve` is the documented long-lived JSON-RPC exception to the
   one-value JSON CLI contract; all other machine commands retain that contract.
-- `v0.5.0` remains supported as currently published; this plan does not
-  retroactively alter its archive, installer, or claims.
+- `v0.5.0` remains available as published, while `v0.6.0` is the current
+  hosted-installer release. This plan does not retroactively alter the v0.5.0
+  archive or claims.
 
 ## Documentation deliverables
 

@@ -4,7 +4,7 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
-## 0.6.0 - Unreleased candidate
+## 0.6.0 - 2026-07-28
 
 - Adds offline, exact-artifact agent discovery through `heyfood agent
   describe`, `guide`, `schema`, and `doctor`.
@@ -15,7 +15,7 @@ authentication contracts are stabilized.
   reads.
 - Keeps every agent mutation, arbitrary shell/file/raw-API access, TUI
   automation, Health, default-build native voice, and Windows distribution
-  outside the proposed release contract.
+  outside the supported release contract.
 
 ## 0.5.0 - 2026-07-25
 
