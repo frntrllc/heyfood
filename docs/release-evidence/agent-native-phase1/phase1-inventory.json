@@ -3,12 +3,12 @@
   "program": "heyfood-agent-native",
   "phase": 1,
   "release_line": "0.6.0",
-  "status": "product_complete_review_pending",
+  "status": "approved",
   "lineage": {
     "repository": "https://github.com/frntrllc/heyfood",
     "branch": "codex/agent-native-integration-plan",
-    "product_sha": null,
-    "product_tree": null
+    "product_sha": "f998b756114b71796ffe1cb68fca99655da3f3eb",
+    "product_tree": "4f671fa4c6aa4c1fd22221ec1baa68cf57a2bcc9"
   },
   "contract_bundle": {
     "sha256": "b827dbe69c5a66877a5c654dae7b715cb6b2f6954f11062c2a9f179824f77bcd",
@@ -105,46 +105,46 @@
     },
     {
       "id": "AN-P1-06-cross-platform-installed-artifact",
-      "status": "qualification_pending",
-      "evidence": [],
-      "blockers": [
-        "Exact candidate archives must pass macOS, Linux, and ordinary Windows semantic discovery qualification."
-      ]
+      "status": "satisfied",
+      "evidence": [
+        "docs/release-evidence/agent-native-phase1/phase1-qualification.json"
+      ],
+      "blockers": []
     },
     {
       "id": "AN-P1-07-exact-sha-review",
-      "status": "review_pending",
-      "evidence": [],
-      "blockers": [
-        "Independent Rust and agent-integration review of the exact product SHA is required."
-      ]
+      "status": "satisfied",
+      "evidence": [
+        "docs/release-evidence/agent-native-phase1/phase1-qualification.json"
+      ],
+      "blockers": []
     }
   ],
   "qualification": {
     "hosted": {
-      "status": "pending",
-      "run_url": null,
-      "successes": 0,
-      "expected_skips": 0,
-      "failures": null,
+      "status": "passed",
+      "run_url": "https://github.com/frntrllc/heyfood/actions/runs/30337463790",
+      "successes": 50,
+      "expected_skips": 4,
+      "failures": 0,
       "platforms": [
         {
           "platform": "linux",
-          "status": "pending",
-          "run_url": null,
-          "successes": 0
+          "status": "passed",
+          "run_url": "https://github.com/frntrllc/heyfood/actions/runs/30337463790",
+          "successes": 1
         },
         {
           "platform": "macos",
-          "status": "pending",
-          "run_url": null,
-          "successes": 0
+          "status": "passed",
+          "run_url": "https://github.com/frntrllc/heyfood/actions/runs/30337463790",
+          "successes": 1
         },
         {
           "platform": "windows",
-          "status": "pending",
-          "run_url": null,
-          "successes": 0
+          "status": "passed",
+          "run_url": "https://github.com/frntrllc/heyfood/actions/runs/30337463790",
+          "successes": 1
         }
       ]
     },
@@ -163,52 +163,67 @@
       ]
     },
     "artifacts": {
-      "status": "pending",
+      "status": "passed",
       "maximum_growth_bytes": 1048576,
       "targets": [
         {
           "target": "aarch64-apple-darwin",
           "baseline_v0_5_0_bytes": 2923971,
-          "candidate_v0_6_0_bytes": null,
-          "growth_bytes": null,
-          "sha256": null,
-          "installed_semantics": "pending"
+          "candidate_v0_6_0_bytes": 3020550,
+          "growth_bytes": 96579,
+          "sha256": "504095ebab871b5c90e62deb915d38b5de1193a35a86fd215a1a6dc891d06999",
+          "installed_semantics": "passed"
         },
         {
           "target": "x86_64-apple-darwin",
           "baseline_v0_5_0_bytes": 3189074,
-          "candidate_v0_6_0_bytes": null,
-          "growth_bytes": null,
-          "sha256": null,
-          "installed_semantics": "pending"
+          "candidate_v0_6_0_bytes": 3295772,
+          "growth_bytes": 106698,
+          "sha256": "bc71c3b5fb203e66bba9ca1084c7bbd0daad8143e2005e2377799a64f047d35a",
+          "installed_semantics": "passed"
         },
         {
           "target": "aarch64-unknown-linux-gnu",
           "baseline_v0_5_0_bytes": 3227966,
-          "candidate_v0_6_0_bytes": null,
-          "growth_bytes": null,
-          "sha256": null,
-          "installed_semantics": "pending"
+          "candidate_v0_6_0_bytes": 3324910,
+          "growth_bytes": 96944,
+          "sha256": "1bf11ce16e9a8370b3a8acf4559afc709545819ca73635e2c10099a37cebae06",
+          "installed_semantics": "passed"
         },
         {
           "target": "x86_64-unknown-linux-gnu",
           "baseline_v0_5_0_bytes": 3468910,
-          "candidate_v0_6_0_bytes": null,
-          "growth_bytes": null,
-          "sha256": null,
-          "installed_semantics": "pending"
+          "candidate_v0_6_0_bytes": 3570703,
+          "growth_bytes": 101793,
+          "sha256": "9537e304fb8be984f4eca5e0f2e5628ada2b42dfe9eafacf6135372a55c9313d",
+          "installed_semantics": "passed"
         }
       ]
     }
   },
   "review": {
-    "status": "pending",
-    "exact_product_sha": null,
-    "exact_product_tree": null,
-    "reviewers": []
+    "status": "approved",
+    "exact_product_sha": "f998b756114b71796ffe1cb68fca99655da3f3eb",
+    "exact_product_tree": "4f671fa4c6aa4c1fd22221ec1baa68cf57a2bcc9",
+    "reviewers": [
+      {
+        "role": "rust",
+        "reviewer": "Huygens",
+        "verdict": "go",
+        "product_sha": "f998b756114b71796ffe1cb68fca99655da3f3eb",
+        "product_tree": "4f671fa4c6aa4c1fd22221ec1baa68cf57a2bcc9"
+      },
+      {
+        "role": "agent_integration",
+        "reviewer": "Socrates",
+        "verdict": "go",
+        "product_sha": "f998b756114b71796ffe1cb68fca99655da3f3eb",
+        "product_tree": "4f671fa4c6aa4c1fd22221ec1baa68cf57a2bcc9"
+      }
+    ]
   },
   "release_gates": {
-    "phase2": "blocked_until_phase1_go",
+    "phase2": "authorized",
     "publication": "not_authorized_by_phase1"
   }
 }
