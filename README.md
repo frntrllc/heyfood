@@ -56,9 +56,16 @@ heyfood agent doctor
 ```
 
 Agents must use this self-description rather than scrape the interactive TUI
-or infer authority from `--help`. Codex/Claude setup and the local read-only
-MCP server are separately qualified increments and are not implied by the
-Phase 1 command family.
+or infer authority from `--help`. The opt-in Agent Skill setup defaults to a
+non-mutating preview:
+
+```bash
+heyfood --json agent setup --target all --scope user --dry-run
+```
+
+See [Agent Skill setup](docs/AGENT_SETUP.md) for apply, update, project-scope,
+and receipt-bound uninstall behavior. The local read-only MCP server is a
+separately qualified increment and is not implied by Agent Skill installation.
 
 ## Connect an account
 

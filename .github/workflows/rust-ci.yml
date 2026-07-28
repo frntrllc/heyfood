@@ -130,6 +130,28 @@ jobs:
       - name: Prove incremental dirty compiled inputs change artifact identity
         run: bash tests/agent_build_provenance_contract.sh
 
+  agent-integration-packages:
+    name: Agent integration packages / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Linux native credential build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes libdbus-1-dev pkg-config
+      - name: Verify canonical Codex and Claude skill packages
+        run: node scripts/agent/generate-skill-packages.mjs --check
+      - name: Test reversible host setup
+        run: cargo test --locked --package heyfood-agent-setup
+      - name: Verify the generated installed manifest fixture
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --locked --package heyfood-bin
+          node scripts/agent/generate-manifest-fixture.mjs --check
+
   stable-contracts:
     name: Stable contracts / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

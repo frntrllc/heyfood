@@ -1241,6 +1241,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "heyfood-agent-setup"
+version = "0.6.0"
+dependencies = [
+ "directories",
+ "fs2",
+ "heyfood-platform",
+ "heyfood-windows-file",
+ "jsonschema",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "heyfood-application"
 version = "0.6.0"
 dependencies = [
@@ -1260,6 +1274,7 @@ dependencies = [
  "clap",
  "heyfood-agent-contract",
  "heyfood-agent-runtime",
+ "heyfood-agent-setup",
  "heyfood-application",
  "heyfood-cli",
  "heyfood-core",

@@ -13,7 +13,7 @@ specific `capability_deferred`.
 | Native v0.4.0 | Unsupported | Do not install or use. Published before release authorization. |
 | Native v0.4.1 | Unsupported | Do not install or use. Published before release authorization. |
 | Hosted installer | Supported | Installs the checksum-verified native `v0.5.0` archive for macOS or Linux. |
-| Agent-native v0.6.0 source candidate | Qualification in progress | Adds exact installed self-description; Skill/setup/MCP support is gated independently and is not implied by the Phase 1 source. |
+| Agent-native v0.6.0 source candidate | Qualification in progress | Adds exact installed self-description and opt-in, receipt-bound Agent Skill setup for the qualified Codex and Claude Code versions. Read-only MCP remains independently gated. |
 | Source | Available | Public for inspection and contributor evaluation under Apache 2.0. |
 | Windows x86-64 | Deferred | Windows distribution is deferred to `v0.5.1`. Ordinary Windows compile, test, Clippy, Credential Manager, and deterministic packaging qualification remains active in CI, but no Windows credential or asset participates in the `v0.5.0` release path. |
 | macOS native archives | Supported in v0.5.0 | Both architectures are Developer ID signed with hardened runtime, Apple notarized, and installed-artifact qualified. |
@@ -40,7 +40,8 @@ specific `capability_deferred`.
 | Interactive TUI | Launches authenticated chat and functional read/action panels | N/A | Supported in v0.5.0; packaged archives pass the bounded clean/returning-user, household Grocery, failure-safety, and 40/80/120-column matrix. |
 | Voice capture | TUI `/voice`, Ctrl+Space, and F8 only in opt-in `native-audio` artifacts | Authenticated transcription | Not enabled in the default `0.5.0` build and not a recovery-release gate; real-hardware and platform qualification remain future work. |
 | Agent self-description | `heyfood agent describe/guide/schema/doctor` | None | Active in the v0.6.0 source candidate; offline, credential-free, bounded, and non-mutating. |
-| Codex/Claude setup and MCP | Not active in Phase 1 | N/A | Separately gated v0.6.0 work; the manifest reports MCP as deferred until installed-artifact qualification succeeds. |
+| Codex/Claude Agent Skill setup | `heyfood agent setup` / `agent uninstall` | N/A | Active in the v0.6.0 source candidate for the exact qualified host versions; dry-run is the default, apply is explicit, and MCP remains deferred. |
+| Local read-only MCP | Not active | N/A | Separately gated v0.6.0 work; the installed manifest continues to report MCP as deferred until protocol and installed-artifact qualification succeeds. |
 
 ## Process contract
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "heyfood"
+  short_description: "Use hello.food safely from coding agents"
+  default_prompt: "Use $heyfood to inspect my installed heyfood capabilities and help with a food or Grocery request."

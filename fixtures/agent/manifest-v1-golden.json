@@ -6,14 +6,17 @@
   },
   "binary_version": "0.6.0",
   "build": {
-    "source_commit": "0000000000000000000000000000000000000001",
-    "source_tree": "0000000000000000000000000000000000000002",
-    "dirty": false,
-    "toolchain": "rustc-qualified-fixture",
+    "build_input_digest_sha256": "4792b986e3f6b7f6da866aba9fa69edbb5963423d8d3f437542cbd0b15e12133",
+    "dirty": true,
     "distribution_channel": "development",
-    "target": "x86_64-unknown-linux-gnu",
-    "features": [],
-    "build_input_digest_sha256": "0000000000000000000000000000000000000000000000000000000000000003"
+    "features": [
+      "default",
+      "native-credentials"
+    ],
+    "source_commit": "cf83d43b07ed121cdc02521358a3511405f393e1",
+    "source_tree": "01804b40ffef1331249ccacf3beffe3e6c377120",
+    "target": "aarch64-apple-darwin",
+    "toolchain": "rustc 1.94.0 (4a4ef493e 2026-03-02)"
   },
   "capabilities": [
     {
@@ -195,6 +198,60 @@
       "reconciliation_command": null,
       "required_scopes": [],
       "retry_class": "not_applicable",
+      "status": "active"
+    },
+    {
+      "audience": "agent_unsupported",
+      "authorization_upgrade_command": null,
+      "browser_handoff": "none",
+      "credential_side_effect_possible": false,
+      "error_schema_id": "https://hey.food/schemas/v1/heyfood-cli-error.schema.json",
+      "error_schema_sha256": "18e5bc9fdafccd06e5a0e5bd185ba213488ef5f11fbfed51f06646992254cc8e",
+      "examples": [
+        "heyfood --json agent setup --target all --scope user --dry-run"
+      ],
+      "exit_behavior": "one_json_value",
+      "human_confirmation": "none",
+      "input_channel": "arguments",
+      "interactivity": "none",
+      "network": false,
+      "operation_class": "mutation",
+      "output_family": "agent_setup_plan_v1",
+      "output_schema_id": "https://hey.food/schemas/v1/heyfood-agent-setup-plan.schema.json",
+      "output_schema_sha256": "d2ecce6c1631adc5fe4ba7d42e4c4d9336e4cfcd905a4001b9592fa717b6401f",
+      "path": "agent setup",
+      "product_state_mutation": false,
+      "purpose": "Plan or install the canonical heyfood Agent Skill.",
+      "reconciliation_command": "heyfood agent setup --target TARGET --scope SCOPE --dry-run",
+      "required_scopes": [],
+      "retry_class": "no_blind_retry",
+      "status": "active"
+    },
+    {
+      "audience": "agent_unsupported",
+      "authorization_upgrade_command": null,
+      "browser_handoff": "none",
+      "credential_side_effect_possible": false,
+      "error_schema_id": "https://hey.food/schemas/v1/heyfood-cli-error.schema.json",
+      "error_schema_sha256": "18e5bc9fdafccd06e5a0e5bd185ba213488ef5f11fbfed51f06646992254cc8e",
+      "examples": [
+        "heyfood --json agent uninstall --target all --scope user --dry-run"
+      ],
+      "exit_behavior": "one_json_value",
+      "human_confirmation": "none",
+      "input_channel": "arguments",
+      "interactivity": "none",
+      "network": false,
+      "operation_class": "mutation",
+      "output_family": "agent_setup_plan_v1",
+      "output_schema_id": "https://hey.food/schemas/v1/heyfood-agent-setup-plan.schema.json",
+      "output_schema_sha256": "d2ecce6c1631adc5fe4ba7d42e4c4d9336e4cfcd905a4001b9592fa717b6401f",
+      "path": "agent uninstall",
+      "product_state_mutation": false,
+      "purpose": "Plan or remove an exact receipt-bound heyfood Agent Skill.",
+      "reconciliation_command": "heyfood agent uninstall --target TARGET --scope SCOPE --dry-run",
+      "required_scopes": [],
+      "retry_class": "no_blind_retry",
       "status": "active"
     },
     {

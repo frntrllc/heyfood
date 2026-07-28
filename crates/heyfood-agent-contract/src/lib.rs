@@ -23,6 +23,8 @@ pub const PUBLIC_OUTPUT_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-output.schema.json");
 pub const PROPOSAL_PRESENTATION_SCHEMA: &str =
     include_str!("../../../schemas/v1/agent-proposal-presentation.schema.json");
+pub const SETUP_PLAN_SCHEMA: &str =
+    include_str!("../../../schemas/v1/heyfood-agent-setup-plan.schema.json");
 
 pub const MANIFEST_SCHEMA_ID: &str =
     "https://hey.food/schemas/v1/heyfood-agent-manifest.schema.json";
@@ -37,6 +39,8 @@ pub const PUBLIC_OUTPUT_SCHEMA_ID: &str =
     "https://github.com/frntrllc/heyfood/blob/main/schemas/v1/heyfood-output.schema.json";
 pub const PROPOSAL_PRESENTATION_SCHEMA_ID: &str =
     "https://hey.food/schemas/v1/agent-proposal-presentation.schema.json";
+pub const SETUP_PLAN_SCHEMA_ID: &str =
+    "https://hey.food/schemas/v1/heyfood-agent-setup-plan.schema.json";
 
 pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 pub const MAX_SCHEMA_BYTES: usize = 1024 * 1024;
@@ -51,6 +55,7 @@ pub enum EmbeddedSchema {
     CliError,
     PublicOutput,
     ProposalPresentation,
+    SetupPlan,
 }
 
 impl EmbeddedSchema {
@@ -65,6 +70,7 @@ impl EmbeddedSchema {
             Self::CliError => "error",
             Self::PublicOutput => "output",
             Self::ProposalPresentation => "proposal-presentation",
+            Self::SetupPlan => "setup-plan",
         }
     }
 
@@ -79,6 +85,7 @@ impl EmbeddedSchema {
             Self::CliError => CLI_ERROR_SCHEMA_ID,
             Self::PublicOutput => PUBLIC_OUTPUT_SCHEMA_ID,
             Self::ProposalPresentation => PROPOSAL_PRESENTATION_SCHEMA_ID,
+            Self::SetupPlan => SETUP_PLAN_SCHEMA_ID,
         }
     }
 
@@ -93,11 +100,12 @@ impl EmbeddedSchema {
             Self::CliError => CLI_ERROR_SCHEMA,
             Self::PublicOutput => PUBLIC_OUTPUT_SCHEMA,
             Self::ProposalPresentation => PROPOSAL_PRESENTATION_SCHEMA,
+            Self::SetupPlan => SETUP_PLAN_SCHEMA,
         }
     }
 }
 
-pub const PUBLIC_SCHEMAS: [EmbeddedSchema; 8] = [
+pub const PUBLIC_SCHEMAS: [EmbeddedSchema; 9] = [
     EmbeddedSchema::Manifest,
     EmbeddedSchema::SchemaIndex,
     EmbeddedSchema::Doctor,
@@ -106,6 +114,7 @@ pub const PUBLIC_SCHEMAS: [EmbeddedSchema; 8] = [
     EmbeddedSchema::CliError,
     EmbeddedSchema::PublicOutput,
     EmbeddedSchema::ProposalPresentation,
+    EmbeddedSchema::SetupPlan,
 ];
 
 #[derive(Serialize)]
@@ -139,6 +148,11 @@ impl CommandContract {
     fn with_output_schema(mut self, schema: EmbeddedSchema) -> Self {
         self.output_schema_id = Some(schema.id());
         self.output_schema_sha256 = Some(sha256_hex(schema.document().as_bytes()));
+        self
+    }
+
+    fn with_reconciliation(mut self, command: &'static str) -> Self {
+        self.reconciliation_command = Some(command);
         self
     }
 }
@@ -303,6 +317,46 @@ fn commands() -> Vec<CommandContract> {
             &["heyfood agent doctor"],
         )
         .with_output_schema(EmbeddedSchema::Doctor),
+        command(
+            "agent setup",
+            "Plan or install the canonical heyfood Agent Skill.",
+            "agent_unsupported",
+            "arguments",
+            "agent_setup_plan_v1",
+            "one_json_value",
+            "mutation",
+            false,
+            false,
+            false,
+            NONE,
+            "no_blind_retry",
+            "none",
+            "none",
+            "none",
+            &["heyfood --json agent setup --target all --scope user --dry-run"],
+        )
+        .with_output_schema(EmbeddedSchema::SetupPlan)
+        .with_reconciliation("heyfood agent setup --target TARGET --scope SCOPE --dry-run"),
+        command(
+            "agent uninstall",
+            "Plan or remove an exact receipt-bound heyfood Agent Skill.",
+            "agent_unsupported",
+            "arguments",
+            "agent_setup_plan_v1",
+            "one_json_value",
+            "mutation",
+            false,
+            false,
+            false,
+            NONE,
+            "no_blind_retry",
+            "none",
+            "none",
+            "none",
+            &["heyfood --json agent uninstall --target all --scope user --dry-run"],
+        )
+        .with_output_schema(EmbeddedSchema::SetupPlan)
+        .with_reconciliation("heyfood agent uninstall --target TARGET --scope SCOPE --dry-run"),
         command(
             "ask",
             "Ask the hosted conversational service.",
@@ -873,15 +927,15 @@ pub fn doctor_document() -> Value {
         contracts.iter().all(|contract| {
             let error_bound = contract["error_schema_id"] == CLI_ERROR_SCHEMA_ID
                 && contract["error_schema_sha256"] == sha256_hex(CLI_ERROR_SCHEMA.as_bytes());
-            let output_bound = if contract["audience"] == "agent_safe" {
+            let output_bound = if contract["output_schema_id"].is_null() {
+                contract["output_schema_sha256"].is_null()
+            } else {
                 contract["output_schema_id"]
                     .as_str()
                     .and_then(schema_by_name)
                     .is_some_and(|schema| {
                         contract["output_schema_sha256"] == sha256_hex(schema.document().as_bytes())
                     })
-            } else {
-                contract["output_schema_id"].is_null() && contract["output_schema_sha256"].is_null()
             };
             error_bound && output_bound
         })
@@ -962,6 +1016,7 @@ mod tests {
             EmbeddedSchema::CliError,
             EmbeddedSchema::PublicOutput,
             EmbeddedSchema::ProposalPresentation,
+            EmbeddedSchema::SetupPlan,
         ] {
             assert!(schema.document().len() <= MAX_SCHEMA_BYTES);
             let parsed: Value = serde_json::from_str(schema.document()).unwrap();
@@ -1002,6 +1057,42 @@ mod tests {
                     }
                 }),
             ),
+            (
+                EmbeddedSchema::SetupPlan,
+                json!({
+                    "schema_version": 1,
+                    "operation": "install",
+                    "mode": "dry_run",
+                    "target": "codex",
+                    "scope": "user",
+                    "project_root": null,
+                    "binary": {
+                        "path": "/absolute/heyfood",
+                        "sha256": "0".repeat(64),
+                        "version": "0.6.0"
+                    },
+                    "package": {
+                        "name": "heyfood",
+                        "version": "0.6.0",
+                        "sha256": "1".repeat(64),
+                        "files": 6
+                    },
+                    "ready": true,
+                    "changed": false,
+                    "hosts": [{
+                        "host": "codex",
+                        "host_executable": "/absolute/codex",
+                        "host_version": "codex-cli 0.145.0-alpha.18",
+                        "compatible_version": "codex-cli 0.145.0-alpha.18",
+                        "compatibility": "compatible",
+                        "skill_path": "/home/user/.agents/skills/heyfood",
+                        "receipt_path": "/state/receipts/receipt.json",
+                        "action": "install",
+                        "conflicts": [],
+                        "user_actions": []
+                    }]
+                }),
+            ),
         ];
         for (schema, instance) in cases {
             let document: Value = serde_json::from_str(schema.document()).unwrap();
@@ -1030,7 +1121,8 @@ mod tests {
                 "schema-result",
                 "error",
                 "output",
-                "proposal-presentation"
+                "proposal-presentation",
+                "setup-plan"
             ]
         );
         let encoded = canonical_json(&index);

@@ -505,17 +505,24 @@ fn deferred_and_hidden_topology_is_never_agent_safe() {
 }
 
 #[test]
-fn phase1_publishes_only_offline_agent_discovery_not_mcp() {
+fn phase2_adds_only_bounded_agent_setup_without_mcp() {
     let command = CommandLine::command_tree();
     let agent = command
         .find_subcommand("agent")
-        .expect("Phase 1 agent discovery command");
+        .expect("agent discovery and setup command");
     assert_eq!(
         agent
             .get_subcommands()
             .map(clap::Command::get_name)
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["describe", "doctor", "guide", "schema"])
+        BTreeSet::from([
+            "describe",
+            "doctor",
+            "guide",
+            "schema",
+            "setup",
+            "uninstall"
+        ])
     );
     assert!(command.find_subcommand("mcp").is_none());
 }

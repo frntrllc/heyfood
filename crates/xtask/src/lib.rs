@@ -2121,8 +2121,51 @@ fn validate_agent_phase1_evidence_separation(
     product_sha: &str,
     current_bundle: &Json,
 ) -> Result<(), String> {
+    let evidence_head = Command::new("git")
+        .args([
+            "log",
+            "-1",
+            "--format=%H",
+            "HEAD",
+            "--",
+            "docs/release-evidence/agent-native-phase1",
+        ])
+        .current_dir(root)
+        .output()
+        .map_err(|error| format!("cannot identify Phase 1 evidence head: {error}"))?;
+    let evidence_head = String::from_utf8_lossy(&evidence_head.stdout)
+        .trim()
+        .to_owned();
+    validate_git_sha(&evidence_head, "agent-native Phase 1 evidence head")?;
+    for (ancestor, descendant, context) in [
+        (
+            product_sha,
+            evidence_head.as_str(),
+            "product SHA is not an ancestor of its evidence head",
+        ),
+        (
+            evidence_head.as_str(),
+            "HEAD",
+            "Phase 1 evidence head is not an ancestor of the current phase",
+        ),
+    ] {
+        let ancestry = Command::new("git")
+            .args(["merge-base", "--is-ancestor", ancestor, descendant])
+            .current_dir(root)
+            .status()
+            .map_err(|error| format!("cannot inspect Phase 1 evidence ancestry: {error}"))?;
+        if !ancestry.success() {
+            return Err(context.to_owned());
+        }
+    }
     let changed = Command::new("git")
-        .args(["diff", "--name-only", product_sha, "HEAD", "--"])
+        .args([
+            "diff",
+            "--name-only",
+            product_sha,
+            evidence_head.as_str(),
+            "--",
+        ])
         .current_dir(root)
         .output()
         .map_err(|error| format!("cannot inspect product/evidence separation: {error}"))?;
@@ -2305,12 +2348,32 @@ pub fn verify_agent_phase1_evidence(root: &Path) -> Result<AgentPhase1EvidenceRe
         }
         previous = Some(relative);
         let path = safe_relative_path(relative)?;
-        let bytes = fs::read(root.join(&path)).map_err(|error| {
-            format!(
-                "cannot read contract bundle file {}: {error}",
-                path.display()
-            )
-        })?;
+        let bytes = if let Some(product_sha) = product_sha {
+            let output = Command::new("git")
+                .args(["show", &format!("{product_sha}:{relative}")])
+                .current_dir(root)
+                .output()
+                .map_err(|error| {
+                    format!(
+                        "cannot read product-bound contract bundle file {}: {error}",
+                        path.display()
+                    )
+                })?;
+            if !output.status.success() {
+                return Err(format!(
+                    "product SHA does not contain contract bundle file {}",
+                    path.display()
+                ));
+            }
+            output.stdout
+        } else {
+            fs::read(root.join(&path)).map_err(|error| {
+                format!(
+                    "cannot read contract bundle file {}: {error}",
+                    path.display()
+                )
+            })?
+        };
         let normalized = std::str::from_utf8(&bytes)
             .map_err(|error| {
                 format!(
@@ -2834,6 +2897,10 @@ fn expected_workspace_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static
             BTreeSet::from(["heyfood-application", "heyfood-core"]),
         ),
         (
+            "heyfood-agent-setup",
+            BTreeSet::from(["heyfood-platform", "heyfood-windows-file"]),
+        ),
+        (
             "heyfood-platform",
             BTreeSet::from([
                 "heyfood-application",
@@ -2864,6 +2931,7 @@ fn expected_workspace_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static
             BTreeSet::from([
                 "heyfood-agent-contract",
                 "heyfood-agent-runtime",
+                "heyfood-agent-setup",
                 "heyfood-application",
                 "heyfood-cli",
                 "heyfood-core",
@@ -3787,13 +3855,13 @@ mod tests {
     }
 
     #[test]
-    fn checked_in_agent_phase1_evidence_is_machine_gated_while_pending() {
+    fn checked_in_agent_phase1_evidence_remains_approved_in_later_phases() {
         let evidence = verify_agent_phase1_evidence(&root()).unwrap();
         assert_eq!(evidence.requirements, 7);
-        assert_eq!(evidence.blockers, 2);
-        assert_eq!(evidence.hosted_status, "pending");
-        assert_eq!(evidence.artifact_status, "pending");
-        assert_eq!(evidence.review_status, "pending");
+        assert_eq!(evidence.blockers, 0);
+        assert_eq!(evidence.hosted_status, "passed");
+        assert_eq!(evidence.artifact_status, "passed");
+        assert_eq!(evidence.review_status, "approved");
     }
 
     #[test]
@@ -3824,6 +3892,10 @@ mod tests {
         let Json::Object(pending) = &mut empty_blockers[5] else {
             panic!("requirement must be an object");
         };
+        pending.insert(
+            "status".to_owned(),
+            Json::String("qualification_pending".to_owned()),
+        );
         pending.insert("blockers".to_owned(), Json::Array(Vec::new()));
         assert!(
             validate_agent_phase1_requirements(&root(), &empty_blockers)

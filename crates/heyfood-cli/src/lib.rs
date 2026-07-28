@@ -225,6 +225,10 @@ pub enum AgentCommand {
     Schema(AgentSchemaArgs),
     /// Run credential-free, network-free local integration diagnostics.
     Doctor,
+    /// Plan or install the canonical Agent Skill for a supported host.
+    Setup(AgentSetupArgs),
+    /// Remove only an exact receipt-bound Agent Skill installation.
+    Uninstall(AgentUninstallArgs),
 }
 
 #[derive(Clone, Debug, Args)]
@@ -254,6 +258,69 @@ pub struct AgentSchemaArgs {
     /// Public schema name or exact schema identifier.
     #[arg(value_name = "NAME_OR_ID")]
     pub schema: Option<String>,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct AgentSetupArgs {
+    /// Agent host to configure.
+    #[arg(long, value_enum)]
+    pub target: AgentSetupTarget,
+
+    /// Installation scope; project scope requires --project-root.
+    #[arg(long, value_enum)]
+    pub scope: AgentSetupScope,
+
+    /// Explicit absolute Git worktree root for project scope.
+    #[arg(long, value_name = "ABSOLUTE_PATH")]
+    pub project_root: Option<PathBuf>,
+
+    /// Apply the displayed plan. Without this flag setup is a dry-run.
+    #[arg(long, conflicts_with = "dry_run")]
+    pub apply: bool,
+
+    /// Explicitly request the default non-mutating dry-run.
+    #[arg(long, conflicts_with = "apply")]
+    pub dry_run: bool,
+
+    /// Replace only an exact prior receipt-bound heyfood installation.
+    #[arg(long)]
+    pub replace: bool,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct AgentUninstallArgs {
+    /// Agent host to remove.
+    #[arg(long, value_enum)]
+    pub target: AgentSetupTarget,
+
+    /// Installation scope; project scope requires --project-root.
+    #[arg(long, value_enum)]
+    pub scope: AgentSetupScope,
+
+    /// Explicit absolute Git worktree root for project scope.
+    #[arg(long, value_name = "ABSOLUTE_PATH")]
+    pub project_root: Option<PathBuf>,
+
+    /// Apply the displayed plan. Without this flag uninstall is a dry-run.
+    #[arg(long, conflicts_with = "dry_run")]
+    pub apply: bool,
+
+    /// Explicitly request the default non-mutating dry-run.
+    #[arg(long, conflicts_with = "apply")]
+    pub dry_run: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum AgentSetupTarget {
+    Codex,
+    Claude,
+    All,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum AgentSetupScope {
+    User,
+    Project,
 }
 
 #[derive(Clone, Debug, Args)]

@@ -1,0 +1,35 @@
+{
+  "name": "heyfood",
+  "version": "0.6.0",
+  "description": "Use the installed heyfood CLI safely from Codex.",
+  "author": {
+    "name": "FRNTR LLC",
+    "url": "https://hey.food"
+  },
+  "homepage": "https://hey.food",
+  "repository": "https://github.com/frntrllc/heyfood",
+  "license": "Apache-2.0",
+  "keywords": [
+    "food",
+    "grocery",
+    "dietary-safety",
+    "menu-watch"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "heyfood",
+    "shortDescription": "Use hello.food safely from Codex",
+    "longDescription": "Discover the installed heyfood contract and use capability-aware food, Grocery, and Menu Watch reads without automating the human TUI.",
+    "developerName": "FRNTR LLC",
+    "category": "Lifestyle",
+    "capabilities": [
+      "Read"
+    ],
+    "websiteURL": "https://hey.food",
+    "defaultPrompt": [
+      "Show my current heyfood capabilities.",
+      "Review my household-aware Grocery list.",
+      "List my recurring Menu Watches."
+    ]
+  }
+}

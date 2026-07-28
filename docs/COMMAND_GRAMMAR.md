@@ -27,11 +27,21 @@ heyfood agent guide --format markdown --safety
 heyfood agent schema --list
 heyfood agent schema manifest
 heyfood agent doctor
+heyfood agent setup --target codex|claude|all --scope user|project \
+  [--project-root /absolute/path] [--dry-run|--apply] [--replace]
+heyfood agent uninstall --target codex|claude|all --scope user|project \
+  [--project-root /absolute/path] [--dry-run|--apply]
 ```
 
 These commands do not read credentials, contact hello.food, mutate product
 state, or start the TUI. Schema lookup accepts only a public name or exact
 identifier from `--list`; unknown names return a typed runtime error.
+
+`agent setup` and `agent uninstall` are separate opt-in user configuration
+operations. They default to dry-run, require `--apply` to change state,
+preserve modified or unreceipted files, and never edit general `AGENTS.md`,
+`CLAUDE.md`, or shared MCP configuration. They are not agent-safe command
+fallbacks.
 
 ## Text input
 

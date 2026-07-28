@@ -29,6 +29,17 @@ Read `automation_surfaces`, capability status, command audience, required
 scopes, retry class, and human-confirmation requirements before choosing a
 surface. Never assume that a command is agent-safe merely because it exists.
 
+## Opt-in host setup
+
+`heyfood agent setup` installs one canonical, versioned Agent Skill for the
+qualified Codex and Claude Code host versions. It defaults to a credential-free
+dry run, changes no general host instructions, and does not enable MCP or grant
+permissions. Apply, replacement, and uninstall are exact-host,
+exact-executable, and receipt bound. See [AGENT_SETUP.md](AGENT_SETUP.md).
+
+The setup and uninstall commands are `agent_unsupported`: they are explicit
+human administration surfaces, not tools that an agent may invoke for itself.
+
 ## Command audiences
 
 - `agent_safe`: may be used by an agent exactly as documented.

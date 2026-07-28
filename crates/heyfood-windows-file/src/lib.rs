@@ -25,9 +25,10 @@ mod windows {
     };
     use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
     use windows_sys::Win32::Storage::FileSystem::{
-        CREATE_NEW, CreateFileW, DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_RENAME_INFO, FILE_SHARE_READ, FILE_SHARE_WRITE, FileAttributeTagInfo, FileRenameInfo,
+        BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateFileW, DELETE, FILE_ATTRIBUTE_DIRECTORY,
+        FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_RENAME_INFO, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        FileAttributeTagInfo, FileRenameInfo, GetFileInformationByHandle,
         GetFileInformationByHandleEx, READ_CONTROL, SetFileInformationByHandle, WRITE_DAC,
     };
 
@@ -78,6 +79,32 @@ mod windows {
         pub fn verify_regular(&self) -> io::Result<()> {
             verify_regular_file(&self.file)
         }
+    }
+
+    /// Stable identity and hard-link count for an already-open Windows file.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct FileIdentity {
+        pub volume_serial_number: u32,
+        pub file_index: u64,
+        pub number_of_links: u32,
+    }
+
+    /// Inspect an already-open file without relying on Rust's unstable Windows
+    /// by-handle metadata extensions.
+    #[allow(unsafe_code)]
+    pub fn file_identity(file: &File) -> io::Result<FileIdentity> {
+        let mut information = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: `information` is a live output buffer of the exact structure
+        // expected by Win32 and `file` owns a valid handle for the call.
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(FileIdentity {
+            volume_serial_number: information.dwVolumeSerialNumber,
+            file_index: (u64::from(information.nFileIndexHigh) << 32)
+                | u64::from(information.nFileIndexLow),
+            number_of_links: information.nNumberOfLinks,
+        })
     }
 
     struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
@@ -299,4 +326,4 @@ mod windows {
 }
 
 #[cfg(windows)]
-pub use windows::{AtomicOwnerOnlyFile, PublishedOwnerOnlyFile};
+pub use windows::{AtomicOwnerOnlyFile, FileIdentity, PublishedOwnerOnlyFile, file_identity};

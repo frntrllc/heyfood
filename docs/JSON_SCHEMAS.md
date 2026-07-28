@@ -65,6 +65,9 @@ The v0.6.0 source candidate exposes its public installed contracts through
   identifier, digest, and size inventory for public schemas.
 - `schemas/v1/heyfood-agent-doctor.schema.json` freezes privacy-safe offline
   diagnostics.
+- `schemas/v1/heyfood-agent-setup-plan.schema.json` freezes the opt-in
+  dry-run/apply/uninstall plan, exact binary and package identities, qualified
+  host observations, conflicts, and typed user handoffs.
 - `schemas/v1/heyfood-output.schema.json` remains the existing public result
   family contract.
 
@@ -72,4 +75,5 @@ The v0.6.0 source candidate exposes its public installed contracts through
 backend/implementation freeze and is intentionally absent from installed
 schema discovery because it describes commit authority. The golden manifest
 fixture is `fixtures/agent/manifest-v1-golden.json`. Self-description does not
-by itself claim Skill, setup, or MCP support.
+by itself claim MCP support; Agent Skill setup is a separately versioned,
+opt-in, receipt-bound surface.

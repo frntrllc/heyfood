@@ -23,6 +23,7 @@ native-audio = ["heyfood-agent-contract/native-audio", "heyfood-voice/native-aud
 [dependencies]
 heyfood-agent-contract = { version = "=0.6.0", path = "../heyfood-agent-contract" }
 heyfood-agent-runtime = { version = "=0.6.0", path = "../heyfood-agent-runtime" }
+heyfood-agent-setup = { version = "=0.6.0", path = "../heyfood-agent-setup" }
 heyfood-application = { version = "=0.6.0", path = "../heyfood-application" }
 heyfood-cli = { version = "=0.6.0", path = "../heyfood-cli" }
 heyfood-core = { version = "=0.6.0", path = "../heyfood-core" }

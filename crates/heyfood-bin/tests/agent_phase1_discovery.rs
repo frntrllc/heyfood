@@ -92,6 +92,10 @@ fn schemas_are_exact_embedded_bytes_without_network() {
             "proposal-presentation",
             heyfood_agent_contract::EmbeddedSchema::ProposalPresentation,
         ),
+        (
+            "setup-plan",
+            heyfood_agent_contract::EmbeddedSchema::SetupPlan,
+        ),
     ];
     for (name, schema) in cases {
         let service = TcpListener::bind("127.0.0.1:0").unwrap();
