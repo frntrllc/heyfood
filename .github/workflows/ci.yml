@@ -400,12 +400,6 @@ jobs:
             echo "HEYFOOD_SHOWCASE_SIGNED_CANDIDATE=true"
             echo "HEYFOOD_CANDIDATE_ARCHIVE=$GITHUB_WORKSPACE/candidate-dist/$archive"
           } >>"$GITHUB_ENV"
-      - name: Verify the protected macOS or Linux candidate
-        shell: bash
-        env:
-          HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
-          TARGET: ${{ matrix.target }}
-        run: scripts/release/smoke-archive.sh candidate-dist "$HEYFOOD_SHOWCASE_VERSION" "$TARGET"
       - name: Create an ephemeral macOS qualification keychain
         if: runner.os == 'macOS'
         shell: bash
@@ -422,6 +416,12 @@ jobs:
           security unlock-keychain -p "$keychain_password" "$keychain"
           security default-keychain -d user -s "$keychain"
           security list-keychains -d user -s "$keychain"
+      - name: Verify the protected macOS or Linux candidate
+        shell: bash
+        env:
+          HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
+          TARGET: ${{ matrix.target }}
+        run: scripts/release/smoke-archive.sh candidate-dist "$HEYFOOD_SHOWCASE_VERSION" "$TARGET"
       - name: Run the protected candidate matrix with native credentials
         if: runner.os != 'Linux'
         run: >-
