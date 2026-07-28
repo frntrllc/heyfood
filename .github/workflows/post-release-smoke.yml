@@ -9,12 +9,22 @@ on:
         description: GitHub Release version without the v prefix
         required: true
         type: string
+      verify_hosted_installer:
+        description: Verify and execute the hosted default installer after cutover
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       version:
         description: GitHub Release version without the v prefix
         required: true
         type: string
+      verify_hosted_installer:
+        description: Verify and execute the hosted default installer after cutover
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   attestations: read
@@ -68,6 +78,7 @@ jobs:
           HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
         run: scripts/release/smoke.sh release "$VERSION" "$TARGET"
       - name: Verify hosted installer provenance
+        if: inputs.verify_hosted_installer
         shell: bash
         run: |
           set -euo pipefail
@@ -92,7 +103,7 @@ jobs:
               shasum -a 256 -c install.sh.sha256
             fi
           )
-      - name: Install through the public hosted path
+      - name: Install exact public version through the reviewed installer
         shell: bash
         run: |
           set -euo pipefail
@@ -103,6 +114,22 @@ jobs:
           HOME="$install_home" \
             HEYFOOD_BIN_DIR="$install_bin" \
             HEYFOOD_VERSION="$VERSION" \
+            bash install.sh
+          test "$("$install_bin/heyfood" --version)" = "heyfood $VERSION"
+          "$install_bin/heyfood" --help >/dev/null
+          rm "$install_bin/heyfood"
+          test ! -e "$install_bin/heyfood"
+      - name: Install through the public hosted default
+        if: inputs.verify_hosted_installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_home="$RUNNER_TEMP/heyfood-hosted-home"
+          install_bin="$RUNNER_TEMP/heyfood-hosted-bin"
+          mkdir -p "$install_home" "$install_bin"
+          chmod 0700 "$install_home" "$install_bin"
+          HOME="$install_home" \
+            HEYFOOD_BIN_DIR="$install_bin" \
             bash hosted-installer/install.sh
           test "$("$install_bin/heyfood" --version)" = "heyfood $VERSION"
           "$install_bin/heyfood" --help >/dev/null

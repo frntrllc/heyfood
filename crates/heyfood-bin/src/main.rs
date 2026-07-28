@@ -318,10 +318,14 @@ async fn main() -> ExitCode {
 
 #[cfg(feature = "native-credentials")]
 fn raw_arguments_request_mcp() -> bool {
-    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
-    arguments.windows(2).any(|pair| {
-        pair[0] == std::ffi::OsStr::new("mcp") && pair[1] == std::ffi::OsStr::new("serve")
-    })
+    // Reject inherited HEYFOOD_* state before debug credential hooks for every
+    // Clap-valid placement of global boolean flags. Once the first positional
+    // command is `mcp`, it is an MCP launch attempt; subcommand validation can
+    // happen later after the environment has been proven clean.
+    std::env::args_os()
+        .skip(1)
+        .find(|argument| !argument.to_string_lossy().starts_with('-'))
+        .is_some_and(|argument| argument == std::ffi::OsStr::new("mcp"))
 }
 
 #[cfg(feature = "native-credentials")]

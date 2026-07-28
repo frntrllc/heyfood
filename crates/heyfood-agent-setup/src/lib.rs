@@ -823,12 +823,10 @@ fn harden_open_directory(directory: &CapDir, absolute_path: &Path) -> Result<(),
     {
         use std::os::unix::fs::PermissionsExt;
         directory
-            .try_clone()
-            .and_then(|value| {
-                value
-                    .into_std_file()
-                    .set_permissions(fs::Permissions::from_mode(0o700))
-            })
+            .set_symlink_permissions(
+                Path::new("."),
+                cap_std::fs::Permissions::from_std(fs::Permissions::from_mode(0o700)),
+            )
             .map_err(|error| SetupError::new("agent_setup_permissions", error.to_string()))?;
     }
     #[cfg(windows)]
@@ -898,13 +896,18 @@ fn validate_windows_open_directory_identity(
         .try_clone()
         .map(CapDir::into_std_file)
         .map_err(|error| SetupError::new("agent_setup_permissions", error.to_string()))?;
-    let reopened = File::open(path)
+    let opened_metadata = directory
+        .dir_metadata()
         .map_err(|error| SetupError::new("agent_setup_permissions", error.to_string()))?;
+    if !opened_metadata.is_dir() {
+        return Err(SetupError::new(
+            "agent_setup_redirect",
+            "setup directory identity changed during permission hardening",
+        ));
+    }
     let opened_identity = heyfood_windows_file::file_identity(&opened)
         .map_err(|error| SetupError::new("agent_setup_permissions", error.to_string()))?;
-    let path_identity = heyfood_windows_file::file_identity(&reopened)
-        .map_err(|error| SetupError::new("agent_setup_permissions", error.to_string()))?;
-    if opened_identity != path_identity {
+    if opened_identity.number_of_links == 0 {
         return Err(SetupError::new(
             "agent_setup_redirect",
             "setup directory identity changed during permission hardening",
@@ -1910,7 +1913,9 @@ fn normalize_project_root(options: &SetupOptions) -> Result<Option<PathBuf>, Set
                 ));
             }
             validate_existing_directory(root)?;
-            let git = root.join(".git");
+            let canonical_root = fs::canonicalize(root)
+                .map_err(|error| SetupError::new("agent_setup_project_root", error.to_string()))?;
+            let git = canonical_root.join(".git");
             let git_metadata = fs::symlink_metadata(&git).map_err(|_| {
                 SetupError::new(
                     "agent_setup_project_root",
@@ -1923,9 +1928,55 @@ fn normalize_project_root(options: &SetupOptions) -> Result<Option<PathBuf>, Set
                     "project Git identity must not be a symlink or reparse point",
                 ));
             }
-            fs::canonicalize(root)
-                .map(Some)
-                .map_err(|error| SetupError::new("agent_setup_project_root", error.to_string()))
+            let git = find_executable("git").ok_or_else(|| {
+                SetupError::new(
+                    "agent_setup_project_root",
+                    "project scope requires Git to verify the worktree identity",
+                )
+            })?;
+            let output = bounded_host_command(
+                &git,
+                &[
+                    OsString::from("-C"),
+                    canonical_root.as_os_str().to_owned(),
+                    OsString::from("rev-parse"),
+                    OsString::from("--show-toplevel"),
+                ],
+                None,
+                HOST_COMMAND_TIMEOUT,
+                HOST_COMMAND_OUTPUT_LIMIT,
+            )
+            .map_err(|_| {
+                SetupError::new(
+                    "agent_setup_project_root",
+                    "project root must identify an existing Git worktree",
+                )
+            })?;
+            if !output.success {
+                return Err(SetupError::new(
+                    "agent_setup_project_root",
+                    "project root must identify an existing Git worktree",
+                ));
+            }
+            let reported = String::from_utf8(output.stdout).map_err(|_| {
+                SetupError::new(
+                    "agent_setup_project_root",
+                    "Git returned a non-UTF-8 worktree identity",
+                )
+            })?;
+            let reported = fs::canonicalize(reported.trim()).map_err(|_| {
+                SetupError::new(
+                    "agent_setup_project_root",
+                    "Git returned an invalid worktree identity",
+                )
+            })?;
+            if reported != canonical_root {
+                return Err(SetupError::new(
+                    "agent_setup_project_root",
+                    "project root must be the exact Git worktree top level",
+                ));
+            }
+            Ok(Some(canonical_root))
         }
     }
 }
@@ -2741,7 +2792,19 @@ mod tests {
         request.scope = SetupScope::Project;
         assert!(execute_with_environment(&request, &environment).is_err());
         let project = root.join("repo");
-        fs::create_dir_all(project.join(".git")).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        let fake = root.join("fake-repo");
+        fs::create_dir_all(fake.join(".git")).unwrap();
+        request.project_root = Some(fake);
+        assert!(execute_with_environment(&request, &environment).is_err());
+        assert!(
+            Command::new("git")
+                .args(["init", "--quiet"])
+                .current_dir(&project)
+                .status()
+                .unwrap()
+                .success()
+        );
         request.project_root = Some(project.clone());
         let plan = execute_with_environment(&request, &environment).unwrap();
         assert_eq!(plan.project_root, Some(fs::canonicalize(project).unwrap()));

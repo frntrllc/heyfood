@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "mode": "mcp_stdio",
-  "status": "frozen_not_implemented",
+  "status": "implemented_and_verified",
   "service": {
     "origin": "https://api.hello.food",
     "network_policy": "production",

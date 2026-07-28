@@ -11,8 +11,9 @@ Releases. The legacy Python/PyPI channel is not a release authority.
    and `CHANGELOG.md` describes that version.
 3. `install.sh`, its macOS/Linux contract suite, `install.sh.sha256`, and every
    release packaging verifier pass.
-4. The hosted `https://hey.food/install.sh` and `install.sh.sha256` mirror the
-   reviewed release-commit bytes before the tag is pushed.
+4. The reviewed installer passes its local exact-version contract. The
+   currently supported hosted installer remains unchanged until the new
+   release assets exist.
 5. The release commit contains no secrets, private data, or proprietary service
    content.
 
@@ -45,20 +46,23 @@ Releases. The legacy Python/PyPI channel is not a release authority.
 
 1. Merge the reviewed version/changelog and distribution changes. Wait for all
    required checks on `main` to pass.
-2. Deploy the separately reviewed `install.sh` and `install.sh.sha256` bytes to
-   `https://hey.food/`, then compare both hosted responses byte-for-byte with
-   the current `main` checkout.
-3. Create an annotated `vMAJOR.MINOR.PATCH` tag at that exact `main` commit and
+2. Create an annotated `vMAJOR.MINOR.PATCH` tag at that exact `main` commit and
    push only the tag.
-4. The release workflow validates the tag, runs the native workspace tests,
+3. The release workflow validates the tag, runs the native workspace tests,
    builds and smokes all four target executables, creates deterministic
    archives, qualifies embedded agent discovery, reversible Codex/Claude setup,
    and the bounded MCP protocol, generates `SHA256SUMS`, attests all five
    files, and creates the GitHub Release.
-5. The reusable post-release workflow downloads the public files on all four
+4. The initial post-release workflow downloads the public files on all four
    target runners, verifies checksums, archive policy, and GitHub attestations,
-   then runs both the public executable smoke and the hosted installer contract.
-6. Confirm the GitHub Release and all four public smoke jobs are green. A
+   then installs the exact new version through the reviewed repository
+   installer. The hosted default continues serving the prior supported release.
+5. Only after step 4 is green, deploy the separately reviewed `install.sh` and
+   `install.sh.sha256` bytes to `https://hey.food/`, compare both responses
+   byte-for-byte with `main`, and manually dispatch the reusable post-release
+   workflow with hosted-installer verification enabled.
+6. Confirm the GitHub Release, all four public artifact smokes, and all four
+   hosted-installer smokes are green. A
    release is not complete while any target or hosted-installer smoke is red.
 
 ## Failed or unsafe releases

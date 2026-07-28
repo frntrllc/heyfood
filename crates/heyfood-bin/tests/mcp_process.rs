@@ -100,6 +100,26 @@ fn inherited_heyfood_environment_fails_before_protocol_stdout() {
         }
         assert!(!stderr.contains("must-not-be-read"), "{name}");
     }
+    for arguments in [
+        vec!["mcp", "--json", "serve"],
+        vec!["--json", "mcp", "serve"],
+        vec!["--verbose", "mcp", "serve"],
+    ] {
+        let output = command()
+            .args(arguments)
+            .env("HEYFOOD_TEST_DELETE_NATIVE_CREDENTIALS", "1")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        if cfg!(feature = "native-credentials") {
+            assert!(
+                stderr.contains("HEYFOOD_TEST_DELETE_NATIVE_CREDENTIALS"),
+                "{stderr}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -230,6 +250,12 @@ fn clean_profile_discovers_the_exact_protocol_and_gets_a_typed_auth_handoff() {
         );
     } else {
         assert_eq!(error_code, "login_required");
+    }
+    if error_code == "login_required" {
+        assert_eq!(
+            missing_auth["result"]["structuredContent"]["error"]["user_action"],
+            "heyfood login"
+        );
     }
 
     drop(stdin);

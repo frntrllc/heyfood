@@ -26,6 +26,12 @@ When present, prefer:
 
 Do not guess that a service failure means an empty result.
 
+Collection tools return at most 100 records. When `page.next_cursor` is
+present, pass it back unchanged with an optional `limit` from 1 through 100.
+Do not parse, edit, or fabricate cursors. If the server returns
+`mcp_cursor_stale`, restart at the first page and do not combine pages from
+different snapshots.
+
 ## Human experience
 
 Bare `heyfood` and `heyfood chat` are human terminal experiences. Tell the

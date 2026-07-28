@@ -1,6 +1,6 @@
 # heyfood local MCP contract
 
-**Status:** v1 read/discovery contract supported in `v0.6.0`
+**Status:** v1 read/discovery contract implemented in the `v0.6.0` release candidate; public support is pending exact-byte qualification and publication
 
 ## Transport
 
@@ -84,6 +84,12 @@ The ninth request receives a typed overloaded error and is not queued.
 Network-free manifest/schema reads may run while one remote operation is in
 flight, but total outstanding work remains eight. Slow readers cannot create
 an unbounded channel.
+
+The three collection tools accept a closed optional input object with
+`limit` (1 through 100) and an opaque, snapshot-bound `cursor`. Results include
+a `page` object with `returned` and `next_cursor`. Each page is a fresh
+authenticated read; changed collection bytes produce `mcp_cursor_stale`, and
+callers restart from the first page rather than combining snapshots.
 
 ## Cancellation and retry
 

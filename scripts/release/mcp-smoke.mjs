@@ -199,6 +199,12 @@ try {
       `signed macOS clean profile returned ${structured(missingAuthentication).error.code} instead of login_required`,
     );
   }
+  if (
+    structured(missingAuthentication).error.code === "login_required" &&
+    structured(missingAuthentication).error.user_action !== "heyfood login"
+  ) {
+    throw new Error("clean-profile MCP auth failure omitted the exact heyfood login handoff");
+  }
 
   child.stdin.end();
   await waitForExit();

@@ -910,11 +910,16 @@ impl StatusPort for HttpService {
         Box::pin(async move {
             self.profile_consent_status(&credentials, operation_id, cancellation)
                 .await
-                .map(|document| {
+                .and_then(|document| {
                     document
                         .get("has_consent")
                         .and_then(Value::as_bool)
-                        .unwrap_or(false)
+                        .ok_or_else(|| {
+                            PortError::new(
+                                "profile_consent_contract",
+                                "The profile consent response omitted boolean `has_consent`",
+                            )
+                        })
                 })
         })
     }

@@ -3,7 +3,7 @@ use std::time::Duration;
 use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
 use heyfood_application::{
     CapabilitySnapshot, DiscoverCapabilities, ListMenuWatches, ReadActiveGroceryDisplay,
-    ReadGroceryExclusions, RegistrationAvailability,
+    ReadGroceryExclusions, RegistrationAvailability, StatusPort,
 };
 use heyfood_core::{
     AccountId, AddItemsRequestWire, CredentialVersion, ExclusionMutationRequestWire,
@@ -908,6 +908,28 @@ async fn profile_consent_and_versioned_upload_preserve_the_frozen_contract() {
         .await
         .unwrap();
     assert_eq!(uploaded["version"], 8);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn malformed_successful_profile_consent_fails_closed() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("GET /v1/profile/consent "));
+        respond(
+            &mut socket,
+            200,
+            json!({"has_consent": "not-a-boolean", "consent_version": 1}),
+        )
+        .await;
+    });
+    let error = service
+        .profile_consent_granted(credentials(), OperationId::new(), CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "profile_consent_contract");
     server.await.unwrap();
 }
 

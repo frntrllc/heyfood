@@ -83,8 +83,9 @@ hard failure.
   proof are Phase 4 gates, not Phase 0 implementation.
 - The application boundaries and exact-host setup matrix are implemented as
   Phase 0 evidence, but still require independent exact-SHA review.
-- Agent Skill, setup, and MCP implementation remain deliberately absent until
-  their later authorized phases.
+- Agent Skill, setup, and read-only MCP implementation are present in the
+  v0.6.0 candidate and remain gated on exact-byte Phase 5 qualification.
+  Phase 4 mutation endpoints and tools remain absent.
 
 The machine-readable Phase 0 inventory distinguishes Phase 0 review and
 qualification blockers from intentionally deferred implementation.
