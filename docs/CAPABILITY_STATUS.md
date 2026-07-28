@@ -28,14 +28,14 @@ specific `capability_deferred`.
 | Login and authorization replacement | `heyfood login` | Fresh existing-account connection or atomic channel and application-session grant replacement | Current source command |
 | Food questions | `heyfood ask` | Hosted agent turn | Current source command |
 | Conversation continuation | `heyfood reply --conversation-id …` | Hosted conversation state | Current source command |
-| Meal logging | `heyfood log` | Hosted agent and meal memory | Current source command |
+| Meal logging | `heyfood log` | Hosted agent and meal memory; direct use requires controlling-terminal `LOG` authorization | Current human-terminal-only source command |
 | Item evaluation | `heyfood item` | Restaurant/menu evidence and dietary evaluation | Current source command |
-| Grocery | `heyfood grocery` plus TUI confirmation cards | Read, prepare, export, explicitly confirm/cancel, and correct pending add-item names | Supported v0.5.0 command |
+| Grocery | `heyfood grocery` plus TUI confirmation cards | Read/export; direct preparation and confirm/cancel require exact controlling-terminal review phrases | Supported v0.5.0 command with human-only mutations |
 | Oura health integrations | Not advertised; retained command spelling fails closed with `capability_deferred` | Future provider-neutral integration work | Deferred from the supported `v0.5.0` contract; no implementation or canary release gate |
 | Apple Health | No CLI command or TUI panel | Mobile/backend work remains outside this release | Deferred from the supported `v0.5.0` contract |
 | Household context | Used by hosted turns and Grocery | Profiles and household-aware evaluation | Backend available; native roster management unavailable |
 | Restaurants and recipes | Via `ask` and `item` | Resolution, menu evidence, and recipe tools | Hosted through current commands |
-| Menu Watch | `heyfood watch` plus `/watch` TUI panel | Create/list/remove and scheduled execution are deployed; latest account-owned change summary, source, freshness, and provenance render in the TUI | Current source management and summary view; item-level diff detail remains follow-on |
+| Menu Watch | `heyfood watch` plus `/watch` TUI panel | List plus human-terminal-only create (`CREATE`) and remove (`REMOVE`); scheduled execution is deployed; latest account-owned change summary, source, freshness, and provenance render in the TUI | Current source management and summary view; item-level diff detail remains follow-on |
 | Interactive TUI | Launches authenticated chat and functional read/action panels | N/A | Supported in v0.5.0; packaged archives pass the bounded clean/returning-user, household Grocery, failure-safety, and 40/80/120-column matrix. |
 | Voice capture | TUI `/voice`, Ctrl+Space, and F8 only in opt-in `native-audio` artifacts | Authenticated transcription | Not enabled in the default `0.5.0` build and not a recovery-release gate; real-hardware and platform qualification remain future work. |
 

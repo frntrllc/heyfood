@@ -2,7 +2,8 @@
 
 #![forbid(unsafe_code)]
 
-use std::io::{self, IsTerminal, Read, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -279,7 +280,7 @@ async fn main() -> ExitCode {
         Some(Command::Onboard(_)) => onboard(machine).await,
         Some(Command::Health { .. }) => deferred_health_command(machine),
         Some(command) if is_native_one_shot(&command) => {
-            one_shot(command, output_mode, machine).await
+            one_shot(command, output_mode, machine, no_input).await
         }
         Some(_) => pending_command(machine),
         None => bare(machine).await,
@@ -566,7 +567,12 @@ fn deferred_health_command(machine: bool) -> ExitCode {
     )
 }
 
-async fn one_shot(command: Command, output_mode: OutputMode, machine: bool) -> ExitCode {
+async fn one_shot(
+    command: Command,
+    output_mode: OutputMode,
+    machine: bool,
+    no_input: bool,
+) -> ExitCode {
     // Install the signal handler before any consuming auth request. Once a
     // rotating refresh is dispatched, Ctrl-C is recorded but the bounded
     // request and durable reconciliation are allowed to finish.
@@ -577,7 +583,7 @@ async fn one_shot(command: Command, output_mode: OutputMode, machine: bool) -> E
             signal_cancellation.cancel();
         }
     });
-    let result = one_shot_inner(command, output_mode, cancellation).await;
+    let result = one_shot_inner(command, output_mode, cancellation, no_input).await;
     signal.abort();
     match result {
         Ok(output) => {
@@ -746,14 +752,16 @@ async fn one_shot_inner(
     command: Command,
     output_mode: OutputMode,
     cancellation: CancellationToken,
+    no_input: bool,
 ) -> Result<String, heyfood_bin::OneShotError> {
+    let stdin = read_command_stdin(&command)?;
+    authorize_human_only_command(&command, &stdin, no_input)?;
     let prepared = prepare_native_session(Some(&command), cancellation.child_token()).await?;
     let imported_state = load_selector_state(
         &prepared.paths,
         &command,
         prepared.snapshot.credentials.account_id.as_str(),
     )?;
-    let stdin = read_command_stdin(&command)?;
     heyfood_bin::execute_qualified_one_shot_with_state(
         prepared.service.as_ref(),
         prepared.ensure_session.as_ref(),
@@ -765,6 +773,318 @@ async fn one_shot_inner(
         imported_state.as_ref(),
     )
     .await
+}
+
+fn authorize_human_only_command(
+    command: &Command,
+    stdin: &[u8],
+    no_input: bool,
+) -> Result<(), heyfood_bin::OneShotError> {
+    if !requires_human_terminal_authority(command) {
+        return Ok(());
+    }
+    if no_input {
+        return Err(heyfood_bin::OneShotError::new(
+            "human_input_disabled",
+            "This human-only command cannot run with --no-input.",
+        ));
+    }
+
+    #[cfg(debug_assertions)]
+    if std::env::var_os("HEYFOOD_TEST_FORCE_NO_CONTROLLING_TERMINAL").as_deref()
+        == Some(std::ffi::OsStr::new("1"))
+    {
+        return Err(heyfood_bin::OneShotError::new(
+            "human_terminal_required",
+            "This human-only command requires a separate attached controlling terminal.",
+        ));
+    }
+
+    let (input, mut output) = open_controlling_terminal().map_err(|_| {
+        heyfood_bin::OneShotError::new(
+            "human_terminal_required",
+            "This human-only command requires a separate attached controlling terminal.",
+        )
+    })?;
+    let mut input = BufReader::new(input);
+    review_human_only_command(command, stdin, &mut input, &mut output)
+}
+
+const fn requires_human_terminal_authority(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Log(_)
+            | Command::Grocery {
+                command: Some(
+                    heyfood_cli::GroceryCommand::Add(_)
+                        | heyfood_cli::GroceryCommand::Remove(_)
+                        | heyfood_cli::GroceryCommand::State(_)
+                        | heyfood_cli::GroceryCommand::Never(_)
+                        | heyfood_cli::GroceryCommand::Confirm(_)
+                )
+            }
+            | Command::Watch {
+                command: Some(
+                    heyfood_cli::MenuWatchCommand::Add(_)
+                        | heyfood_cli::MenuWatchCommand::Remove(_)
+                )
+            }
+    )
+}
+
+fn review_human_only_command(
+    command: &Command,
+    stdin: &[u8],
+    input: &mut dyn BufRead,
+    output: &mut dyn Write,
+) -> Result<(), heyfood_bin::OneShotError> {
+    let (review, expected) = human_review_document(command, stdin)?;
+    writeln!(
+        output,
+        "\nheyfood human-only authorization\n\n{review}\n\nType {expected} to continue:"
+    )
+    .and_then(|_| output.flush())
+    .map_err(|_| {
+        heyfood_bin::OneShotError::new(
+            "human_terminal_write",
+            "Could not write the human-only review to the controlling terminal.",
+        )
+    })?;
+
+    let mut decision = String::new();
+    input.read_line(&mut decision).map_err(|_| {
+        heyfood_bin::OneShotError::new(
+            "human_terminal_read",
+            "Could not read the human decision from the controlling terminal.",
+        )
+    })?;
+    if decision.trim() != expected {
+        return Err(heyfood_bin::OneShotError::new(
+            "human_confirmation_declined",
+            "The human-only command was not authorized; no network request was dispatched.",
+        ));
+    }
+    Ok(())
+}
+
+fn human_review_document(
+    command: &Command,
+    stdin: &[u8],
+) -> Result<(String, &'static str), heyfood_bin::OneShotError> {
+    match command {
+        Command::Log(arguments) => {
+            let meal = bounded_human_data(
+                if arguments.meal.is_empty() {
+                    stdin_text(stdin, "meal")?
+                } else {
+                    arguments.meal_text()
+                },
+                500,
+                "meal",
+            )?;
+            let meal_type = arguments
+                .meal_type
+                .map(|value| value.as_str())
+                .unwrap_or("unspecified");
+            Ok((
+                format!(
+                    "Mutation: log meal memory\nMeal: {}\nMeal type: {}",
+                    inline_human_text(&meal),
+                    inline_human_text(meal_type)
+                ),
+                "LOG",
+            ))
+        }
+        Command::Grocery {
+            command: Some(heyfood_cli::GroceryCommand::Add(arguments)),
+        } => Ok((
+            format!(
+                "Preparation: create an add-items proposal containing commit authority\nList: {}\nExpected version: {}\nItems:\n{}\nIntended for: {}",
+                inline_human_text(&arguments.list.list_id),
+                arguments.list.version,
+                review_lines(&arguments.items),
+                arguments
+                    .intended_for
+                    .as_deref()
+                    .map(inline_human_text)
+                    .unwrap_or_else(|| "unspecified".into())
+            ),
+            "PREPARE",
+        )),
+        Command::Grocery {
+            command: Some(heyfood_cli::GroceryCommand::Remove(arguments)),
+        } => Ok((
+            format!(
+                "Preparation: create a remove-items proposal containing commit authority\nList: {}\nExpected version: {}\nItems:\n{}",
+                inline_human_text(&arguments.list.list_id),
+                arguments.list.version,
+                review_lines(&arguments.items)
+            ),
+            "PREPARE",
+        )),
+        Command::Grocery {
+            command: Some(heyfood_cli::GroceryCommand::State(arguments)),
+        } => Ok((
+            format!(
+                "Preparation: create an item-state proposal containing commit authority\nList: {}\nExpected version: {}\nItem: {}\nNew state: {:?}",
+                inline_human_text(&arguments.list.list_id),
+                arguments.list.version,
+                inline_human_text(&arguments.item),
+                arguments.state
+            ),
+            "PREPARE",
+        )),
+        Command::Grocery {
+            command: Some(heyfood_cli::GroceryCommand::Never(arguments)),
+        } => Ok((
+            format!(
+                "Preparation: create a never-buy proposal containing commit authority\nList: {}\nExpected version: {}\nItem: {}\nAction: {} exclusion",
+                inline_human_text(&arguments.list.list_id),
+                arguments.list.version,
+                inline_human_text(&arguments.item),
+                if arguments.remove { "remove" } else { "add" }
+            ),
+            "PREPARE",
+        )),
+        Command::Grocery {
+            command: Some(heyfood_cli::GroceryCommand::Confirm(arguments)),
+        } => {
+            if !arguments.proposal_stdin {
+                return Err(heyfood_bin::OneShotError::new(
+                    "confirmation_input",
+                    "confirmation proposals must be read from stdin",
+                ));
+            }
+            if stdin.is_empty() || stdin.len() > heyfood_bin::MAX_CONFIRMATION_STDIN_BYTES {
+                return Err(heyfood_bin::OneShotError::new(
+                    "confirmation_input",
+                    "confirmation proposal stdin must contain at most 1 MiB",
+                ));
+            }
+            let proposal: heyfood_core::GroceryMutationProposalWire = serde_json::from_slice(stdin)
+                .map_err(|_| {
+                    heyfood_bin::OneShotError::new(
+                        "confirmation_input",
+                        "confirmation proposal stdin is invalid JSON",
+                    )
+                })?;
+            let expected = match arguments.decision {
+                heyfood_cli::GroceryDecisionArgument::Accept => "ACCEPT",
+                heyfood_cli::GroceryDecisionArgument::Cancel => "CANCEL",
+            };
+            let proposal_review = heyfood_cli::render_grocery_proposal(
+                &proposal,
+                heyfood_cli::OutputMode::HumanPlain,
+            )
+            .lines()
+            .map(|line| format!("  │ {}", inline_human_text(line)))
+            .collect::<Vec<_>>()
+            .join("\n");
+            Ok((
+                format!("Exact proposal:\n{proposal_review}\nRequested decision: {expected}"),
+                expected,
+            ))
+        }
+        Command::Watch {
+            command: Some(heyfood_cli::MenuWatchCommand::Add(arguments)),
+        } => Ok((
+            format!(
+                "Mutation: create a recurring Menu Watch subscription\nRestaurant: {}\nSchedule: {:?} {:02}:00\nTimezone: {}\nNotifications: {}\nMenu source: {}",
+                inline_human_text(&arguments.restaurant_id),
+                arguments.weekday,
+                arguments.hour,
+                arguments
+                    .tz
+                    .as_deref()
+                    .map(inline_human_text)
+                    .unwrap_or_else(|| "restaurant default".into()),
+                if arguments.notify {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                arguments
+                    .menu_url
+                    .as_deref()
+                    .map(inline_human_text)
+                    .unwrap_or_else(|| "automatic discovery".into())
+            ),
+            "CREATE",
+        )),
+        Command::Watch {
+            command: Some(heyfood_cli::MenuWatchCommand::Remove(arguments)),
+        } => Ok((
+            format!(
+                "Mutation: remove a Menu Watch subscription\nWatch: {}",
+                inline_human_text(&arguments.watch_id)
+            ),
+            "REMOVE",
+        )),
+        _ => Err(heyfood_bin::OneShotError::new(
+            "human_authority_contract",
+            "The human-only command is missing its authorization contract.",
+        )),
+    }
+}
+
+fn stdin_text(stdin: &[u8], label: &'static str) -> Result<String, heyfood_bin::OneShotError> {
+    if stdin.is_empty() || stdin.len() > heyfood_bin::MAX_CONFIRMATION_STDIN_BYTES {
+        return Err(heyfood_bin::OneShotError::new(
+            "human_input",
+            format!("{label} input is missing or exceeds 1 MiB"),
+        ));
+    }
+    std::str::from_utf8(stdin)
+        .map(|value| value.trim_end_matches(['\r', '\n']).to_owned())
+        .map_err(|_| {
+            heyfood_bin::OneShotError::new("human_input", format!("{label} input is not UTF-8"))
+        })
+}
+
+fn bounded_human_data(
+    value: String,
+    maximum: usize,
+    label: &'static str,
+) -> Result<String, heyfood_bin::OneShotError> {
+    let value = value.trim().to_owned();
+    if value.is_empty() || value.chars().count() > maximum {
+        return Err(heyfood_bin::OneShotError::new(
+            "human_input",
+            format!("{label} must contain between 1 and {maximum} characters"),
+        ));
+    }
+    Ok(value)
+}
+
+fn review_lines(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| format!("  • {}", inline_human_text(value)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn inline_human_text(value: &str) -> String {
+    terminal_safe_text(value)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(unix)]
+fn open_controlling_terminal() -> io::Result<(File, File)> {
+    Ok((
+        OpenOptions::new().read(true).open("/dev/tty")?,
+        OpenOptions::new().write(true).open("/dev/tty")?,
+    ))
+}
+
+#[cfg(windows)]
+fn open_controlling_terminal() -> io::Result<(File, File)> {
+    Ok((
+        OpenOptions::new().read(true).open("CONIN$")?,
+        OpenOptions::new().write(true).open("CONOUT$")?,
+    ))
 }
 
 fn load_selector_state(
@@ -1579,6 +1899,10 @@ fn failure(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
+    use clap::Parser;
+
     use super::*;
 
     fn registration_arguments(no_onboard: bool) -> heyfood_cli::RegisterArgs {
@@ -1635,5 +1959,191 @@ mod tests {
             true,
             true,
         ));
+    }
+
+    fn parsed_command(arguments: &[&str]) -> Command {
+        Cli::try_parse_from(arguments).unwrap().command.unwrap()
+    }
+
+    #[test]
+    fn only_classified_human_mutations_require_terminal_authority() {
+        assert!(requires_human_terminal_authority(&parsed_command(&[
+            "heyfood", "log", "oatmeal"
+        ])));
+        assert!(requires_human_terminal_authority(&parsed_command(&[
+            "heyfood",
+            "watch",
+            "remove",
+            "00000000-0000-4000-8000-000000000010"
+        ])));
+        assert!(!requires_human_terminal_authority(&parsed_command(&[
+            "heyfood", "grocery", "show"
+        ])));
+        assert!(!requires_human_terminal_authority(&parsed_command(&[
+            "heyfood", "ask", "hello"
+        ])));
+    }
+
+    #[test]
+    fn no_input_rejects_human_only_authority_before_opening_a_terminal() {
+        let command = parsed_command(&["heyfood", "log", "oatmeal"]);
+        let error = authorize_human_only_command(&command, &[], true).unwrap_err();
+        assert_eq!(error.code, "human_input_disabled");
+    }
+
+    #[test]
+    fn meal_review_requires_the_exact_terminal_phrase_and_sanitizes_controls() {
+        let command = parsed_command(&["heyfood", "log", "oatmeal\nforged\u{1b}[2J"]);
+        let mut approved_input = Cursor::new(b"LOG\n");
+        let mut review = Vec::new();
+
+        review_human_only_command(&command, &[], &mut approved_input, &mut review).unwrap();
+
+        let review = String::from_utf8(review).unwrap();
+        assert!(review.contains("Mutation: log meal memory"));
+        assert!(review.contains("Meal: oatmeal forged[2J"));
+        assert!(!review.contains('\u{1b}'));
+        assert!(!review.contains("\nforged"));
+
+        let mut rejected_input = Cursor::new(b"yes\n");
+        let error = review_human_only_command(&command, &[], &mut rejected_input, &mut Vec::new())
+            .unwrap_err();
+        assert_eq!(error.code, "human_confirmation_declined");
+    }
+
+    #[test]
+    fn grocery_confirm_reviews_the_exact_proposal_and_matches_the_requested_decision() {
+        let command = parsed_command(&["heyfood", "grocery", "confirm", "--decision", "accept"]);
+        let proposal = serde_json::to_vec(&serde_json::json!({
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "operation": "add_items",
+            "expires_at": "2026-07-21T12:05:00Z",
+            "structured_preview": {"items": []},
+            "preconditions": [{"type": "list_version", "expected_version": 4}],
+            "confirmation_token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }))
+        .unwrap();
+        let mut input = Cursor::new(b"ACCEPT\n");
+        let mut review = Vec::new();
+
+        review_human_only_command(&command, &proposal, &mut input, &mut review).unwrap();
+
+        let review = String::from_utf8(review).unwrap();
+        assert!(review.contains("Review add_items"));
+        assert!(review.contains("Requested decision: ACCEPT"));
+        assert!(!review.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    }
+
+    #[test]
+    fn every_guarded_command_has_an_exact_review_contract() {
+        let proposal = serde_json::to_vec(&serde_json::json!({
+            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+            "operation": "add_items",
+            "expires_at": "2026-07-21T12:05:00Z",
+            "structured_preview": {"items": []},
+            "preconditions": [{"type": "list_version", "expected_version": 4}],
+            "confirmation_token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }))
+        .unwrap();
+        let cases = [
+            (
+                parsed_command(&["heyfood", "log", "oatmeal"]),
+                Vec::new(),
+                "LOG",
+            ),
+            (
+                parsed_command(&[
+                    "heyfood",
+                    "grocery",
+                    "add",
+                    "--list-id",
+                    "00000000-0000-4000-8000-000000000123",
+                    "--version",
+                    "4",
+                    "onion",
+                ]),
+                Vec::new(),
+                "PREPARE",
+            ),
+            (
+                parsed_command(&[
+                    "heyfood",
+                    "grocery",
+                    "remove",
+                    "--list-id",
+                    "00000000-0000-4000-8000-000000000123",
+                    "--version",
+                    "4",
+                    "item-1",
+                ]),
+                Vec::new(),
+                "PREPARE",
+            ),
+            (
+                parsed_command(&[
+                    "heyfood",
+                    "grocery",
+                    "state",
+                    "--list-id",
+                    "00000000-0000-4000-8000-000000000123",
+                    "--version",
+                    "4",
+                    "item-1",
+                    "purchased",
+                ]),
+                Vec::new(),
+                "PREPARE",
+            ),
+            (
+                parsed_command(&[
+                    "heyfood",
+                    "grocery",
+                    "never",
+                    "--list-id",
+                    "00000000-0000-4000-8000-000000000123",
+                    "--version",
+                    "4",
+                    "pork",
+                ]),
+                Vec::new(),
+                "PREPARE",
+            ),
+            (
+                parsed_command(&["heyfood", "grocery", "confirm", "--decision", "accept"]),
+                proposal,
+                "ACCEPT",
+            ),
+            (
+                parsed_command(&[
+                    "heyfood",
+                    "watch",
+                    "add",
+                    "0c1cb790-0000-4000-8000-000000000000",
+                    "--weekday",
+                    "thursday",
+                    "--hour",
+                    "9",
+                ]),
+                Vec::new(),
+                "CREATE",
+            ),
+            (
+                parsed_command(&[
+                    "heyfood",
+                    "watch",
+                    "remove",
+                    "00000000-0000-4000-8000-000000000010",
+                ]),
+                Vec::new(),
+                "REMOVE",
+            ),
+        ];
+
+        for (command, stdin, expected) in cases {
+            assert!(requires_human_terminal_authority(&command));
+            assert_eq!(human_review_document(&command, &stdin).unwrap().1, expected);
+        }
     }
 }

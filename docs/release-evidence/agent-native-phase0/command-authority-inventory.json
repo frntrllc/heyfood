@@ -67,7 +67,7 @@
       "network": "post_sse",
       "retry": "reconcile_uncertain_never_blind_retry",
       "product_state": "meal_memory_mutation",
-      "phase0_gap": "The current command does not yet require the separate controlling-terminal decision."
+      "phase0_gap": null
     },
     "grocery_read": {
       "audience": "agent_unsupported",
@@ -94,7 +94,7 @@
       ],
       "retry": "dg_r2_no_blind_retry",
       "product_state": "no_list_mutation_but_emits_commit_authority",
-      "phase0_gap": "The current command can emit GroceryMutationProposalWire without a separate controlling-terminal acknowledgement."
+      "phase0_gap": null
     },
     "grocery_export_human": {
       "audience": "human_terminal_only",
@@ -121,7 +121,7 @@
       ],
       "retry": "reconcile_uncertain_never_blind_retry",
       "product_state": "grocery_list_mutation_on_accept",
-      "phase0_gap": "The current command accepts --decision plus proposal stdin without a separate controlling-terminal ceremony."
+      "phase0_gap": null
     },
     "watch_read": {
       "audience": "agent_unsupported",
@@ -134,7 +134,7 @@
       ],
       "retry": "safe_only_before_or_as_defined_by_get_contract",
       "product_state": "no_menu_watch_product_mutation_but_session_may_rotate",
-      "phase0_gap": "Application port/controller and bounded agent result are absent."
+      "phase0_gap": "Application port/controller extraction is complete; the bounded agent result remains Phase 1 work."
     },
     "watch_mutation_human": {
       "audience": "human_terminal_only",
@@ -147,7 +147,7 @@
       ],
       "retry": "reconcile_uncertain_never_blind_retry",
       "product_state": "menu_watch_subscription_mutation",
-      "phase0_gap": "The current commands do not yet require the separate controlling-terminal decision."
+      "phase0_gap": null
     },
     "completion": {
       "audience": "agent_unsupported",

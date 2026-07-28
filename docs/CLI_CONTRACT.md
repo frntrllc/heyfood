@@ -37,6 +37,17 @@ and require no additional implementation or production canary for this release.
 positional text is omitted and stdin is not a terminal, the command reads the
 prompt from stdin. `reply` fails locally when `--conversation-id` is absent.
 
+Direct one-shot `log`, Grocery proposal preparation/confirmation, and Menu
+Watch creation/removal are human-terminal-only commands. Before credentials
+are read or a network request is dispatched, the executable opens the
+controlling terminal independently of stdin/stdout, renders terminal-safe
+review details, and requires the command-specific phrase `LOG`, `PREPARE`,
+`ACCEPT`, `CANCEL`, `CREATE`, or `REMOVE`. Missing terminal, EOF, an I/O error,
+or any other response fails closed. Redirected stdin may carry meal or Grocery
+proposal data, and JSON stdout remains exactly one value; neither channel
+supplies semantic authority. The direct CLI routes are not agent-safe
+fallbacks. `--no-input` rejects these routes before opening a terminal.
+
 Existing credentials missing a command's required scope fail locally with
 `authorization_scope_upgrade_required` and direct the user to `heyfood login`.
 The old channel and app-session credentials remain authoritative through the
@@ -49,8 +60,11 @@ Grocery reads include `grocery show` (compatibility alias `list`) and
 `grocery exclusions`.
 `grocery never --list-id UUID --version N ITEM` prepares an exclusion addition;
 `--remove` prepares its removal. Preparation never mutates server state. REST
-proposals are confirmed only from a JSON proposal read on stdin. `grocery
-export LIST_ID --out FILE` creates an owner-only file exclusively by default;
+proposals containing commit authority are emitted only after the controlling
+terminal receives `PREPARE`. Confirmation reads the complete JSON proposal on
+stdin, renders that exact proposal on the controlling terminal, and requires
+`ACCEPT` or `CANCEL` matching `--decision` before dispatch. `grocery export
+LIST_ID --out FILE` creates an owner-only file exclusively by default;
 `--overwrite` opts into same-directory atomic replacement. Targets and direct
 parent directories that are symlinks or Windows reparse points are rejected,
 temporary files are removed on pre-commit failure, and export contents never
@@ -112,6 +126,10 @@ JSON stdout never contains:
 stderr contains progress and human diagnostics. Programs must not parse human
 stderr as a data format. Registration prints its approval URL and short code to
 stderr before waiting for the terminal decision.
+
+Human-only mutation review is written directly to the controlling terminal,
+not stdout or stderr. It therefore does not corrupt redirected JSON or proposal
+data streams.
 
 Global `--verbose` is reserved for privacy-safe request diagnostics on stderr;
 it does not change JSON stdout. Diagnostics must not expose request bodies,

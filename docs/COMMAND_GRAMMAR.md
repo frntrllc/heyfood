@@ -42,6 +42,27 @@ fail during argument parsing:
 heyfood ask --lat 35.28 --lng -120.66 "What can I order nearby?"
 ```
 
+## Human-only mutation authority
+
+These direct CLI routes require a fresh decision on an attached controlling
+terminal before credential access or network dispatch:
+
+| Command family | Required phrase |
+|---|---|
+| `log` | `LOG` |
+| `grocery add/remove/state/never` | `PREPARE` |
+| `grocery confirm --decision accept` | `ACCEPT` |
+| `grocery confirm --decision cancel` | `CANCEL` |
+| `watch add` | `CREATE` |
+| `watch remove` | `REMOVE` |
+
+The controlling terminal is opened independently from stdin and stdout.
+Arguments and redirected stdin carry data only; they never count as consent.
+Consequently these commands fail with `human_terminal_required` in unattended
+processes even when an automation host allocates ordinary pipes. Agents must
+not drive the prompt through a PTY or use these human-only commands as a
+fallback. `--no-input` rejects them with `human_input_disabled`.
+
 ## Registration and login
 
 ```bash
@@ -69,9 +90,11 @@ heyfood grocery export UUID --format markdown [--out FILE [--overwrite]]
 heyfood grocery confirm --decision accept --proposal-stdin < proposal.json
 ```
 
-Mutation commands prepare a proposal and do not commit it. Confirmation reads
-the proposal from stdin so authorization material does not enter shell history
-or process arguments.
+Mutation commands prepare a proposal and do not commit it. The human must type
+`PREPARE` before the capability-bearing proposal is emitted. Confirmation
+reads the proposal from stdin so authorization material does not enter shell
+history or process arguments, renders the exact proposal on the controlling
+terminal, and requires an `ACCEPT`/`CANCEL` decision matching `--decision`.
 
 ## Deferred Health integrations
 
@@ -98,7 +121,8 @@ Creation freezes the restaurant-local cadence, resolved timezone, notification
 preference, and activation state. The TUI renders the latest account-owned
 change summary with source, freshness, and provenance. Item-level added,
 removed, modified, and price-change detail remains follow-on work and is not
-claimed by the current client.
+claimed by the current client. Direct creation requires `CREATE`; direct
+removal requires `REMOVE` on the controlling terminal.
 
 ## Global process controls
 

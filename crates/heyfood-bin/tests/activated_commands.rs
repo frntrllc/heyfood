@@ -92,6 +92,7 @@ async fn run(
         .env("HEYFOOD_CREDENTIAL_STORE", "file")
         .env("HEYFOOD_API_URL", base_url)
         .env("HEYFOOD_API_KEY", "fixture-api-key")
+        .env("HEYFOOD_TEST_FORCE_NO_CONTROLLING_TERMINAL", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if stdin.is_some() {
@@ -270,14 +271,14 @@ fn response_for(method: &str, path: &str) -> (&'static str, Vec<u8>) {
 }
 
 #[tokio::test]
-async fn public_binary_dispatches_all_twelve_grocery_and_watch_routes() {
+async fn public_binary_dispatches_the_unattended_grocery_and_watch_read_routes() {
     let root = TempRoot::new("routes");
     initialize(&root.0, FULL_SCOPE);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
         let mut product_routes = BTreeSet::new();
-        for _ in 0..23 {
+        for _ in 0..7 {
             let (mut socket, _) = listener.accept().await.unwrap();
             let request = read_request(&mut socket).await;
             let mut request_line = request.lines().next().unwrap().split_whitespace();
@@ -301,6 +302,41 @@ async fn public_binary_dispatches_all_twelve_grocery_and_watch_routes() {
 
     let cases: Vec<(Vec<&str>, Option<Vec<u8>>)> = vec![
         (vec!["--json", "grocery"], None),
+        (
+            vec!["--json", "grocery", "export", LIST_ID, "--format", "json"],
+            None,
+        ),
+        (vec!["--json", "grocery", "exclusions"], None),
+        (vec!["--json", "watch"], None),
+    ];
+    for (args, stdin) in cases {
+        let output = run(&root.0, &base_url, &args, stdin.as_deref()).await;
+        assert!(
+            output.status.success(),
+            "{} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let routes = server.await.unwrap();
+    let expected = BTreeSet::from([
+        "GET /v1/grocery/list".into(),
+        "GET /v1/grocery/exclusions".into(),
+        format!("GET /v1/grocery/lists/{LIST_ID}/export"),
+        "GET /v1/menu/watch".into(),
+    ]);
+    assert_eq!(routes, expected);
+}
+
+#[tokio::test]
+async fn public_binary_rejects_human_only_mutations_without_a_controlling_terminal() {
+    let root = TempRoot::new("human-authority");
+    initialize(&root.0, FULL_SCOPE);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let proposal = serde_json::to_vec(&proposal("add_items")).unwrap();
+    let cases: Vec<(Vec<&str>, Option<&[u8]>)> = vec![
+        (vec!["--json", "log", "oatmeal"], None),
         (
             vec![
                 "--json",
@@ -342,42 +378,22 @@ async fn public_binary_dispatches_all_twelve_grocery_and_watch_routes() {
             None,
         ),
         (
-            vec!["--json", "grocery", "export", LIST_ID, "--format", "json"],
+            vec![
+                "--json",
+                "grocery",
+                "never",
+                "--list-id",
+                LIST_ID,
+                "--version",
+                "4",
+                "pork",
+            ],
             None,
         ),
         (
             vec!["--json", "grocery", "confirm", "--decision", "cancel"],
-            Some(serde_json::to_vec(&proposal("add_items")).unwrap()),
+            Some(proposal.as_slice()),
         ),
-        (vec!["--json", "grocery", "exclusions"], None),
-        (
-            vec![
-                "--json",
-                "grocery",
-                "never",
-                "--list-id",
-                LIST_ID,
-                "--version",
-                "4",
-                "pork",
-            ],
-            None,
-        ),
-        (
-            vec![
-                "--json",
-                "grocery",
-                "never",
-                "--list-id",
-                LIST_ID,
-                "--version",
-                "4",
-                "--remove",
-                "pork",
-            ],
-            None,
-        ),
-        (vec!["--json", "watch"], None),
         (
             vec![
                 "--json",
@@ -402,31 +418,24 @@ async fn public_binary_dispatches_all_twelve_grocery_and_watch_routes() {
             None,
         ),
     ];
-    for (args, stdin) in cases {
-        let output = run(&root.0, &base_url, &args, stdin.as_deref()).await;
-        assert!(
-            output.status.success(),
-            "{} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr)
+
+    for (arguments, stdin) in cases {
+        let output = run(&root.0, &base_url, &arguments, stdin).await;
+        assert!(!output.status.success(), "{}", arguments.join(" "));
+        let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            error["error"]["type"],
+            "human_terminal_required",
+            "{}",
+            arguments.join(" ")
         );
     }
-    let routes = server.await.unwrap();
-    let expected = BTreeSet::from([
-        "GET /v1/grocery/list".into(),
-        "POST /v1/grocery/items".into(),
-        "POST /v1/grocery/items/remove".into(),
-        "POST /v1/grocery/items/state".into(),
-        "GET /v1/grocery/exclusions".into(),
-        "POST /v1/grocery/exclusions".into(),
-        "POST /v1/grocery/exclusions/remove".into(),
-        "POST /v1/grocery/confirm".into(),
-        format!("GET /v1/grocery/lists/{LIST_ID}/export"),
-        "GET /v1/menu/watch".into(),
-        "POST /v1/menu/watch".into(),
-        "DELETE /v1/menu/watch/00000000-0000-4000-8000-000000000010".into(),
-    ]);
-    assert_eq!(routes, expected);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "a human-only command reached the network without a controlling terminal"
+    );
 }
 
 #[tokio::test]
@@ -521,25 +530,6 @@ async fn public_binary_fails_closed_before_route_dispatch_for_scope_deferral_cap
     initialize(&confirmed.0, FULL_SCOPE);
     let confirmation_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let confirmation_url = format!("http://{}", confirmation_listener.local_addr().unwrap());
-    let confirmation_server = tokio::spawn(async move {
-        let (mut socket, _) = confirmation_listener.accept().await.unwrap();
-        let request = read_request(&mut socket).await;
-        assert!(request.starts_with("GET /v1/auth/capabilities "));
-        respond(
-            &mut socket,
-            "application/json",
-            &serde_json::to_vec(&capabilities(true)).unwrap(),
-        )
-        .await;
-        assert!(
-            tokio::time::timeout(
-                std::time::Duration::from_millis(100),
-                confirmation_listener.accept()
-            )
-            .await
-            .is_err()
-        );
-    });
     let output = run(
         &confirmed.0,
         &confirmation_url,
@@ -549,8 +539,15 @@ async fn public_binary_fails_closed_before_route_dispatch_for_scope_deferral_cap
     .await;
     assert!(!output.status.success());
     let error: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(error["error"]["type"], "confirmation_input");
-    confirmation_server.await.unwrap();
+    assert_eq!(error["error"]["type"], "human_terminal_required");
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            confirmation_listener.accept()
+        )
+        .await
+        .is_err()
+    );
 
     let capability_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let capability_url = format!("http://{}", capability_listener.local_addr().unwrap());
