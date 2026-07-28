@@ -1155,8 +1155,10 @@ exit $child.ExitCode
     // The PowerShell host independently bounds readiness (8s), result
     // publication (8s), and post-result exit (5s). Leave explicit headroom
     // around those nested deadlines for cold pwsh/Add-Type startup, console
-    // allocation, and process launch on a contended Windows runner.
-    let status = wait_for_process_child(&mut child, Duration::from_secs(40));
+    // allocation, and process launch on a contended Windows runner. Add-Type
+    // can take tens of seconds while the parallel Windows matrix is linking,
+    // so its bootstrap is bounded separately from the signal/result deadlines.
+    let status = wait_for_process_child(&mut child, Duration::from_secs(90));
     assert!(
         status.success(),
         "Windows console host or signal child failed: {status}"
@@ -1179,9 +1181,19 @@ fn wait_for_process_child(
             return status;
         }
         if Instant::now() >= deadline {
-            child
-                .kill()
-                .expect("terminate stalled Windows signal child");
+            let process_id = child.id().to_string();
+            let _ = Command::new("taskkill")
+                .args(["/PID", &process_id, "/T", "/F"])
+                .status();
+            if child
+                .try_wait()
+                .expect("poll terminated Windows signal child")
+                .is_none()
+            {
+                child
+                    .kill()
+                    .expect("terminate stalled Windows signal child");
+            }
             let _ = child.wait();
             panic!("Windows signal child did not exit within {timeout:?}");
         }
