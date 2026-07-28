@@ -27,9 +27,11 @@ mod windows {
     use windows_sys::Win32::Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateFileW, DELETE, FILE_ATTRIBUTE_DIRECTORY,
         FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_RENAME_INFO, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
         FileAttributeTagInfo, FileRenameInfo, GetFileInformationByHandle,
-        GetFileInformationByHandleEx, READ_CONTROL, SetFileInformationByHandle, WRITE_DAC,
+        GetFileInformationByHandleEx, OPEN_EXISTING, READ_CONTROL, SetFileInformationByHandle,
+        WRITE_DAC,
     };
 
     /// A newly created regular file whose DACL was protected and restricted to
@@ -105,6 +107,35 @@ mod windows {
                 | u64::from(information.nFileIndexLow),
             number_of_links: information.nNumberOfLinks,
         })
+    }
+
+    /// Open an existing directory without following its final reparse point
+    /// and return the identity of that exact path entry.
+    #[allow(unsafe_code)]
+    pub fn open_directory_identity(path: &Path) -> io::Result<FileIdentity> {
+        let wide_path = nul_terminated_wide(path.as_os_str())?;
+        // SAFETY: `wide_path` is NUL-terminated and alive for the call.
+        // BACKUP_SEMANTICS is required to open directories; OPEN_REPARSE_POINT
+        // ensures a final reparse point is inspected rather than followed.
+        let handle = unsafe {
+            CreateFileW(
+                wide_path.as_ptr(),
+                FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                ptr::null(),
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `handle` is a unique valid owned handle returned by
+        // CreateFileW and ownership transfers exactly once to `File`.
+        let file = unsafe { File::from_raw_handle(handle) };
+        verify_directory(&file)?;
+        file_identity(&file)
     }
 
     struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
@@ -272,6 +303,34 @@ mod windows {
         Ok(())
     }
 
+    #[allow(unsafe_code)]
+    fn verify_directory(file: &File) -> io::Result<()> {
+        let mut attributes = FILE_ATTRIBUTE_TAG_INFO::default();
+        // SAFETY: `attributes` is a live output buffer of the exact class size
+        // and `file` owns a valid handle for the duration of the call.
+        if unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                FileAttributeTagInfo,
+                ptr::addr_of_mut!(attributes).cast(),
+                u32::try_from(size_of::<FILE_ATTRIBUTE_TAG_INFO>())
+                    .expect("FILE_ATTRIBUTE_TAG_INFO size fits in u32"),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        if attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+            || attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "owner-only directory identity is not a direct directory",
+            ));
+        }
+        Ok(())
+    }
+
     fn nul_terminated_wide(value: &OsStr) -> io::Result<Vec<u16>> {
         let mut wide = wide_without_nul(value)?;
         wide.push(0);
@@ -326,4 +385,7 @@ mod windows {
 }
 
 #[cfg(windows)]
-pub use windows::{AtomicOwnerOnlyFile, FileIdentity, PublishedOwnerOnlyFile, file_identity};
+pub use windows::{
+    AtomicOwnerOnlyFile, FileIdentity, PublishedOwnerOnlyFile, file_identity,
+    open_directory_identity,
+};

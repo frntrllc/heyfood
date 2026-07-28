@@ -907,7 +907,9 @@ fn validate_windows_open_directory_identity(
     }
     let opened_identity = heyfood_windows_file::file_identity(&opened)
         .map_err(|error| SetupError::new("agent_setup_permissions", error.to_string()))?;
-    if opened_identity.number_of_links == 0 {
+    let path_identity = heyfood_windows_file::open_directory_identity(path)
+        .map_err(|error| SetupError::new("agent_setup_permissions", error.to_string()))?;
+    if opened_identity != path_identity || opened_identity.number_of_links == 0 {
         return Err(SetupError::new(
             "agent_setup_redirect",
             "setup directory identity changed during permission hardening",

@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 #![recursion_limit = "512"]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
 use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 use std::time::Duration;
@@ -16,9 +16,9 @@ use heyfood_application::{
 };
 use heyfood_core::{GroceryCapability, OperationId, SessionCredentials};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ErrorCode, ErrorData, Implementation, JsonRpcMessage,
-    ListToolsResult, PaginatedRequestParams, RequestId, ServerCapabilities, ServerInfo, Tool,
-    ToolAnnotations,
+    CallToolRequestParams, CallToolResult, ClientNotification, ErrorCode, ErrorData,
+    Implementation, JsonRpcMessage, ListToolsResult, PaginatedRequestParams, RequestId,
+    ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
 };
 use rmcp::service::{RequestContext, RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
@@ -1084,6 +1084,8 @@ pub struct BoundedStdioTransport<R, W> {
     write: Arc<Mutex<Option<W>>>,
     request_slots: Arc<Semaphore>,
     inflight: Arc<StdMutex<HashMap<RequestId, OwnedSemaphorePermit>>>,
+    cancelled: Arc<StdMutex<HashSet<RequestId>>>,
+    initialized_seen: bool,
 }
 
 impl<R, W> BoundedStdioTransport<R, W>
@@ -1099,6 +1101,8 @@ where
             write: Arc::new(Mutex::new(Some(write))),
             request_slots: Arc::new(Semaphore::new(MAX_OUTSTANDING_REQUESTS)),
             inflight: Arc::new(StdMutex::new(HashMap::new())),
+            cancelled: Arc::new(StdMutex::new(HashSet::new())),
+            initialized_seen: false,
         }
     }
 }
@@ -1147,6 +1151,7 @@ where
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
         let write = self.write.clone();
         let inflight = self.inflight.clone();
+        let cancelled = self.cancelled.clone();
         let completed = match &item {
             JsonRpcMessage::Response(response) => Some(response.id.clone()),
             JsonRpcMessage::Error(error) => error.id.clone(),
@@ -1160,6 +1165,10 @@ where
                 inflight
                     .lock()
                     .expect("MCP request registry lock poisoned")
+                    .remove(&id);
+                cancelled
+                    .lock()
+                    .expect("MCP cancellation registry lock poisoned")
                     .remove(&id);
             }
             result
@@ -1272,6 +1281,49 @@ where
                         continue;
                     }
                     return Some(message);
+                }
+                Ok(message @ JsonRpcMessage::Notification(_)) => {
+                    let JsonRpcMessage::Notification(notification) = &message else {
+                        unreachable!("notification pattern already matched")
+                    };
+                    match &notification.notification {
+                        ClientNotification::InitializedNotification(_) => {
+                            if self.initialized_seen {
+                                continue;
+                            }
+                            self.initialized_seen = true;
+                            return Some(message);
+                        }
+                        ClientNotification::CancelledNotification(cancelled) => {
+                            let Some(request_id) = cancelled.params.request_id.as_ref() else {
+                                continue;
+                            };
+                            let active = self
+                                .inflight
+                                .lock()
+                                .expect("MCP request registry lock poisoned")
+                                .contains_key(request_id);
+                            if !active {
+                                continue;
+                            }
+                            let first = self
+                                .cancelled
+                                .lock()
+                                .expect("MCP cancellation registry lock poisoned")
+                                .insert(request_id.clone());
+                            if first {
+                                return Some(message);
+                            }
+                        }
+                        ClientNotification::ProgressNotification(_)
+                        | ClientNotification::RootsListChangedNotification(_)
+                        | ClientNotification::TaskStatusNotification(_)
+                        | ClientNotification::CustomNotification(_) => {
+                            // This server neither requests client roots/tasks nor
+                            // consumes client progress/custom notifications.
+                            // Drop them before rmcp can spawn one task per frame.
+                        }
+                    }
                 }
                 Ok(message) => return Some(message),
                 Err(_) => {
@@ -1696,6 +1748,70 @@ mod tests {
         .unwrap();
         let output = std::str::from_utf8(&output[..read]).unwrap();
         assert_eq!(output.matches("Parse error").count(), 2);
+    }
+
+    #[tokio::test]
+    async fn notification_flood_is_filtered_before_service_tasks_are_spawned() {
+        let (mut input_writer, input_reader) = tokio::io::duplex(32 * 1024);
+        let (output_writer, _output_reader) = tokio::io::duplex(4096);
+        let mut transport = BoundedStdioTransport::new(input_reader, output_writer);
+        input_writer
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n")
+            .await
+            .unwrap();
+        assert!(matches!(
+            rmcp::transport::Transport::<RoleServer>::receive(&mut transport).await,
+            Some(JsonRpcMessage::Request(request)) if request.id == RequestId::Number(1)
+        ));
+
+        input_writer
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n\
+                  {\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+            )
+            .await
+            .unwrap();
+        for _ in 0..64 {
+            input_writer
+                .write_all(
+                    b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/custom-flood\",\"params\":{}}\n",
+                )
+                .await
+                .unwrap();
+        }
+        for _ in 0..64 {
+            input_writer
+                .write_all(
+                    b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":1,\"reason\":\"stop\"}}\n",
+                )
+                .await
+                .unwrap();
+        }
+        input_writer
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}\n")
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            rmcp::transport::Transport::<RoleServer>::receive(&mut transport).await,
+            Some(JsonRpcMessage::Notification(notification))
+                if matches!(
+                    notification.notification,
+                    ClientNotification::InitializedNotification(_)
+                )
+        ));
+        assert!(matches!(
+            rmcp::transport::Transport::<RoleServer>::receive(&mut transport).await,
+            Some(JsonRpcMessage::Notification(notification))
+                if matches!(
+                    notification.notification,
+                    ClientNotification::CancelledNotification(_)
+                )
+        ));
+        assert!(matches!(
+            rmcp::transport::Transport::<RoleServer>::receive(&mut transport).await,
+            Some(JsonRpcMessage::Request(request)) if request.id == RequestId::Number(2)
+        ));
     }
 
     #[tokio::test(start_paused = true)]

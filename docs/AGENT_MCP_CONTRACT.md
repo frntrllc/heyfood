@@ -83,7 +83,10 @@ full state machine. Tool names in planning documents are not advertisements.
 The ninth request receives a typed overloaded error and is not queued.
 Network-free manifest/schema reads may run while one remote operation is in
 flight, but total outstanding work remains eight. Slow readers cannot create
-an unbounded channel.
+an unbounded channel. The transport admits the initialization notification
+once and at most one cancellation notification for each active request.
+Duplicate lifecycle notifications and client notification classes this server
+does not consume are dropped before the SDK can spawn handler work.
 
 The three collection tools accept a closed optional input object with
 `limit` (1 through 100) and an opaque, snapshot-bound `cursor`. Results include
