@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "evaluation": "tui-post-release-v2",
+  "evaluated_on": "2026-07-29",
+  "status": "passed",
+  "score": 100,
+  "maximum_score": 100,
+  "release": {
+    "version": "0.6.0",
+    "product_sha": "80d0b4b3defeb4ded45b890cd0b4bab85193e587",
+    "url": "https://github.com/frntrllc/heyfood/releases/tag/v0.6.0"
+  },
+  "evaluation_run": {
+    "workflow_sha": "17bea63f1830a7f2b86bd4d0c3c78fb2ed4aec61",
+    "url": "https://github.com/frntrllc/heyfood/actions/runs/30448054046"
+  },
+  "targets": [
+    {
+      "target": "aarch64-apple-darwin",
+      "status": "passed",
+      "score": 100,
+      "archive_sha256": "d5696768196f02a2a639238fb8f24381a637ac25c2f684e388c550545f2aa98d",
+      "evidence_sha256": {
+        "installed_core_matrix": "554f5b20cf1368fcea070a5ecae9499881fd143c6c1f5f4f5e9be063f8289e47",
+        "post_release_report": "74feaeaaaf5a532c56b281959cab17d6e195e618768f54bd93dcd9e04c75776e",
+        "clean_user_ansi": "1e538ac569d5a2276f191c6853be0e82db4366e7a4a948ea9f337e1042d68e4f",
+        "returning_user_ansi": "1846a1302c44bb99109f9d216e86f8d9d3dda874dc73eaad82e99de08921b327",
+        "width_40_ansi": "be6bab7d540511f64e6c3e1e81dcf88eb6c4492b71b76adf683f08951d9f6826",
+        "width_120_no_color_ansi": "6be428b280ac74501cfcea0ebd1f7a72187881437262ee19800a6b070f0ca34e",
+        "interrupt_exit_ansi": "9f70f27b582d1a0d2acf1de43b18904f1fde8d04f817fa3bce99c999cccad91d"
+      }
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "status": "passed",
+      "score": 100,
+      "archive_sha256": "b6c9b714fc10c1f018587cf9ebdb0339e7a51450ee44d569be714eb1a8362610",
+      "evidence_sha256": {
+        "installed_core_matrix": "176609c2ae12cb2b22edda038f1d5b69d0160131913301c3f9626365fc8a1a59",
+        "post_release_report": "34126b35c08883d4114513839d83b1f59cd989eba31a09a13843068f5fe83b66",
+        "clean_user_ansi": "2f85fb4a90d02bed2d649fd6e6dfc686e10fc146b427909c9f20a62128bc901c",
+        "returning_user_ansi": "1846a1302c44bb99109f9d216e86f8d9d3dda874dc73eaad82e99de08921b327",
+        "width_40_ansi": "be6bab7d540511f64e6c3e1e81dcf88eb6c4492b71b76adf683f08951d9f6826",
+        "width_120_no_color_ansi": "6be428b280ac74501cfcea0ebd1f7a72187881437262ee19800a6b070f0ca34e",
+        "interrupt_exit_ansi": "9f70f27b582d1a0d2acf1de43b18904f1fde8d04f817fa3bce99c999cccad91d"
+      }
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "status": "passed",
+      "score": 100,
+      "archive_sha256": "d8456e6649a23d5185ce214a44983a18b27d39855415f1c639ac4a34b812c2dc",
+      "evidence_sha256": {
+        "installed_core_matrix": "7b0ab0598f11c27f6c91dbdd6caabfb812a0c9f044ca88250fff44b677d76980",
+        "post_release_report": "4b3233dcd9658ce935d5a0e98e3d58ff5d2c868f684965a65f73aae59c7b6bc7",
+        "clean_user_ansi": "b7f68841ed6ca46cbf33089b96ac1b2fdf9406c483ca7664d011383ad41c172a",
+        "returning_user_ansi": "0ac3958e828554356e87835285d970731335afcb98c8cc83a05f2bacd6a2ed81",
+        "width_40_ansi": "e940590c91c9b8f8e71a98e0cebf372f2fb4249463479ae8cb83b0d09e11830f",
+        "width_120_no_color_ansi": "09a25e87373b5abffc182904bb49bcfa01c9abe010d600499ab695cdb1d50784",
+        "interrupt_exit_ansi": "9f70f27b582d1a0d2acf1de43b18904f1fde8d04f817fa3bce99c999cccad91d"
+      }
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "status": "passed",
+      "score": 100,
+      "archive_sha256": "c9cbcd992ca2ed2ad80a8986d462288d7022278a763421dc7af2de0d27b6a4c1",
+      "evidence_sha256": {
+        "installed_core_matrix": "9eacb3910ed6d3b734239096d8940193c669439e6d96bcbcf0c3043478c97790",
+        "post_release_report": "6a834091048949e3adb60a195caca814ecb50c13a31386a69ded907280d89a44",
+        "clean_user_ansi": "24f187a5ba43523f2c1b938ee4a77c74f77d43f04782d44d510ec46661cc0326",
+        "returning_user_ansi": "0ac3958e828554356e87835285d970731335afcb98c8cc83a05f2bacd6a2ed81",
+        "width_40_ansi": "e940590c91c9b8f8e71a98e0cebf372f2fb4249463479ae8cb83b0d09e11830f",
+        "width_120_no_color_ansi": "09a25e87373b5abffc182904bb49bcfa01c9abe010d600499ab695cdb1d50784",
+        "interrupt_exit_ansi": "9f70f27b582d1a0d2acf1de43b18904f1fde8d04f817fa3bce99c999cccad91d"
+      }
+    }
+  ],
+  "categories": [
+    {
+      "id": "first-run-orientation",
+      "weight": 5,
+      "status": "passed"
+    },
+    {
+      "id": "first-run-and-onboarding",
+      "weight": 15,
+      "status": "passed"
+    },
+    {
+      "id": "returning-session",
+      "weight": 15,
+      "status": "passed"
+    },
+    {
+      "id": "household-grocery",
+      "weight": 30,
+      "status": "passed"
+    },
+    {
+      "id": "failure-recovery",
+      "weight": 20,
+      "status": "passed"
+    },
+    {
+      "id": "terminal-presentation",
+      "weight": 15,
+      "status": "passed"
+    }
+  ],
+  "findings": [],
+  "limitations": [
+    "This is the supported-scope installed-artifact baseline, not a human aesthetic score.",
+    "The deterministic backend proves client behavior without mutating a production household.",
+    "Production availability and latency remain gated on the dedicated least-privilege canary identity.",
+    "Deferred roadmap capabilities are not credited by this score."
+  ]
+}
