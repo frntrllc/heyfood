@@ -46,6 +46,19 @@ impl LogoutStep {
             }),
         }
     }
+
+    const fn blocked_before_teardown(outcome_uncertain: bool) -> Self {
+        Self {
+            attempted: false,
+            ok: false,
+            outcome_uncertain,
+            error: Some(if outcome_uncertain {
+                "outcome_uncertain"
+            } else {
+                "request_failed"
+            }),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -100,6 +113,22 @@ impl LogoutOutcome {
                 link: UNKNOWN,
                 device: UNKNOWN,
                 session: UNKNOWN,
+            },
+            local_credentials_cleared: true,
+        }
+    }
+
+    /// Report a logout that cleared all local authority after credential
+    /// preflight failed before any remote teardown request was attempted.
+    #[must_use]
+    pub const fn preflight_failed(outcome_uncertain: bool) -> Self {
+        Self {
+            ok: true,
+            remote_complete: false,
+            teardown: LogoutTeardown {
+                link: LogoutStep::blocked_before_teardown(outcome_uncertain),
+                device: LogoutStep::blocked_before_teardown(outcome_uncertain),
+                session: LogoutStep::blocked_before_teardown(outcome_uncertain),
             },
             local_credentials_cleared: true,
         }

@@ -8,7 +8,7 @@ use std::process::{ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
 use heyfood_application::{BoxFuture, CredentialCommit, CredentialPort, PortError};
-use heyfood_core::{CommitId, CredentialVersion, SessionCredentials};
+use heyfood_core::{AccountId, CommitId, CredentialVersion, SessionCredentials};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
@@ -462,6 +462,29 @@ impl AuthorizationSessionStore for CredentialBrokerStore {
         self.request_blocking("delete", Vec::new(), true)
             .map(|_| ())
     }
+
+    fn delete_authorized_session_for_logout(
+        &self,
+        expected: Option<&SessionCredentials>,
+    ) -> Result<(), PortError> {
+        let input = expected
+            .cloned()
+            .map_or_else(Vec::new, |value| CredentialState::new(value).encode());
+        self.request_blocking("logout-delete-exact", input, true)
+            .map(|_| ())
+    }
+
+    fn delete_authorized_session_after_preflight_failure(
+        &self,
+        expected_account: &AccountId,
+    ) -> Result<(), PortError> {
+        self.request_blocking(
+            "logout-delete-account",
+            format!("{}\n", expected_account.as_str()).into_bytes(),
+            true,
+        )
+        .map(|_| ())
+    }
 }
 
 /// Handle the broker mode before any terminal/tracing initialization. Returns
@@ -624,6 +647,25 @@ fn run_broker_action(action: &str, root: &Path) -> Result<Vec<u8>, PortError> {
         }
         "delete" if input.is_empty() => {
             store.delete()?;
+            Ok(Vec::new())
+        }
+        "logout-delete-exact" => {
+            let expected = if input.is_empty() {
+                None
+            } else {
+                Some(CredentialState::decode(&input)?.credentials)
+            };
+            store.delete_authorized_session_for_logout(expected.as_ref())?;
+            Ok(Vec::new())
+        }
+        "logout-delete-account" => {
+            let account = AccountId::parse(trimmed_input(&input)?).map_err(|_| {
+                PortError::new(
+                    "credential_broker_request",
+                    "invalid logout account binding",
+                )
+            })?;
+            store.delete_authorized_session_after_preflight_failure(&account)?;
             Ok(Vec::new())
         }
         _ => Err(PortError::new(

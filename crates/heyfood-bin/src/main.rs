@@ -21,12 +21,12 @@ use heyfood_application::{
 };
 use heyfood_application::{BrowserPort, EnsureSession, EnsureSessionOutcome};
 use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
+#[cfg(feature = "native-credentials")]
+use heyfood_core::{AuthCredentialBundle, CommitId, SessionCredentials};
 use heyfood_core::{
     BrowserUrl, NetworkPolicy, OperationId, ProfileStatus, SensitiveString, ServiceUrl,
     SessionSnapshot, terminal_safe_text,
 };
-#[cfg(feature = "native-credentials")]
-use heyfood_core::{CommitId, SessionCredentials};
 #[cfg(feature = "native-credentials")]
 use heyfood_mcp::{HeyfoodMcpServer, McpSessionContext, McpSessionProvider};
 #[cfg(feature = "native-credentials")]
@@ -244,6 +244,32 @@ impl AuthorizationSessionStore for NativeSessionStore {
             Self::Platform(store) => store.delete_authorized_session(),
             #[cfg(not(windows))]
             Self::OwnerOnlyFile(store) => store.delete_authorized_session(),
+        }
+    }
+
+    fn delete_authorized_session_for_logout(
+        &self,
+        expected: Option<&SessionCredentials>,
+    ) -> Result<(), PortError> {
+        match self {
+            Self::Platform(store) => store.delete_authorized_session_for_logout(expected),
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => store.delete_authorized_session_for_logout(expected),
+        }
+    }
+
+    fn delete_authorized_session_after_preflight_failure(
+        &self,
+        expected_account: &heyfood_core::AccountId,
+    ) -> Result<(), PortError> {
+        match self {
+            Self::Platform(store) => {
+                store.delete_authorized_session_after_preflight_failure(expected_account)
+            }
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => {
+                store.delete_authorized_session_after_preflight_failure(expected_account)
+            }
         }
     }
 }
@@ -1620,12 +1646,12 @@ async fn logout(machine: bool) -> ExitCode {
 async fn logout_inner() -> Result<LogoutOutcome, PortError> {
     let paths = NativePaths::discover()?;
     let auth_store = NativeAuthStore::open(paths.config_dir())?;
-    let session_store = NativeSessionStore::open(paths.config_dir())?;
+    let session_store = Arc::new(NativeSessionStore::open(paths.config_dir())?);
     auth_store.finish_authorization_terminal_cleanup()?;
-    if auth_store.finish_account_bound_logout(&session_store)? {
+    if auth_store.finish_account_bound_logout(session_store.as_ref())? {
         return Ok(LogoutOutcome::recovered_local_logout());
     }
-    let Some(credentials) = auth_store.load_account_bound(&session_store)? else {
+    let Some(initial_credentials) = auth_store.load_account_bound(session_store.as_ref())? else {
         return Ok(LogoutOutcome::already_logged_out());
     };
     let (service_url, policy) = service_url().map_err(|error| {
@@ -1634,17 +1660,6 @@ async fn logout_inner() -> Result<LogoutOutcome, PortError> {
             "could not construct the configured hello.food service origin",
         )
     })?;
-    let cli_auth = CliAuthContext::new(
-        credentials.channel.device_id.clone(),
-        credentials.channel.access_token.clone(),
-        None,
-    )?;
-    let service =
-        HttpService::new(service_url, policy, HttpDeadlines::default())?.with_cli_auth(cli_auth);
-    let local = NativeLogoutLocal {
-        auth: &auth_store,
-        session: &session_store,
-    };
     let cancellation = CancellationToken::new();
     let signal_cancellation = cancellation.clone();
     let signal = tokio::spawn(async move {
@@ -1652,11 +1667,174 @@ async fn logout_inner() -> Result<LogoutOutcome, PortError> {
             signal_cancellation.cancel();
         }
     });
+    let prepared = prepare_logout_authority(
+        &auth_store,
+        Arc::clone(&session_store),
+        initial_credentials.clone(),
+        service_url,
+        policy,
+        cancellation.clone(),
+    )
+    .await;
+    let (credentials, service) = match prepared {
+        Ok(value) => value,
+        Err(error) => {
+            signal.abort();
+            auth_store.clear_account_bound_after_preflight_failure(
+                &initial_credentials,
+                session_store.as_ref(),
+            )?;
+            return Ok(LogoutOutcome::preflight_failed(error.outcome_uncertain));
+        }
+    };
+    let local = NativeLogoutLocal {
+        auth: &auth_store,
+        session: session_store.as_ref(),
+    };
     let result = Logout::new(&service, &local)
         .execute(&credentials, cancellation)
         .await;
     signal.abort();
     result
+}
+
+#[cfg(feature = "native-credentials")]
+async fn prepare_logout_authority(
+    auth_store: &NativeAuthStore,
+    session_store: Arc<NativeSessionStore>,
+    mut credentials: AuthCredentialBundle,
+    service_url: ServiceUrl,
+    policy: NetworkPolicy,
+    cancellation: CancellationToken,
+) -> Result<(AuthCredentialBundle, HttpService), PortError> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |value| value.as_secs());
+    let now = i64::try_from(now).unwrap_or(i64::MAX);
+    if credentials.channel.expires_at_unix() <= now {
+        let refresh = auth_store.begin_refresh()?;
+        credentials = refresh.load()?.ok_or_else(|| {
+            PortError::new(
+                "login_required",
+                "native hello.food account authority disappeared before logout",
+            )
+        })?;
+        if credentials.channel.expires_at_unix() <= now {
+            if cancellation.is_cancelled() {
+                return Err(PortError::new(
+                    "channel_refresh_cancelled_before_dispatch",
+                    "channel refresh was cancelled before dispatch",
+                ));
+            }
+            let client = RegistrationClient::new(service_url.clone(), policy)
+                .map_err(registration_to_port)?;
+            refresh.mark_reconciliation_required()?;
+            credentials.channel = match client.refresh_channel(&credentials.channel).await {
+                Ok(channel) => channel,
+                Err(error) if error.outcome_uncertain => {
+                    return Err(registration_to_port(error));
+                }
+                Err(error) => {
+                    refresh.clear_reconciliation_required()?;
+                    return Err(registration_to_port(error));
+                }
+            };
+            refresh.replace(&credentials).map_err(|_| {
+                PortError::uncertain(
+                    "channel_refresh_persistence_outcome_uncertain",
+                    "channel refresh completed but durable replacement was not observed",
+                )
+            })?;
+        }
+    }
+
+    credentials = auth_store
+        .load_account_bound(session_store.as_ref())?
+        .ok_or_else(|| {
+            PortError::new(
+                "login_required",
+                "native hello.food account authority disappeared before logout",
+            )
+        })?;
+    let api_key = std::env::var("HEYFOOD_API_KEY")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(SensitiveString::new);
+    let cli_auth = CliAuthContext::new(
+        credentials.channel.device_id.clone(),
+        credentials.channel.access_token.clone(),
+        api_key,
+    )?;
+    let service =
+        HttpService::new(service_url, policy, HttpDeadlines::default())?.with_cli_auth(cli_auth);
+    let ensure = EnsureSession::new(
+        Arc::new(service.clone()),
+        session_store.clone(),
+        Arc::new(NativeClock),
+    );
+    let session = match ensure
+        .execute(
+            SessionSnapshot {
+                credentials: credentials.session.clone(),
+                reconciliation_required: session_store.reconciliation_required()?,
+            },
+            cancellation,
+        )
+        .await
+        .map_err(ensure_session_to_port)?
+    {
+        EnsureSessionOutcome::Current(session) | EnsureSessionOutcome::Refreshed(session) => {
+            session
+        }
+        EnsureSessionOutcome::CancelledBeforeDispatch => {
+            return Err(PortError::new(
+                "session_refresh_cancelled_before_dispatch",
+                "session refresh was cancelled before dispatch",
+            ));
+        }
+    };
+    credentials = auth_store
+        .load_account_bound(session_store.as_ref())?
+        .ok_or_else(|| {
+            PortError::new(
+                "login_required",
+                "native hello.food account authority disappeared before logout",
+            )
+        })?;
+    if credentials.session != session {
+        return Err(PortError::uncertain(
+            "logout_refresh_persistence_outcome_uncertain",
+            "refreshed logout authority did not match durable session state",
+        ));
+    }
+    Ok((credentials, service))
+}
+
+#[cfg(feature = "native-credentials")]
+fn registration_to_port(error: RegistrationError) -> PortError {
+    if error.outcome_uncertain {
+        PortError::uncertain(error.code, error.public_message)
+    } else {
+        PortError::new(error.code, error.public_message)
+    }
+}
+
+#[cfg(feature = "native-credentials")]
+fn ensure_session_to_port(error: EnsureSessionError) -> PortError {
+    match error {
+        EnsureSessionError::ReconciliationRequired => PortError::uncertain(
+            "credential_reconciliation_required",
+            "session credentials have an unresolved refresh outcome",
+        ),
+        EnsureSessionError::Service(error) => error,
+        EnsureSessionError::ServiceReconciliationRequired(error)
+        | EnsureSessionError::CredentialReconciliationRequired(error) => {
+            PortError::uncertain(error.code, error.message)
+        }
+        EnsureSessionError::ReconciliationMarkerWrite { marker, .. } => {
+            PortError::uncertain(marker.code, marker.message)
+        }
+    }
 }
 
 async fn login(arguments: heyfood_cli::LoginArgs, machine: bool) -> ExitCode {
