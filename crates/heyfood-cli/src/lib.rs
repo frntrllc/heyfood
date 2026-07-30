@@ -10,7 +10,7 @@ use std::time::Duration;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use heyfood_application::{
     GroceryDisplayList, GroceryExclusions, LogoutOutcome, MenuWatchList, MenuWatchSnapshot,
-    render_household_menu,
+    UNRENDERABLE_AGENT_RESULT_MESSAGE, render_household_menu,
 };
 use heyfood_core::{
     GroceryDecisionWire, GroceryItemStateWire, GroceryMutationProposalWire, GrocerySafetyStatus,
@@ -1394,8 +1394,7 @@ pub fn render_agent_result(document: &Value, mode: OutputMode) -> String {
         );
     }
     if output.is_empty() {
-        let encoded = serde_json::to_string(document).unwrap_or_else(|_| "{}".into());
-        let _ = writeln!(output, "{}", terminal_safe_text(&encoded));
+        let _ = writeln!(output, "{UNRENDERABLE_AGENT_RESULT_MESSAGE}");
     }
     output
 }
@@ -1759,6 +1758,39 @@ mod registration_tests {
         ] {
             assert!(rendered.lines().any(|rendered| rendered == line));
         }
+    }
+
+    #[test]
+    fn agent_human_output_never_dumps_an_unrecognized_structured_result() {
+        let document = json!({
+            "structured": {
+                "type": "future_menu_presentation",
+                "sections": [{
+                    "name": "Tea",
+                    "items": [{
+                        "item_id": "18fbb9d6-85a1-4e04-bd44-a8348507048c",
+                        "name": "12 oz Chai Latte",
+                        "price_cents": 450,
+                        "safety": {
+                            "_self": {
+                                "level": "caution",
+                                "reason": "Verify sweetness level."
+                            }
+                        }
+                    }]
+                }]
+            }
+        });
+
+        let rendered = render_agent_result(&document, OutputMode::HumanPlain);
+        assert_eq!(rendered.trim_end(), UNRENDERABLE_AGENT_RESULT_MESSAGE);
+        for protocol_fragment in ["item_id", "\"safety\"", "_self", "{", "}"] {
+            assert!(!rendered.contains(protocol_fragment), "{rendered}");
+        }
+
+        let machine_output = render_agent_result(&document, OutputMode::Json);
+        let decoded: Value = serde_json::from_str(&machine_output).unwrap();
+        assert_eq!(decoded, document);
     }
 
     #[test]

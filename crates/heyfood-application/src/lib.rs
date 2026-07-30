@@ -41,8 +41,8 @@ pub use menu_watch::{
     RemoveMenuWatch,
 };
 pub use one_shot_turn::{
-    MAX_ONE_SHOT_EVENTS, MAX_ONE_SHOT_STREAM_BYTES, OneShotTurnResult, agent_result_text,
-    execute_one_shot_turn,
+    MAX_ONE_SHOT_EVENTS, MAX_ONE_SHOT_STREAM_BYTES, OneShotTurnResult,
+    UNRENDERABLE_AGENT_RESULT_MESSAGE, agent_result_text, execute_one_shot_turn,
 };
 
 pub use ports::{

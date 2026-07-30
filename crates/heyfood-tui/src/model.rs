@@ -1,6 +1,8 @@
 use std::{collections::VecDeque, fmt::Write as _};
 
-use heyfood_application::{RunTurnOutcome, agent_result_text, render_household_menu};
+use heyfood_application::{
+    RunTurnOutcome, UNRENDERABLE_AGENT_RESULT_MESSAGE, agent_result_text, render_household_menu,
+};
 use heyfood_core::{
     ActionConfirmationEnvelopeWire, AgentConfirmationCommandWire, AgentEvent,
     ConfirmationDecisionWire, GroceryEditPatch, OnboardingOption, OnboardingProfileInput,
@@ -2151,7 +2153,7 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                                 append_choice_labels(&mut entry.text, &choice_labels);
                             }
                         } else if entry.text.is_empty() {
-                            entry.text = terminal_safe_text(&document.to_string());
+                            entry.text = UNRENDERABLE_AGENT_RESULT_MESSAGE.into();
                         }
                     }
                 }
@@ -3136,6 +3138,51 @@ mod tests {
             assert!(!entry.text.contains('{'));
             assert!(!entry.streaming);
         }
+    }
+
+    #[test]
+    fn terminal_result_never_dumps_an_unrecognized_structured_result() {
+        let mut model = AppModel {
+            draft: "Can I see the full menu?".into(),
+            cursor: 24,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "structured": {
+                            "type": "future_menu_presentation",
+                            "sections": [{
+                                "name": "Tea",
+                                "items": [{
+                                    "item_id": "18fbb9d6-85a1-4e04-bd44-a8348507048c",
+                                    "name": "12 oz Chai Latte",
+                                    "price_cents": 450,
+                                    "safety": {
+                                        "_self": {
+                                            "level": "caution",
+                                            "reason": "Verify sweetness level."
+                                        }
+                                    }
+                                }]
+                            }]
+                        }
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+
+        let entry = model.scrollback.entries().back().unwrap();
+        assert_eq!(entry.text, UNRENDERABLE_AGENT_RESULT_MESSAGE);
+        for protocol_fragment in ["item_id", "\"safety\"", "_self", "{", "}"] {
+            assert!(!entry.text.contains(protocol_fragment), "{}", entry.text);
+        }
+        assert!(!entry.streaming);
     }
 
     #[test]

@@ -731,6 +731,64 @@ mod tests {
     }
 
     #[test]
+    fn renders_the_production_single_profile_menu_shape_without_protocol_json() {
+        let document = json!({
+            "conversation_id": "conversation-1",
+            "structured": {
+                "type": "household_menu",
+                "presentation": "full_menu",
+                "restaurant_name": "Pismo's Coastal Grill",
+                "freshness_hours": 1.0,
+                "requested_max_age_seconds": 86400,
+                "is_stale": false,
+                "sections": [{
+                    "name": "Tea",
+                    "items": [{
+                        "allergen_detail": [],
+                        "composite_level": "caution",
+                        "description": null,
+                        "item_id": "18fbb9d6-85a1-4e04-bd44-a8348507048c",
+                        "name": "12 oz Chai Latte",
+                        "price_cents": 450,
+                        "safety": {
+                            "_self": {
+                                "chips": ["carbohydrates"],
+                                "conflicts": ["carbohydrates"],
+                                "label": "Me",
+                                "level": "caution",
+                                "member_id": "_self",
+                                "reason": "Verify sweetness level; likely high carbs"
+                            }
+                        }
+                    }]
+                }]
+            }
+        });
+
+        let rendered = render_household_menu(&document).unwrap();
+        for expected in [
+            "Current menu at Pismo's Coastal Grill",
+            "Tea",
+            "• 12 oz Chai Latte  $4.50  [caution]",
+            "  Why for Me (caution): Verify sweetness level; likely high carbs",
+            "    Flags: carbohydrates",
+            "    Conflicts: carbohydrates",
+        ] {
+            assert!(rendered.lines().any(|line| line == expected), "{rendered}");
+        }
+        for protocol_fragment in [
+            "item_id",
+            "member_id",
+            "price_cents",
+            "\"safety\"",
+            "_self",
+            "18fbb9d6-85a1-4e04-bd44-a8348507048c",
+        ] {
+            assert!(!rendered.contains(protocol_fragment), "{rendered}");
+        }
+    }
+
+    #[test]
     fn ignores_non_household_results() {
         assert!(render_household_menu(&json!({"type": "general_response"})).is_none());
         assert!(

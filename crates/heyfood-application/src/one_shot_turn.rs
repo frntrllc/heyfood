@@ -134,6 +134,13 @@ pub fn agent_result_text(document: &Value) -> Option<&str> {
         })
 }
 
+/// Human-safe fallback when a successful agent result has no supported
+/// presentation in the installed client.
+///
+/// Machine consumers still receive the complete document through JSON output.
+/// Human surfaces must never substitute the serialized protocol envelope.
+pub const UNRENDERABLE_AGENT_RESULT_MESSAGE: &str = "hey.food returned a response this version can’t display clearly. Update heyfood, or ask about a specific item.";
+
 fn merge_stream_content(
     document: &mut Value,
     partial_text: &str,
