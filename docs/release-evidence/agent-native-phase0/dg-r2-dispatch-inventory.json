@@ -390,6 +390,57 @@
       ]
     },
     {
+      "id": "cli-logout-link",
+      "method": "DELETE",
+      "path": "/v1/channel/links/{link_id}",
+      "reachability": "public_explicit_logout",
+      "operation": "revoke_current_channel_link",
+      "client_rule": "never_blind_retry_after_dispatch; observed_absence_is_success_equivalent",
+      "server_replay_contract": "resource_identity_delete",
+      "reconciliation": "continue_device_and_session_teardown_then_clear_local_credentials",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/channel/links/{link_id}\"",
+      "evidence": [
+        "crates/heyfood-bin/tests/activated_commands.rs",
+        "docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "cli-logout-device",
+      "method": "POST",
+      "path": "/v1/auth/device/revoke",
+      "reachability": "public_explicit_logout",
+      "operation": "revoke_current_device",
+      "client_rule": "never_blind_retry_after_dispatch; observed_absence_is success_equivalent",
+      "server_replay_contract": "device_identity_revoke",
+      "reconciliation": "continue_session_teardown_then_clear_local_credentials",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/auth/device/revoke\"",
+      "evidence": [
+        "crates/heyfood-bin/tests/activated_commands.rs",
+        "docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "cli-logout-session",
+      "method": "POST",
+      "path": "/v1/auth/session/revoke",
+      "reachability": "public_explicit_logout",
+      "operation": "revoke_current_app_session_last",
+      "client_rule": "never_blind_retry_after_dispatch; observed_absence_is_success_equivalent",
+      "server_replay_contract": "session_identity_revoke",
+      "reconciliation": "clear_local_credentials regardless of remote result",
+      "source": "crates/heyfood-agent-runtime/src/service_api.rs",
+      "source_anchor": "\"/v1/auth/session/revoke\"",
+      "evidence": [
+        "crates/heyfood-bin/tests/activated_commands.rs",
+        "docs/release-evidence/rust-phase0/backend-idempotency-metrics-inventory.md"
+      ],
+      "blockers": []
+    },
+    {
       "id": "health-oura-authorize",
       "method": "POST",
       "path": "/v1/integrations/authorize",
@@ -439,8 +490,8 @@
     }
   ],
   "summary": {
-    "dispatches_total": 24,
-    "public_or_feature_reachable": 21,
+    "dispatches_total": 27,
+    "public_or_feature_reachable": 24,
     "compiled_deferred": 3,
     "rows_with_open_server_contract_blockers": 12,
     "phase0_client_inventory_complete": true,

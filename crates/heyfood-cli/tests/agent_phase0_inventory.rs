@@ -342,6 +342,15 @@ fn command_network_authority_matches_dg_r2_and_runtime_routes() {
                 "POST device or loopback authorization exchange",
             ],
         ),
+        (
+            "logout",
+            vec![
+                "GET /v1/channel/oauth/whoami",
+                "DELETE /v1/channel/links/{link_id}",
+                "POST /v1/auth/device/revoke",
+                "POST /v1/auth/session/revoke",
+            ],
+        ),
         ("grocery", vec!["GET /v1/grocery/list"]),
         ("grocery show", vec!["GET /v1/grocery/list"]),
         ("grocery exclusions", vec!["GET /v1/grocery/exclusions"]),

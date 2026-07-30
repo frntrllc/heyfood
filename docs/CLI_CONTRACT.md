@@ -1,7 +1,7 @@
 # heyfood native CLI contract
 
 This document defines the process interface for the current Rust public cut.
-Its active product commands are `agent`, `register`, `login`, `chat`,
+Its active product commands are `agent`, `register`, `login`, `logout`, `chat`,
 `onboard`, `ask`, `reply`, `log`, `item`, `grocery`, and `watch`. An
 interactive bare `heyfood`
 invocation opens the same native TUI as `heyfood chat`.
@@ -17,6 +17,7 @@ The following commands perform native product work:
 | `agent` | Describes the exact installed executable, prints its embedded integration/safety guides and public schemas, and runs bounded local diagnostics without credentials or network access. |
 | `register` | Explicitly starts create-account device authorization, exchanges the approved grant, validates the response contract, and persists the complete native session. |
 | `login` | Connects an existing account on a fresh machine; on a connected machine, explicitly signs in again and atomically replaces the native grant with the canonical supported scope set. Refresh is never used to change authority. |
+| `logout` | Resolves and revokes the current channel link, revokes the current device, revokes the app session last, and then clears the exact account-bound local credential pair. Remote failures never prevent local teardown. |
 | `chat` | Opens the authenticated interactive Rust TUI. |
 | `onboard` | Opens the Rust TUI directly in guided dietary-profile onboarding. |
 | `ask` | Runs one hosted-agent turn. |
@@ -33,7 +34,7 @@ authoritative allowlist: internal approval/commit schemas are deliberately not
 exposed. `agent doctor` reports only bounded build/contract facts and never
 prints a user-specific executable or configuration path.
 
-Health integrations are deferred from the supported `v0.6.0` contract.
+Health integrations are deferred from the supported `v0.6.1` contract.
 `health` is hidden from root help and generated shell completion, `/health` is
 absent from the TUI command registry, and new grants do not request
 `health:read` or `integrations:manage`. The retained top-level spelling returns
@@ -70,6 +71,18 @@ new browser/device grant and session exchange. A durable reconciliation marker
 blocks use if the final two-store replacement cannot complete. The replacement
 may add Grocery or Menu Watch authority while removing scopes for deferred
 capabilities such as Health.
+
+`logout` is an explicit, idempotent authorization teardown. It performs no
+automatic mutation retries. A channel-link lookup uses channel authority;
+link, device, and session revocation use the current app session, with session
+revocation last. HTTP 404 is success-equivalent for these identity-bound
+deletes. Local account-bound credentials are cleared even if remote cleanup
+fails or is canceled. The two local stores are committed under a durable
+`account_logout_pending` marker so interruption can be resumed without
+deleting a concurrently replaced account. Human success is `Logged out.`; a
+partial remote outcome is stated explicitly. JSON includes `remote_complete`,
+per-step attempted/ok/uncertainty fields, and
+`local_credentials_cleared`, but never tokens or raw server errors.
 
 Grocery reads include `grocery show` (compatibility alias `list`) and
 `grocery exclusions`.

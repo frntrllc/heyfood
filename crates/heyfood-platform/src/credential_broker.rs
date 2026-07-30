@@ -457,6 +457,11 @@ impl AuthorizationSessionStore for CredentialBrokerStore {
         self.request_blocking("clear-stage", input, true)
             .map(|_| ())
     }
+
+    fn delete_authorized_session(&self) -> Result<(), PortError> {
+        self.request_blocking("delete", Vec::new(), true)
+            .map(|_| ())
+    }
 }
 
 /// Handle the broker mode before any terminal/tracing initialization. Returns

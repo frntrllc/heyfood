@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use heyfood_application::{
-    GroceryDisplayList, GroceryExclusions, MenuWatchList, MenuWatchSnapshot, render_household_menu,
+    GroceryDisplayList, GroceryExclusions, LogoutOutcome, MenuWatchList, MenuWatchSnapshot,
+    render_household_menu,
 };
 use heyfood_core::{
     GroceryDecisionWire, GroceryItemStateWire, GroceryMutationProposalWire, GrocerySafetyStatus,
@@ -123,9 +124,8 @@ pub enum Command {
     Login(LoginArgs),
     /// Create and connect a hello.food account.
     Register(RegisterArgs),
-    /// Revoke the local/server session.
-    #[command(hide = true)]
-    Logout(LegacyArgs),
+    /// Revoke this device's hosted authority and clear local credentials.
+    Logout(LogoutArgs),
     /// Show session status.
     #[command(hide = true)]
     Status(LegacyArgs),
@@ -149,10 +149,10 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<GroceryCommand>,
     },
-    /// Health integrations are deferred from the supported v0.6.0 contract.
+    /// Health integrations are deferred from the supported v0.6.1 contract.
     #[command(
         hide = true,
-        about = "Health integrations are deferred from the supported v0.6.0 contract."
+        about = "Health integrations are deferred from the supported v0.6.1 contract."
     )]
     Health {
         #[command(subcommand)]
@@ -472,6 +472,9 @@ pub struct LegacyArgs {
     pub arguments: Vec<String>,
 }
 
+#[derive(Clone, Debug, Default, Args)]
+pub struct LogoutArgs {}
+
 #[derive(Clone, Debug, PartialEq, Args)]
 pub struct RegisterArgs {
     /// Use device-code authorization. This is the native launch transport.
@@ -664,19 +667,19 @@ impl From<GroceryDecisionArgument> for GroceryDecisionWire {
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum HealthCommand {
-    /// Retained for future compatibility; unavailable in v0.6.0.
+    /// Retained for future compatibility; unavailable in v0.6.1.
     #[command(hide = true)]
     Status,
-    /// Retained for future compatibility; unavailable in v0.6.0.
+    /// Retained for future compatibility; unavailable in v0.6.1.
     #[command(hide = true)]
     Show,
-    /// Retained for future compatibility; unavailable in v0.6.0.
+    /// Retained for future compatibility; unavailable in v0.6.1.
     #[command(hide = true)]
     Connect(HealthProviderArgs),
-    /// Retained for future compatibility; unavailable in v0.6.0.
+    /// Retained for future compatibility; unavailable in v0.6.1.
     #[command(hide = true)]
     Sync(HealthProviderArgs),
-    /// Retained for future compatibility; unavailable in v0.6.0.
+    /// Retained for future compatibility; unavailable in v0.6.1.
     #[command(hide = true)]
     Disconnect(HealthDisconnectArgs),
 }
@@ -896,6 +899,19 @@ pub fn render_registration_success(
             "Your hello.food account is connected.\nNext: {}\n",
             document.next_command
         ))
+    }
+}
+
+pub fn render_logout_success(
+    document: &LogoutOutcome,
+    machine: bool,
+) -> Result<String, serde_json::Error> {
+    if machine {
+        serde_json::to_string(document).map(|value| format!("{value}\n"))
+    } else if document.remote_complete {
+        Ok("Logged out.\n".into())
+    } else {
+        Ok("Logged out locally. Some server cleanup could not be confirmed; remaining sessions will expire automatically.\n".into())
     }
 }
 
@@ -1610,6 +1626,32 @@ mod registration_tests {
         assert_eq!(value["next_command"], "heyfood");
         assert!(!rendered.contains('\u{1b}'));
         assert!(rendered.ends_with('\n'));
+    }
+
+    #[test]
+    fn logout_is_public_and_renders_one_sanitized_json_value() {
+        let cli = Cli::try_parse_from(["heyfood", "--json", "logout"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Logout(_))));
+        let rendered = render_logout_success(&LogoutOutcome::already_logged_out(), true).unwrap();
+        let value: Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["remote_complete"], true);
+        assert_eq!(value["local_credentials_cleared"], true);
+        assert!(!rendered.contains('\u{1b}'));
+        assert!(rendered.ends_with('\n'));
+    }
+
+    #[test]
+    fn logout_human_output_distinguishes_remote_uncertainty() {
+        assert_eq!(
+            render_logout_success(&LogoutOutcome::already_logged_out(), false).unwrap(),
+            "Logged out.\n"
+        );
+        assert!(
+            render_logout_success(&LogoutOutcome::recovered_local_logout(), false)
+                .unwrap()
+                .starts_with("Logged out locally.")
+        );
     }
 
     #[test]

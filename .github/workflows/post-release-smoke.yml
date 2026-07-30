@@ -117,6 +117,7 @@ jobs:
             bash install.sh
           test "$("$install_bin/heyfood" --version)" = "heyfood $VERSION"
           "$install_bin/heyfood" --help >/dev/null
+          "$install_bin/heyfood" logout --help >/dev/null
           rm "$install_bin/heyfood"
           test ! -e "$install_bin/heyfood"
       - name: Install through the public hosted default
@@ -133,5 +134,6 @@ jobs:
             bash hosted-installer/install.sh
           test "$("$install_bin/heyfood" --version)" = "heyfood $VERSION"
           "$install_bin/heyfood" --help >/dev/null
+          "$install_bin/heyfood" logout --help >/dev/null
           rm "$install_bin/heyfood"
           test ! -e "$install_bin/heyfood"

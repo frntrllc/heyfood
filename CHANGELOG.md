@@ -4,6 +4,15 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
+## 0.6.1 - 2026-07-29
+
+- Add supported, idempotent `heyfood logout` for the current installation.
+- Revoke the current channel link, device, and app session in dependency order
+  without blind mutation retries.
+- Always clear local account-bound credentials, with resumable two-store
+  teardown and exact-account conflict protection.
+- Add human and JSON logout results with sanitized per-step remote outcomes.
+
 ## 0.6.0 - 2026-07-28
 
 - Adds offline, exact-artifact agent discovery through `heyfood agent

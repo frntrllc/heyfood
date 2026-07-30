@@ -10,6 +10,7 @@ agent         inspect the exact installed agent integration contract offline
 mcp           serve the bounded local read/discovery MCP protocol
 register      create and connect a hello.food account
 login         connect an existing account or replace this machine's authorization
+logout        revoke this device's hosted authority and clear local credentials
 ask           ask the hosted agent a one-shot question
 reply         continue an explicit conversation id
 log           log a meal through the hosted agent
@@ -108,13 +109,14 @@ processes even when an automation host allocates ordinary pipes. Agents must
 not drive the prompt through a PTY or use these human-only commands as a
 fallback. `--no-input` rejects them with `human_input_disabled`.
 
-## Registration and login
+## Registration, login, and logout
 
 ```bash
 heyfood register
 heyfood register --device --no-browser
 heyfood register --device --no-browser --json --timeout 600
 heyfood login
+heyfood logout
 ```
 
 `--json` suppresses browser launch and interactive prompts. Device authorization
@@ -123,6 +125,11 @@ authority. On a fresh machine, bare `heyfood` starts the account-neutral browser
 flow where the user chooses sign-in or account creation, while `heyfood login`
 connects an existing account. On a connected machine, `login` atomically
 replaces the grant with the canonical supported scope set.
+
+`heyfood logout` resolves the current channel link, revokes link and device
+authority before revoking the authenticating app session, and always clears
+the exact local account-bound credential pair. It is idempotent and reports
+uncertain remote outcomes without exposing credentials.
 
 ## Grocery
 
@@ -146,11 +153,11 @@ authority are never rendered.
 
 ## Deferred Health integrations
 
-Health integrations are not part of the supported `v0.6.0` command surface.
+Health integrations are not part of the supported `v0.6.1` command surface.
 They are absent from root help, shell completion, and the TUI command registry.
 The retained `health` spelling fails locally with `capability_deferred` before
 credential access or network dispatch. Oura and Apple Health integration work
-remains post-`v0.6.0`; no Health implementation or canary is required for this
+remains post-`v0.6.1`; no Health implementation or canary is required for this
 release.
 
 ## Menu Watch
@@ -214,12 +221,12 @@ fail before microphone access. Dietary onboarding, interactive Grocery
 confirmation, and the bounded installed-artifact core matrix remain active
 release work. Item-level Menu Watch diff detail, real-hardware voice
 qualification, full parity, and the complete twelve-stage showcase are
-post-`v0.6.0` conformance work, not release gates.
+post-`v0.6.1` conformance work, not release gates.
 
 ## Unavailable compatibility topology
 
 Health integrations, profile editing, restaurant search, recommendation, menu,
-recipe, household management, voice device configuration, diagnostics, logout,
-and account management are not active Rust commands. Some names remain hidden
+recipe, household management, voice device configuration, diagnostics, and
+account management are not active Rust commands. Some names remain hidden
 for migration topology only. Health returns `capability_deferred`; unfinished
 compatibility topology returns `command_not_available`.

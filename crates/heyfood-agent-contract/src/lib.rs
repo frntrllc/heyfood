@@ -502,6 +502,25 @@ fn commands() -> Vec<CommandContract> {
             NONE,
         ),
         command(
+            "logout",
+            "Revoke this device's hosted authority and clear its local credentials.",
+            "agent_unsupported",
+            "arguments",
+            "logout_result_v1",
+            "one_json_value",
+            "authorization",
+            true,
+            false,
+            true,
+            NONE,
+            "no_blind_retry",
+            "none",
+            "none",
+            "none",
+            NONE,
+        )
+        .with_reconciliation("heyfood logout"),
+        command(
             "grocery",
             "Read the active Grocery list.",
             "agent_unsupported",
@@ -1087,11 +1106,11 @@ mod tests {
                     "binary": {
                         "path": "/absolute/heyfood",
                         "sha256": "0".repeat(64),
-                        "version": "0.6.0"
+                        "version": "0.6.1"
                     },
                     "package": {
                         "name": "heyfood",
-                        "version": "0.6.0",
+                        "version": "0.6.1",
                         "sha256": "1".repeat(64),
                         "files": 6
                     },

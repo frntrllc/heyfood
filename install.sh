@@ -7,7 +7,7 @@ readonly HEYFOOD_COMMAND="heyfood"
 readonly HEYFOOD_REPOSITORY="frntrllc/heyfood"
 readonly GITHUB_URL="https://github.com"
 readonly RELEASE_URL="$GITHUB_URL/$HEYFOOD_REPOSITORY/releases"
-readonly SUPPORTED_VERSION="0.6.0"
+readonly SUPPORTED_VERSION="0.6.1"
 
 say() {
   printf '%s\n' "$*"
@@ -88,7 +88,7 @@ readonly TARGET="$TARGET_ARCH-$TARGET_OS"
 
 VERSION="${HEYFOOD_VERSION:-$SUPPORTED_VERSION}"
 validate_version "$VERSION" ||
-  fail "HEYFOOD_VERSION must be an exact release such as 0.6.0"
+  fail "HEYFOOD_VERSION must be an exact release such as 0.6.1"
 [[ "$VERSION" == "$SUPPORTED_VERSION" ]] ||
   fail "this installer supports heyfood $SUPPORTED_VERSION; requested $VERSION"
 readonly VERSION
