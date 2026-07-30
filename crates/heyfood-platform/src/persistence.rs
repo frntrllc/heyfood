@@ -1132,12 +1132,12 @@ impl NativeAuthStore {
             self.replacement_entry(
                 &self.replacement_pending_target,
                 "authorization-replacement-pending",
-            ),
+            )?,
             self.replacement_entry(
                 &self.replacement_previous_target,
                 "authorization-replacement-previous",
-            ),
-            self.replacement_entry(&self.replacement_target, "authorization-replacement"),
+            )?,
+            self.replacement_entry(&self.replacement_target, "authorization-replacement")?,
         ] {
             delete_keyring_entry(&entry, "credential_manager_delete")?;
         }
