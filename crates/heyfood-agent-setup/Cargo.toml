@@ -13,13 +13,13 @@ cap-std.workspace = true
 cap-fs-ext.workspace = true
 directories.workspace = true
 fs2.workspace = true
-heyfood-platform = { version = "=0.6.1", path = "../heyfood-platform" }
+heyfood-platform = { version = "=0.6.2", path = "../heyfood-platform" }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 sha2 = { workspace = true, features = ["std"] }
 
 [target.'cfg(windows)'.dependencies]
-heyfood-windows-file = { version = "=0.6.1", path = "../heyfood-windows-file" }
+heyfood-windows-file = { version = "=0.6.2", path = "../heyfood-windows-file" }
 
 [dev-dependencies]
 jsonschema = { version = "=0.49.2", default-features = false }

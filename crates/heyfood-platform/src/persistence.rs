@@ -1106,7 +1106,11 @@ impl NativeAuthStore {
         self.ensure_reconciled_unlocked()?;
         let auth = self.load_unlocked()?;
         let session = session_store.load_authorized_session()?;
-        if auth.as_ref() != Some(expected) || session.as_ref() != Some(&expected.session) {
+        let authorization_matches = auth.as_ref().is_some_and(|authorization| {
+            authorization.channel == expected.channel
+                && authorization.session.account_id == expected.session.account_id
+        });
+        if !authorization_matches || session.as_ref() != Some(&expected.session) {
             return Err(PortError::new(
                 "logout_account_changed",
                 "active account authorization changed while logout was in progress",
@@ -4558,6 +4562,64 @@ mod credential_write_verification_tests {
         assert!(!auth.reconciliation_path.exists());
         assert_eq!(auth.load_account_bound(&session).unwrap(), None);
         assert!(!auth.finish_account_bound_logout(&session).unwrap());
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn account_bound_logout_accepts_authoritative_session_rotation() {
+        let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "heyfood-account-logout-rotated-session-{}-{sequence}",
+            std::process::id()
+        ));
+        let _cleanup = Cleanup(root.clone());
+        let auth = NativeAuthStore::open(&root).unwrap();
+        let session = FileCredentialStore::open(&root).unwrap();
+        let initial = AuthCredentialBundle {
+            channel: ChannelCredentials::from_rfc3339_expiry(
+                "hf_cid_heyfood_cli",
+                "logout-rotated-session-device",
+                SensitiveString::new("channel-access"),
+                SensitiveString::new("channel-refresh"),
+                "2099-01-01T00:00:00Z",
+                "account:link",
+            )
+            .unwrap(),
+            session: SessionCredentials::from_rfc3339_expiry(
+                AccountId::parse("account-logout-rotated-session").unwrap(),
+                SensitiveString::new("session-access-1"),
+                SensitiveString::new("session-refresh-1"),
+                CredentialVersion::new(1),
+                "2099-01-01T00:00:00Z",
+            )
+            .unwrap(),
+        };
+        auth.initialize_account_bound(&initial, &session).unwrap();
+
+        let rotated_session = SessionCredentials::from_rfc3339_expiry(
+            initial.session.account_id.clone(),
+            SensitiveString::new("session-access-2"),
+            SensitiveString::new("session-refresh-2"),
+            CredentialVersion::new(2),
+            "2099-02-01T00:00:00Z",
+        )
+        .unwrap();
+        session
+            .replace_authorized_session(&rotated_session)
+            .unwrap();
+        let expected = AuthCredentialBundle {
+            channel: initial.channel,
+            session: rotated_session,
+        };
+        assert_eq!(
+            auth.load_account_bound(&session).unwrap(),
+            Some(expected.clone())
+        );
+
+        auth.clear_account_bound(&expected, &session).unwrap();
+
+        assert!(!auth.reconciliation_path.exists());
+        assert_eq!(auth.load_account_bound(&session).unwrap(), None);
     }
 }
 

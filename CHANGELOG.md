@@ -4,6 +4,14 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
+## 0.6.2 - 2026-07-29
+
+- Fix `heyfood logout` for accounts whose authoritative app session rotated
+  after initial authorization.
+- Preserve exact-account and concurrent-authorization replacement protection
+  while treating the authorization bundle's documented session mirror as
+  non-authoritative.
+
 ## 0.6.1 - 2026-07-29
 
 - Add supported, idempotent `heyfood logout` for the current installation.

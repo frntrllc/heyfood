@@ -153,11 +153,11 @@ authority are never rendered.
 
 ## Deferred Health integrations
 
-Health integrations are not part of the supported `v0.6.1` command surface.
+Health integrations are not part of the supported `v0.6.2` command surface.
 They are absent from root help, shell completion, and the TUI command registry.
 The retained `health` spelling fails locally with `capability_deferred` before
 credential access or network dispatch. Oura and Apple Health integration work
-remains post-`v0.6.1`; no Health implementation or canary is required for this
+remains post-`v0.6.2`; no Health implementation or canary is required for this
 release.
 
 ## Menu Watch
@@ -221,7 +221,7 @@ fail before microphone access. Dietary onboarding, interactive Grocery
 confirmation, and the bounded installed-artifact core matrix remain active
 release work. Item-level Menu Watch diff detail, real-hardware voice
 qualification, full parity, and the complete twelve-stage showcase are
-post-`v0.6.1` conformance work, not release gates.
+post-`v0.6.2` conformance work, not release gates.
 
 ## Unavailable compatibility topology
 
