@@ -92,8 +92,8 @@ write_report() {
         provider_tokens_present: false
       },
       mutation_policy: {
-        proposal_prepared: ($operations | any(.id == "grocery_prepare")),
-        decision: (if ($operations | any(.id == "grocery_cancel")) then "cancel" else null end),
+        proposal_prepared: false,
+        decision: null,
         non_mutation_verified: $non_mutation,
         accept_permitted: false
       },
@@ -266,66 +266,6 @@ if ! jq -e '
    (.response? | type == "string"))
 ' "$agent" >/dev/null; then
   write_report "failed" "contract" "agent_turn" "agent_result_contract"
-  exit 1
-fi
-
-proposal="$scratch/proposal.json"
-run_operation grocery_prepare "$proposal" "" \
-  "${common[@]}" grocery add \
-  --list-id "$list_id" \
-  --version "$list_version" \
-  onion
-if ! jq -e '
-  (.confirmation_token | type == "string" and length >= 32) and
-  (.structured_preview.items | type == "array" and length == 1) and
-  (.structured_preview.items[0].safety | type == "object") and
-  (.structured_preview.items[0].safety.status | type == "string") and
-  (.structured_preview.items[0].safety.member_flags | type == "array" and length >= 1) and
-  (.structured_preview.items[0].safety.member_flags |
-    any((.reason | type == "string" and length > 0) and
-        (.substitutions | type == "array" and length >= 1))) and
-  (.structured_preview.items[0].safety.label_hint |
-    type == "string" and length > 0) and
-  (.preconditions | type == "array" and length >= 2)
-' "$proposal" >/dev/null; then
-  write_report "failed" "contract" "grocery_prepare" "grocery_safety_contract"
-  exit 1
-fi
-proposal_confirmation_id=$(jq -er '.confirmation_id' "$proposal")
-proposal_operation=$(jq -er '.operation' "$proposal")
-if ! jq -e \
-  --arg id "$list_id" \
-  --argjson version "$list_version" \
-  '
-    .preconditions |
-    any(
-      .type == "list_version" and
-      .list_id == $id and
-      .expected_version == $version
-    ) and
-    any(
-      .type == "household_context_hash" and
-      (.expected_hash | type == "string" and length == 64)
-    )
-  ' "$proposal" >/dev/null; then
-  write_report "failed" "contract" "grocery_prepare" "grocery_authority_contract"
-  exit 1
-fi
-
-cancel="$scratch/cancel.json"
-run_operation grocery_cancel "$cancel" "$proposal" \
-  "${common[@]}" grocery confirm --decision cancel
-if ! jq -e \
-  --arg confirmation_id "$proposal_confirmation_id" \
-  --arg operation "$proposal_operation" \
-  '
-  .status == "cancelled" and
-  .confirmation_id == $confirmation_id and
-  .operation == $operation and
-  .list == null and
-  .exclusions == null
-' "$cancel" >/dev/null; then
-  write_report "failed" "safety" "grocery_cancel" "cancel_contract"
   exit 1
 fi
 

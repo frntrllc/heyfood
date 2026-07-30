@@ -36,7 +36,7 @@ run appear green.
 |---|---|---|---|---|
 | PR contract | Every change | Source and packaged fixture | Prevent compile, command, rendering, terminal, and evaluator regressions | Synthetic only |
 | Public artifact | Daily and on demand | Exact GitHub Release archive, real PTY, deterministic backend | Exercise supported journeys exactly as installed users receive them | Isolated synthetic account |
-| Production availability | Six-hourly after a dedicated canary identity exists | Exact public binary, production API | Detect auth, streaming, capability, and read-path outages | Read-only plus proposal cancel; never accept |
+| Production availability | Six-hourly after a dedicated canary identity exists | Exact public binary, production API | Detect auth, streaming, capability, and read-path outages | Read-only |
 | Human experience session | Weekly and before a feature release | Public binary in a real terminal | Judge discoverability, hierarchy, language, comfort, and trust | Dedicated evaluation account |
 
 The public-artifact layer is fully implemented. Production monitoring must not
@@ -46,7 +46,7 @@ least-privilege canary identity is provisioned with:
 - an isolated household containing synthetic dietary data;
 - a revocable CLI session with the minimum supported scopes;
 - no Kroger or Health provider token;
-- a versioned Grocery fixture where all automated proposals are cancelled;
+- a versioned Grocery fixture read before and after the agent turn;
 - credentials stored only in a protected `native-eval` environment.
 
 The fail-closed production workflow is
@@ -86,10 +86,12 @@ least-privilege replacement; the current design must not be described as
 per-secret authorization.
 
 The canary downloads and verifies the exact public Linux x86-64 archive. It
-executes an authenticated agent turn, reads the active Grocery list, prepares a
-synthetically screened proposal, explicitly cancels it, and proves the list
-version and content did not change. It never sends an accept decision and
-never installs a Kroger or Health provider token.
+reads the active Grocery list, executes an authenticated agent turn, reads the
+list again, and proves the list version and content did not change. It never
+invokes a human-only command, creates proposal authority, sends a decision, or
+installs a Kroger or Health provider token. Proposal review and cancellation
+remain part of the human experience session because both require a fresh
+decision on an independently attached controlling terminal.
 
 Only bounded status, latency, endpoint class, public version, archive digest,
 and sanitized error type enter uploaded evidence. Raw prompts, responses,
