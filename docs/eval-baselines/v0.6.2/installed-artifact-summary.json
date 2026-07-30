@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "evaluation": "tui-post-release-v2",
+  "evaluated_on": "2026-07-29",
+  "status": "passed",
+  "score": 100,
+  "maximum_score": 100,
+  "release": {
+    "version": "0.6.2",
+    "product_sha": "4cba1a038f67a5d4c8f075940922bd17e464fb01",
+    "url": "https://github.com/frntrllc/heyfood/releases/tag/v0.6.2"
+  },
+  "evaluation_run": {
+    "workflow_sha": "4cba1a038f67a5d4c8f075940922bd17e464fb01",
+    "url": "https://github.com/frntrllc/heyfood/actions/runs/30507987643"
+  },
+  "production_canary": {
+    "status": "passed",
+    "url": "https://github.com/frntrllc/heyfood/actions/runs/30507988826",
+    "target": "x86_64-unknown-linux-gnu",
+    "archive_sha256": "b346a4bccbf9f295a35eed131bd689ffb72441f8efcc08a8fb5b07572096cc2d",
+    "non_mutation_verified": true,
+    "protected_state_rotation": "success",
+    "credential_material_cleanup": "success"
+  },
+  "targets": [
+    {
+      "target": "aarch64-apple-darwin",
+      "status": "passed",
+      "score": 100,
+      "archive_sha256": "8ed10a2600144793f24cb9cbec963afb7b40e0302365bfd40162eb023b1be03a",
+      "evidence_sha256": {
+        "installed_core_matrix": "3ba789adfcc5d6cd2815d589cc8f5f32712fd9eb9486ae594b3f5b7264e7e6e4",
+        "post_release_report": "c29dee97c7fe7b5113dc02d8f0e2656e62126bf738ae806bae6124191ff544b5",
+        "clean_user_ansi": "1e538ac569d5a2276f191c6853be0e82db4366e7a4a948ea9f337e1042d68e4f",
+        "returning_user_ansi": "1846a1302c44bb99109f9d216e86f8d9d3dda874dc73eaad82e99de08921b327",
+        "width_40_ansi": "be6bab7d540511f64e6c3e1e81dcf88eb6c4492b71b76adf683f08951d9f6826",
+        "width_120_no_color_ansi": "6be428b280ac74501cfcea0ebd1f7a72187881437262ee19800a6b070f0ca34e",
+        "interrupt_exit_ansi": "9f70f27b582d1a0d2acf1de43b18904f1fde8d04f817fa3bce99c999cccad91d"
+      }
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "status": "passed",
+      "score": 100,
+      "archive_sha256": "eaeb90a5ce421297da80543dbc0733c9c7bd8058b436389d152fd114c808711b",
+      "evidence_sha256": {
+        "installed_core_matrix": "23e2dad0431b942169585cc9484518827362553c29eb5f202c4ff4c61c55b5b0",
+        "post_release_report": "f3545b396d53499c6b9f36d755b6dd100d50b6059961105ce231d7c3147ae52d",
+        "clean_user_ansi": "705482bd1e7df24be64fc67790b4b64788bc83419d4fec91aac031d99fb5b6b8",
+        "returning_user_ansi": "1846a1302c44bb99109f9d216e86f8d9d3dda874dc73eaad82e99de08921b327",
+        "width_40_ansi": "be6bab7d540511f64e6c3e1e81dcf88eb6c4492b71b76adf683f08951d9f6826",
+        "width_120_no_color_ansi": "6be428b280ac74501cfcea0ebd1f7a72187881437262ee19800a6b070f0ca34e",
+        "interrupt_exit_ansi": "9f70f27b582d1a0d2acf1de43b18904f1fde8d04f817fa3bce99c999cccad91d"
+      }
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "status": "passed",
+      "score": 100,
+      "archive_sha256": "5f63b205c51f5cac7862e0c3b88f1b7bba7fe0550c4c3b12488cd36dd997528b",
+      "evidence_sha256": {
+        "installed_core_matrix": "fd055ee5c15e996b23dac7c91e9fe6de5a871c77978816b25c8b560cc0c0d752",
+        "post_release_report": "35e123a0b63b6ec0c533be14ccefcbb1dbd58c63ff850da3ba4fa80a332e0b40",
+        "clean_user_ansi": "e8819fecf6798adb3caae841ae1d8fca851604a4d132c716c8c136429fe9a6c1",
+        "returning_user_ansi": "0ac3958e828554356e87835285d970731335afcb98c8cc83a05f2bacd6a2ed81",
+        "width_40_ansi": "e940590c91c9b8f8e71a98e0cebf372f2fb4249463479ae8cb83b0d09e11830f",
+        "width_120_no_color_ansi": "09a25e87373b5abffc182904bb49bcfa01c9abe010d600499ab695cdb1d50784",
+        "interrupt_exit_ansi": "9f70f27b582d1a0d2acf1de43b18904f1fde8d04f817fa3bce99c999cccad91d"
+      }
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "status": "passed",
+      "score": 100,
+      "archive_sha256": "b346a4bccbf9f295a35eed131bd689ffb72441f8efcc08a8fb5b07572096cc2d",
+      "evidence_sha256": {
+        "installed_core_matrix": "7eae7cc7e1f1b696e943d83cb5bfd392e4643d0a8033699774e6da541e1a4ff9",
+        "post_release_report": "5e64add5773732492de64664647b197be1bcfdf16f8fa7c18e0bd82705c21409",
+        "clean_user_ansi": "a3744cbce53f3f8bc5a14973d501e0f9d7b5a536612eb9e54f20a19d9bfc3db6",
+        "returning_user_ansi": "0ac3958e828554356e87835285d970731335afcb98c8cc83a05f2bacd6a2ed81",
+        "width_40_ansi": "e940590c91c9b8f8e71a98e0cebf372f2fb4249463479ae8cb83b0d09e11830f",
+        "width_120_no_color_ansi": "09a25e87373b5abffc182904bb49bcfa01c9abe010d600499ab695cdb1d50784",
+        "interrupt_exit_ansi": "9f70f27b582d1a0d2acf1de43b18904f1fde8d04f817fa3bce99c999cccad91d"
+      }
+    }
+  ],
+  "categories": [
+    {
+      "id": "first-run-orientation",
+      "weight": 5,
+      "status": "passed"
+    },
+    {
+      "id": "first-run-and-onboarding",
+      "weight": 15,
+      "status": "passed"
+    },
+    {
+      "id": "returning-session",
+      "weight": 15,
+      "status": "passed"
+    },
+    {
+      "id": "household-grocery",
+      "weight": 30,
+      "status": "passed"
+    },
+    {
+      "id": "failure-recovery",
+      "weight": 20,
+      "status": "passed"
+    },
+    {
+      "id": "terminal-presentation",
+      "weight": 15,
+      "status": "passed"
+    }
+  ],
+  "findings": [],
+  "known_release_findings": [
+    {
+      "issue": "https://github.com/frntrllc/heyfood/issues/47",
+      "severity": "P1",
+      "scope": "Signed mature-session logout clears local credentials but cannot complete remote teardown when persisted authority has expired."
+    }
+  ],
+  "limitations": [
+    "This is the supported-scope installed-artifact baseline, not a human aesthetic score.",
+    "The deterministic backend proves client behavior without mutating a production household.",
+    "The production canary is read-only and does not exercise human-only account or Grocery mutations.",
+    "A complete current-release human session remains required by the v0.7.0 session and first-run excellence plan.",
+    "Deferred roadmap capabilities are not credited by this score."
+  ]
+}
