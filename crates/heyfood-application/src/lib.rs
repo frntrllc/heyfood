@@ -52,7 +52,7 @@ pub use ports::{
 };
 pub use run_turn::{
     MAX_TURN_EVENTS, MAX_TURN_STREAM_BYTES, RefreshPolicy, RunTurn, RunTurnError, RunTurnOutcome,
-    TurnContext, TurnEvent, TurnRequest,
+    TurnContext, TurnEvent, TurnFailure, TurnFailureKind, TurnRequest,
 };
 pub use state_writer::{
     CommitError, CommitOutcome, Mutation, MutationClass, MutationMetadata, MutationProposal,

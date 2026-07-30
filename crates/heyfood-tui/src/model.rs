@@ -1,7 +1,8 @@
 use std::{collections::VecDeque, fmt::Write as _};
 
 use heyfood_application::{
-    RunTurnOutcome, UNRENDERABLE_AGENT_RESULT_MESSAGE, agent_result_text, render_household_menu,
+    RunTurnOutcome, TurnFailure, TurnFailureKind, UNRENDERABLE_AGENT_RESULT_MESSAGE,
+    agent_result_text, render_household_menu,
 };
 use heyfood_core::{
     ActionConfirmationEnvelopeWire, AgentConfirmationCommandWire, AgentEvent,
@@ -552,7 +553,7 @@ pub enum RuntimeEvent {
     },
     TurnFailed {
         operation_id: u64,
-        message: String,
+        failure: TurnFailure,
     },
     PanelReady {
         operation_id: u64,
@@ -1870,18 +1871,9 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
         }
         RuntimeEvent::TurnFailed {
             operation_id,
-            message,
+            failure,
         } if model.operation.operation_id() == Some(operation_id) => {
-            let message = terminal_safe_text(&message);
-            model.scrollback.mutate_last_assistant(|entry| {
-                if !entry.text.is_empty() {
-                    entry.text.push_str("\n\n");
-                }
-                entry
-                    .text
-                    .push_str(&format!("Unable to complete this turn: {message}"));
-            });
-            finish_stream(model, RunTurnOutcome::Completed);
+            finish_failed_stream(model, failure);
         }
         RuntimeEvent::PanelReady {
             operation_id,
@@ -2501,6 +2493,39 @@ fn finish_stream(model: &mut AppModel, outcome: RunTurnOutcome) {
     account_for_new_lines(model, old_lines);
 }
 
+fn finish_failed_stream(model: &mut AppModel, failure: TurnFailure) {
+    model.pending_choice_labels.clear();
+    let old_lines = model.scrollback.rendered_lines();
+    model.scrollback.mutate_last_assistant(|entry| {
+        let notice = match failure.kind {
+            TurnFailureKind::Inactivity => {
+                "This response stopped before it finished. hey.food did not retry it. You can ask a new question now."
+            }
+            TurnFailureKind::StreamInterrupted => {
+                "This response was interrupted before it finished. hey.food did not retry it. You can ask a new question now."
+            }
+            TurnFailureKind::DispatchOutcomeUnknown => {
+                "This turn may have reached hello.food, but its result was not received. It was not retried. Check the conversation before trying the same request again."
+            }
+            TurnFailureKind::Unavailable => {
+                "hey.food couldn’t start this turn. Check your connection, then ask again."
+            }
+            TurnFailureKind::Internal => {
+                "hey.food couldn’t finish this turn. It was not retried. You can ask a new question now."
+            }
+        };
+        if !entry.text.is_empty() {
+            entry.text.push_str("\n\n");
+        }
+        entry.text.push_str(notice);
+        entry.streaming = false;
+    });
+    model.operation = OperationState::Idle;
+    model.activity = None;
+    model.idle_exit_armed = false;
+    account_for_new_lines(model, old_lines);
+}
+
 fn account_for_new_lines(model: &mut AppModel, old_lines: usize) {
     if model.follow_tail {
         return;
@@ -2934,6 +2959,75 @@ mod tests {
         let text = &model.scrollback.entries().back().unwrap().text;
         assert!(text.contains("server outcome is unknown"));
         assert!(text.contains("Check current state before retrying"));
+    }
+
+    #[test]
+    fn inactivity_preserves_streamed_content_and_restores_a_usable_composer() {
+        let mut model = AppModel {
+            draft: "What do you know about me?".into(),
+            cursor: 26,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Partial {
+                    text: "I can consider your saved dietary profile.".into(),
+                },
+            }),
+        );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Choices {
+                    choices: vec![
+                        heyfood_core::AgentChoice::from_untrusted(
+                            "Review my profile".into(),
+                            Some("review".into()),
+                        )
+                        .unwrap(),
+                    ],
+                    allow_multiple: false,
+                },
+            }),
+        );
+        let failure = TurnFailure::from_port_error(&heyfood_application::PortError::new(
+            "sse_inactivity",
+            "event stream inactivity deadline expired",
+        ));
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFailed {
+                operation_id: 1,
+                failure,
+            }),
+        );
+
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert!(text.contains("I can consider your saved dietary profile."));
+        assert_eq!(text.matches("Review my profile").count(), 1);
+        assert!(text.contains("This response stopped before it finished."));
+        assert!(text.contains("hey.food did not retry it."));
+        assert!(text.contains("You can ask a new question now."));
+        assert!(!text.contains("sse_inactivity"));
+        assert!(!text.contains("inactivity deadline expired"));
+        assert!(!model.scrollback.entries().back().unwrap().streaming);
+        assert_eq!(model.operation, OperationState::Idle);
+        assert!(model.activity.is_none());
+        assert!(model.pending_choice_labels.is_empty());
+
+        model.draft = "Try an independent question".into();
+        model.cursor = model.draft.chars().count();
+        assert!(matches!(
+            dispatch(&mut model, Action::Submit).as_slice(),
+            [Effect::SubmitTurn {
+                operation_id: 2,
+                prompt
+            }] if prompt == "Try an independent question"
+        ));
     }
 
     #[test]

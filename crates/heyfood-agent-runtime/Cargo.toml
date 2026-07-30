@@ -22,6 +22,7 @@ tracing = { workspace = true, features = ["attributes", "std"] }
 
 [dev-dependencies]
 proptest = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

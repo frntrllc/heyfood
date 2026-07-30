@@ -71,6 +71,96 @@ pub enum RunTurnOutcome {
     StaleGeneration,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TurnFailureKind {
+    Inactivity,
+    StreamInterrupted,
+    DispatchOutcomeUnknown,
+    Unavailable,
+    Internal,
+}
+
+/// Renderer-neutral classification for a conversational turn that could not
+/// reach a domain-terminal result.
+///
+/// The diagnostic code remains available to deterministic tests and explicit
+/// diagnostics, but ordinary human presentation must use only `kind` and
+/// `outcome_uncertain`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TurnFailure {
+    pub kind: TurnFailureKind,
+    pub outcome_uncertain: bool,
+    diagnostic_code: &'static str,
+}
+
+impl TurnFailure {
+    #[must_use]
+    pub fn from_port_error(error: &PortError) -> Self {
+        let (kind, outcome_uncertain) = match error.code {
+            "sse_inactivity" => (TurnFailureKind::Inactivity, true),
+            "sse_transport"
+            | "sse_truncated"
+            | "sse_utf8"
+            | "sse_payload"
+            | "sse_event"
+            | "sse_buffer_too_large"
+            | "sse_line_too_large"
+            | "sse_event_too_large"
+            | "sse_event_after_done"
+            | "sse_event_after_terminal"
+            | "sse_done_without_terminal"
+            | "stream_incomplete"
+            | "stream_limit" => (TurnFailureKind::StreamInterrupted, true),
+            _ if error.outcome_uncertain => (TurnFailureKind::DispatchOutcomeUnknown, true),
+            _ => (TurnFailureKind::Unavailable, false),
+        };
+        Self {
+            kind,
+            outcome_uncertain,
+            diagnostic_code: error.code,
+        }
+    }
+
+    #[must_use]
+    pub const fn internal(diagnostic_code: &'static str) -> Self {
+        Self {
+            kind: TurnFailureKind::Internal,
+            outcome_uncertain: false,
+            diagnostic_code,
+        }
+    }
+
+    #[must_use]
+    pub const fn diagnostic_code(self) -> &'static str {
+        self.diagnostic_code
+    }
+
+    #[must_use]
+    pub fn from_run_turn_error(error: &RunTurnError) -> Self {
+        match error {
+            RunTurnError::Service(error) | RunTurnError::ServiceReconciliationRequired(error) => {
+                Self::from_port_error(error)
+            }
+            RunTurnError::StreamLimitExceeded => Self {
+                kind: TurnFailureKind::StreamInterrupted,
+                outcome_uncertain: true,
+                diagnostic_code: "stream_limit",
+            },
+            RunTurnError::StreamEndedWithoutTerminalEvent => Self {
+                kind: TurnFailureKind::StreamInterrupted,
+                outcome_uncertain: true,
+                diagnostic_code: "stream_incomplete",
+            },
+            RunTurnError::InvalidRequest(_) => Self::internal("invalid_turn_request"),
+            RunTurnError::UnresolvedReconciliation => {
+                Self::internal("session_reconciliation_required")
+            }
+            RunTurnError::State(_) => Self::internal("turn_state_failed"),
+            RunTurnError::EventConsumerClosed => Self::internal("turn_event_consumer_closed"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RunTurnError {
     InvalidRequest(&'static str),
@@ -350,5 +440,37 @@ impl RunTurn {
                 return Ok(RunTurnOutcome::Completed);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_failures_are_typed_uncertain_and_keep_diagnostics_separate() {
+        for (code, expected_kind) in [
+            ("sse_inactivity", TurnFailureKind::Inactivity),
+            ("sse_transport", TurnFailureKind::StreamInterrupted),
+            ("sse_payload", TurnFailureKind::StreamInterrupted),
+            ("sse_buffer_too_large", TurnFailureKind::StreamInterrupted),
+            ("sse_line_too_large", TurnFailureKind::StreamInterrupted),
+            ("sse_event_too_large", TurnFailureKind::StreamInterrupted),
+        ] {
+            let failure = TurnFailure::from_port_error(&PortError::new(code, "private detail"));
+            assert_eq!(failure.kind, expected_kind);
+            assert!(failure.outcome_uncertain);
+            assert_eq!(failure.diagnostic_code(), code);
+            assert!(!format!("{failure:?}").contains("private detail"));
+        }
+    }
+
+    #[test]
+    fn pre_acceptance_service_failure_is_not_reclassified_as_uncertain() {
+        let failure =
+            TurnFailure::from_port_error(&PortError::new("service_unavailable", "private detail"));
+        assert_eq!(failure.kind, TurnFailureKind::Unavailable);
+        assert!(!failure.outcome_uncertain);
+        assert_eq!(failure.diagnostic_code(), "service_unavailable");
     }
 }

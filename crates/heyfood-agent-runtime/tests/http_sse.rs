@@ -5,7 +5,7 @@ use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
 use heyfood_application::{
     BoxFuture, ClockPort, ConfigCommit, ConfigPort, CredentialCommit, CredentialPort, PortError,
     RefreshPolicy, RunTurn, RunTurnOutcome, SerializedStateWriter, ServicePort, TurnContext,
-    TurnRequest,
+    TurnFailure, TurnFailureKind, TurnRequest,
 };
 use heyfood_core::{
     AccountId, AgentConfirmationCommandWire, AgentEvent, ClientConfig, ConfigRevision,
@@ -221,6 +221,184 @@ async fn fixture_service() -> (TcpListener, ServiceUrl) {
     )
     .unwrap();
     (listener, base)
+}
+
+#[tokio::test]
+async fn proxy_visible_heartbeats_keep_a_slow_turn_alive_until_result_and_done() {
+    let (listener, base) = fixture_service().await;
+    let inactivity = Duration::from_secs(30);
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_request(&mut socket).await;
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        for event in [
+            "event: thinking\ndata: {\"stage\":\"route\",\"message\":\"Considering your dietary profile\\u2026\"}\n\n",
+            "event: thinking\ndata: {\"message\":\"Still working\\u2026\"}\n\n",
+            "event: thinking\ndata: {\"message\":\"Still working\\u2026\"}\n\n",
+            "event: thinking\ndata: {\"message\":\"Still working\\u2026\"}\n\n",
+            "event: partial\ndata: {\"text\":\"I can consider your saved profile.\"}\n\n",
+            "event: result\ndata: {\"conversation_id\":\"conversation-slow\",\"message\":\"I can consider your saved profile.\"}\n\n",
+            "event: done\ndata: {}\n\n",
+        ] {
+            socket.write_all(event.as_bytes()).await.unwrap();
+            socket.flush().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+    });
+    let service = HttpService::new(
+        base,
+        NetworkPolicy::DEVELOPMENT,
+        HttpDeadlines {
+            sse_inactivity: inactivity,
+            ..deadlines()
+        },
+    )
+    .unwrap()
+    .with_cli_auth(cli_auth(None));
+    let accepted = service
+        .open_turn(
+            TurnRequest {
+                prompt: "What do you know about me?".into(),
+                conversation_id: None,
+                context: Default::default(),
+                refresh: RefreshPolicy::Never,
+            },
+            credentials(1),
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
+    let mut events = accepted.events;
+    let mut received = Vec::new();
+    while let Some(event) = events.next().await.unwrap() {
+        received.push(event);
+    }
+    assert!(
+        started.elapsed() > inactivity,
+        "the fixture must exceed one inactivity window"
+    );
+    assert_eq!(
+        received
+            .iter()
+            .filter(|event| matches!(event, AgentEvent::Thinking { .. }))
+            .count(),
+        4
+    );
+    assert!(received.iter().any(|event| matches!(
+        event,
+        AgentEvent::Partial { text } if text == "I can consider your saved profile."
+    )));
+    assert!(matches!(
+        received.last(),
+        Some(AgentEvent::Result { conversation_id, .. })
+            if conversation_id.as_deref() == Some("conversation-slow")
+    ));
+    events.close().await.unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn stopped_heartbeats_fail_once_as_typed_inactivity_without_replay() {
+    let (listener, base) = fixture_service().await;
+    let (replay_sender, replay_receiver) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_request(&mut socket).await;
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\nevent: thinking\ndata: {\"message\":\"Still working\\u2026\"}\n\n",
+            )
+            .await
+            .unwrap();
+        socket.flush().await.unwrap();
+        let replayed = tokio::time::timeout(Duration::from_millis(400), listener.accept())
+            .await
+            .is_ok();
+        replay_sender.send(replayed).unwrap();
+    });
+    let service = HttpService::new(
+        base,
+        NetworkPolicy::DEVELOPMENT,
+        HttpDeadlines {
+            sse_inactivity: Duration::from_millis(120),
+            ..deadlines()
+        },
+    )
+    .unwrap()
+    .with_cli_auth(cli_auth(None));
+    let accepted = service
+        .open_turn(
+            TurnRequest {
+                prompt: "Do not replay this turn".into(),
+                conversation_id: None,
+                context: Default::default(),
+                refresh: RefreshPolicy::Never,
+            },
+            credentials(1),
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let mut events = accepted.events;
+    assert!(matches!(
+        events.next().await.unwrap(),
+        Some(AgentEvent::Thinking { .. })
+    ));
+    let error = events.next().await.unwrap_err();
+    let failure = TurnFailure::from_port_error(&error);
+    assert_eq!(failure.kind, TurnFailureKind::Inactivity);
+    assert!(failure.outcome_uncertain);
+    assert_eq!(failure.diagnostic_code(), "sse_inactivity");
+    assert!(!replay_receiver.await.unwrap());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn transport_heartbeat_comment_between_result_and_done_is_semantically_inert() {
+    let (listener, base) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_request(&mut socket).await;
+        let stream = b"event: result\ndata: {\"conversation_id\":\"conversation-terminal\",\"message\":\"Complete result.\"}\n\n: heartbeat\n\nevent: done\ndata: {}\n\n";
+        respond(&mut socket, "text/event-stream", stream).await;
+    });
+    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines())
+        .unwrap()
+        .with_cli_auth(cli_auth(None));
+    let accepted = service
+        .open_turn(
+            TurnRequest {
+                prompt: "terminal heartbeat fixture".into(),
+                conversation_id: None,
+                context: Default::default(),
+                refresh: RefreshPolicy::Never,
+            },
+            credentials(1),
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let mut events = accepted.events;
+    assert!(matches!(
+        events.next().await.unwrap(),
+        Some(AgentEvent::Result {
+            conversation_id,
+            ..
+        }) if conversation_id.as_deref() == Some("conversation-terminal")
+    ));
+    assert!(events.next().await.unwrap().is_none());
+    events.close().await.unwrap();
+    server.await.unwrap();
 }
 
 #[tokio::test]

@@ -11,9 +11,9 @@ use heyfood_application::{
     AudioCapturePort, CapabilitySnapshot, ConfirmGroceryMutation, CreateMenuWatch,
     CreateMenuWatchRequest, DeployedGroceryMutationRequest, DiscoverCapabilities, EnsureSession,
     EnsureSessionError, EnsureSessionOutcome, ExportGroceryList, GroceryExport, ListMenuWatches,
-    OptionalCapabilityStatus, PrepareGroceryMutation, ProfileReadinessStatus,
+    OptionalCapabilityStatus, PortError, PrepareGroceryMutation, ProfileReadinessStatus,
     ReadActiveGroceryDisplay, ReadGroceryExclusions, ReadStatus, RefreshPolicy, RemoveMenuWatch,
-    RunTurnOutcome, ServicePort, TurnContext, TurnRequest, VoiceReadinessStatus,
+    RunTurnOutcome, ServicePort, TurnContext, TurnFailure, TurnRequest, VoiceReadinessStatus,
     execute_one_shot_turn,
 };
 use heyfood_cli::{
@@ -1541,9 +1541,9 @@ impl InteractiveTurnDriver {
                     operation_id,
                     outcome,
                 },
-                Err(message) => RuntimeEvent::TurnFailed {
+                Err(failure) => RuntimeEvent::TurnFailed {
                     operation_id,
-                    message,
+                    failure,
                 },
             };
             let _ = runtime_events.send(terminal_event).await;
@@ -2079,12 +2079,12 @@ async fn run_interactive_turn(
     local_state: Option<Arc<ImportedPythonState>>,
     cancellation: CancellationToken,
     runtime_events: mpsc::Sender<RuntimeEvent>,
-) -> Result<RunTurnOutcome, String> {
+) -> Result<RunTurnOutcome, TurnFailure> {
     let snapshot = session.lock().await.clone();
     let credentials = match ensure_session
         .execute(snapshot.clone(), cancellation.child_token())
         .await
-        .map_err(|error| terminal_safe_text(&error.to_string()))?
+        .map_err(|error| turn_failure_from_session_error(&error))?
     {
         EnsureSessionOutcome::Current(credentials) => credentials,
         EnsureSessionOutcome::Refreshed(credentials) => {
@@ -2112,7 +2112,7 @@ async fn run_interactive_turn(
                 cancellation.child_token(),
             )
             .await
-            .map_err(|error| terminal_safe_text(&error.message))?
+            .map_err(|error| turn_failure_from_one_shot_error(&error))?
         }
         _ => TurnContext::default(),
     };
@@ -2139,7 +2139,7 @@ async fn run_interactive_turn(
         Err(error) if error.outcome_uncertain => {
             return Ok(RunTurnOutcome::CancelledAfterDispatchOutcomeUnknown);
         }
-        Err(error) => return Err(terminal_safe_text(&error.message)),
+        Err(error) => return Err(TurnFailure::from_port_error(&error)),
     };
 
     loop {
@@ -2149,11 +2149,14 @@ async fn run_interactive_turn(
                 let _ = accepted.events.close().await;
                 return Ok(RunTurnOutcome::CancelledAfterServerAcceptance);
             }
-            event = next => event.map_err(|error| terminal_safe_text(&error.message))?,
+            event = next => event.map_err(|error| TurnFailure::from_port_error(&error))?,
         };
         let Some(event) = event else {
             let _ = accepted.events.close().await;
-            return Err("The response stream ended before a final result arrived.".into());
+            return Err(TurnFailure::from_port_error(&PortError::uncertain(
+                "stream_incomplete",
+                "the response stream ended before a final result arrived",
+            )));
         };
         let terminal = matches!(event, AgentEvent::Result { .. } | AgentEvent::Error { .. });
         if let AgentEvent::Result {
@@ -2180,10 +2183,35 @@ async fn run_interactive_turn(
                 .events
                 .close()
                 .await
-                .map_err(|error| terminal_safe_text(&error.message))?;
+                .map_err(|error| TurnFailure::from_port_error(&error))?;
             return Ok(RunTurnOutcome::Completed);
         }
     }
+}
+
+fn turn_failure_from_session_error(error: &EnsureSessionError) -> TurnFailure {
+    match error {
+        EnsureSessionError::Service(error)
+        | EnsureSessionError::ServiceReconciliationRequired(error)
+        | EnsureSessionError::CredentialReconciliationRequired(error) => {
+            TurnFailure::from_port_error(error)
+        }
+        EnsureSessionError::ReconciliationMarkerWrite { operation, .. } => {
+            TurnFailure::from_port_error(operation)
+        }
+        EnsureSessionError::ReconciliationRequired => {
+            TurnFailure::internal("session_reconciliation_required")
+        }
+    }
+}
+
+fn turn_failure_from_one_shot_error(error: &OneShotError) -> TurnFailure {
+    let port_error = if error.outcome_uncertain {
+        PortError::uncertain(error.code, &error.message)
+    } else {
+        PortError::new(error.code, &error.message)
+    };
+    TurnFailure::from_port_error(&port_error)
 }
 
 enum OnboardingOperationError {
