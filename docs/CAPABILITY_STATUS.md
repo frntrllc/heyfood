@@ -10,8 +10,6 @@ specific `capability_deferred`.
 
 | Surface | Status | Meaning |
 |---|---|---|
-| Native v0.4.0 | Unsupported | Do not install or use. Published before release authorization. |
-| Native v0.4.1 | Unsupported | Do not install or use. Published before release authorization. |
 | Native v0.5.0 | Previous supported release | The qualified Rust recovery release superseded by the v0.6 line. |
 | Native v0.6.0 | Previous supported release | Superseded by v0.6.1, which adds supported account-bound logout. |
 | Native v0.6.1 | Previous supported release | Added account-bound logout but rejected local teardown after normal app-session rotation. Superseded by v0.6.2. |

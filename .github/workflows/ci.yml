@@ -52,10 +52,13 @@ jobs:
           fi
       - name: Lint distribution scripts
         shell: bash
-        run: shellcheck install.sh tests/installer_contract.sh tests/release_scope_contract.sh tests/continuous_eval_contract.sh scripts/eval/*.sh scripts/release/*.sh packaging/macos/*.sh
+        run: shellcheck install.sh tests/installer_contract.sh tests/release_scope_contract.sh tests/version_documentation_contract.sh tests/continuous_eval_contract.sh scripts/eval/*.sh scripts/release/*.sh packaging/macos/*.sh
       - name: Test the hosted-installer contract
         shell: bash
         run: bash tests/installer_contract.sh
+      - name: Test release documentation coordination
+        shell: bash
+        run: bash tests/version_documentation_contract.sh
       - name: Test the bounded v0.6.2 release scope
         if: runner.os == 'Linux'
         shell: bash
