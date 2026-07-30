@@ -116,6 +116,7 @@ jobs:
           test "$($binary --version)" = "heyfood $VERSION"
           "$binary" --help >/dev/null
           "$binary" register --help >/dev/null
+          "$binary" logout --help >/dev/null
           "$binary" agent describe |
             jq -e \
               --arg commit "$GITHUB_SHA" \

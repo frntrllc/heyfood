@@ -1012,6 +1012,122 @@ async fn rejected_login_leaves_both_existing_credentials_byte_for_byte_authorita
 }
 
 #[tokio::test]
+#[cfg(feature = "native-credentials")]
+async fn public_logout_revokes_current_authority_in_order_and_clears_both_stores() {
+    let root = TempRoot::new("logout-success");
+    initialize(&root.0, FULL_SCOPE);
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for expected in [
+            "GET /v1/channel/oauth/whoami ",
+            "DELETE /v1/channel/links/link-activated ",
+            "POST /v1/auth/device/revoke ",
+            "POST /v1/auth/session/revoke ",
+        ] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            assert!(request.starts_with(expected), "{request}");
+            if expected.starts_with("GET ") {
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer channel-access\r\n")
+                );
+                respond(
+                    &mut socket,
+                    "application/json",
+                    br#"{"link_id":"link-activated"}"#,
+                )
+                .await;
+            } else {
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer session-access\r\n")
+                );
+                if expected.starts_with("POST ") {
+                    let body: Value =
+                        serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+                    assert_eq!(body["reason"], "cli_logout");
+                    if expected.contains("/auth/device/revoke") {
+                        assert_eq!(body["device_id"], "heyfood-activated-device");
+                    } else {
+                        assert!(body.get("device_id").is_none());
+                    }
+                }
+                respond(&mut socket, "application/json", br#"{"revoked":true}"#).await;
+            }
+        }
+    });
+    let output = run(&root.0, &base_url, &["--json", "logout"], None).await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    server.await.unwrap();
+    let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["remote_complete"], true);
+    assert_eq!(document["local_credentials_cleared"], true);
+    assert_eq!(auth_store.load().unwrap(), None);
+    assert_eq!(session_store.load().await.unwrap(), None);
+
+    let repeated = run(&root.0, &base_url, &["--json", "logout"], None).await;
+    assert!(repeated.status.success());
+    let repeated: Value = serde_json::from_slice(&repeated.stdout).unwrap();
+    assert_eq!(repeated["remote_complete"], true);
+    assert_eq!(repeated["teardown"]["link"]["attempted"], false);
+    assert_eq!(repeated["teardown"]["device"]["attempted"], false);
+    assert_eq!(repeated["teardown"]["session"]["attempted"], false);
+}
+
+#[tokio::test]
+#[cfg(feature = "native-credentials")]
+async fn public_logout_clears_local_credentials_after_remote_failures_without_leaking_tokens() {
+    let root = TempRoot::new("logout-remote-failure");
+    initialize(&root.0, FULL_SCOPE);
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for expected in [
+            "GET /v1/channel/oauth/whoami ",
+            "POST /v1/auth/device/revoke ",
+            "POST /v1/auth/session/revoke ",
+        ] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            assert!(request.starts_with(expected), "{request}");
+            respond_status(
+                &mut socket,
+                503,
+                "Unavailable",
+                "application/json",
+                br#"{"detail":"sentinel-secret"}"#,
+            )
+            .await;
+        }
+    });
+    let output = run(&root.0, &base_url, &["--json", "logout"], None).await;
+    assert!(output.status.success());
+    server.await.unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let document: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(document["remote_complete"], false);
+    assert_eq!(document["local_credentials_cleared"], true);
+    assert!(!stdout.contains("sentinel"));
+    assert!(!stdout.contains("channel-access"));
+    assert!(!stdout.contains("session-access"));
+    assert_eq!(auth_store.load().unwrap(), None);
+    assert_eq!(session_store.load().await.unwrap(), None);
+}
+
+#[tokio::test]
 async fn lost_prepare_response_then_expiry_recovers_old_authority_without_second_issuance() {
     let root = TempRoot::new("login-prepare-loss-expiry");
     initialize(&root.0, old_scope());

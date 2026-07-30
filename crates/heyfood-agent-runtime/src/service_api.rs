@@ -4,19 +4,20 @@ use heyfood_application::{
     BoxFuture, CapabilityPort, CapabilitySnapshot, CreateMenuWatchRequest,
     DeployedGroceryMutationRequest, GroceryDisplayItem, GroceryDisplayList,
     GroceryDisplayMemberFlag, GroceryDisplaySafety, GroceryDisplaySource, GroceryExclusions,
-    GroceryExport, GroceryExportPort, GroceryMutationPort, GroceryReadPort, MenuWatchChangeEvent,
-    MenuWatchChangeSummary, MenuWatchList, MenuWatchPort, MenuWatchReadPort, MenuWatchSnapshot,
-    PortError, RegistrationAvailability, StatusPort,
+    GroceryExport, GroceryExportPort, GroceryMutationPort, GroceryReadPort, LogoutRemotePort,
+    MenuWatchChangeEvent, MenuWatchChangeSummary, MenuWatchList, MenuWatchPort, MenuWatchReadPort,
+    MenuWatchSnapshot, PortError, RegistrationAvailability, StatusPort,
 };
 use heyfood_core::{
-    AddItemsRequestWire, ApplicationCapabilitiesWire, AuthorizationServerMetadataWire,
-    ExclusionListResponseWire, ExclusionMutationRequestWire, GroceryCapability, GroceryEntityId,
-    GroceryListWire, GroceryMutationConfirmRequestWire, GroceryMutationProposalWire,
-    GroceryMutationResultWire, HealthContextWire, IntegrationAuthorizeRequestWire,
-    IntegrationAuthorizeResponseWire, IntegrationDisconnectResponseWire, IntegrationListWire,
-    IntegrationRedirectTargetWire, IntegrationSyncResponseWire, MenuWatchCreateRequestWire,
-    MenuWatchId, MenuWatchListResponseWire, MenuWatchResponseWire, OperationId,
-    RemoveItemsRequestWire, SelfRegistrationStatusWire, SessionCredentials, TRANSCRIPTION_CHANNELS,
+    AddItemsRequestWire, ApplicationCapabilitiesWire, AuthCredentialBundle,
+    AuthorizationServerMetadataWire, ExclusionListResponseWire, ExclusionMutationRequestWire,
+    GroceryCapability, GroceryEntityId, GroceryListWire, GroceryMutationConfirmRequestWire,
+    GroceryMutationProposalWire, GroceryMutationResultWire, HealthContextWire,
+    IntegrationAuthorizeRequestWire, IntegrationAuthorizeResponseWire,
+    IntegrationDisconnectResponseWire, IntegrationListWire, IntegrationRedirectTargetWire,
+    IntegrationSyncResponseWire, MenuWatchCreateRequestWire, MenuWatchId,
+    MenuWatchListResponseWire, MenuWatchResponseWire, OperationId, RemoveItemsRequestWire,
+    SelfRegistrationStatusWire, SessionCredentials, TRANSCRIPTION_CHANNELS,
     TRANSCRIPTION_CLIENT_ERROR_KINDS, TRANSCRIPTION_MAX_AUDIO_BYTES,
     TRANSCRIPTION_MAX_DURATION_SECONDS, TRANSCRIPTION_MAX_LANGUAGE_CHARACTERS,
     TRANSCRIPTION_MAX_REQUEST_BYTES, TRANSCRIPTION_SAMPLE_WIDTH_BYTES,
@@ -1278,6 +1279,143 @@ fn http_status_error(status: StatusCode) -> PortError {
 struct TranscriptionErrorBody {
     #[serde(default)]
     error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LogoutWhoami {
+    link_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct LogoutReason<'a> {
+    reason: &'a str,
+}
+
+#[derive(Serialize)]
+struct LogoutDeviceReason<'a> {
+    device_id: &'a str,
+    reason: &'a str,
+}
+
+fn logout_id(value: &str) -> Result<&str, PortError> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(PortError::new(
+            "logout_contract_error",
+            "service returned an invalid channel link identifier",
+        ));
+    }
+    Ok(value)
+}
+
+impl LogoutRemotePort for HttpService {
+    fn current_link<'a>(
+        &'a self,
+        credentials: &'a AuthCredentialBundle,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<Option<String>, PortError>> {
+        Box::pin(async move {
+            let builder = self
+                .request(Method::GET, "/v1/channel/oauth/whoami", None, operation_id)?
+                .header(header::ACCEPT, "application/json")
+                .bearer_auth(credentials.channel.access_token.expose_secret());
+            let response: LogoutWhoami = self
+                .dispatch_json(builder, cancellation, DispatchKind::Safe)
+                .await?;
+            response
+                .link_id
+                .map(|value| logout_id(&value).map(str::to_owned))
+                .transpose()
+        })
+    }
+
+    fn revoke_link<'a>(
+        &'a self,
+        credentials: &'a AuthCredentialBundle,
+        link_id: String,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<(), PortError>> {
+        Box::pin(async move {
+            let link_id = logout_id(&link_id)?;
+            let builder = self.request(
+                Method::DELETE,
+                &format!("/v1/channel/links/{link_id}"),
+                Some(&credentials.session),
+                operation_id,
+            )?;
+            match self
+                .dispatch(builder, &cancellation, DispatchKind::Mutation)
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(error) if error.code == "resource_not_found" => Ok(()),
+                Err(error) => Err(error),
+            }
+        })
+    }
+
+    fn revoke_device<'a>(
+        &'a self,
+        credentials: &'a AuthCredentialBundle,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<(), PortError>> {
+        Box::pin(async move {
+            let builder = self
+                .request(
+                    Method::POST,
+                    "/v1/auth/device/revoke",
+                    Some(&credentials.session),
+                    operation_id,
+                )?
+                .json(&LogoutDeviceReason {
+                    device_id: &credentials.channel.device_id,
+                    reason: "cli_logout",
+                });
+            match self
+                .dispatch(builder, &cancellation, DispatchKind::Mutation)
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(error) if error.code == "resource_not_found" => Ok(()),
+                Err(error) => Err(error),
+            }
+        })
+    }
+
+    fn revoke_session<'a>(
+        &'a self,
+        credentials: &'a AuthCredentialBundle,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<(), PortError>> {
+        Box::pin(async move {
+            let builder = self
+                .request(
+                    Method::POST,
+                    "/v1/auth/session/revoke",
+                    Some(&credentials.session),
+                    operation_id,
+                )?
+                .json(&LogoutReason {
+                    reason: "cli_logout",
+                });
+            match self
+                .dispatch(builder, &cancellation, DispatchKind::Mutation)
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(error) if error.code == "resource_not_found" => Ok(()),
+                Err(error) => Err(error),
+            }
+        })
+    }
 }
 
 #[derive(Default, Deserialize)]

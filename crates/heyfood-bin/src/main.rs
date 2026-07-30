@@ -16,7 +16,9 @@ use heyfood_agent_runtime::{
 #[cfg(feature = "native-credentials")]
 use heyfood_application::EnsureSessionError;
 #[cfg(feature = "native-credentials")]
-use heyfood_application::{BoxFuture, CredentialCommit, CredentialPort, PortError};
+use heyfood_application::{
+    BoxFuture, CredentialCommit, CredentialPort, Logout, LogoutLocalPort, LogoutOutcome, PortError,
+};
 use heyfood_application::{BrowserPort, EnsureSession, EnsureSessionOutcome};
 use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
 use heyfood_core::{
@@ -236,6 +238,30 @@ impl AuthorizationSessionStore for NativeSessionStore {
             }
         }
     }
+
+    fn delete_authorized_session(&self) -> Result<(), PortError> {
+        match self {
+            Self::Platform(store) => store.delete_authorized_session(),
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => store.delete_authorized_session(),
+        }
+    }
+}
+
+#[cfg(feature = "native-credentials")]
+struct NativeLogoutLocal<'a> {
+    auth: &'a NativeAuthStore,
+    session: &'a NativeSessionStore,
+}
+
+#[cfg(feature = "native-credentials")]
+impl LogoutLocalPort for NativeLogoutLocal<'_> {
+    fn clear<'a>(
+        &'a self,
+        expected: &'a heyfood_core::AuthCredentialBundle,
+    ) -> BoxFuture<'a, Result<(), PortError>> {
+        Box::pin(async move { self.auth.clear_account_bound(expected, self.session) })
+    }
 }
 
 #[tokio::main]
@@ -305,6 +331,16 @@ async fn main() -> ExitCode {
         }
         Some(Command::Register(arguments)) => register(arguments, machine, no_input).await,
         Some(Command::Login(arguments)) => login(arguments, machine).await,
+        #[cfg(feature = "native-credentials")]
+        Some(Command::Logout(_)) => logout(machine).await,
+        #[cfg(not(feature = "native-credentials"))]
+        Some(Command::Logout(_)) => failure(
+            "logout_unavailable",
+            "Logout requires native credential support in this build.",
+            None,
+            machine,
+            false,
+        ),
         Some(Command::Chat(_)) => chat(machine).await,
         Some(Command::Onboard(_)) => onboard(machine).await,
         Some(Command::Health { .. }) => deferred_health_command(machine),
@@ -740,8 +776,8 @@ fn pending_command(machine: bool) -> ExitCode {
 fn deferred_health_command(machine: bool) -> ExitCode {
     failure(
         "capability_deferred",
-        "Health integrations are deferred from the supported heyfood v0.6.0 contract.",
-        Some("Use `heyfood --help` to see the supported v0.6.0 commands."),
+        "Health integrations are deferred from the supported heyfood v0.6.1 contract.",
+        Some("Use `heyfood --help` to see the supported v0.6.1 commands."),
         machine,
         false,
     )
@@ -1552,6 +1588,75 @@ fn ensure_command_scopes(
             missing.join(", ")
         ),
     ))
+}
+
+#[cfg(feature = "native-credentials")]
+async fn logout(machine: bool) -> ExitCode {
+    match logout_inner().await {
+        Ok(document) => match heyfood_cli::render_logout_success(&document, machine) {
+            Ok(output) => {
+                print!("{output}");
+                ExitCode::SUCCESS
+            }
+            Err(_) => failure(
+                "internal_error",
+                "Could not render the logout result.",
+                None,
+                machine,
+                false,
+            ),
+        },
+        Err(error) => failure(
+            error.code,
+            "Could not securely clear native hello.food account credentials.",
+            Some("Run `heyfood logout` again. If this persists, contact hello.food support."),
+            machine,
+            error.outcome_uncertain,
+        ),
+    }
+}
+
+#[cfg(feature = "native-credentials")]
+async fn logout_inner() -> Result<LogoutOutcome, PortError> {
+    let paths = NativePaths::discover()?;
+    let auth_store = NativeAuthStore::open(paths.config_dir())?;
+    let session_store = NativeSessionStore::open(paths.config_dir())?;
+    auth_store.finish_authorization_terminal_cleanup()?;
+    if auth_store.finish_account_bound_logout(&session_store)? {
+        return Ok(LogoutOutcome::recovered_local_logout());
+    }
+    let Some(credentials) = auth_store.load_account_bound(&session_store)? else {
+        return Ok(LogoutOutcome::already_logged_out());
+    };
+    let (service_url, policy) = service_url().map_err(|error| {
+        PortError::new(
+            error.code,
+            "could not construct the configured hello.food service origin",
+        )
+    })?;
+    let cli_auth = CliAuthContext::new(
+        credentials.channel.device_id.clone(),
+        credentials.channel.access_token.clone(),
+        None,
+    )?;
+    let service =
+        HttpService::new(service_url, policy, HttpDeadlines::default())?.with_cli_auth(cli_auth);
+    let local = NativeLogoutLocal {
+        auth: &auth_store,
+        session: &session_store,
+    };
+    let cancellation = CancellationToken::new();
+    let signal_cancellation = cancellation.clone();
+    let signal = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            signal_cancellation.cancel();
+        }
+    });
+    let result = Logout::new(&service, &local)
+        .execute(&credentials, cancellation)
+        .await;
+    signal.abort();
+    result
 }
 
 async fn login(arguments: heyfood_cli::LoginArgs, machine: bool) -> ExitCode {

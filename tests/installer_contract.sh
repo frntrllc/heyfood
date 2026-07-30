@@ -144,7 +144,7 @@ test_source_invariants() {
     fail "install.sh.sha256 does not match install.sh"
   assert_contains "$INSTALLER" 'set -euo pipefail'
   assert_contains "$INSTALLER" 'https://github.com'
-  assert_contains "$INSTALLER" 'SUPPORTED_VERSION="0.6.0"'
+  assert_contains "$INSTALLER" 'SUPPORTED_VERSION="0.6.1"'
   assert_contains "$INSTALLER" '.local/pipx/venvs/heyfood-cli/bin/heyfood'
   assert_contains "$INSTALLER" 'SHA256SUMS'
   assert_contains "$INSTALLER" "mv -f -- \"\$STAGED_EXECUTABLE\" \"\$INSTALL_PATH\""
@@ -161,35 +161,35 @@ test_source_invariants() {
 
 test_exact_native_install() {
   new_case exact
-  make_release 0.6.0
-  export HEYFOOD_VERSION=0.6.0
+  make_release 0.6.1
+  export HEYFOOD_VERSION=0.6.1
   run_installer
 
   [[ -x "$BIN_DIR/heyfood" ]] || fail "native executable was not installed"
-  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.0" ]] ||
+  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.1" ]] ||
     fail "installed executable did not report the exact release version"
-  assert_contains "$STDOUT_LOG" "Installed heyfood 0.6.0 at $BIN_DIR/heyfood"
+  assert_contains "$STDOUT_LOG" "Installed heyfood 0.6.1 at $BIN_DIR/heyfood"
   assert_contains "$STDOUT_LOG" "Open heyfood to sign in or create an account: heyfood"
   assert_contains "$STDOUT_LOG" "Agent contract: heyfood agent describe"
   assert_contains "$STDOUT_LOG" "Optional Codex/Claude setup preview:"
-  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.6.0/SHA256SUMS"
-  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.6.0/heyfood-v0.6.0-$(host_target).tar.gz"
+  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.6.1/SHA256SUMS"
+  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.6.1/heyfood-v0.6.1-$(host_target).tar.gz"
 }
 
 test_default_release_is_v060() {
   new_case default
-  make_release 0.6.0
+  make_release 0.6.1
   run_installer
 
-  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.0" ]] ||
+  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.1" ]] ||
     fail "default supported release was not installed"
-  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.6.0/"
+  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.6.1/"
   assert_not_contains "$DOWNLOAD_LOG" "/releases/latest"
 }
 
 test_streamed_install() {
   new_case streamed
-  make_release 0.6.0
+  make_release 0.6.1
   /bin/bash <"$INSTALLER" >"$STDOUT_LOG" 2>"$STDERR_LOG"
   [[ -x "$BIN_DIR/heyfood" ]] || fail "streamed installer did not install heyfood"
 }
@@ -201,10 +201,10 @@ test_rejects_unsupported_or_unsafe_version_before_download() {
     fail "installer accepted an unsupported incident release"
   fi
   [[ ! -e "$DOWNLOAD_LOG" ]] || fail "installer downloaded before rejecting the unsupported release"
-  assert_contains "$STDERR_LOG" "this installer supports heyfood 0.6.0"
+  assert_contains "$STDERR_LOG" "this installer supports heyfood 0.6.1"
 
   new_case version-injection
-  export HEYFOOD_VERSION="0.6.0;touch-must-not-run"
+  export HEYFOOD_VERSION="0.6.1;touch-must-not-run"
   if run_installer; then
     fail "installer accepted an unsafe version"
   fi
@@ -214,7 +214,7 @@ test_rejects_unsupported_or_unsafe_version_before_download() {
 
 test_rejects_uncontrolled_install_targets() {
   new_case relative-bin
-  make_release 0.6.0
+  make_release 0.6.1
   export HEYFOOD_BIN_DIR="relative/bin"
   if run_installer; then
     fail "installer accepted a relative bin directory"
@@ -222,7 +222,7 @@ test_rejects_uncontrolled_install_targets() {
   [[ ! -e "$DOWNLOAD_LOG" ]] || fail "installer downloaded before rejecting the directory"
 
   new_case symlink-bin
-  make_release 0.6.0
+  make_release 0.6.1
   mkdir -p "$CASE_DIR/real-bin"
   ln -s "$CASE_DIR/real-bin" "$CASE_DIR/bin-link"
   export HEYFOOD_BIN_DIR="$CASE_DIR/bin-link"
@@ -232,7 +232,7 @@ test_rejects_uncontrolled_install_targets() {
   [[ ! -e "$DOWNLOAD_LOG" ]] || fail "installer downloaded before rejecting the symlink"
 
   new_case shared-bin
-  make_release 0.6.0
+  make_release 0.6.1
   mkdir -p "$CASE_DIR/shared-bin"
   chmod 0775 "$CASE_DIR/shared-bin"
   export HEYFOOD_BIN_DIR="$CASE_DIR/shared-bin"
@@ -242,7 +242,7 @@ test_rejects_uncontrolled_install_targets() {
   [[ ! -e "$DOWNLOAD_LOG" ]] || fail "installer downloaded into a shared directory"
 
   new_case symlink-target
-  make_release 0.6.0
+  make_release 0.6.1
   mkdir -p "$BIN_DIR"
   printf 'do not replace\n' >"$CASE_DIR/target"
   ln -s "$CASE_DIR/target" "$BIN_DIR/heyfood"
@@ -267,23 +267,23 @@ EOF
 
 test_migrates_known_legacy_pipx_symlink() {
   new_case legacy-pipx
-  make_release 0.6.0
+  make_release 0.6.1
   make_legacy_pipx_link
   run_installer
 
   [[ -f "$BIN_DIR/heyfood" && ! -L "$BIN_DIR/heyfood" ]] ||
     fail "legacy pipx symlink was not replaced by the native executable"
-  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.0" ]] ||
-    fail "legacy pipx migration did not install v0.6.0"
+  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.1" ]] ||
+    fail "legacy pipx migration did not install v0.6.1"
   [[ "$("$HOME_DIR/.local/pipx/venvs/heyfood-cli/bin/heyfood")" == "heyfood 0.3.2" ]] ||
     fail "legacy pipx migration changed the old environment"
 }
 
 test_failed_install_preserves_known_legacy_pipx_symlink() {
   new_case legacy-pipx-failure
-  make_release 0.6.0
+  make_release 0.6.1
   make_legacy_pipx_link
-  printf 'corruption\n' >>"$ASSET_DIR/heyfood-v0.6.0-$(host_target).tar.gz"
+  printf 'corruption\n' >>"$ASSET_DIR/heyfood-v0.6.1-$(host_target).tar.gz"
   if run_installer; then
     fail "legacy pipx migration accepted an invalid checksum"
   fi
@@ -312,9 +312,9 @@ assert_existing_binary_untouched() {
 
 test_checksum_failure_preserves_existing_binary() {
   new_case bad-checksum
-  make_release 0.6.0
+  make_release 0.6.1
   write_existing_binary
-  printf 'corruption\n' >>"$ASSET_DIR/heyfood-v0.6.0-$(host_target).tar.gz"
+  printf 'corruption\n' >>"$ASSET_DIR/heyfood-v0.6.1-$(host_target).tar.gz"
   if run_installer; then
     fail "installer accepted an invalid checksum"
   fi
@@ -324,14 +324,14 @@ test_checksum_failure_preserves_existing_binary() {
 
 test_archive_shape_failure_preserves_existing_binary() {
   new_case bad-archive
-  make_release 0.6.0
+  make_release 0.6.1
   write_existing_binary
   printf 'unexpected\n' >"$CASE_DIR/payload/unexpected.txt"
-  tar -czf "$ASSET_DIR/heyfood-v0.6.0-$(host_target).tar.gz" \
+  tar -czf "$ASSET_DIR/heyfood-v0.6.1-$(host_target).tar.gz" \
     -C "$CASE_DIR/payload" heyfood unexpected.txt
   printf '%s  %s\n' \
-    "$(sha256_file "$ASSET_DIR/heyfood-v0.6.0-$(host_target).tar.gz")" \
-    "heyfood-v0.6.0-$(host_target).tar.gz" >"$ASSET_DIR/SHA256SUMS"
+    "$(sha256_file "$ASSET_DIR/heyfood-v0.6.1-$(host_target).tar.gz")" \
+    "heyfood-v0.6.1-$(host_target).tar.gz" >"$ASSET_DIR/SHA256SUMS"
   if run_installer; then
     fail "installer accepted unexpected archive members"
   fi
@@ -341,12 +341,12 @@ test_archive_shape_failure_preserves_existing_binary() {
 
 test_version_mismatch_preserves_existing_binary() {
   new_case wrong-version
-  make_release 0.6.0 9.9.9
+  make_release 0.6.1 9.9.9
   write_existing_binary
   if run_installer; then
     fail "installer accepted an executable with the wrong version"
   fi
-  assert_contains "$STDERR_LOG" "expected heyfood 0.6.0 before installation"
+  assert_contains "$STDERR_LOG" "expected heyfood 0.6.1 before installation"
   assert_existing_binary_untouched
 }
 

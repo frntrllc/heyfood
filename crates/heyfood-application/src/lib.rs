@@ -7,6 +7,7 @@ pub mod ensure_session;
 pub mod grocery;
 pub mod health;
 pub mod household_menu;
+pub mod logout;
 pub mod menu_watch;
 pub mod one_shot_turn;
 pub mod ports;
@@ -31,6 +32,9 @@ pub use health::{
     HealthAuthorization, HealthConnection, HealthContext, HealthManagementOutcome, HealthPort,
 };
 pub use household_menu::render_household_menu;
+pub use logout::{
+    Logout, LogoutLocalPort, LogoutOutcome, LogoutRemotePort, LogoutStep, LogoutTeardown,
+};
 pub use menu_watch::{
     CreateMenuWatch, CreateMenuWatchRequest, ListMenuWatches, MenuWatchChangeEvent,
     MenuWatchChangeSummary, MenuWatchList, MenuWatchPort, MenuWatchReadPort, MenuWatchSnapshot,

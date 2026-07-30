@@ -37,11 +37,14 @@ fn inventory_covers_the_exact_current_mutating_and_post_as_read_routes() {
         })
         .collect::<BTreeSet<_>>();
     let expected = BTreeSet::from([
+        "DELETE /v1/channel/links/{link_id}".into(),
         "DELETE /v1/integrations/oura".into(),
         "DELETE /v1/menu/watch/{watch_id}".into(),
         "POST /v1/agent/converse".into(),
         "POST /v1/audio/transcriptions".into(),
+        "POST /v1/auth/device/revoke".into(),
         "POST /v1/auth/session/refresh".into(),
+        "POST /v1/auth/session/revoke".into(),
         "POST /v1/channel/oauth/cli/reauthorizations".into(),
         "POST /v1/channel/oauth/cli/reauthorizations/{stage_id}/abort".into(),
         "POST /v1/channel/oauth/cli/reauthorizations/{stage_id}/promote".into(),
