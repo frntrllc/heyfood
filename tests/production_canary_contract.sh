@@ -31,10 +31,10 @@ grep -Fq "scripts/eval/run-production-canary.sh" "$workflow"
 grep -Fq "scripts/eval/triage-production-canary.sh" "$workflow"
 grep -Fq "scripts/eval/finalize-production-canary.sh" "$workflow"
 grep -Fq "scripts/eval/rotate-production-canary-state.sh" "$workflow"
-grep -Fq -- "--decision cancel" "$runner"
-if grep -Eq -- '--decision[[:space:]]+accept|grocery[[:space:]]+accept' \
+if grep -Eq -- \
+  'grocery[[:space:]]+(add|remove|state|never|confirm)|--decision[[:space:]]+(accept|cancel)' \
   "$workflow" "$runner"; then
-  echo "production canary must never accept a Grocery proposal" >&2
+  echo "automated production canary must never invoke a human-only Grocery command" >&2
   exit 1
 fi
 
@@ -94,46 +94,6 @@ if [[ "$args" == *" grocery list "* ]]; then
 elif [[ "$args" == *" ask "* ]]; then
   cat >/dev/null
   printf '%s\n' '{"message":"synthetic acknowledgement"}'
-elif [[ "$args" == *" grocery add "* ]]; then
-  jq -cn '{
-    confirmation_id: "00000000-0000-4000-8000-000000000031",
-    idempotency_key: "00000000-0000-4000-8000-000000000032",
-    operation: "add_items",
-    expires_at: "2026-07-26T00:05:00Z",
-    structured_preview: {
-      items: [{
-        name: "onion",
-        safety: {
-          status: "risky",
-          member_flags: [{
-            member_id: "synthetic",
-            status: "risky",
-            reason: "synthetic screening reason",
-            substitutions: ["synthetic substitute"]
-          }],
-          label_hint: "Synthetic label guidance."
-        }
-      }]
-    },
-    preconditions: [{
-      type: "list_version",
-      list_id: "00000000-0000-4000-8000-000000000030",
-      expected_version: 7
-    }, {
-      type: "household_context_hash",
-      expected_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    }],
-    confirmation_token: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  }'
-elif [[ "$args" == *" grocery confirm "* ]]; then
-  jq -e '.confirmation_token | length >= 32' >/dev/null
-  printf '%s\n' '{
-    "status":"cancelled",
-    "operation":"add_items",
-    "confirmation_id":"00000000-0000-4000-8000-000000000031",
-    "list":null,
-    "exclusions":null
-  }'
 else
   printf '%s\n' '{"ok":false,"error":{"type":"fixture_command","message":"redacted"}}'
   exit 1
@@ -160,14 +120,15 @@ run_fixture success
 success="$evidence-success/production-canary.json"
 jq -e '
   .status == "passed" and
-  .mutation_policy.decision == "cancel" and
+  .mutation_policy.proposal_prepared == false and
+  .mutation_policy.decision == null and
   .mutation_policy.non_mutation_verified == true and
   .mutation_policy.accept_permitted == false and
-  (.operations | length == 5) and
+  (.operations | length == 3) and
   .privacy.raw_requests_retained == false and
   .privacy.raw_responses_retained == false
 ' "$success" >/dev/null
-if grep -Eq 'synthetic acknowledgement|00000000-0000-4000-8000-000000000030|onion' \
+if grep -Eq 'synthetic acknowledgement|00000000-0000-4000-8000-000000000030' \
   "$success"; then
   echo "privacy-safe evidence retained private journey content" >&2
   exit 1
