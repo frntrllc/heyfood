@@ -103,6 +103,9 @@ impl TurnFailure {
             | "sse_utf8"
             | "sse_payload"
             | "sse_event"
+            | "sse_buffer_too_large"
+            | "sse_line_too_large"
+            | "sse_event_too_large"
             | "sse_event_after_done"
             | "sse_event_after_terminal"
             | "sse_done_without_terminal"
@@ -450,6 +453,9 @@ mod tests {
             ("sse_inactivity", TurnFailureKind::Inactivity),
             ("sse_transport", TurnFailureKind::StreamInterrupted),
             ("sse_payload", TurnFailureKind::StreamInterrupted),
+            ("sse_buffer_too_large", TurnFailureKind::StreamInterrupted),
+            ("sse_line_too_large", TurnFailureKind::StreamInterrupted),
+            ("sse_event_too_large", TurnFailureKind::StreamInterrupted),
         ] {
             let failure = TurnFailure::from_port_error(&PortError::new(code, "private detail"));
             assert_eq!(failure.kind, expected_kind);

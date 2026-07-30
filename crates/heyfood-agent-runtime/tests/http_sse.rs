@@ -363,6 +363,45 @@ async fn stopped_heartbeats_fail_once_as_typed_inactivity_without_replay() {
 }
 
 #[tokio::test]
+async fn transport_heartbeat_comment_between_result_and_done_is_semantically_inert() {
+    let (listener, base) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_request(&mut socket).await;
+        let stream = b"event: result\ndata: {\"conversation_id\":\"conversation-terminal\",\"message\":\"Complete result.\"}\n\n: heartbeat\n\nevent: done\ndata: {}\n\n";
+        respond(&mut socket, "text/event-stream", stream).await;
+    });
+    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines())
+        .unwrap()
+        .with_cli_auth(cli_auth(None));
+    let accepted = service
+        .open_turn(
+            TurnRequest {
+                prompt: "terminal heartbeat fixture".into(),
+                conversation_id: None,
+                context: Default::default(),
+                refresh: RefreshPolicy::Never,
+            },
+            credentials(1),
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let mut events = accepted.events;
+    assert!(matches!(
+        events.next().await.unwrap(),
+        Some(AgentEvent::Result {
+            conversation_id,
+            ..
+        }) if conversation_id.as_deref() == Some("conversation-terminal")
+    ));
+    assert!(events.next().await.unwrap().is_none());
+    events.close().await.unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn refresh_rotation_integrates_with_run_turn_and_normalized_sse() {
     let (listener, base) = fixture_service().await;
     let fixture = auth_fixture();
