@@ -13,8 +13,8 @@ default = []
 native-audio = ["dep:cpal", "dep:hound"]
 
 [dependencies]
-heyfood-application = { version = "=0.6.1", path = "../heyfood-application" }
-heyfood-core = { version = "=0.6.1", path = "../heyfood-core" }
+heyfood-application = { version = "=0.6.2", path = "../heyfood-application" }
+heyfood-core = { version = "=0.6.2", path = "../heyfood-core" }
 tokio = { workspace = true, features = ["rt"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true, features = ["attributes", "std"] }

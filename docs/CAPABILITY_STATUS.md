@@ -14,13 +14,14 @@ specific `capability_deferred`.
 | Native v0.4.1 | Unsupported | Do not install or use. Published before release authorization. |
 | Native v0.5.0 | Previous supported release | The qualified Rust recovery release superseded by the v0.6 line. |
 | Native v0.6.0 | Previous supported release | Superseded by v0.6.1, which adds supported account-bound logout. |
-| Native v0.6.1 | Current supported release | Retains exact installed self-description, receipt-bound skill/MCP setup, and six bounded read/discovery MCP tools; adds current-device authority revocation and local credential teardown through `heyfood logout`. |
-| Hosted installer | Supported | Installs the checksum-verified native `v0.6.1` archive for macOS or Linux. |
+| Native v0.6.1 | Previous supported release | Added account-bound logout but rejected local teardown after normal app-session rotation. Superseded by v0.6.2. |
+| Native v0.6.2 | Current supported release | Retains exact installed self-description, receipt-bound skill/MCP setup, and six bounded read/discovery MCP tools; fixes current-device authority revocation and local credential teardown through `heyfood logout` after normal session rotation. |
+| Hosted installer | Supported | Installs the checksum-verified native `v0.6.2` archive for macOS or Linux. |
 | Source | Available | Public for inspection and contributor evaluation under Apache 2.0. |
 | Windows x86-64 | Deferred | Windows distribution requires a separately qualified future release. Ordinary Windows compile, test, Clippy, Credential Manager, and deterministic packaging qualification remains active in CI, but no Windows credential or asset participates in the public release path. |
-| macOS v0.6.1 archives | Supported | Both architectures are Developer ID signed with hardened runtime, Apple notarized, attested, and installed-artifact qualified. |
-| Linux v0.6.1 archives | Supported | Both architectures are checksum verified, attested, and installed-artifact qualified. |
-| Current native release | v0.6.1 | Supported on the four macOS/Linux targets listed above. |
+| macOS v0.6.2 archives | Supported | Both architectures are Developer ID signed with hardened runtime, Apple notarized, attested, and installed-artifact qualified. |
+| Linux v0.6.2 archives | Supported | Both architectures are checksum verified, attested, and installed-artifact qualified. |
+| Current native release | v0.6.2 | Supported on the four macOS/Linux targets listed above. |
 
 ## Product capabilities
 
@@ -34,17 +35,17 @@ specific `capability_deferred`.
 | Conversation continuation | `heyfood reply --conversation-id …` | Hosted conversation state | Current source command |
 | Meal logging | `heyfood log` | Hosted agent and meal memory; direct use requires controlling-terminal `LOG` authorization | Current human-terminal-only source command |
 | Item evaluation | `heyfood item` | Restaurant/menu evidence and dietary evaluation | Current source command |
-| Grocery | `heyfood grocery` plus TUI confirmation cards | Read/export; direct preparation and confirm/cancel require exact controlling-terminal review phrases | Supported v0.6.1 command with human-only mutations |
-| Oura health integrations | Not advertised; retained command spelling fails closed with `capability_deferred` | Future provider-neutral integration work | Deferred from the supported `v0.6.1` contract; no implementation or canary release gate |
-| Apple Health | No CLI command or TUI panel | Mobile/backend work remains outside this release | Deferred from the supported `v0.6.1` contract |
+| Grocery | `heyfood grocery` plus TUI confirmation cards | Read/export; direct preparation and confirm/cancel require exact controlling-terminal review phrases | Supported v0.6.2 command with human-only mutations |
+| Oura health integrations | Not advertised; retained command spelling fails closed with `capability_deferred` | Future provider-neutral integration work | Deferred from the supported `v0.6.2` contract; no implementation or canary release gate |
+| Apple Health | No CLI command or TUI panel | Mobile/backend work remains outside this release | Deferred from the supported `v0.6.2` contract |
 | Household context | Used by hosted turns and Grocery | Profiles and household-aware evaluation | Backend available; native roster management unavailable |
 | Restaurants and recipes | Via `ask` and `item` | Resolution, menu evidence, and recipe tools | Hosted through current commands |
 | Menu Watch | `heyfood watch` plus `/watch` TUI panel | List plus human-terminal-only create (`CREATE`) and remove (`REMOVE`); scheduled execution is deployed; latest account-owned change summary, source, freshness, and provenance render in the TUI | Current source management and summary view; item-level diff detail remains follow-on |
-| Interactive TUI | Launches authenticated chat and functional read/action panels | N/A | Supported and installed-artifact qualified in v0.6.1. |
-| Voice capture | TUI `/voice`, Ctrl+Space, and F8 only in opt-in `native-audio` artifacts | Authenticated transcription | Not enabled in the default `0.6.1` build; real-hardware and platform qualification remain future work. |
-| Agent self-description | `heyfood agent describe/guide/schema/doctor` | None | Supported in v0.6.1; offline, credential-free, bounded, and non-mutating. |
-| Codex/Claude Agent Skill setup | `heyfood agent setup` / `agent uninstall` | N/A | Supported in v0.6.1 for the exact qualified host versions; dry-run is default, apply requires the reviewed plan digest, and setup registers MCP through host-owned commands. |
-| Local read-only MCP | `heyfood mcp serve` | Existing authenticated read controllers | Supported in v0.6.1 with exactly six bounded read/discovery tools, bounded cursor pagination, and no agent mutation surface. |
+| Interactive TUI | Launches authenticated chat and functional read/action panels | N/A | Supported and installed-artifact qualified in v0.6.2. |
+| Voice capture | TUI `/voice`, Ctrl+Space, and F8 only in opt-in `native-audio` artifacts | Authenticated transcription | Not enabled in the default `0.6.2` build; real-hardware and platform qualification remain future work. |
+| Agent self-description | `heyfood agent describe/guide/schema/doctor` | None | Supported in v0.6.2; offline, credential-free, bounded, and non-mutating. |
+| Codex/Claude Agent Skill setup | `heyfood agent setup` / `agent uninstall` | N/A | Supported in v0.6.2 for the exact qualified host versions; dry-run is default, apply requires the reviewed plan digest, and setup registers MCP through host-owned commands. |
+| Local read-only MCP | `heyfood mcp serve` | Existing authenticated read controllers | Supported in v0.6.2 with exactly six bounded read/discovery tools, bounded cursor pagination, and no agent mutation surface. |
 
 ## Process contract
 

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "release": "0.6.1",
+  "release": "0.6.2",
   "description": "Bounded installed-artifact release matrix. This contract does not import the twelve landing-page marketing stages.",
   "distribution": {
     "release_targets": [
