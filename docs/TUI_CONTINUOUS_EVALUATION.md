@@ -51,11 +51,13 @@ least-privilege canary identity is provisioned with:
 
 The fail-closed production workflow is
 `.github/workflows/production-tui-canary.yml`. It remains inert unless the
-repository variable `HEYFOOD_PRODUCTION_CANARY_ENABLED` is exactly `true`.
-The job also rejects every ref except `refs/heads/main`, and the `native-eval`
-environment's deployment-branch policy must independently allow only `main`.
-No workflow may silently fall back to a real user account. Provisioning and
-activation are tracked in
+repository variable `HEYFOOD_PRODUCTION_CANARY_ENABLED` is exactly `true`,
+except for an explicitly requested `workflow_dispatch` qualification run.
+This permits the first manual run to prove the protected identity and evidence
+path before enabling the schedule. Both paths reject every ref except
+`refs/heads/main`, and the `native-eval` environment's deployment-branch
+policy must independently allow only `main`. No workflow may silently fall
+back to a real user account. Provisioning and activation are tracked in
 [heyfood issue #30](https://github.com/frntrllc/heyfood/issues/30).
 
 The protected `native-eval` environment owns two secrets:

@@ -27,7 +27,10 @@ jobs:
     if: >-
       ${{
         github.ref == 'refs/heads/main' &&
-        vars.HEYFOOD_PRODUCTION_CANARY_ENABLED == 'true'
+        (
+          github.event_name == 'workflow_dispatch' ||
+          vars.HEYFOOD_PRODUCTION_CANARY_ENABLED == 'true'
+        )
       }}
     runs-on: ubuntu-22.04
     environment: native-eval
