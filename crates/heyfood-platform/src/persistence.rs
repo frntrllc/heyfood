@@ -1181,9 +1181,14 @@ impl NativeAuthStore {
                 "authorization replacement must be reconciled before logout",
             ));
         }
-        if self.reconciliation_path.exists()
-            && read_limited(&self.reconciliation_path, 512)?
-                != b"channel_refresh_outcome_uncertain\n"
+        let previous_reconciliation = self
+            .reconciliation_path
+            .exists()
+            .then(|| read_limited(&self.reconciliation_path, 512))
+            .transpose()?;
+        if previous_reconciliation
+            .as_deref()
+            .is_some_and(|marker| marker != b"channel_refresh_outcome_uncertain\n")
         {
             return Err(PortError::uncertain(
                 "auth_reconciliation_required",
@@ -1211,7 +1216,11 @@ impl NativeAuthStore {
             .delete_authorized_session_after_preflight_failure(&expected.session.account_id)
         {
             if !error.outcome_uncertain {
-                clear_any_reconciliation_marker(&self.reconciliation_path)?;
+                if let Some(marker) = previous_reconciliation {
+                    AtomicFile::replace(&self.reconciliation_path, &marker)?;
+                } else {
+                    clear_any_reconciliation_marker(&self.reconciliation_path)?;
+                }
             }
             return Err(error);
         }
@@ -4896,6 +4905,69 @@ mod credential_write_verification_tests {
 
         assert!(!auth.reconciliation_path.exists());
         assert_eq!(auth.load_account_bound(&session).unwrap(), None);
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn failed_preflight_logout_restores_prior_channel_reconciliation_marker() {
+        let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "heyfood-account-logout-marker-{}-{sequence}",
+            std::process::id()
+        ));
+        let _cleanup = Cleanup(root.clone());
+        let auth = NativeAuthStore::open(&root).unwrap();
+        let session = FileCredentialStore::open(&root).unwrap();
+        let expected = AuthCredentialBundle {
+            channel: ChannelCredentials::from_rfc3339_expiry(
+                "hf_cid_heyfood_cli",
+                "logout-marker-device",
+                SensitiveString::new("channel-access"),
+                SensitiveString::new("channel-refresh"),
+                "2099-01-01T00:00:00Z",
+                "account:link",
+            )
+            .unwrap(),
+            session: SessionCredentials::from_rfc3339_expiry(
+                AccountId::parse("account-logout-marker").unwrap(),
+                SensitiveString::new("session-access"),
+                SensitiveString::new("session-refresh"),
+                CredentialVersion::new(1),
+                "2099-01-01T00:00:00Z",
+            )
+            .unwrap(),
+        };
+        auth.initialize(&expected).unwrap();
+        session
+            .initialize(
+                &SessionCredentials::from_rfc3339_expiry(
+                    AccountId::parse("different-account").unwrap(),
+                    SensitiveString::new("other-access"),
+                    SensitiveString::new("other-refresh"),
+                    CredentialVersion::new(1),
+                    "2099-01-01T00:00:00Z",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        AtomicFile::replace(
+            &auth.reconciliation_path,
+            b"channel_refresh_outcome_uncertain\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            auth.clear_account_bound_after_preflight_failure(&expected, &session)
+                .unwrap_err()
+                .code,
+            "logout_account_changed"
+        );
+        assert_eq!(
+            read_limited(&auth.reconciliation_path, 512).unwrap(),
+            b"channel_refresh_outcome_uncertain\n"
+        );
+        assert!(auth.load_unlocked().unwrap().is_some());
+        assert!(session.load_authorized_session().unwrap().is_some());
     }
 }
 
