@@ -1107,19 +1107,60 @@ impl NativeAuthStore {
     }
 
     /// Resume a locally committed logout after interruption between the
-    /// session-store and authorization-store deletions.
+    /// session-store and authorization-store deletions. A logout invocation
+    /// also adopts an uncertain channel-refresh marker into the same local,
+    /// resumable teardown before ordinary account loading can reject it.
     #[cfg(any(not(windows), feature = "native-credentials"))]
     pub fn finish_account_bound_logout(
         &self,
         session_store: &impl AuthorizationSessionStore,
     ) -> Result<bool, PortError> {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
-        if !self.reconciliation_path.exists()
-            || read_limited(&self.reconciliation_path, 512)? != b"account_logout_pending\n"
-        {
+        if !self.reconciliation_path.exists() {
             return Ok(false);
         }
-        session_store.delete_authorized_session_for_logout(None)?;
+        let marker = read_limited(&self.reconciliation_path, 512)?;
+        let expected_session = if marker == b"channel_refresh_outcome_uncertain\n" {
+            if self.load_authorization_journal_unlocked()?.is_some() {
+                return Err(PortError::uncertain(
+                    "auth_reconciliation_required",
+                    "staged authorization replacement must be reconciled before logout",
+                ));
+            }
+            let authorization = self.load_unlocked()?;
+            let session = session_store.load_authorized_session()?;
+            let session = match (authorization, session) {
+                (Some(authorization), Some(session))
+                    if authorization.session.account_id == session.account_id =>
+                {
+                    session
+                }
+                (None, None) => {
+                    clear_any_reconciliation_marker(&self.reconciliation_path)?;
+                    return Ok(true);
+                }
+                (Some(_), Some(_)) => {
+                    return Err(PortError::uncertain(
+                        "authorization_account_conflict",
+                        "authorization and active session belong to different accounts",
+                    ));
+                }
+                _ => {
+                    return Err(PortError::uncertain(
+                        "authorization_account_conflict",
+                        "authorization and active session are missing or cannot be safely matched for logout",
+                    ));
+                }
+            };
+            AtomicFile::replace(&self.reconciliation_path, b"account_logout_pending\n")
+                .map_err(|error| PortError::uncertain("logout_marker_write", error.to_string()))?;
+            Some(session)
+        } else if marker != b"account_logout_pending\n" {
+            return Ok(false);
+        } else {
+            None
+        };
+        session_store.delete_authorized_session_for_logout(expected_session.as_ref())?;
         self.delete_unlocked_for_logout()?;
         clear_any_reconciliation_marker(&self.reconciliation_path)?;
         Ok(true)
@@ -4832,6 +4873,68 @@ mod credential_write_verification_tests {
 
         AtomicFile::replace(&auth.reconciliation_path, b"account_logout_pending\n").unwrap();
         session.delete_authorized_session().unwrap();
+        assert!(auth.finish_account_bound_logout(&session).unwrap());
+        assert!(!auth.reconciliation_path.exists());
+        assert_eq!(auth.load_account_bound(&session).unwrap(), None);
+        assert!(!auth.finish_account_bound_logout(&session).unwrap());
+
+        auth.initialize_account_bound(&bundle, &session).unwrap();
+        auth.begin_authorization_replacement(
+            "client-transaction-channel-refresh-logout".to_owned(),
+            &session,
+        )
+        .unwrap();
+        AtomicFile::replace(
+            &auth.reconciliation_path,
+            b"channel_refresh_outcome_uncertain\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            auth.finish_account_bound_logout(&session).unwrap_err().code,
+            "auth_reconciliation_required"
+        );
+        assert!(auth.load_unlocked().unwrap().is_some());
+        assert!(session.load_authorized_session().unwrap().is_some());
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn account_bound_logout_adopts_uncertain_channel_refresh_after_restart() {
+        let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "heyfood-account-logout-channel-refresh-{}-{sequence}",
+            std::process::id()
+        ));
+        let _cleanup = Cleanup(root.clone());
+        let auth = NativeAuthStore::open(&root).unwrap();
+        let session = FileCredentialStore::open(&root).unwrap();
+        let bundle = AuthCredentialBundle {
+            channel: ChannelCredentials::from_rfc3339_expiry(
+                "hf_cid_heyfood_cli",
+                "logout-channel-refresh-device",
+                SensitiveString::new("channel-access"),
+                SensitiveString::new("channel-refresh"),
+                "2099-01-01T00:00:00Z",
+                "account:link",
+            )
+            .unwrap(),
+            session: SessionCredentials::from_rfc3339_expiry(
+                AccountId::parse("account-logout-channel-refresh").unwrap(),
+                SensitiveString::new("session-access"),
+                SensitiveString::new("session-refresh"),
+                CredentialVersion::new(1),
+                "2099-01-01T00:00:00Z",
+            )
+            .unwrap(),
+        };
+        auth.initialize_account_bound(&bundle, &session).unwrap();
+        AtomicFile::replace(
+            &auth.reconciliation_path,
+            b"channel_refresh_outcome_uncertain\n",
+        )
+        .unwrap();
+
         assert!(auth.finish_account_bound_logout(&session).unwrap());
         assert!(!auth.reconciliation_path.exists());
         assert_eq!(auth.load_account_bound(&session).unwrap(), None);

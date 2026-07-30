@@ -1338,6 +1338,49 @@ async fn uncertain_logout_preflight_removes_refresh_markers_with_local_authority
 }
 
 #[tokio::test]
+#[cfg(feature = "native-credentials")]
+async fn restarted_logout_adopts_uncertain_channel_refresh_without_network_teardown() {
+    let root = TempRoot::new("logout-refresh-uncertain-restart");
+    initialize_expired_mature_session(&root.0, FULL_SCOPE);
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    std::fs::write(
+        root.0.join("auth.reconciliation"),
+        b"channel_refresh_outcome_uncertain\n",
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+
+    let output = run(&root.0, &base_url, &["--json", "logout"], None).await;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["remote_complete"], false);
+    assert_eq!(document["local_credentials_cleared"], true);
+    for step in ["link", "device", "session"] {
+        assert_eq!(document["teardown"][step]["attempted"], false);
+        assert_eq!(document["teardown"][step]["outcome_uncertain"], true);
+        assert_eq!(document["teardown"][step]["error"], "outcome_uncertain");
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "restart recovery dispatched a teardown request"
+    );
+    assert_eq!(auth_store.load().unwrap(), None);
+    assert_eq!(session_store.load().await.unwrap(), None);
+    assert!(!root.0.join("auth.reconciliation").exists());
+    assert!(!root.0.join("credentials.reconciliation").exists());
+}
+
+#[tokio::test]
 async fn lost_prepare_response_then_expiry_recovers_old_authority_without_second_issuance() {
     let root = TempRoot::new("login-prepare-loss-expiry");
     initialize(&root.0, old_scope());
