@@ -37,6 +37,34 @@ automatic retry occurred, or offer an immediate recovery action. The result is
 a P1 first-turn failure, recorded as
 [issue #50](https://github.com/frntrllc/heyfood/issues/50).
 
+Every tool-progress label observed during the session used machine-oriented
+snake_case vocabulary. The problem is not confined to the dietary-graph stage;
+issue #50 therefore requires a complete stage-presentation boundary with a
+human fallback for unknown future identifiers.
+
+## Restaurant recommendation observation
+
+A subsequent restaurant recommendation completed successfully at the service
+boundary. The conversational summary identified a safe-option count and one
+standout item, but the TUI then stopped without presenting the remaining ranked
+recommendations, their reasons, safety and provenance context, or a clear next
+action.
+
+Source inspection confirms that the backend returns this information in a
+structured `household_menu` result. For recommendation questions it
+deliberately omits `presentation: full_menu`, because the client is expected to
+render a concise recommendation experience rather than every menu item. The
+shared Rust renderer currently rejects that shape and renders structured data
+only for an explicit full-menu listing. The resulting data-loss defect is
+[issue #53](https://github.com/frntrllc/heyfood/issues/53).
+
+The menu-evaluation phase also took long enough to feel stalled. No exact
+duration is inferred from the human observation. The backend result already
+contains a privacy-safe `evaluation_ms` value, while the stream currently
+provides no incremental progress from inside the long evaluation. Measured
+warm/cold latency budgets, meaningful progress, and cancellation qualification
+are tracked in [issue #54](https://github.com/frntrllc/heyfood/issues/54).
+
 ## Source-backed interpretation
 
 The Rust client has a finite 30-second SSE inactivity deadline. Its current TUI
@@ -56,11 +84,11 @@ cancellation, no blind retry, typed failure state, and a usable next turn.
 | Discoverability | Pending | Not yet scored |
 | Information hierarchy | Pending | Not yet scored |
 | Keyboard confidence | Pending | Not yet scored |
-| Response clarity | Failing gate | First response exposed machine language and produced no answer |
+| Response clarity | Failing gate | First response exposed machine language and produced no answer; restaurant recommendations dropped their structured card |
 | Household clarity | Pending | Not yet scored |
-| Safety and evidence trust | Pending | Not yet scored |
+| Safety and evidence trust | Failing gate | Restaurant safety reasons and provenance were available but not presented |
 | Failure recovery | Failing gate | Raw timeout with no safe recovery guidance |
-| Long-session comfort | Pending | Not yet scored |
+| Long-session comfort | Failing gate | Menu evaluation felt stalled and lacked meaningful incremental progress |
 
 No numeric human score is inferred from the observation. The session owner will
 assign the final 1–5 scores after the remaining protocol.
@@ -70,7 +98,11 @@ assign the final 1–5 scores after the remaining protocol.
 - [Issue #48](https://github.com/frntrllc/heyfood/issues/48) owns the focused
   `v0.7.0` session and first-run excellence release.
 - [Issue #50](https://github.com/frntrllc/heyfood/issues/50) owns this first-turn
-  stream and presentation failure.
+  stream, progress-vocabulary, and presentation failure.
+- [Issue #53](https://github.com/frntrllc/heyfood/issues/53) owns the missing
+  structured restaurant-recommendation presentation.
+- [Issue #54](https://github.com/frntrllc/heyfood/issues/54) owns measured
+  restaurant latency budgets and meaningful evaluation progress.
 - [Issue #47](https://github.com/frntrllc/heyfood/issues/47) remains the separate
   logout-authority remediation lane.
 
