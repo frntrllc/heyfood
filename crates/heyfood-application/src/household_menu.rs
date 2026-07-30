@@ -22,7 +22,7 @@ pub fn render_household_menu(document: &Value) -> Option<String> {
         return None;
     }
     if structured.get("presentation").and_then(Value::as_str) != Some("full_menu") {
-        return None;
+        return Some(render_household_recommendations(structured));
     }
 
     let restaurant_name = structured
@@ -87,6 +87,279 @@ pub fn render_household_menu(document: &Value) -> Option<String> {
     }
 
     Some(output)
+}
+
+fn render_household_recommendations(structured: &Value) -> String {
+    let restaurant_name = structured
+        .get("restaurant_name")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty() && *value != "Unknown")
+        .unwrap_or("this restaurant");
+    let mut output = format!("Top picks at {}\n", inline_text(restaurant_name));
+    append_recommendation_provenance(&mut output, structured);
+
+    let mut member_ids = structured
+        .get("member_summaries")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|summary| summary.get("member_id").and_then(Value::as_str))
+        .filter(|member_id| {
+            structured
+                .get("agent_picks")
+                .and_then(Value::as_object)
+                .and_then(|picks| picks.get(*member_id))
+                .is_some()
+        })
+        .collect::<Vec<_>>();
+    if let Some(picks) = structured.get("agent_picks").and_then(Value::as_object) {
+        let mut remaining = picks
+            .keys()
+            .map(String::as_str)
+            .filter(|member_id| !member_ids.contains(member_id))
+            .collect::<Vec<_>>();
+        remaining.sort_unstable();
+        member_ids.extend(remaining);
+    }
+
+    let mut rendered_picks = 0_usize;
+    for member_id in member_ids {
+        let Some(picks) = structured
+            .get("agent_picks")
+            .and_then(Value::as_object)
+            .and_then(|all_picks| all_picks.get(member_id))
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        let mut member_output = String::new();
+        let mut member_pick_number = 0_usize;
+        for pick in picks.iter().take(5) {
+            let Some(item_id) = pick.get("item_id").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(item) = menu_item_by_id(structured, item_id) else {
+                continue;
+            };
+            let Some(member_safety) = item
+                .get("safety")
+                .and_then(Value::as_object)
+                .and_then(|safety| safety.get(member_id))
+            else {
+                continue;
+            };
+            let Some(level) = member_safety
+                .get("level")
+                .and_then(Value::as_str)
+                .map(safety_label)
+                .filter(|level| level == "generally safer")
+            else {
+                continue;
+            };
+            let Some(name) = item
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+            else {
+                continue;
+            };
+            member_pick_number += 1;
+            let _ = write!(member_output, "{member_pick_number}. {}", inline_text(name));
+            if let Some(price) = item
+                .get("price_cents")
+                .and_then(Value::as_i64)
+                .filter(|value| *value >= 0)
+            {
+                let _ = write!(member_output, "  {}", format_price(price));
+            }
+            let tag = pick
+                .get("tag")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("Recommended");
+            let _ = writeln!(member_output, "  [{level}] · {}", inline_text(tag));
+
+            let reason = pick
+                .get("reason")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    member_safety
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                });
+            if let Some(reason) = reason {
+                let _ = writeln!(member_output, "   {}", inline_text(reason));
+            } else {
+                member_output.push_str(
+                    "   Detailed reasoning was not provided; verify ingredients before ordering.\n",
+                );
+            }
+        }
+        if member_pick_number == 0 {
+            continue;
+        }
+        let _ = writeln!(
+            output,
+            "\n{}",
+            recommendation_member_heading(structured, member_id)
+        );
+        output.push_str(member_output.trim_end());
+        output.push('\n');
+        rendered_picks += member_pick_number;
+    }
+
+    if rendered_picks == 0 {
+        output.push_str(
+            "\nI couldn't safely match the ranked picks to this evaluated menu. Ask about a specific item instead.\n",
+        );
+    }
+    append_recommendation_conflicts(&mut output, structured);
+    output.push_str(
+        "\nAsk about any pick, or say `show me the full menu` for every evaluated option.",
+    );
+    output
+}
+
+fn menu_item_by_id<'a>(structured: &'a Value, item_id: &str) -> Option<&'a Value> {
+    structured
+        .get("sections")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|section| section.get("items").and_then(Value::as_array))
+        .flatten()
+        .find(|item| item.get("item_id").and_then(Value::as_str) == Some(item_id))
+}
+
+fn recommendation_member_heading(structured: &Value, member_id: &str) -> String {
+    if member_id == "_self" {
+        return "For you".into();
+    }
+    structured
+        .get("member_summaries")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|summary| summary.get("member_id").and_then(Value::as_str) == Some(member_id))
+        .and_then(|summary| summary.get("label").and_then(Value::as_str))
+        .filter(|label| !label.trim().is_empty())
+        .map(|label| format!("For {}", inline_text(label)))
+        .unwrap_or_else(|| "For a household member".into())
+}
+
+fn append_recommendation_conflicts(output: &mut String, structured: &Value) {
+    let Some(conflicts) = structured.get("conflicts").and_then(Value::as_array) else {
+        return;
+    };
+    let mut rendered = 0_usize;
+    for conflict in conflicts.iter().take(3) {
+        let Some(item_name) = conflict
+            .get("item_name")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        else {
+            continue;
+        };
+        if rendered == 0 {
+            output.push_str("\nHousehold notes\n");
+        }
+        let _ = write!(output, "• {}", inline_text(item_name));
+        if let Some(recommendation) = conflict
+            .get("recommendation")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            let _ = write!(output, ": {}", inline_text(recommendation));
+        }
+        output.push('\n');
+        if let Some(reasons) = conflict.get("reasons").and_then(Value::as_array) {
+            let reasons = reasons
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .filter(|value| !contains_raw_member_reference(structured, value))
+                .map(inline_text)
+                .collect::<Vec<_>>()
+                .join("; ");
+            if !reasons.is_empty() {
+                let _ = writeln!(output, "  {reasons}");
+            }
+        }
+        rendered += 1;
+    }
+}
+
+fn contains_raw_member_reference(structured: &Value, value: &str) -> bool {
+    let summary_ids = structured
+        .get("member_summaries")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|summary| summary.get("member_id").and_then(Value::as_str));
+    let pick_ids = structured
+        .get("agent_picks")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|picks| picks.keys().map(String::as_str));
+    summary_ids
+        .chain(pick_ids)
+        .filter(|member_id| !member_id.trim().is_empty())
+        .any(|member_id| value.contains(member_id))
+}
+
+fn append_recommendation_provenance(output: &mut String, structured: &Value) {
+    if structured.get("is_stale").and_then(Value::as_bool) == Some(true) {
+        output.push_str("Warning: this menu may be out of date.\n");
+    }
+    let provenance = structured.get("provenance");
+    let freshness = structured
+        .get("menu_freshness")
+        .and_then(Value::as_str)
+        .or_else(|| provenance.and_then(|value| value.get("freshness").and_then(Value::as_str)));
+    if let Some(freshness) = freshness.filter(|value| !value.trim().is_empty()) {
+        let _ = writeln!(output, "Freshness: {}", inline_text(freshness));
+    } else {
+        output.push_str("Freshness: not provided\n");
+    }
+    if let Some(verified_at) = structured
+        .get("last_verified_at")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        let _ = writeln!(output, "Verified: {}", inline_text(verified_at));
+    } else if let Some(captured_at) = structured
+        .get("captured_at")
+        .and_then(Value::as_str)
+        .or_else(|| provenance.and_then(|value| value.get("captured_at").and_then(Value::as_str)))
+        .filter(|value| !value.trim().is_empty())
+    {
+        let _ = writeln!(output, "Captured: {}", inline_text(captured_at));
+    }
+    if let Some(source) = structured
+        .get("source_url")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            provenance.and_then(|value| {
+                ["source_url", "url"]
+                    .into_iter()
+                    .find_map(|key| value.get(key).and_then(Value::as_str))
+            })
+        })
+        .filter(|value| !value.trim().is_empty())
+    {
+        let _ = writeln!(output, "Source: {}", inline_text(source));
+    }
+    if let Some(lineage) = structured
+        .get("source_lineage")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            provenance.and_then(|value| value.get("source_lineage").and_then(Value::as_str))
+        })
+        .filter(|value| !value.trim().is_empty())
+    {
+        let _ = writeln!(output, "Source lineage: {}", inline_text(lineage));
+    }
 }
 
 fn append_provenance(
@@ -464,15 +737,189 @@ mod tests {
             render_household_menu(&json!({"structured": {"type": "action_confirmation"}}))
                 .is_none()
         );
-        assert!(
-            render_household_menu(&json!({
-                "structured": {
-                    "type": "household_menu",
-                    "sections": []
+    }
+
+    #[test]
+    fn renders_ranked_single_profile_recommendations_with_a_real_next_step() {
+        let document = json!({
+            "structured": {
+                "type": "household_menu",
+                "restaurant_name": "Harbor Cafe",
+                "menu_freshness": "Menu updated 2 hours ago",
+                "captured_at": "2026-07-29T17:27:14Z",
+                "source_url": "https://example.test/menu",
+                "source_lineage": "restaurant_owned",
+                "is_stale": false,
+                "member_summaries": [{
+                    "member_id": "_self",
+                    "label": null,
+                    "safe_count": 2
+                }],
+                "sections": [{
+                    "name": "Dinner",
+                    "items": [
+                        {
+                            "item_id": "item-1",
+                            "name": "Grilled Fish",
+                            "price_cents": 2400,
+                            "safety": {
+                                "_self": {
+                                    "level": "safe",
+                                    "reason": "Fits the active dietary profile."
+                                }
+                            }
+                        },
+                        {
+                            "item_id": "item-2",
+                            "name": "Roasted Vegetables",
+                            "safety": {
+                                "_self": {
+                                    "level": "generally_safer",
+                                    "reason": "No conflicts found."
+                                }
+                            }
+                        }
+                    ]
+                }],
+                "agent_picks": {
+                    "_self": [
+                        {
+                            "item_id": "item-1",
+                            "member_id": "_self",
+                            "reason": "A simple preparation with no detected conflicts.",
+                            "tag": "Top pick"
+                        },
+                        {
+                            "item_id": "item-2",
+                            "member_id": "_self",
+                            "reason": "A generally safer side.",
+                            "tag": "Side"
+                        }
+                    ]
                 }
-            }))
-            .is_none()
+            }
+        });
+
+        let rendered = render_household_menu(&document).unwrap();
+        for expected in [
+            "Top picks at Harbor Cafe",
+            "Freshness: Menu updated 2 hours ago",
+            "Captured: 2026-07-29T17:27:14Z",
+            "Source: https://example.test/menu",
+            "Source lineage: restaurant_owned",
+            "For you",
+            "1. Grilled Fish  $24.00  [generally safer] · Top pick",
+            "   A simple preparation with no detected conflicts.",
+            "2. Roasted Vegetables  [generally safer] · Side",
+            "   A generally safer side.",
+            "Ask about any pick, or say `show me the full menu` for every evaluated option.",
+        ] {
+            assert!(rendered.lines().any(|line| line == expected));
+        }
+        assert!(!rendered.contains("_self"));
+        assert!(!rendered.contains("item-1"));
+    }
+
+    #[test]
+    fn recommendation_rendering_uses_member_labels_and_fails_closed() {
+        let document = json!({
+            "structured": {
+                "type": "household_menu",
+                "restaurant_name": "Household Cafe",
+                "is_stale": true,
+                "member_summaries": [{
+                    "member_id": "member-a",
+                    "label": "Alex"
+                }],
+                "sections": [{
+                    "name": "Dinner",
+                    "items": [
+                        {
+                            "item_id": "safe-item",
+                            "name": "Bean Bowl",
+                            "safety": {
+                                "member-a": {
+                                    "level": "safe",
+                                    "reason": "No conflicts found."
+                                }
+                            }
+                        },
+                        {
+                            "item_id": "unsafe-item",
+                            "name": "Unsafe Pick",
+                            "safety": {
+                                "member-a": {
+                                    "level": "avoid",
+                                    "reason": "Conflict found."
+                                }
+                            }
+                        }
+                    ]
+                }],
+                "agent_picks": {
+                    "member-a": [
+                        {
+                            "item_id": "safe-item",
+                            "member_id": "member-a",
+                            "reason": "",
+                            "tag": "Top pick"
+                        },
+                        {
+                            "item_id": "unsafe-item",
+                            "member_id": "member-a",
+                            "reason": "Must not be rendered.",
+                            "tag": "Invalid"
+                        },
+                        {
+                            "item_id": "missing-item",
+                            "member_id": "member-a",
+                            "reason": "Must not be invented.",
+                            "tag": "Invalid"
+                        }
+                    ]
+                },
+                "conflicts": [{
+                    "item_name": "Shared Plate",
+                    "reasons": [
+                        "member-a: private restriction",
+                        "Different household needs"
+                    ],
+                    "recommendation": "Order separately"
+                }]
+            }
+        });
+
+        let rendered = render_household_menu(&document).unwrap();
+        assert!(rendered.contains("Warning: this menu may be out of date."));
+        assert!(rendered.contains("Freshness: not provided"));
+        assert!(rendered.contains("For Alex"));
+        assert!(rendered.contains("1. Bean Bowl  [generally safer] · Top pick"));
+        assert!(rendered.contains("   No conflicts found."));
+        assert!(rendered.contains("Household notes"));
+        assert!(rendered.contains("• Shared Plate: Order separately"));
+        assert!(rendered.contains("Different household needs"));
+        assert!(!rendered.contains("private restriction"));
+        assert!(!rendered.contains("Unsafe Pick"));
+        assert!(!rendered.contains("missing-item"));
+        assert!(!rendered.contains("member-a"));
+    }
+
+    #[test]
+    fn missing_recommendation_picks_are_reported_without_inventing_items() {
+        let rendered = render_household_menu(&json!({
+            "structured": {
+                "type": "household_menu",
+                "restaurant_name": "Cafe",
+                "sections": [],
+                "agent_picks": {}
+            }
+        }))
+        .unwrap();
+
+        assert!(
+            rendered.contains("I couldn't safely match the ranked picks to this evaluated menu.")
         );
+        assert!(!rendered.contains("1."));
     }
 
     #[test]

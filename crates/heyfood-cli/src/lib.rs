@@ -1827,6 +1827,60 @@ mod registration_tests {
     }
 
     #[test]
+    fn agent_human_output_includes_ranked_restaurant_recommendations() {
+        let rendered = render_agent_result(
+            &json!({
+                "text": "I found several options that fit.",
+                "structured": {
+                    "type": "household_menu",
+                    "restaurant_name": "Harbor Cafe",
+                    "menu_freshness": "Menu updated 2 hours ago",
+                    "source_url": "https://example.test/menu",
+                    "member_summaries": [{
+                        "member_id": "_self",
+                        "label": null
+                    }],
+                    "sections": [{
+                        "name": "Dinner",
+                        "items": [{
+                            "item_id": "item-1",
+                            "name": "Grilled Fish",
+                            "price_cents": 2400,
+                            "safety": {
+                                "_self": {
+                                    "level": "safe",
+                                    "reason": "No detected conflicts."
+                                }
+                            }
+                        }]
+                    }],
+                    "agent_picks": {
+                        "_self": [{
+                            "item_id": "item-1",
+                            "member_id": "_self",
+                            "reason": "A simple preparation with no detected conflicts.",
+                            "tag": "Top pick"
+                        }]
+                    }
+                }
+            }),
+            OutputMode::HumanPlain,
+        );
+
+        for expected in [
+            "I found several options that fit.",
+            "Top picks at Harbor Cafe",
+            "For you",
+            "1. Grilled Fish  $24.00  [generally safer] · Top pick",
+            "   A simple preparation with no detected conflicts.",
+            "Ask about any pick, or say `show me the full menu` for every evaluated option.",
+        ] {
+            assert!(rendered.lines().any(|line| line == expected));
+        }
+        assert!(!rendered.contains("_self"));
+    }
+
+    #[test]
     fn item_human_output_uses_the_dedicated_python_compatible_shape() {
         let rendered = render_item_result(
             &json!({

@@ -2026,14 +2026,56 @@ fn finish_panel(model: &mut AppModel, panel: PanelRequest, result: Result<String
     account_for_new_lines(model, old_lines);
 }
 
+fn thinking_activity(stage: Option<&str>, message: Option<&str>) -> String {
+    let safe_message = message.map(terminal_safe_text);
+    if let Some(message) = safe_message
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .filter(|value| !looks_like_machine_identifier(value.trim()))
+    {
+        return message.to_owned();
+    }
+
+    [stage, safe_message.as_deref()]
+        .into_iter()
+        .flatten()
+        .find_map(|value| human_activity_for_identifier(value.trim()))
+        .unwrap_or_else(|| "Working through your question…".into())
+}
+
+fn human_activity_for_identifier(value: &str) -> Option<String> {
+    let message = match value {
+        "resolving_restaurant" | "search_restaurants" => "Finding the right restaurant…",
+        "loading_menu"
+        | "get_cached_menu"
+        | "request_menu_fetch"
+        | "check_menu_fetch_status"
+        | "search_menu_items" => "Loading the latest menu…",
+        "evaluating_menu" | "evaluate_menu" => "Checking the menu against your profile…",
+        "applying_dietary_graph" | "describe_dietary_graph" | "get_food_preferences" => {
+            "Considering your dietary profile…"
+        }
+        "searching_recipes" | "search_recipes" | "get_recipe_details" => {
+            "Finding recipes that fit…"
+        }
+        "checking_food" | "check_food_safety" => "Checking this food against your profile…",
+        _ => return None,
+    };
+    Some(message.into())
+}
+
+fn looks_like_machine_identifier(value: &str) -> bool {
+    value.contains('_')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
 fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
     let old_lines = model.scrollback.rendered_lines();
     match event {
         AgentEvent::Thinking { stage, message } => {
-            model.activity = message
-                .or(stage)
-                .map(|value| terminal_safe_text(&value))
-                .or_else(|| Some("Thinking…".into()));
+            model.activity = Some(thinking_activity(stage.as_deref(), message.as_deref()));
         }
         AgentEvent::Progress {
             message,
@@ -2041,6 +2083,12 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             total,
         } => {
             let message = terminal_safe_text(&message);
+            let message = if looks_like_machine_identifier(message.trim()) {
+                human_activity_for_identifier(message.trim())
+                    .unwrap_or_else(|| "Making progress…".into())
+            } else {
+                message
+            };
             model.activity = match (current, total) {
                 (Some(current), Some(total)) => Some(format!("{message} ({current}/{total})")),
                 _ => Some(message),
@@ -2725,6 +2773,91 @@ mod tests {
     }
 
     #[test]
+    fn thinking_stages_are_always_presented_as_human_progress() {
+        for (stage, expected) in [
+            ("resolving_restaurant", "Finding the right restaurant…"),
+            ("loading_menu", "Loading the latest menu…"),
+            ("evaluating_menu", "Checking the menu against your profile…"),
+            (
+                "applying_dietary_graph",
+                "Considering your dietary profile…",
+            ),
+            ("searching_recipes", "Finding recipes that fit…"),
+            ("checking_food", "Checking this food against your profile…"),
+        ] {
+            assert_eq!(thinking_activity(Some(stage), None), expected);
+        }
+
+        assert_eq!(
+            thinking_activity(None, Some("evaluate_menu")),
+            "Checking the menu against your profile…"
+        );
+        assert_eq!(
+            thinking_activity(Some("tool_use"), Some("evaluating_menu")),
+            "Checking the menu against your profile…"
+        );
+        assert_eq!(
+            thinking_activity(Some("future_internal_stage"), None),
+            "Working through your question…"
+        );
+        assert_eq!(
+            thinking_activity(Some("evaluating_menu"), Some("Reviewing 22 menu items…")),
+            "Reviewing 22 menu items…"
+        );
+    }
+
+    #[test]
+    fn thinking_runtime_event_never_exposes_unknown_machine_identifiers() {
+        let mut model = AppModel {
+            draft: "question".into(),
+            cursor: 8,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Thinking {
+                    stage: Some("future_internal_stage".into()),
+                    message: None,
+                },
+            }),
+        );
+        assert_eq!(
+            model.activity.as_deref(),
+            Some("Working through your question…")
+        );
+        assert!(!model.activity.as_deref().unwrap().contains('_'));
+    }
+
+    #[test]
+    fn progress_runtime_event_never_exposes_machine_identifiers() {
+        let mut model = AppModel {
+            draft: "question".into(),
+            cursor: 8,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Progress {
+                    message: "evaluating_menu".into(),
+                    current: Some(1),
+                    total: Some(2),
+                },
+            }),
+        );
+        assert_eq!(
+            model.activity.as_deref(),
+            Some("Checking the menu against your profile… (1/2)")
+        );
+        assert!(!model.activity.as_deref().unwrap().contains('_'));
+    }
+
+    #[test]
     fn scrollback_is_bounded_by_entries_and_lines() {
         let mut scrollback = Scrollback::bounded(3, 4, 1_024);
         for number in 0..8 {
@@ -3066,6 +3199,74 @@ mod tests {
             assert!(entry.text.lines().any(|line| line == expected));
         }
         assert_eq!(entry.text.matches("• ").count(), 2);
+        assert!(!entry.streaming);
+    }
+
+    #[test]
+    fn terminal_result_renders_ranked_restaurant_picks_and_a_next_step() {
+        let mut model = AppModel {
+            draft: "What can I eat there?".into(),
+            cursor: 20,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "text": "I found several options that fit.",
+                        "structured": {
+                            "type": "household_menu",
+                            "restaurant_name": "Harbor Cafe",
+                            "menu_freshness": "Menu updated 2 hours ago",
+                            "source_url": "https://example.test/menu",
+                            "member_summaries": [{
+                                "member_id": "_self",
+                                "label": null
+                            }],
+                            "sections": [{
+                                "name": "Dinner",
+                                "items": [{
+                                    "item_id": "item-1",
+                                    "name": "Grilled Fish",
+                                    "price_cents": 2400,
+                                    "safety": {
+                                        "_self": {
+                                            "level": "safe",
+                                            "reason": "No detected conflicts."
+                                        }
+                                    }
+                                }]
+                            }],
+                            "agent_picks": {
+                                "_self": [{
+                                    "item_id": "item-1",
+                                    "member_id": "_self",
+                                    "reason": "A simple preparation with no detected conflicts.",
+                                    "tag": "Top pick"
+                                }]
+                            }
+                        }
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+
+        let entry = model.scrollback.entries().back().unwrap();
+        for expected in [
+            "I found several options that fit.",
+            "Top picks at Harbor Cafe",
+            "For you",
+            "1. Grilled Fish  $24.00  [generally safer] · Top pick",
+            "   A simple preparation with no detected conflicts.",
+            "Ask about any pick, or say `show me the full menu` for every evaluated option.",
+        ] {
+            assert!(entry.text.lines().any(|line| line == expected));
+        }
+        assert!(!entry.text.contains("_self"));
         assert!(!entry.streaming);
     }
 

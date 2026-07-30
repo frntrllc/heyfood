@@ -292,6 +292,58 @@ mod tests {
         model
     }
 
+    fn restaurant_recommendation_model() -> AppModel {
+        let mut model = AppModel::default();
+        model.draft = "What can I eat there?".into();
+        model.cursor = 20;
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "text": "I found several options that fit.",
+                        "structured": {
+                            "type": "household_menu",
+                            "restaurant_name": "Harbor Cafe",
+                            "menu_freshness": "Menu updated 2 hours ago",
+                            "source_url": "https://example.test/menu",
+                            "member_summaries": [{
+                                "member_id": "_self",
+                                "label": null
+                            }],
+                            "sections": [{
+                                "name": "Dinner",
+                                "items": [{
+                                    "item_id": "item-1",
+                                    "name": "Grilled Fish",
+                                    "price_cents": 2400,
+                                    "safety": {
+                                        "_self": {
+                                            "level": "safe",
+                                            "reason": "No detected conflicts."
+                                        }
+                                    }
+                                }]
+                            }],
+                            "agent_picks": {
+                                "_self": [{
+                                    "item_id": "item-1",
+                                    "member_id": "_self",
+                                    "reason": "A simple preparation with no detected conflicts.",
+                                    "tag": "Top pick"
+                                }]
+                            }
+                        }
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+        model
+    }
+
     #[test]
     fn responsive_snapshots_keep_stream_and_composer_visible() {
         let model = streaming_model();
@@ -321,6 +373,29 @@ mod tests {
         assert_eq!(model.scrollback, content);
         assert!(narrow.contains("^C stop"));
         assert!(wide.contains("Tab complete"));
+    }
+
+    #[test]
+    fn restaurant_recommendations_keep_semantics_at_supported_widths() {
+        let model = restaurant_recommendation_model();
+        for width in [40, 80, 120] {
+            let rendered = snapshot(&model, width, 40);
+            let semantic = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+            for expected in [
+                "Top picks at Harbor Cafe",
+                "Grilled Fish",
+                "generally safer",
+                "Top pick",
+                "show me the full menu",
+            ] {
+                assert!(
+                    semantic.contains(expected),
+                    "width {width} is missing {expected:?}: {rendered}"
+                );
+            }
+            assert!(!rendered.contains("_self"));
+            assert!(!rendered.contains('\u{1b}'));
+        }
     }
 
     #[test]
