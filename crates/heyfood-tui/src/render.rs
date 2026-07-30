@@ -251,6 +251,7 @@ fn wrapped_line_count(lines: &[Line<'_>], width: usize) -> usize {
 mod tests {
     use super::*;
     use crate::{Action, RuntimeEvent, dispatch};
+    use heyfood_application::{PortError, TurnFailure};
     use heyfood_core::AgentEvent;
     use ratatui::{Terminal, backend::TestBackend};
 
@@ -344,6 +345,33 @@ mod tests {
         model
     }
 
+    fn interrupted_response_model() -> AppModel {
+        let mut model = AppModel::default();
+        model.draft = "What do you know about me?".into();
+        model.cursor = 26;
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Partial {
+                    text: "I can consider your saved dietary profile.".into(),
+                },
+            }),
+        );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFailed {
+                operation_id: 1,
+                failure: TurnFailure::from_port_error(&PortError::new(
+                    "sse_inactivity",
+                    "event stream inactivity deadline expired",
+                )),
+            }),
+        );
+        model
+    }
+
     #[test]
     fn responsive_snapshots_keep_stream_and_composer_visible() {
         let model = streaming_model();
@@ -394,6 +422,29 @@ mod tests {
                 );
             }
             assert!(!rendered.contains("_self"));
+            assert!(!rendered.contains('\u{1b}'));
+        }
+    }
+
+    #[test]
+    fn interrupted_response_recovery_is_semantic_at_supported_widths() {
+        let model = interrupted_response_model();
+        for width in [40, 80, 120] {
+            let rendered = snapshot(&model, width, 22);
+            let semantic = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+            for expected in [
+                "saved dietary profile",
+                "response stopped before it finished",
+                "did not retry",
+                "ask a new question now",
+            ] {
+                assert!(
+                    semantic.contains(expected),
+                    "width {width} is missing {expected:?}: {rendered}"
+                );
+            }
+            assert!(!rendered.contains("sse_inactivity"));
+            assert!(!rendered.contains("inactivity deadline"));
             assert!(!rendered.contains('\u{1b}'));
         }
     }

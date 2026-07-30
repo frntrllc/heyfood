@@ -15,7 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
 use heyfood_application::{
     ClockPort, ConfigPort, CredentialPort, OperationSnapshot, RefreshPolicy, RunTurn,
-    RunTurnOutcome, SerializedStateWriter, TurnContext, TurnRequest,
+    RunTurnOutcome, SerializedStateWriter, TurnContext, TurnFailure, TurnRequest,
 };
 use heyfood_bin::{QualifiedTurnDriver, run_qualified_session};
 use heyfood_core::{
@@ -567,11 +567,11 @@ impl QualifiedTurnDriver for SupervisedQualificationDriver {
                 },
                 Ok(Err(error)) => RuntimeEvent::TurnFailed {
                     operation_id,
-                    message: error.to_string(),
+                    failure: TurnFailure::from_run_turn_error(&error),
                 },
-                Err(error) => RuntimeEvent::TurnFailed {
+                Err(_) => RuntimeEvent::TurnFailed {
                     operation_id,
-                    message: format!("turn task failed: {error}"),
+                    failure: TurnFailure::internal("turn_task_failed"),
                 },
             };
             let _ = runtime_events.send(runtime_event).await;
