@@ -12,7 +12,9 @@ use heyfood_core::{
     AccountId, AuthCredentialBundle, ChannelCredentials, CredentialVersion, SensitiveString,
     SessionCredentials,
 };
-use heyfood_platform::{AuthorizationSessionStore, FileCredentialStore, NativeAuthStore};
+#[cfg(feature = "native-credentials")]
+use heyfood_platform::AuthorizationSessionStore;
+use heyfood_platform::{FileCredentialStore, NativeAuthStore};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -82,6 +84,7 @@ fn initialize(root: &Path, scope: &str) {
         .unwrap();
 }
 
+#[cfg(feature = "native-credentials")]
 fn initialize_expired_mature_session(root: &Path, scope: &str) {
     let initial_session = SessionCredentials::from_unix_expiry(
         AccountId::parse("activated-account").unwrap(),
