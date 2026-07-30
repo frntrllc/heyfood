@@ -12,7 +12,7 @@ use heyfood_core::{
     AccountId, AuthCredentialBundle, ChannelCredentials, CredentialVersion, SensitiveString,
     SessionCredentials,
 };
-use heyfood_platform::{FileCredentialStore, NativeAuthStore};
+use heyfood_platform::{AuthorizationSessionStore, FileCredentialStore, NativeAuthStore};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -79,6 +79,45 @@ fn initialize(root: &Path, scope: &str) {
     FileCredentialStore::open(root)
         .unwrap()
         .initialize(&session)
+        .unwrap();
+}
+
+fn initialize_expired_mature_session(root: &Path, scope: &str) {
+    let initial_session = SessionCredentials::from_unix_expiry(
+        AccountId::parse("activated-account").unwrap(),
+        SensitiveString::new("session-access-1"),
+        SensitiveString::new("session-refresh-1"),
+        CredentialVersion::new(1),
+        1,
+    )
+    .unwrap();
+    let bundle = AuthCredentialBundle {
+        channel: ChannelCredentials::from_unix_expiry(
+            "hf_cid_heyfood_cli",
+            "heyfood-activated-device",
+            SensitiveString::new("channel-access-old"),
+            SensitiveString::new("channel-refresh-old"),
+            1,
+            scope,
+        )
+        .unwrap(),
+        session: initial_session.clone(),
+    };
+    let auth_store = NativeAuthStore::open(root).unwrap();
+    let session_store = FileCredentialStore::open(root).unwrap();
+    auth_store.initialize(&bundle).unwrap();
+    session_store.initialize(&initial_session).unwrap();
+    session_store
+        .replace_authorized_session(
+            &SessionCredentials::from_unix_expiry(
+                initial_session.account_id,
+                SensitiveString::new("session-access-7"),
+                SensitiveString::new("session-refresh-7"),
+                CredentialVersion::new(7),
+                1,
+            )
+            .unwrap(),
+        )
         .unwrap();
 }
 
@@ -1125,6 +1164,174 @@ async fn public_logout_clears_local_credentials_after_remote_failures_without_le
     assert!(!stdout.contains("session-access"));
     assert_eq!(auth_store.load().unwrap(), None);
     assert_eq!(session_store.load().await.unwrap(), None);
+}
+
+#[tokio::test]
+#[cfg(feature = "native-credentials")]
+async fn public_logout_refreshes_expired_mature_authority_before_remote_teardown() {
+    let root = TempRoot::new("logout-refresh-mature");
+    initialize_expired_mature_session(&root.0, FULL_SCOPE);
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server_scope = FULL_SCOPE.to_owned();
+    let server = tokio::spawn(async move {
+        for expected in [
+            "POST /v1/channel/oauth/token ",
+            "POST /v1/auth/session/refresh ",
+            "GET /v1/channel/oauth/whoami ",
+            "DELETE /v1/channel/links/link-refreshed ",
+            "POST /v1/auth/device/revoke ",
+            "POST /v1/auth/session/revoke ",
+        ] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            assert!(request.starts_with(expected), "{request}");
+            let body = request.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+            if expected.contains("/channel/oauth/token") {
+                let body: Value = serde_json::from_str(body).unwrap();
+                assert_eq!(body["grant_type"], "refresh_token");
+                assert_eq!(body["refresh_token"], "channel-refresh-old");
+                respond(
+                    &mut socket,
+                    "application/json",
+                    &serde_json::to_vec(&json!({
+                        "access_token": "channel-access-new",
+                        "refresh_token": "channel-refresh-new",
+                        "token_type": "bearer",
+                        "expires_in": 3600,
+                        "scope": server_scope
+                    }))
+                    .unwrap(),
+                )
+                .await;
+            } else if expected.contains("/auth/session/refresh") {
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("x-device-id: heyfood-activated-device\r\n")
+                );
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("x-api-key: fixture-api-key\r\n")
+                );
+                let body: Value = serde_json::from_str(body).unwrap();
+                assert_eq!(body["refresh_token"], "session-refresh-7");
+                respond(
+                    &mut socket,
+                    "application/json",
+                    br#"{"user_id":"activated-account","access_token":"session-access-8","refresh_token":"session-refresh-8","access_expires_at":"2099-01-01T00:00:00Z"}"#,
+                )
+                .await;
+            } else if expected.starts_with("GET ") {
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer channel-access-new\r\n")
+                );
+                respond(
+                    &mut socket,
+                    "application/json",
+                    br#"{"link_id":"link-refreshed"}"#,
+                )
+                .await;
+            } else {
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer session-access-8\r\n")
+                );
+                respond(&mut socket, "application/json", br#"{"revoked":true}"#).await;
+            }
+        }
+    });
+
+    let output = run(&root.0, &base_url, &["--json", "logout"], None).await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    server.await.unwrap();
+    let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["remote_complete"], true);
+    assert_eq!(document["local_credentials_cleared"], true);
+    assert_eq!(auth_store.load().unwrap(), None);
+    assert_eq!(session_store.load().await.unwrap(), None);
+    assert!(!root.0.join("auth.reconciliation").exists());
+    assert!(!root.0.join("credentials.reconciliation").exists());
+}
+
+#[tokio::test]
+#[cfg(feature = "native-credentials")]
+async fn rejected_logout_preflight_clears_local_authority_without_remote_teardown() {
+    let root = TempRoot::new("logout-refresh-rejected");
+    initialize_expired_mature_session(&root.0, FULL_SCOPE);
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/channel/oauth/token "));
+        respond_status(
+            &mut socket,
+            401,
+            "Unauthorized",
+            "application/json",
+            br#"{"error":"invalid_grant"}"#,
+        )
+        .await;
+    });
+
+    let output = run(&root.0, &base_url, &["--json", "logout"], None).await;
+    assert!(output.status.success());
+    server.await.unwrap();
+    let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["remote_complete"], false);
+    assert_eq!(document["local_credentials_cleared"], true);
+    for step in ["link", "device", "session"] {
+        assert_eq!(document["teardown"][step]["attempted"], false);
+        assert_eq!(document["teardown"][step]["error"], "request_failed");
+    }
+    assert_eq!(auth_store.load().unwrap(), None);
+    assert_eq!(session_store.load().await.unwrap(), None);
+}
+
+#[tokio::test]
+#[cfg(feature = "native-credentials")]
+async fn uncertain_logout_preflight_removes_refresh_markers_with_local_authority() {
+    let root = TempRoot::new("logout-refresh-uncertain");
+    initialize_expired_mature_session(&root.0, FULL_SCOPE);
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/channel/oauth/token "));
+        drop(socket);
+    });
+
+    let output = run(&root.0, &base_url, &["--json", "logout"], None).await;
+    assert!(output.status.success());
+    server.await.unwrap();
+    let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["remote_complete"], false);
+    assert_eq!(document["local_credentials_cleared"], true);
+    for step in ["link", "device", "session"] {
+        assert_eq!(document["teardown"][step]["attempted"], false);
+        assert_eq!(document["teardown"][step]["outcome_uncertain"], true);
+        assert_eq!(document["teardown"][step]["error"], "outcome_uncertain");
+    }
+    assert_eq!(auth_store.load().unwrap(), None);
+    assert_eq!(session_store.load().await.unwrap(), None);
+    assert!(!root.0.join("auth.reconciliation").exists());
+    assert!(!root.0.join("credentials.reconciliation").exists());
 }
 
 #[tokio::test]

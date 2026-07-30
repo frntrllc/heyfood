@@ -937,6 +937,39 @@ pub trait AuthorizationSessionStore {
             "this session store does not support account-bound deletion",
         ))
     }
+
+    /// Compare and remove local session authority as the terminal half of an
+    /// account logout. A refresh reconciliation marker may be discarded here
+    /// because the credential is deleted in the same locked transaction;
+    /// staged account replacement remains a hard conflict.
+    fn delete_authorized_session_for_logout(
+        &self,
+        _expected: Option<&SessionCredentials>,
+    ) -> Result<(), PortError> {
+        self.delete_authorized_session()
+    }
+
+    /// Remove the binding-preserving local session after preflight refresh
+    /// failed before teardown began. Implementations compare the account while
+    /// accepting either side of a locally uncertain credential rotation.
+    fn delete_authorized_session_after_preflight_failure(
+        &self,
+        expected_account: &AccountId,
+    ) -> Result<(), PortError> {
+        let current = self.load_authorized_session()?.ok_or_else(|| {
+            PortError::new(
+                "logout_account_changed",
+                "active account session changed while logout was in progress",
+            )
+        })?;
+        if &current.account_id != expected_account {
+            return Err(PortError::new(
+                "logout_account_changed",
+                "active account session changed while logout was in progress",
+            ));
+        }
+        self.delete_authorized_session()
+    }
 }
 
 #[cfg(any(not(windows), feature = "native-credentials"))]
@@ -1086,7 +1119,7 @@ impl NativeAuthStore {
         {
             return Ok(false);
         }
-        session_store.delete_authorized_session()?;
+        session_store.delete_authorized_session_for_logout(None)?;
         self.delete_unlocked_for_logout()?;
         clear_any_reconciliation_marker(&self.reconciliation_path)?;
         Ok(true)
@@ -1105,12 +1138,11 @@ impl NativeAuthStore {
         let _lock = FileLock::acquire(&self.lock_path, true)?;
         self.ensure_reconciled_unlocked()?;
         let auth = self.load_unlocked()?;
-        let session = session_store.load_authorized_session()?;
         let authorization_matches = auth.as_ref().is_some_and(|authorization| {
             authorization.channel == expected.channel
                 && authorization.session.account_id == expected.session.account_id
         });
-        if !authorization_matches || session.as_ref() != Some(&expected.session) {
+        if !authorization_matches {
             return Err(PortError::new(
                 "logout_account_changed",
                 "active account authorization changed while logout was in progress",
@@ -1118,7 +1150,71 @@ impl NativeAuthStore {
         }
         AtomicFile::replace(&self.reconciliation_path, b"account_logout_pending\n")
             .map_err(|error| PortError::uncertain("logout_marker_write", error.to_string()))?;
-        session_store.delete_authorized_session()?;
+        if let Err(error) =
+            session_store.delete_authorized_session_for_logout(Some(&expected.session))
+        {
+            if !error.outcome_uncertain {
+                clear_any_reconciliation_marker(&self.reconciliation_path)?;
+            }
+            return Err(error);
+        }
+        self.delete_unlocked_for_logout()?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
+    }
+
+    /// Fail closed on remote teardown but still honor the local logout request
+    /// after a preflight channel/session refresh could not be reconciled.
+    ///
+    /// Refresh is binding-preserving, so the durable account, client, and
+    /// device must still match the authority observed before preflight. A
+    /// staged account replacement is never erased by this recovery path.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn clear_account_bound_after_preflight_failure(
+        &self,
+        expected: &AuthCredentialBundle,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.load_authorization_journal_unlocked()?.is_some() {
+            return Err(PortError::uncertain(
+                "auth_reconciliation_required",
+                "authorization replacement must be reconciled before logout",
+            ));
+        }
+        if self.reconciliation_path.exists()
+            && read_limited(&self.reconciliation_path, 512)?
+                != b"channel_refresh_outcome_uncertain\n"
+        {
+            return Err(PortError::uncertain(
+                "auth_reconciliation_required",
+                "authorization state changed outside logout preflight",
+            ));
+        }
+        let authorization = self.load_unlocked()?.ok_or_else(|| {
+            PortError::new(
+                "logout_account_changed",
+                "active account authorization changed while logout was in progress",
+            )
+        })?;
+        if authorization.session.account_id != expected.session.account_id
+            || authorization.channel.client_id != expected.channel.client_id
+            || authorization.channel.device_id != expected.channel.device_id
+        {
+            return Err(PortError::new(
+                "logout_account_changed",
+                "active account authorization changed while logout was in progress",
+            ));
+        }
+        AtomicFile::replace(&self.reconciliation_path, b"account_logout_pending\n")
+            .map_err(|error| PortError::uncertain("logout_marker_write", error.to_string()))?;
+        if let Err(error) = session_store
+            .delete_authorized_session_after_preflight_failure(&expected.session.account_id)
+        {
+            if !error.outcome_uncertain {
+                clear_any_reconciliation_marker(&self.reconciliation_path)?;
+            }
+            return Err(error);
+        }
         self.delete_unlocked_for_logout()?;
         clear_any_reconciliation_marker(&self.reconciliation_path)
     }
@@ -2313,6 +2409,69 @@ impl AuthorizationSessionStore for FileCredentialStore {
     fn delete_authorized_session(&self) -> Result<(), PortError> {
         self.delete()
     }
+
+    fn delete_authorized_session_for_logout(
+        &self,
+        expected: Option<&SessionCredentials>,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.authorization_stage_path.exists() {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "staged authorization replacement must be reconciled before logout",
+            ));
+        }
+        let current = self.read_unlocked()?.map(|state| state.credentials);
+        if expected.is_some_and(|value| current.as_ref() != Some(value)) {
+            return Err(PortError::new(
+                "logout_account_changed",
+                "active account session changed while logout was in progress",
+            ));
+        }
+        if self.state_path.exists() {
+            fs::remove_file(&self.state_path)
+                .map_err(|error| PortError::new("credential_file_delete", error.to_string()))?;
+            if let Some(parent) = self.state_path.parent() {
+                sync_directory(parent).map_err(|error| {
+                    PortError::uncertain("credential_file_delete", error.to_string())
+                })?;
+            }
+        }
+        clear_any_reconciliation_marker(&self.reconciliation_path)
+    }
+
+    fn delete_authorized_session_after_preflight_failure(
+        &self,
+        expected_account: &AccountId,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.authorization_stage_path.exists() {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "staged authorization replacement must be reconciled before logout",
+            ));
+        }
+        let current = self.read_unlocked()?.ok_or_else(|| {
+            PortError::new(
+                "logout_account_changed",
+                "active account session changed while logout was in progress",
+            )
+        })?;
+        if &current.credentials.account_id != expected_account {
+            return Err(PortError::new(
+                "logout_account_changed",
+                "active account session changed while logout was in progress",
+            ));
+        }
+        fs::remove_file(&self.state_path)
+            .map_err(|error| PortError::new("credential_file_delete", error.to_string()))?;
+        if let Some(parent) = self.state_path.parent() {
+            sync_directory(parent).map_err(|error| {
+                PortError::uncertain("credential_file_delete", error.to_string())
+            })?;
+        }
+        clear_any_reconciliation_marker(&self.reconciliation_path)
+    }
 }
 
 impl CredentialPort for FileCredentialStore {
@@ -2679,6 +2838,55 @@ impl AuthorizationSessionStore for WindowsCredentialStore {
     fn delete_authorized_session(&self) -> Result<(), PortError> {
         self.delete()
     }
+
+    fn delete_authorized_session_for_logout(
+        &self,
+        expected: Option<&SessionCredentials>,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.read_authorization_stage_unlocked()?.is_some() {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "staged authorization replacement must be reconciled before logout",
+            ));
+        }
+        let current = self.read_unlocked()?.map(|state| state.credentials);
+        if expected.is_some_and(|value| current.as_ref() != Some(value)) {
+            return Err(PortError::new(
+                "logout_account_changed",
+                "active account session changed while logout was in progress",
+            ));
+        }
+        delete_keyring_entry(&self.entry()?, "credential_manager_delete")?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
+    }
+
+    fn delete_authorized_session_after_preflight_failure(
+        &self,
+        expected_account: &AccountId,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.read_authorization_stage_unlocked()?.is_some() {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "staged authorization replacement must be reconciled before logout",
+            ));
+        }
+        let current = self.read_unlocked()?.ok_or_else(|| {
+            PortError::new(
+                "logout_account_changed",
+                "active account session changed while logout was in progress",
+            )
+        })?;
+        if &current.credentials.account_id != expected_account {
+            return Err(PortError::new(
+                "logout_account_changed",
+                "active account session changed while logout was in progress",
+            ));
+        }
+        delete_keyring_entry(&self.entry()?, "credential_manager_delete")?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)
+    }
 }
 
 /// Force-clean seam for a root-isolated Windows qualification fixture.
@@ -3036,6 +3244,63 @@ impl AuthorizationSessionStore for KeyringCredentialStore {
 
     fn delete_authorized_session(&self) -> Result<(), PortError> {
         self.delete()
+    }
+
+    fn delete_authorized_session_for_logout(
+        &self,
+        expected: Option<&SessionCredentials>,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.read_authorization_stage_unlocked()?.is_some() {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "staged authorization replacement must be reconciled before logout",
+            ));
+        }
+        let current = self.read_unlocked()?.map(|state| state.credentials);
+        if expected.is_some_and(|value| current.as_ref() != Some(value)) {
+            return Err(PortError::new(
+                "logout_account_changed",
+                "active account session changed while logout was in progress",
+            ));
+        }
+        match self.entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {
+                clear_any_reconciliation_marker(&self.reconciliation_path)
+            }
+            Err(error) => Err(keyring_error("native_keyring_delete", error)),
+        }
+    }
+
+    fn delete_authorized_session_after_preflight_failure(
+        &self,
+        expected_account: &AccountId,
+    ) -> Result<(), PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if self.read_authorization_stage_unlocked()?.is_some() {
+            return Err(PortError::uncertain(
+                "credential_reconciliation_required",
+                "staged authorization replacement must be reconciled before logout",
+            ));
+        }
+        let current = self.read_unlocked()?.ok_or_else(|| {
+            PortError::new(
+                "logout_account_changed",
+                "active account session changed while logout was in progress",
+            )
+        })?;
+        if &current.credentials.account_id != expected_account {
+            return Err(PortError::new(
+                "logout_account_changed",
+                "active account session changed while logout was in progress",
+            ));
+        }
+        match self.entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {
+                clear_any_reconciliation_marker(&self.reconciliation_path)
+            }
+            Err(error) => Err(keyring_error("native_keyring_delete", error)),
+        }
     }
 }
 
@@ -4608,9 +4873,20 @@ mod credential_write_verification_tests {
             .replace_authorized_session(&rotated_session)
             .unwrap();
         let expected = AuthCredentialBundle {
-            channel: initial.channel,
-            session: rotated_session,
+            channel: initial.channel.clone(),
+            session: rotated_session.clone(),
         };
+        assert_eq!(
+            auth.load_account_bound(&session).unwrap(),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            auth.clear_account_bound(&initial, &session)
+                .unwrap_err()
+                .code,
+            "logout_account_changed"
+        );
+        assert!(!auth.reconciliation_path.exists());
         assert_eq!(
             auth.load_account_bound(&session).unwrap(),
             Some(expected.clone())
