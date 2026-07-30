@@ -1,19 +1,13 @@
 # heyfood
 
-> [!CAUTION]
-> **Do not install or use v0.4.0 or v0.4.1.**
-> Both releases were published before release authorization and remain
-> unsupported. The current supported replacement is `v0.6.2`.
-
 Native command-line access to personalized food and dietary guidance from
 [hello.food](https://hello.food).
 
 The CLI and interactive terminal experience are implemented in Rust. The
-supported release is `0.6.2` for macOS and Linux. It adds offline
+supported release is `0.6.2` for macOS and Linux. It includes offline
 self-description, opt-in Codex and Claude Code setup, and a bounded read-only
 MCP interface, plus account-bound logout with current-device authority
-revocation. The immutable `v0.4.0` and `v0.4.1` releases remain unsupported and
-must not be installed.
+revocation.
 
 See the [current capability and distribution status](docs/CAPABILITY_STATUS.md)
 before evaluating the client.

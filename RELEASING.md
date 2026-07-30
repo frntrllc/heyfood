@@ -14,7 +14,11 @@ Releases. The legacy Python/PyPI channel is not a release authority.
 4. The reviewed installer passes its local exact-version contract. The
    currently supported hosted installer remains unchanged until the new
    release assets exist.
-5. The release commit contains no secrets, private data, or proprietary service
+5. A reviewed `frntrllc/hellofood` coordination PR is ready to update the
+   canonical website release manifest, hosted installer and checksum,
+   provenance, landing-page metadata, and all public documentation to the exact
+   release version and source commit.
+6. The release commit contains no secrets, private data, or proprietary service
    content.
 
 ## Publication contract
@@ -57,13 +61,19 @@ Releases. The legacy Python/PyPI channel is not a release authority.
    target runners, verifies checksums, archive policy, and GitHub attestations,
    then installs the exact new version through the reviewed repository
    installer. The hosted default continues serving the prior supported release.
-5. Only after step 4 is green, deploy the separately reviewed `install.sh` and
-   `install.sh.sha256` bytes to `https://hey.food/`, compare both responses
-   byte-for-byte with `main`, and manually dispatch the reusable post-release
-   workflow with hosted-installer verification enabled.
-6. Confirm the GitHub Release, all four public artifact smokes, and all four
-   hosted-installer smokes are green. A
-   release is not complete while any target or hosted-installer smoke is red.
+5. Only after step 4 is green, merge the prepared `frntrllc/hellofood`
+   coordination PR. It must update `website/src/components/heyfood/release.json`,
+   the exact `install.sh` and checksum bytes, installer provenance, landing-page
+   metadata, and public documentation in one change.
+6. Compare `https://hey.food/install.sh`, its checksum and provenance,
+   `https://hey.food/`, and `https://hey.food/docs` with the reviewed website
+   source. Manually dispatch the hellofood
+   `heyfood release coordination` workflow and the reusable heyfood
+   post-release workflow with hosted-installer verification enabled.
+7. Confirm the GitHub Release, all four public artifact smokes, all four
+   hosted-installer smokes, and the cross-repository version-coordination
+   workflow are green. A release is not complete while any target, installer,
+   landing-page, documentation, or source-provenance check is red.
 
 ## Failed or unsafe releases
 
