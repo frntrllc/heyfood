@@ -2819,9 +2819,9 @@ fn validate_metadata(metadata: &Metadata) -> Result<(), String> {
         .iter()
         .filter(|package| workspace_ids.contains(&package.id))
     {
-        if package.version.to_string() != "0.6.2" {
+        if package.version.to_string() != "0.6.3" {
             return Err(format!(
-                "{} has internal version {}; expected exact workspace version 0.6.2",
+                "{} has internal version {}; expected exact workspace version 0.6.3",
                 package.name, package.version
             ));
         }
@@ -2856,9 +2856,9 @@ fn validate_metadata(metadata: &Metadata) -> Result<(), String> {
             .iter()
             .filter(|dependency| workspace_names.contains(dependency.name.as_str()))
         {
-            if dependency.req.to_string() != "=0.6.2" {
+            if dependency.req.to_string() != "=0.6.3" {
                 return Err(format!(
-                    "{} -> {} must use exact internal version =0.6.2; found {}",
+                    "{} -> {} must use exact internal version =0.6.3; found {}",
                     package.name, dependency.name, dependency.req
                 ));
             }

@@ -63,11 +63,13 @@ const STALE_CONTEXT_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-00000000003
 const CTRL_C_CONFIRMATION_ID: &str = "00000000-0000-4000-8000-000000000041";
 const CTRL_C_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-000000000042";
 const FULL_SCOPE: &str = "account:link account:delete knowledge:read menu:read menu:watch recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe grocery:read grocery:write";
-const CORE_MATRIX_GROUPS: [&str; 5] = [
+const CORE_MATRIX_GROUPS: [&str; 7] = [
     "clean-user",
     "returning-user",
     "household-grocery",
     "failure-safety",
+    "human-presentation",
+    "logout-recovery",
     "artifact-behavior",
 ];
 const ENTER_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049h";
@@ -2691,7 +2693,7 @@ fn installed_harness_inventory_matches_core_release_contract() {
     ))
     .expect("decode installed core release contract");
     assert_eq!(contract["schema_version"], 1);
-    assert_eq!(contract["release"], "0.6.2");
+    assert_eq!(contract["release"], "0.6.3");
     assert_eq!(
         contract["distribution"]["release_targets"],
         json!([

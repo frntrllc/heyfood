@@ -1,6 +1,6 @@
 # heyfood agent integration threat model
 
-**Status:** v0.6.2 read/discovery integration qualified and public; agent
+**Status:** v0.6.3 read/discovery integration qualified and public; agent
 mutations remain absent and separately gated
 **Release source:** `80d0b4b3defeb4ded45b890cd0b4bab85193e587`
 
@@ -76,10 +76,10 @@ hard failure.
 
 - Public macOS/Linux installed-archive qualification is complete. Windows
   `CONIN$`/`CONOUT$` remains covered by ordinary source CI only; no Windows
-  archive or support claim ships in v0.6.2.
+  archive or support claim ships in v0.6.3.
 - The application boundaries, exact-host setup matrix, Agent Skill, setup, and
   read-only MCP implementation passed independent exact-SHA and exact-artifact
-  review for v0.6.2.
+  review for v0.6.3.
 - Phase 4 mutation endpoints and tools remain absent. The frozen hello.food
   out-of-band approval protocol still requires its separate security,
   implementation, and production qualification before any mutation tool can

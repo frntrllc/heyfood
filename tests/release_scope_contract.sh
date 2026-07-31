@@ -182,20 +182,20 @@ for target in \
   aarch64-unknown-linux-gnu \
   x86_64-apple-darwin \
   x86_64-unknown-linux-gnu; do
-  "$ROOT/scripts/release/package.sh" "$ROOT/install.sh" 0.6.2 "$target" "$distribution"
+  "$ROOT/scripts/release/package.sh" "$ROOT/install.sh" 0.6.3 "$target" "$distribution"
 done
-"$ROOT/scripts/release/checksums.sh" "$distribution" 0.6.2
-"$ROOT/scripts/release/verify-assets.sh" "$distribution" 0.6.2
+"$ROOT/scripts/release/checksums.sh" "$distribution" 0.6.3
+"$ROOT/scripts/release/verify-assets.sh" "$distribution" 0.6.3
 [[ "$(wc -l <"$distribution/SHA256SUMS" | tr -d '[:space:]')" -eq 4 ]] ||
   fail "the release manifest must bind exactly four archives"
 
-windows_asset="$distribution/heyfood-v0.6.2-x86_64-pc-windows-msvc.zip"
+windows_asset="$distribution/heyfood-v0.6.3-x86_64-pc-windows-msvc.zip"
 touch "$windows_asset"
-if "$ROOT/scripts/release/checksums.sh" "$distribution" 0.6.2 >/dev/null 2>&1; then
-  fail "checksum generation must reject a Windows v0.6.2 asset"
+if "$ROOT/scripts/release/checksums.sh" "$distribution" 0.6.3 >/dev/null 2>&1; then
+  fail "checksum generation must reject a Windows v0.6.3 asset"
 fi
-if "$ROOT/scripts/release/verify-assets.sh" "$distribution" 0.6.2 >/dev/null 2>&1; then
-  fail "complete-set verification must reject a Windows v0.6.2 asset"
+if "$ROOT/scripts/release/verify-assets.sh" "$distribution" 0.6.3 >/dev/null 2>&1; then
+  fail "complete-set verification must reject a Windows v0.6.3 asset"
 fi
 
 grep -Fq "Windows distribution remains deferred" "$ROOT/README.md" ||
@@ -221,4 +221,4 @@ jq -e '
 ' "$ROOT/tests/showcase/core-release-matrix.v1.json" >/dev/null ||
   fail "the core matrix must preserve the bounded distribution and non-gates"
 
-printf 'release scope contract: four v0.6.2 archives; Windows CI retained\n'
+printf 'release scope contract: four v0.6.3 archives; Windows CI retained\n'

@@ -1,14 +1,14 @@
 # Native release signing
 
-The `v0.6.2` tag-driven release workflow uses the protected `native-release`
+The `v0.6.3` tag-driven release workflow uses the protected `native-release`
 GitHub environment. It produces exactly four archives: macOS Apple Silicon,
 macOS Intel, Linux ARM64, and Linux x64.
 Windows distribution is deferred to a separately qualified future release;
 ordinary Windows CI remains
-required, but the `v0.6.2` protected candidate, publication, and public-smoke
+required, but the `v0.6.3` protected candidate, publication, and public-smoke
 paths consume no Windows signing credential and emit no Windows asset.
 
-## Protected `v0.6.2` environment configuration
+## Protected `v0.6.3` environment configuration
 
 Configure these secrets in `native-release`:
 
@@ -37,7 +37,7 @@ attestations and verified before execution.
 
 Ordinary pull-request CI includes Windows and builds unsigned platform fixtures
 to test compilation, Clippy, credentials, installed behavior, and archive
-determinism. It cannot satisfy the `v0.6.2` protected signing gate.
+determinism. It cannot satisfy the `v0.6.3` protected signing gate.
 
 Before merge or publication, dispatch `Native CLI CI` with
 `qualify_signed_candidate=true` at the exact proposed product SHA. The
@@ -65,4 +65,4 @@ Windows release packaging, Authenticode signing, and public installer
 qualification are deferred together to a future release. The Windows source,
 Credential Manager implementation, PowerShell packaging/signing scripts, and
 ordinary Windows CI remain in the repository. They do not authorize or produce
-a Windows `v0.6.2` release asset.
+a Windows `v0.6.3` release asset.

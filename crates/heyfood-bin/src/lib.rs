@@ -2484,7 +2484,7 @@ async fn run_interactive_panel(
                 }
             };
             Ok(format!(
-                "Session: active\nService: reachable\nProfile: {profile}\nGrocery: {grocery}\nMenu Watch: {menu_watch}\nHealth integrations: deferred from v0.6.2\nVoice: {voice}"
+                "Session: active\nService: reachable\nProfile: {profile}\nGrocery: {grocery}\nMenu Watch: {menu_watch}\nHealth integrations: deferred from v0.6.3\nVoice: {voice}"
             ))
         }
         PanelRequest::Grocery => {
@@ -4260,7 +4260,7 @@ mod tests {
         assert!(status.contains("Profile: authorized · sync consent granted"));
         assert!(status.contains("Grocery: available · authorized"));
         assert!(status.contains("Menu Watch: authorized · create/list/remove available"));
-        assert!(status.contains("Health integrations: deferred from v0.6.2"));
+        assert!(status.contains("Health integrations: deferred from v0.6.3"));
         assert!(status.contains(
             "Voice: native capture available · transcription authorized · permission checked on use"
         ));
