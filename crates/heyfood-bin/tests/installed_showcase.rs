@@ -76,6 +76,7 @@ const ENABLE_BRACKETED_PASTE: &[u8] = b"\x1b[?2004h";
 const DISABLE_BRACKETED_PASTE: &[u8] = b"\x1b[?2004l";
 const HIDE_CURSOR: &[u8] = b"\x1b[?25l";
 const SHOW_CURSOR: &[u8] = b"\x1b[?25h";
+const FILE_CREDENTIAL_STORE_DISCLOSURE: &[u8] = b"heyfood: using explicitly requested owner-only file credential storage; unset HEYFOOD_CREDENTIAL_STORE to use the operating-system credential store";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShowcaseCredentialBackend {
@@ -699,6 +700,7 @@ async fn run_installed_archive_core_release_matrix() {
         &width_40,
         &width_120_no_color,
         &interrupt_exit,
+        credential_backend,
     );
     let first_run_choice_visible =
         raw_terminal_contains(&clean_user, FIRST_RUN_ACCOUNT_CHOICE_COPY);
@@ -2205,6 +2207,7 @@ fn assert_core_terminal_contract(
     width_40: &[u8],
     width_120_no_color: &[u8],
     interrupt_exit: &[u8],
+    credential_backend: ShowcaseCredentialBackend,
 ) {
     for expected in ["Open this URL to continue:", "Approval code: SHOW-CASE"] {
         assert_raw_terminal_text(clean_user, expected);
@@ -2220,6 +2223,47 @@ fn assert_core_terminal_contract(
     ] {
         assert_terminal_restored(terminal);
         assert_terminal_redacted(terminal);
+        assert_credential_disclosure_precedes_interactive_screen(terminal, credential_backend);
+    }
+    for protocol_code in ["list_version_conflict", "household_context_conflict"] {
+        assert!(
+            !raw_terminal_contains(returning_user, protocol_code),
+            "human TUI output exposed protocol code {protocol_code:?}"
+        );
+    }
+}
+
+fn assert_credential_disclosure_precedes_interactive_screen(
+    terminal: &[u8],
+    credential_backend: ShowcaseCredentialBackend,
+) {
+    let positions = terminal
+        .windows(FILE_CREDENTIAL_STORE_DISCLOSURE.len())
+        .enumerate()
+        .filter_map(|(position, window)| {
+            (window == FILE_CREDENTIAL_STORE_DISCLOSURE).then_some(position)
+        })
+        .collect::<Vec<_>>();
+    match credential_backend {
+        ShowcaseCredentialBackend::IsolatedFile => {
+            assert_eq!(
+                positions.len(),
+                1,
+                "the file credential-store disclosure must be emitted exactly once per process"
+            );
+            let interactive_screen = terminal
+                .windows(ENTER_ALTERNATE_SCREEN.len())
+                .position(|window| window == ENTER_ALTERNATE_SCREEN)
+                .expect("installed TUI must enter the alternate screen");
+            assert!(
+                positions[0] < interactive_screen,
+                "credential-store disclosure must precede alternate-screen entry"
+            );
+        }
+        ShowcaseCredentialBackend::Native => assert!(
+            positions.is_empty(),
+            "native credential qualification must not disclose the file fallback"
+        ),
     }
 }
 
