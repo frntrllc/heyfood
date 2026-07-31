@@ -2169,13 +2169,15 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             if !confirmation_error_preserves_pending(&error.code) {
                 model.pending_confirmation = None;
             }
-            let code = terminal_safe_text(&error.code);
-            let message = terminal_safe_text(&error.message);
+            let mut message = terminal_safe_text(&error.message);
+            if message.trim().is_empty() {
+                message = "hey.food could not complete this request. You can try again now.".into();
+            }
             model.scrollback.mutate_last_assistant(|entry| {
                 if !entry.text.is_empty() {
                     entry.text.push_str("\n\n");
                 }
-                entry.text.push_str(&format!("{code}: {message}"));
+                entry.text.push_str(&message);
                 entry.streaming = false;
             });
             mark_finishing(model);
@@ -2800,6 +2802,93 @@ mod tests {
         );
         let text = &model.scrollback.entries().back().unwrap().text;
         assert_eq!(text, "safe]52;clipboard");
+        assert!(!text.chars().any(|character| character == '\u{1b}'));
+    }
+
+    #[test]
+    fn agent_errors_render_human_messages_without_protocol_codes() {
+        let mut model = AppModel {
+            draft: "confirm".into(),
+            cursor: 7,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Error {
+                    error: AgentFailure {
+                        code: "list_version_conflict".into(),
+                        message:
+                            "Stale Grocery list authority rejected; fetch the active list again."
+                                .into(),
+                        retryable: false,
+                    },
+                },
+            }),
+        );
+
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert_eq!(
+            text,
+            "Stale Grocery list authority rejected; fetch the active list again."
+        );
+        assert!(!text.contains("list_version_conflict"));
+    }
+
+    #[test]
+    fn empty_agent_error_messages_have_a_truthful_human_fallback() {
+        let mut model = AppModel {
+            draft: "question".into(),
+            cursor: 8,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Error {
+                    error: AgentFailure {
+                        code: "service_error".into(),
+                        message: " \n ".into(),
+                        retryable: true,
+                    },
+                },
+            }),
+        );
+
+        assert_eq!(
+            model.scrollback.entries().back().unwrap().text,
+            "hey.food could not complete this request. You can try again now."
+        );
+    }
+
+    #[test]
+    fn agent_error_messages_are_terminal_safe() {
+        let mut model = AppModel {
+            draft: "question".into(),
+            cursor: 8,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Error {
+                    error: AgentFailure {
+                        code: "service_error".into(),
+                        message: "Safe guidance\u{1b}]52;clipboard\u{7}".into(),
+                        retryable: false,
+                    },
+                },
+            }),
+        );
+
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert_eq!(text, "Safe guidance]52;clipboard");
         assert!(!text.chars().any(|character| character == '\u{1b}'));
     }
 

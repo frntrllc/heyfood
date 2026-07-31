@@ -6,6 +6,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
+#[cfg(all(feature = "native-credentials", not(windows)))]
+use std::sync::Once;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use heyfood_agent_runtime::{
@@ -52,6 +54,11 @@ enum NativeSessionStore {
     OwnerOnlyFile(FileCredentialStore),
 }
 
+#[cfg(all(feature = "native-credentials", not(windows)))]
+static FILE_CREDENTIAL_STORE_DISCLOSURE: Once = Once::new();
+#[cfg(all(feature = "native-credentials", not(windows)))]
+static LEGACY_CREDENTIAL_STORE_DISCLOSURE: Once = Once::new();
+
 #[cfg(feature = "native-credentials")]
 impl NativeSessionStore {
     #[cfg(not(windows))]
@@ -59,9 +66,11 @@ impl NativeSessionStore {
         let root = root.as_ref();
         match std::env::var("HEYFOOD_CREDENTIAL_STORE").as_deref() {
             Ok("file") => {
-                eprintln!(
-                    "heyfood: using explicitly requested owner-only file credential storage; unset HEYFOOD_CREDENTIAL_STORE to use the operating-system credential store"
-                );
+                FILE_CREDENTIAL_STORE_DISCLOSURE.call_once(|| {
+                    eprintln!(
+                        "heyfood: using explicitly requested owner-only file credential storage; unset HEYFOOD_CREDENTIAL_STORE to use the operating-system credential store"
+                    );
+                });
                 FileCredentialStore::open(root).map(Self::OwnerOnlyFile)
             }
             Ok("native") => {
@@ -74,9 +83,11 @@ impl NativeSessionStore {
                     Ok(None) => legacy.reconciliation_required()?,
                 };
                 if legacy_state_exists {
-                    eprintln!(
-                        "heyfood: continuing with disclosed owner-only legacy credential storage; set HEYFOOD_CREDENTIAL_STORE=native after completing credential migration"
-                    );
+                    LEGACY_CREDENTIAL_STORE_DISCLOSURE.call_once(|| {
+                        eprintln!(
+                            "heyfood: continuing with disclosed owner-only legacy credential storage; set HEYFOOD_CREDENTIAL_STORE=native after completing credential migration"
+                        );
+                    });
                     Ok(Self::OwnerOnlyFile(legacy))
                 } else {
                     CredentialBrokerStore::open(root, Duration::from_secs(15)).map(Self::Platform)

@@ -19,6 +19,9 @@ authentication contracts are stabilized.
   operation so a terminal left open across token expiry keeps working; when
   renewal is rejected, explain the exact `heyfood login` recovery instead of
   misreporting a connection failure.
+- Keep protocol error codes out of human TUI output and emit credential-store
+  fallback disclosures only once, before the interactive screen starts, so
+  background authorization preparation cannot corrupt visible guidance.
 - Refresh expired channel and app-session authority before logout teardown,
   persist rotated credentials atomically, and perform no refresh or retry after
   revocation begins.
