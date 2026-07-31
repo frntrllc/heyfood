@@ -62,24 +62,16 @@ landing-page inventory. Its machine-readable contract is
   authenticated TUI turn;
 - complete process exit followed by a second installed process that reloads
   credentials without registration and completes another authenticated turn;
-- terminal-native activity labels, structured restaurant recommendations, and
-  full-menu presentation with prices, freshness, provenance, and dietary
-  explanations; unsupported protocol JSON never renders on the human surface;
 - an active household Grocery list with member-specific screening,
   substitutions, provenance, proposal review/edit, non-mutating cancel, one
   accepted mutation and one list-version advance, plus independent rejection of
   stale list and household-context authority;
 - no blind retry after uncertain dispatch, Ctrl-C stream cancellation, Ctrl-C
   cancellation of a pending Grocery confirmation without mutation, a typed
-  inactivity outcome that preserves valid partial content and leaves the TUI
-  usable, healthy transport heartbeats during accepted slow work, and complete
-  presentation restoration after normal and application-interrupt exits. The
-  companion internal PTY and terminal-guard gates remain required for
-  native-signal canonical-mode and body-error/panic restoration;
-- expired channel and session authority refresh before logout teardown, no
-  post-teardown refresh or retry, mandatory local clear after rejected or
-  uncertain preflight, and local-only crash recovery from an interrupted
-  uncertain refresh without erasing a staged account replacement;
+  failure that leaves the TUI usable, and complete presentation restoration
+  after normal and application-interrupt exits. The companion internal PTY and
+  terminal-guard gates remain required for native-signal canonical-mode and
+  body-error/panic restoration;
 - semantic output at 40, 80, and 120 columns, `NO_COLOR`, the exact archive
   digest, and the real platform credential backend on the final signed
   candidate.
@@ -93,6 +85,30 @@ proof. Passing the synthetic source-archive matrix did not itself authorize
 release: production registration/Grocery canaries, protected signing, the same
 matrix against the signed archives, and independent exact-SHA review were also
 required.
+
+## `0.6.3` recovery qualification
+
+The installed core matrix above retains its five executable groups.
+`signed_candidate_matrix_complete: true` proves only those groups; it does not
+prove the following `0.6.3` recovery-release gates:
+
+- a deployed backend heartbeat remains visible during deliberately slow work,
+  and the packaged client preserves valid partial content and choices on a
+  typed inactivity outcome without replaying an accepted turn;
+- the packaged client completes the profile-awareness, restaurant
+  recommendation, and referential full-menu production journeys with human
+  progress labels, structured prices/freshness/provenance/dietary guidance,
+  and no unsupported protocol JSON;
+- a signed artifact refreshes expired channel and app-session authority before
+  logout, performs no refresh or retry after teardown starts, and completes
+  binding-preserving local-only recovery after rejected, uncertain, or
+  interrupted preflight.
+
+These gates require separate privacy-safe production evidence and independent
+review of the exact candidate bytes. They remain listed in
+`remaining_release_gates` even after the protected signed core matrix passes.
+Neither source CI nor `signed_candidate_matrix_complete` authorizes publication
+without them.
 
 ## Full showcase E2E design
 
