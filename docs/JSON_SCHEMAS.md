@@ -51,7 +51,7 @@ contains a separate explicit safety assessment.
 
 ## Agent-native contracts
 
-The supported v0.6.2 release exposes its public installed contracts through
+The supported v0.6.3 release exposes its public installed contracts through
 `heyfood agent schema --list`. The public allowlist contains:
 
 - `schemas/v1/heyfood-agent-manifest.schema.json` freezes network-free

@@ -4,17 +4,19 @@ Native command-line access to personalized food and dietary guidance from
 [hello.food](https://hello.food).
 
 The CLI and interactive terminal experience are implemented in Rust. The
-supported release is `0.6.2` for macOS and Linux. It includes offline
+supported release is `0.6.3` for macOS and Linux. It includes offline
 self-description, opt-in Codex and Claude Code setup, and a bounded read-only
 MCP interface, plus account-bound logout with current-device authority
-revocation.
+revocation. Slow turns now stay alive with truthful progress, restaurant
+results render as terminal-native guidance instead of protocol data, and
+logout safely recovers expired or interrupted account authority.
 
 See the [current capability and distribution status](docs/CAPABILITY_STATUS.md)
 before evaluating the client.
 
 ## Install
 
-Install the supported native `v0.6.2` binary on macOS or Linux:
+Install the supported native `v0.6.3` binary on macOS or Linux:
 
 ```bash
 curl -fsSL https://hey.food/install.sh | bash
@@ -43,7 +45,7 @@ contributors.
 
 ## Agent discovery
 
-The v0.6.2 release can explain its exact installed automation
+The v0.6.3 release can explain its exact installed automation
 contract without repository access, credentials, or a network connection:
 
 ```bash
@@ -187,12 +189,12 @@ Account connection continues into the native Rust TUI and an authenticated bare
 stream, keeps bounded process-local prompt history, and preserves conversation
 continuity only for the lifetime of the process.
 
-The bounded `v0.6.2` release provides exactly four native archives: macOS
+The bounded `v0.6.3` release provides exactly four native archives: macOS
 Apple Silicon, macOS Intel, Linux ARM64, and Linux x64.
 Windows distribution remains deferred; ordinary Windows compile, test,
 Clippy, credential, and packaging qualification remains active in CI. Health,
 item-level Menu Watch diff detail, native voice, full legacy parity, and the
-complete twelve-stage showcase are future work rather than `v0.6.2` release
+complete twelve-stage showcase are future work rather than `v0.6.3` release
 gates.
 
 Interactive controls include Enter to send, Shift+Enter or Ctrl+J for a
@@ -205,8 +207,13 @@ validated transcript in the composer for editing before submission. Use
 readiness.
 
 Grocery, Menu Watch, profile, household, location, and status panels are
-included in `v0.6.2`. Health integrations are explicitly deferred from the
-supported `v0.6.2` contract: `health` is absent from root help and shell
+included in `v0.6.3`. Human progress labels stay separate from backend tool
+identifiers, structured restaurant recommendations and full menus retain
+prices and dietary evidence, and a slow or interrupted turn returns the
+composer to a usable state without blindly replaying accepted work.
+
+Health integrations are explicitly deferred from the supported `v0.6.3`
+contract: `health` is absent from root help and shell
 completion, `/health` is absent from TUI discovery, and fresh grants do not
 request Health or integration-management scopes. Retained internal
 provider-neutral contracts are future work, not a release capability.
@@ -221,7 +228,7 @@ and `/watch` create/list/remove or display subscriptions using the deployed
 `menu:watch` contract. The TUI renders the latest account-owned change summary
 with source, freshness, and provenance; item-level added, removed, modified,
 and price-change detail remains follow-on work. The broader installed-artifact
-showcase and real-hardware voice qualification remain post-`v0.6.2`
+showcase and real-hardware voice qualification remain post-`v0.6.3`
 conformance work. Hidden compatibility routes continue to fail closed where a
 native workflow is not complete.
 

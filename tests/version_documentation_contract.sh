@@ -33,6 +33,21 @@ assert_contains "$ROOT/docs/CAPABILITY_STATUS.md" \
   "checksum-verified native \`v$version\` archive"
 assert_contains "$ROOT/docs/RELEASE_SIGNING.md" "\`v$version\` tag-driven release"
 assert_contains "$ROOT/CHANGELOG.md" "## $version -"
+assert_contains "$ROOT/docs/AGENT_MCP_CONTRACT.md" "\`v$version\` release"
+assert_contains "$ROOT/docs/CLI_CONTRACT.md" "supported \`v$version\` contract"
+assert_contains "$ROOT/docs/COMMAND_GRAMMAR.md" "supported \`v$version\` command surface"
+assert_contains "$ROOT/docs/JSON_SCHEMAS.md" "supported v$version release"
+assert_contains "$ROOT/docs/SHOWCASE_CONFORMANCE.md" "\`$version\` bounded release matrix"
+assert_contains "$ROOT/tests/installer_contract.sh" "SUPPORTED_VERSION=\"$version\""
+assert_contains "$ROOT/.github/workflows/ci.yml" "bounded v$version release scope"
+assert_contains "$ROOT/.github/workflows/continuous-tui-eval.yml" "default: \"$version\""
+assert_contains "$ROOT/.github/workflows/production-tui-canary.yml" "default: \"$version\""
+assert_contains "$ROOT/agent-integrations/codex/heyfood/.codex-plugin/plugin.json" \
+  "\"version\": \"$version\""
+assert_contains "$ROOT/agent-integrations/claude/heyfood/.claude-plugin/plugin.json" \
+  "\"version\": \"$version\""
+[[ "$(jq -r '.release' "$ROOT/tests/showcase/core-release-matrix.v1.json")" == "$version" ]] ||
+  fail "the installed-artifact matrix must target v$version"
 
 for source in "$ROOT/README.md" "$ROOT/docs/CAPABILITY_STATUS.md"; do
   if grep -Eq 'v0\.4\.[01]' "$source"; then

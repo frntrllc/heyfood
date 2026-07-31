@@ -4,6 +4,23 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
+## 0.6.3 - 2026-07-30
+
+- Replace backend stage and tool identifiers with calm, human progress copy,
+  while unknown identifiers fall back to neutral language.
+- Render restaurant recommendations and full menus as structured terminal
+  guidance with prices, freshness, provenance, and household dietary reasons;
+  human output no longer falls back to raw protocol JSON.
+- Keep healthy slow turns alive with transport heartbeats, preserve valid
+  partial content and choices on typed inactivity, restore a usable composer,
+  and never replay an accepted turn automatically.
+- Refresh expired channel and app-session authority before logout teardown,
+  persist rotated credentials atomically, and perform no refresh or retry after
+  revocation begins.
+- Clear local credentials when logout preflight is rejected or uncertain, and
+  resume an interrupted uncertain-refresh logout without issuing a teardown
+  request or erasing a staged account replacement.
+
 ## 0.6.2 - 2026-07-29
 
 - Fix `heyfood logout` for accounts whose authoritative app session rotated

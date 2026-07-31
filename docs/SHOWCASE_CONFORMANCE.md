@@ -46,9 +46,9 @@ Browser-only window chrome and animation timing are not runtime requirements.
 The semantic layout, information density, colors, spacing, states, and keyboard
 experience are.
 
-## `0.6.2` bounded release matrix
+## `0.6.3` bounded release matrix
 
-The `0.6.2` release gate remains intentionally narrower than the twelve-stage
+The `0.6.3` release gate remains intentionally narrower than the twelve-stage
 landing-page inventory. Its machine-readable contract is
 `tests/showcase/core-release-matrix.v1.json`. The installed archive must prove:
 
@@ -62,22 +62,30 @@ landing-page inventory. Its machine-readable contract is
   authenticated TUI turn;
 - complete process exit followed by a second installed process that reloads
   credentials without registration and completes another authenticated turn;
+- terminal-native activity labels, structured restaurant recommendations, and
+  full-menu presentation with prices, freshness, provenance, and dietary
+  explanations; unsupported protocol JSON never renders on the human surface;
 - an active household Grocery list with member-specific screening,
   substitutions, provenance, proposal review/edit, non-mutating cancel, one
   accepted mutation and one list-version advance, plus independent rejection of
   stale list and household-context authority;
 - no blind retry after uncertain dispatch, Ctrl-C stream cancellation, Ctrl-C
   cancellation of a pending Grocery confirmation without mutation, a typed
-  failure that leaves the TUI usable, and complete presentation restoration
-  after normal and application-interrupt exits. The companion internal PTY and
-  terminal-guard gates remain required for native-signal canonical-mode and
-  body-error/panic restoration;
+  inactivity outcome that preserves valid partial content and leaves the TUI
+  usable, healthy transport heartbeats during accepted slow work, and complete
+  presentation restoration after normal and application-interrupt exits. The
+  companion internal PTY and terminal-guard gates remain required for
+  native-signal canonical-mode and body-error/panic restoration;
+- expired channel and session authority refresh before logout teardown, no
+  post-teardown refresh or retry, mandatory local clear after rejected or
+  uncertain preflight, and local-only crash recovery from an interrupted
+  uncertain refresh without erasing a staged account replacement;
 - semantic output at 40, 80, and 120 columns, `NO_COLOR`, the exact archive
   digest, and the real platform credential backend on the final signed
   candidate.
 
 Native voice, item-level Menu Watch diff detail, and Health integrations are not
-`0.6.2` gates.
+`0.6.3` gates.
 Health integrations are explicitly deferred from the supported release
 contract and require neither implementation nor a production canary. Menu Watch
 management and latest-summary rendering have since received bounded production
@@ -121,7 +129,7 @@ dietary, or audio content in test evidence.
 ## Full showcase-complete gate
 
 Longer-term landing-page TUI completion requires all of the following. These
-requirements do not broaden the bounded `0.6.2` release matrix:
+requirements do not broaden the bounded `0.6.3` release matrix:
 
 - 12/12 showcase stages pass from the installed artifact;
 - every negative and cancellation case passes;
@@ -151,9 +159,9 @@ cases. Household targeting, consent-aware dietary context, and Grocery safety
 cards now have bounded installed-artifact proof; production-canary proof
 remains.
 
-Ordinary Native CLI CI runs the bounded `0.6.2` behavior matrix from packaged
+Ordinary Native CLI CI runs the bounded `0.6.3` behavior matrix from packaged
 fixtures on macOS, Linux, and Windows. Windows execution is source
-qualification for a future release, not a `v0.6.2` distribution claim. The protected
+qualification for a future release, not a `v0.6.3` distribution claim. The protected
 candidate and public release matrices run only the four authorized macOS/Linux
 archives. The harness verifies the checksum and one-executable archive policy,
 extracts into a clean temporary user environment, drives registration and

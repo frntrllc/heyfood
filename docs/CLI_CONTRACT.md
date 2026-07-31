@@ -34,7 +34,7 @@ authoritative allowlist: internal approval/commit schemas are deliberately not
 exposed. `agent doctor` reports only bounded build/contract facts and never
 prints a user-specific executable or configuration path.
 
-Health integrations are deferred from the supported `v0.6.2` contract.
+Health integrations are deferred from the supported `v0.6.3` contract.
 `health` is hidden from root help and generated shell completion, `/health` is
 absent from the TUI command registry, and new grants do not request
 `health:read` or `integrations:manage`. The retained top-level spelling returns
