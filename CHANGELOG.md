@@ -9,8 +9,9 @@ authentication contracts are stabilized.
 - Replace backend stage and tool identifiers with calm, human progress copy,
   while unknown identifiers fall back to neutral language.
 - Render restaurant recommendations and full menus as structured terminal
-  guidance with prices, freshness, provenance, and household dietary reasons;
-  human output no longer falls back to raw protocol JSON.
+  guidance with prices, freshness, approachable source labels, and household
+  dietary reasons; human output no longer falls back to raw protocol JSON or
+  internal provenance identifiers.
 - Keep healthy slow turns alive with transport heartbeats, preserve valid
   partial content and choices on typed inactivity, restore a usable composer,
   and never replay an accepted turn automatically.

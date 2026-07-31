@@ -1845,7 +1845,7 @@ mod registration_tests {
             "Source: https://example.test/abby-jane",
             "Freshness: Menu updated 2 hours ago",
             "Captured: 2026-07-26T17:27:14Z",
-            "Source lineage: hunter_toast_sites",
+            "Menu source: Restaurant ordering page",
             "Pastries",
             "• Butter Croissant  $5.00  [caution]",
             "  Layers on layers.",
