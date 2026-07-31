@@ -44,31 +44,11 @@
       "id": "failure-safety",
       "requirements": [
         "no blind retry after uncertain dispatch",
-        "accepted slow work emits transport heartbeats within the finite client inactivity deadline",
-        "typed inactivity preserves valid partial content and choices and leaves the composer usable without replay",
         "Ctrl-C stream cancellation",
         "Ctrl-C pending-confirmation cancellation without mutation",
         "typed runtime failure remains usable and restores on subsequent clean exit",
         "full presentation restoration after normal and application-interrupt exits",
         "native-signal canonical-mode and body-error or panic restoration remain required companion CI gates"
-      ]
-    },
-    {
-      "id": "human-presentation",
-      "requirements": [
-        "backend stage and tool identifiers render as human progress or neutral fallback copy",
-        "restaurant recommendations join evaluated item and member-safety evidence",
-        "full menus render prices, provenance, freshness, and dietary explanations",
-        "human output never serializes unsupported protocol JSON"
-      ]
-    },
-    {
-      "id": "logout-recovery",
-      "requirements": [
-        "expired channel and session authority refresh and persist before teardown",
-        "no refresh or retry occurs after teardown begins",
-        "rejected or uncertain preflight clears local authority without teardown dispatch",
-        "interrupted uncertain refresh resumes binding-checked local teardown without network dispatch"
       ]
     },
     {

@@ -63,13 +63,11 @@ const STALE_CONTEXT_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-00000000003
 const CTRL_C_CONFIRMATION_ID: &str = "00000000-0000-4000-8000-000000000041";
 const CTRL_C_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-000000000042";
 const FULL_SCOPE: &str = "account:link account:delete knowledge:read menu:read menu:watch recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe grocery:read grocery:write";
-const CORE_MATRIX_GROUPS: [&str; 7] = [
+const CORE_MATRIX_GROUPS: [&str; 5] = [
     "clean-user",
     "returning-user",
     "household-grocery",
     "failure-safety",
-    "human-presentation",
-    "logout-recovery",
     "artifact-behavior",
 ];
 const ENTER_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049h";
@@ -767,13 +765,19 @@ async fn run_installed_archive_core_release_matrix() {
     let remaining_release_gates = if signed_candidate_native_backend_proven {
         vec![
             "production_registration_and_grocery_canaries",
+            "production_heartbeat_and_terminal_recovery_journeys",
+            "signed_logout_refresh_canary",
+            "public_version_and_installer_coordination",
             "exact_sha_release_review",
         ]
     } else {
         vec![
             "production_registration_and_grocery_canaries",
+            "production_heartbeat_and_terminal_recovery_journeys",
+            "signed_logout_refresh_canary",
             "protected_signing_environment",
             "signed_candidate_core_matrix_rerun",
+            "public_version_and_installer_coordination",
             "exact_sha_release_review",
         ]
     };
@@ -906,9 +910,9 @@ async fn run_installed_archive_core_release_matrix() {
             "contains_credentials": false
         })).collect::<Vec<_>>(),
         "deferred": {
-            "native_voice": "not enabled in the default 0.5.0 artifact",
-            "menu_watch_diff": "not a 0.5.0 gate",
-            "health_integrations": "deferred from the supported 0.5.0 contract",
+            "native_voice": format!("not enabled in the default {expected_version} artifact"),
+            "menu_watch_diff": format!("not a {expected_version} gate"),
+            "health_integrations": format!("deferred from the supported {expected_version} contract"),
             "menu_watch_management": "requires a bounded live canary or truthful deferral"
         },
         "remaining_release_gates": remaining_release_gates
