@@ -15,11 +15,11 @@ use heyfood_agent_runtime::{
 };
 #[cfg(feature = "native-credentials")]
 use heyfood_application::EnsureSessionError;
+use heyfood_application::{BoxFuture, BrowserPort, EnsureSession, EnsureSessionOutcome};
 #[cfg(feature = "native-credentials")]
 use heyfood_application::{
-    BoxFuture, CredentialCommit, CredentialPort, Logout, LogoutLocalPort, LogoutOutcome, PortError,
+    CredentialCommit, CredentialPort, Logout, LogoutLocalPort, LogoutOutcome, PortError,
 };
-use heyfood_application::{BrowserPort, EnsureSession, EnsureSessionOutcome};
 use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
 #[cfg(feature = "native-credentials")]
 use heyfood_core::{AuthCredentialBundle, CommitId, SessionCredentials};
@@ -644,6 +644,7 @@ async fn interactive(machine: bool, force_onboarding: bool) -> ExitCode {
             prepared.snapshot,
             prepared.authorization_scope,
         )?
+        .with_session_provider(Arc::new(NativeInteractiveSessionProvider))
         .with_local_state(local_state)
         .with_startup_notice(startup_notice)
         .with_startup_onboarding(startup_onboarding);
@@ -848,6 +849,26 @@ struct PreparedNativeSession {
     ensure_session: Arc<EnsureSession>,
     snapshot: SessionSnapshot,
     authorization_scope: String,
+}
+
+struct NativeInteractiveSessionProvider;
+
+impl heyfood_bin::InteractiveSessionProvider for NativeInteractiveSessionProvider {
+    fn prepare(
+        &self,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<heyfood_bin::InteractiveSessionPreparation, heyfood_bin::OneShotError>>
+    {
+        Box::pin(async move {
+            let prepared = prepare_native_session(None, cancellation).await?;
+            Ok(heyfood_bin::InteractiveSessionPreparation::new(
+                prepared.service,
+                prepared.ensure_session,
+                prepared.snapshot,
+                prepared.authorization_scope,
+            ))
+        })
+    }
 }
 
 #[cfg(feature = "native-credentials")]

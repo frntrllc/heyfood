@@ -76,6 +76,8 @@ pub enum TurnFailureKind {
     Inactivity,
     StreamInterrupted,
     DispatchOutcomeUnknown,
+    AuthenticationRequired,
+    AuthenticationChanged,
     Unavailable,
     Internal,
 }
@@ -111,6 +113,8 @@ impl TurnFailure {
             | "sse_done_without_terminal"
             | "stream_incomplete"
             | "stream_limit" => (TurnFailureKind::StreamInterrupted, true),
+            "login_required" => (TurnFailureKind::AuthenticationRequired, false),
+            "interactive_account_changed" => (TurnFailureKind::AuthenticationChanged, false),
             _ if error.outcome_uncertain => (TurnFailureKind::DispatchOutcomeUnknown, true),
             _ => (TurnFailureKind::Unavailable, false),
         };
@@ -472,5 +476,25 @@ mod tests {
         assert_eq!(failure.kind, TurnFailureKind::Unavailable);
         assert!(!failure.outcome_uncertain);
         assert_eq!(failure.diagnostic_code(), "service_unavailable");
+    }
+
+    #[test]
+    fn rejected_authorization_uses_a_distinct_human_recovery_kind() {
+        let failure =
+            TurnFailure::from_port_error(&PortError::new("login_required", "private detail"));
+        assert_eq!(failure.kind, TurnFailureKind::AuthenticationRequired);
+        assert!(!failure.outcome_uncertain);
+        assert_eq!(failure.diagnostic_code(), "login_required");
+    }
+
+    #[test]
+    fn changed_interactive_account_uses_a_distinct_human_recovery_kind() {
+        let failure = TurnFailure::from_port_error(&PortError::new(
+            "interactive_account_changed",
+            "private detail",
+        ));
+        assert_eq!(failure.kind, TurnFailureKind::AuthenticationChanged);
+        assert!(!failure.outcome_uncertain);
+        assert_eq!(failure.diagnostic_code(), "interactive_account_changed");
     }
 }

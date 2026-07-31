@@ -99,6 +99,10 @@ prove the following `0.6.3` recovery-release gates:
   recommendation, and referential full-menu production journeys with human
   progress labels, structured prices/freshness/provenance/dietary guidance,
   and no unsupported protocol JSON;
+- a long-running packaged TUI renews expired channel and app-session authority
+  before its next operation without losing conversation continuity or
+  dispatching twice; rejected renewal identifies `heyfood login` as the
+  recovery and does not misreport a network failure;
 - a signed artifact refreshes expired channel and app-session authority before
   logout, performs no refresh or retry after teardown starts, and completes
   binding-preserving local-only recovery after rejected, uncertain, or

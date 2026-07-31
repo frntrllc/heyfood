@@ -2507,6 +2507,12 @@ fn finish_failed_stream(model: &mut AppModel, failure: TurnFailure) {
             TurnFailureKind::DispatchOutcomeUnknown => {
                 "This turn may have reached hello.food, but its result was not received. It was not retried. Check the conversation before trying the same request again."
             }
+            TurnFailureKind::AuthenticationRequired => {
+                "Your hello.food sign-in expired. Exit heyfood, run `heyfood login`, then reopen the TUI. This turn was not sent."
+            }
+            TurnFailureKind::AuthenticationChanged => {
+                "The connected hello.food account changed. Exit and reopen heyfood before continuing. This turn was not sent."
+            }
             TurnFailureKind::Unavailable => {
                 "hey.food couldn’t start this turn. Check your connection, then ask again."
             }
@@ -3028,6 +3034,63 @@ mod tests {
                 prompt
             }] if prompt == "Try an independent question"
         ));
+    }
+
+    #[test]
+    fn expired_sign_in_names_the_login_recovery_without_guessing_about_connectivity() {
+        let mut model = AppModel {
+            draft: "What can I eat?".into(),
+            cursor: 15,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let failure = TurnFailure::from_port_error(&heyfood_application::PortError::new(
+            "login_required",
+            "private authorization detail",
+        ));
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFailed {
+                operation_id: 1,
+                failure,
+            }),
+        );
+
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert!(text.contains("sign-in expired"));
+        assert!(text.contains("heyfood login"));
+        assert!(text.contains("This turn was not sent"));
+        assert!(!text.contains("Check your connection"));
+        assert!(!text.contains("private authorization detail"));
+        assert_eq!(model.operation, OperationState::Idle);
+    }
+
+    #[test]
+    fn changed_account_requires_a_clean_tui_restart_without_dispatch_advice() {
+        let mut model = AppModel {
+            draft: "What can I eat?".into(),
+            cursor: 15,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let failure = TurnFailure::from_port_error(&heyfood_application::PortError::new(
+            "interactive_account_changed",
+            "private account detail",
+        ));
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFailed {
+                operation_id: 1,
+                failure,
+            }),
+        );
+
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert!(text.contains("account changed"));
+        assert!(text.contains("Exit and reopen heyfood"));
+        assert!(text.contains("This turn was not sent"));
+        assert!(!text.contains("private account detail"));
+        assert_eq!(model.operation, OperationState::Idle);
     }
 
     #[test]
