@@ -818,11 +818,9 @@ fn toggle_voice(model: &mut AppModel) -> Vec<Effect> {
             return Vec::new();
         }
         VoiceAvailability::AuthorizationRequired => {
-            push_notice(
-                model,
-                "Voice transcription needs `audio:transcribe` authorization. Exit the TUI, run `heyfood login`, then try again. No microphone was opened.",
-            );
-            return Vec::new();
+            // Native authority may have been safely upgraded since launch.
+            // The driver checks the freshly loaded scope before opening the
+            // microphone and reports the current availability back here.
         }
         VoiceAvailability::Ready => {}
     }
@@ -4020,9 +4018,27 @@ mod tests {
             voice_availability: VoiceAvailability::AuthorizationRequired,
             ..AppModel::default()
         };
-        assert!(dispatch(&mut model, Action::VoiceToggle).is_empty());
+        assert_eq!(
+            dispatch(&mut model, Action::VoiceToggle),
+            vec![Effect::StartVoice { operation_id: 1 }]
+        );
+        assert!(model.draft.is_empty());
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::VoiceAvailability(
+                VoiceAvailability::AuthorizationRequired,
+            )),
+        );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::VoiceFailed {
+                operation_id: 1,
+                message: "Additional authorization is required. No microphone was opened.".into(),
+            }),
+        );
         assert_eq!(model.draft, "typed draft");
         assert_eq!(model.operation, OperationState::Idle);
+        assert_eq!(model.voice_phase, VoicePhase::Idle);
         assert!(
             model
                 .scrollback
@@ -4036,16 +4052,16 @@ mod tests {
         model.voice_availability = VoiceAvailability::Ready;
         assert_eq!(
             dispatch(&mut model, Action::VoiceToggle),
-            vec![Effect::StartVoice { operation_id: 1 }]
+            vec![Effect::StartVoice { operation_id: 2 }]
         );
         assert!(model.draft.is_empty());
         assert_eq!(
             dispatch(&mut model, Action::CancelVoice),
-            vec![Effect::CancelVoice { operation_id: 1 }]
+            vec![Effect::CancelVoice { operation_id: 2 }]
         );
         let _ = dispatch(
             &mut model,
-            Action::Runtime(RuntimeEvent::VoiceCancelled { operation_id: 1 }),
+            Action::Runtime(RuntimeEvent::VoiceCancelled { operation_id: 2 }),
         );
         assert_eq!(model.draft, "typed draft");
         assert_eq!(model.operation, OperationState::Idle);
