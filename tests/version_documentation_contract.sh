@@ -54,6 +54,12 @@ assert_contains "$ROOT/crates/heyfood-bin/tests/installed_showcase.rs" \
   'format!("deferred from the supported {expected_version} contract")'
 assert_contains "$ROOT/crates/heyfood-bin/tests/installed_showcase.rs" \
   '"production_human_presentation_journeys"'
+presentation_gate_count=$(
+  grep -Fc '"production_human_presentation_journeys"' \
+    "$ROOT/crates/heyfood-bin/tests/installed_showcase.rs"
+)
+[[ "$presentation_gate_count" -eq 2 ]] ||
+  fail "the human-presentation production gate must remain in both signed and unsigned evidence branches"
 if grep -Fq '0.5.0' "$ROOT/crates/heyfood-bin/tests/installed_showcase.rs"; then
   fail "installed-artifact evidence must not retain stale v0.5.0 release copy"
 fi
