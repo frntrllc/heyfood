@@ -357,8 +357,9 @@ fn append_recommendation_provenance(output: &mut String, structured: &Value) {
             provenance.and_then(|value| value.get("source_lineage").and_then(Value::as_str))
         })
         .filter(|value| !value.trim().is_empty())
+        .and_then(menu_source_label)
     {
-        let _ = writeln!(output, "Source lineage: {}", inline_text(lineage));
+        let _ = writeln!(output, "Menu source: {lineage}");
     }
 }
 
@@ -436,8 +437,11 @@ fn append_provenance(
         .or_else(|| {
             provenance.and_then(|value| value.get("source_lineage").and_then(Value::as_str))
         });
-    if let Some(lineage) = lineage.filter(|value| !value.trim().is_empty()) {
-        let _ = writeln!(output, "Source lineage: {}", inline_text(lineage));
+    if let Some(lineage) = lineage
+        .filter(|value| !value.trim().is_empty())
+        .and_then(menu_source_label)
+    {
+        let _ = writeln!(output, "Menu source: {lineage}");
     }
 }
 
@@ -572,18 +576,23 @@ fn append_allergen_detail(output: &mut String, item: &Value) {
         let confidence = allergen
             .get("confidence")
             .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty());
+            .filter(|value| !value.trim().is_empty())
+            .and_then(allergen_confidence_label);
         let source = allergen
             .get("source")
             .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty());
+            .filter(|value| !value.trim().is_empty())
+            .and_then(allergen_source_label);
 
-        let _ = write!(output, "  Allergen flag: {}", inline_text(name));
+        let _ = write!(
+            output,
+            "  Allergen flag: {}",
+            inline_text(name).replace('_', " ")
+        );
         if confidence.is_some() || source.is_some() {
             let details = [confidence, source]
                 .into_iter()
                 .flatten()
-                .map(inline_text)
                 .collect::<Vec<_>>()
                 .join(", ");
             let _ = write!(output, " ({details})");
@@ -631,6 +640,47 @@ fn safety_label(value: &str) -> String {
         "avoid" => "avoid".into(),
         "unable" | "unknown" | "unable_to_evaluate" => "unable to evaluate".into(),
         other => inline_text(other).replace('_', " "),
+    }
+}
+
+fn menu_source_label(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "hunter_toast" | "hunter_toast_sites" => Some("Restaurant ordering page"),
+        "hunter_web"
+        | "hunter_firecrawl"
+        | "hunter_firecrawl_v2"
+        | "hunter_official_site"
+        | "hunter_wix"
+        | "hunter_popmenu"
+        | "hunter_squarespace" => Some("Restaurant website"),
+        "hunter_pdf" => Some("Published menu"),
+        "owner_email" | "owner_upload" | "owner_portal" | "owner_unknown" | "restaurant_owned" => {
+            Some("Provided by the restaurant")
+        }
+        "admin_manual_entry" => Some("Reviewed menu entry"),
+        // Source lineage is an internal, extensible backend enum. Unknown
+        // values are intentionally omitted until the client has deliberate
+        // human copy for them; never expose protocol vocabulary by default.
+        _ => None,
+    }
+}
+
+fn allergen_confidence_label(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "high" => Some("high confidence"),
+        "medium" => Some("medium confidence"),
+        "low" => Some("low confidence"),
+        _ => None,
+    }
+}
+
+fn allergen_source_label(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "owner_added" | "owner_confirmed" => Some("restaurant-confirmed"),
+        "llm_inferred" | "ai_inferred" | "inferred" => Some("inferred from menu details"),
+        // Allergen-source values are internal protocol metadata. Evidence is
+        // still rendered, but an unknown enum must not become terminal copy.
+        _ => None,
     }
 }
 
@@ -710,14 +760,14 @@ mod tests {
             "Freshness: Menu updated 2 hours ago",
             "Captured: 2026-07-26T17:27:14Z",
             "Source: https://example.test/menu",
-            "Source lineage: hunter_toast_sites",
+            "Menu source: Restaurant ordering page",
             "Bread",
             "• Big Country  $9.00  [avoid]",
             "  Country sourdough.",
             "  Why for Jane (avoid): Contains wheat flour (Celiac)",
             "    Flags: Contains gluten, Shared equipment",
             "    Conflicts: Not suitable for Jane",
-            "  Allergen flag: wheat (high, owner_added)",
+            "  Allergen flag: wheat (high confidence, restaurant-confirmed)",
             "    Evidence: Owner-confirmed wheat flour",
             "• Baguette  $4.00  [caution]",
             "  Dietary details were not provided; treat this guidance conservatively.",
@@ -864,7 +914,7 @@ mod tests {
             "Freshness: Menu updated 2 hours ago",
             "Captured: 2026-07-29T17:27:14Z",
             "Source: https://example.test/menu",
-            "Source lineage: restaurant_owned",
+            "Menu source: Provided by the restaurant",
             "For you",
             "1. Grilled Fish  $24.00  [generally safer] · Top pick",
             "   A simple preparation with no detected conflicts.",
@@ -1125,5 +1175,87 @@ mod tests {
         assert!(!rendered.contains("\nSource: forged"));
         assert!(!rendered.contains("\nFreshness: forged"));
         assert!(!rendered.contains("\n• forged"));
+    }
+
+    #[test]
+    fn humanizes_every_supported_menu_source_without_exposing_protocol_values() {
+        let cases = [
+            ("hunter_toast", "Restaurant ordering page"),
+            ("hunter_toast_sites", "Restaurant ordering page"),
+            ("hunter_web", "Restaurant website"),
+            ("hunter_firecrawl", "Restaurant website"),
+            ("hunter_firecrawl_v2", "Restaurant website"),
+            ("hunter_official_site", "Restaurant website"),
+            ("hunter_wix", "Restaurant website"),
+            ("hunter_popmenu", "Restaurant website"),
+            ("hunter_squarespace", "Restaurant website"),
+            ("hunter_pdf", "Published menu"),
+            ("owner_email", "Provided by the restaurant"),
+            ("owner_upload", "Provided by the restaurant"),
+            ("owner_portal", "Provided by the restaurant"),
+            ("owner_unknown", "Provided by the restaurant"),
+            ("restaurant_owned", "Provided by the restaurant"),
+            ("admin_manual_entry", "Reviewed menu entry"),
+        ];
+
+        for (lineage, label) in cases {
+            for presentation in ["recommendations", "full_menu"] {
+                let rendered = render_household_menu(&json!({
+                    "structured": {
+                        "type": "household_menu",
+                        "presentation": presentation,
+                        "restaurant_name": "Cafe",
+                        "source_lineage": lineage,
+                        "freshness_hours": 1.0,
+                        "requested_max_age_seconds": 86400,
+                        "is_stale": false,
+                        "sections": []
+                    }
+                }))
+                .unwrap();
+                assert!(
+                    rendered.contains(&format!("Menu source: {label}")),
+                    "{lineage} ({presentation}): {rendered}"
+                );
+                assert!(!rendered.contains(lineage), "{lineage}: {rendered}");
+                assert!(!rendered.contains("Source lineage:"), "{rendered}");
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_internal_sources_fail_closed_without_losing_human_evidence() {
+        let rendered = render_household_menu(&json!({
+            "structured": {
+                "type": "household_menu",
+                "presentation": "full_menu",
+                "restaurant_name": "Cafe",
+                "source_url": "https://example.test/menu",
+                "source_lineage": "future_internal_source",
+                "freshness_hours": 1.0,
+                "requested_max_age_seconds": 86400,
+                "is_stale": false,
+                "sections": [{
+                    "name": "Lunch",
+                    "items": [{
+                        "name": "Soup",
+                        "allergen_detail": [{
+                            "allergen_code": "tree_nuts",
+                            "confidence": "future_confidence_enum",
+                            "source": "future_internal_source",
+                            "evidence": "Listed in the menu description"
+                        }]
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+
+        assert!(rendered.contains("Source: https://example.test/menu"));
+        assert!(rendered.contains("Allergen flag: tree nuts"));
+        assert!(rendered.contains("Evidence: Listed in the menu description"));
+        assert!(!rendered.contains("future_internal_source"));
+        assert!(!rendered.contains("future_confidence_enum"));
+        assert!(!rendered.contains("Source lineage:"));
     }
 }
