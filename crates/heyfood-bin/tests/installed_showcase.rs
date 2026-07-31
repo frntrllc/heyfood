@@ -766,6 +766,7 @@ async fn run_installed_archive_core_release_matrix() {
         vec![
             "production_registration_and_grocery_canaries",
             "production_heartbeat_and_terminal_recovery_journeys",
+            "production_human_presentation_journeys",
             "signed_logout_refresh_canary",
             "public_version_and_installer_coordination",
             "exact_sha_release_review",
@@ -774,6 +775,7 @@ async fn run_installed_archive_core_release_matrix() {
         vec![
             "production_registration_and_grocery_canaries",
             "production_heartbeat_and_terminal_recovery_journeys",
+            "production_human_presentation_journeys",
             "signed_logout_refresh_canary",
             "protected_signing_environment",
             "signed_candidate_core_matrix_rerun",
