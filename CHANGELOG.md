@@ -15,6 +15,10 @@ authentication contracts are stabilized.
 - Keep healthy slow turns alive with transport heartbeats, preserve valid
   partial content and choices on typed inactivity, restore a usable composer,
   and never replay an accepted turn automatically.
+- Reconcile channel and app-session authority before every authenticated TUI
+  operation so a terminal left open across token expiry keeps working; when
+  renewal is rejected, explain the exact `heyfood login` recovery instead of
+  misreporting a connection failure.
 - Refresh expired channel and app-session authority before logout teardown,
   persist rotated credentials atomically, and perform no refresh or retry after
   revocation begins.

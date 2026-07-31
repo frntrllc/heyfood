@@ -8,13 +8,13 @@ use std::{fmt, io, sync::Arc, time::Duration};
 
 use heyfood_agent_runtime::HttpService;
 use heyfood_application::{
-    AudioCapturePort, CapabilitySnapshot, ConfirmGroceryMutation, CreateMenuWatch,
+    AudioCapturePort, BoxFuture, CapabilitySnapshot, ConfirmGroceryMutation, CreateMenuWatch,
     CreateMenuWatchRequest, DeployedGroceryMutationRequest, DiscoverCapabilities, EnsureSession,
     EnsureSessionError, EnsureSessionOutcome, ExportGroceryList, GroceryExport, ListMenuWatches,
     OptionalCapabilityStatus, PortError, PrepareGroceryMutation, ProfileReadinessStatus,
     ReadActiveGroceryDisplay, ReadGroceryExclusions, ReadStatus, RefreshPolicy, RemoveMenuWatch,
-    RunTurnOutcome, ServicePort, TurnContext, TurnFailure, TurnRequest, VoiceReadinessStatus,
-    execute_one_shot_turn,
+    RunTurnOutcome, ServicePort, TurnContext, TurnFailure, TurnFailureKind, TurnRequest,
+    VoiceReadinessStatus, execute_one_shot_turn,
 };
 use heyfood_cli::{
     AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, MenuWatchCommand,
@@ -1401,6 +1401,69 @@ struct InteractiveContinuity {
     household_scope: Option<String>,
 }
 
+/// Fresh native authorization and session composition for one interactive
+/// operation. Long-running terminal sessions must not retain the channel
+/// access token captured when the TUI first opened.
+pub struct InteractiveSessionPreparation {
+    service: Arc<dyn ServicePort>,
+    http_service: Option<Arc<HttpService>>,
+    ensure_session: Arc<EnsureSession>,
+    snapshot: SessionSnapshot,
+    authorization_scope: Arc<str>,
+}
+
+impl InteractiveSessionPreparation {
+    #[must_use]
+    pub fn new(
+        service: Arc<HttpService>,
+        ensure_session: Arc<EnsureSession>,
+        snapshot: SessionSnapshot,
+        authorization_scope: impl Into<Arc<str>>,
+    ) -> Self {
+        let conversational_service: Arc<dyn ServicePort> = service.clone();
+        Self {
+            service: conversational_service,
+            http_service: Some(service),
+            ensure_session,
+            snapshot,
+            authorization_scope: authorization_scope.into(),
+        }
+    }
+
+    #[cfg(test)]
+    fn from_service(
+        service: Arc<dyn ServicePort>,
+        ensure_session: Arc<EnsureSession>,
+        snapshot: SessionSnapshot,
+        authorization_scope: impl Into<Arc<str>>,
+    ) -> Self {
+        Self {
+            service,
+            http_service: None,
+            ensure_session,
+            snapshot,
+            authorization_scope: authorization_scope.into(),
+        }
+    }
+}
+
+/// Re-load and reconcile native account authority before an authenticated TUI
+/// operation. Implementations own channel-refresh persistence and must return
+/// only after the complete account-bound bundle is durable.
+pub trait InteractiveSessionProvider: Send + Sync {
+    fn prepare(
+        &self,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<InteractiveSessionPreparation, OneShotError>>;
+}
+
+struct PreparedInteractiveOperation {
+    service: Arc<dyn ServicePort>,
+    http_service: Option<Arc<HttpService>>,
+    ensure_session: Arc<EnsureSession>,
+    authorization_scope: Arc<str>,
+}
+
 /// Production driver for the retained terminal surface.
 ///
 /// The terminal loop stays synchronous and owns stdout. Every authenticated
@@ -1417,6 +1480,7 @@ pub struct InteractiveTurnDriver {
     local_state: Option<Arc<ImportedPythonState>>,
     startup_notice: Option<String>,
     startup_onboarding: bool,
+    session_provider: Option<Arc<dyn InteractiveSessionProvider>>,
     ensure_session: Arc<EnsureSession>,
     session: Arc<Mutex<SessionSnapshot>>,
     continuity: Arc<Mutex<InteractiveContinuity>>,
@@ -1443,6 +1507,7 @@ impl InteractiveTurnDriver {
             local_state: None,
             startup_notice: None,
             startup_onboarding: false,
+            session_provider: None,
             ensure_session,
             session: Arc::new(Mutex::new(session)),
             continuity: Arc::new(Mutex::new(InteractiveContinuity::default())),
@@ -1483,6 +1548,12 @@ impl InteractiveTurnDriver {
     }
 
     #[must_use]
+    pub fn with_session_provider(mut self, provider: Arc<dyn InteractiveSessionProvider>) -> Self {
+        self.session_provider = Some(provider);
+        self
+    }
+
+    #[must_use]
     pub fn with_audio_capture(mut self, audio_capture: Arc<dyn AudioCapturePort>) -> Self {
         self.audio_capture = Some(audio_capture);
         self
@@ -1515,27 +1586,47 @@ impl InteractiveTurnDriver {
 
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
-        let service = self.service.clone();
-        let ensure_session = self.ensure_session.clone();
+        let fallback_service = self.service.clone();
+        let fallback_http_service = self.interactive_service.clone();
+        let fallback_ensure_session = self.ensure_session.clone();
+        let fallback_authorization_scope = self.authorization_scope.clone();
+        let session_provider = self.session_provider.clone();
         let session = self.session.clone();
         let continuity = self.continuity.clone();
-        let context_service = self.interactive_service.clone();
         let local_state = self.local_state.clone();
         let task = self.runtime.spawn(async move {
-            let outcome = run_interactive_turn(
-                operation_id,
-                prompt,
-                confirmation,
-                service,
-                ensure_session,
-                session,
-                continuity,
-                context_service,
-                local_state,
-                task_cancellation,
-                runtime_events.clone(),
+            let prepared = prepare_interactive_operation(
+                session_provider,
+                fallback_service,
+                fallback_http_service,
+                fallback_ensure_session,
+                fallback_authorization_scope,
+                session.clone(),
+                task_cancellation.child_token(),
             )
             .await;
+            let outcome = match prepared {
+                Ok(prepared) => {
+                    run_interactive_turn(
+                        operation_id,
+                        prompt,
+                        confirmation,
+                        prepared.service,
+                        prepared.ensure_session,
+                        session,
+                        continuity,
+                        prepared.http_service,
+                        local_state,
+                        task_cancellation,
+                        runtime_events.clone(),
+                    )
+                    .await
+                }
+                Err(InteractivePreparationError::CancelledBeforeDispatch) => {
+                    Ok(RunTurnOutcome::CancelledBeforeServerAcceptance)
+                }
+                Err(InteractivePreparationError::Failed(failure)) => Err(failure),
+            };
             let terminal_event = match outcome {
                 Ok(outcome) => RuntimeEvent::TurnFinished {
                     operation_id,
@@ -1705,21 +1796,27 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 "interactive work is already active",
             ));
         }
-        let service = self.interactive_service.clone().ok_or_else(|| {
-            io::Error::new(
+        if self.interactive_service.is_none() && self.session_provider.is_none() {
+            return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "interactive panels require the authenticated HTTP adapter",
-            )
-        })?;
+            ));
+        }
+        let fallback_http_service = self.interactive_service.clone();
+        let fallback_service = self.service.clone();
+        let fallback_ensure_session = self.ensure_session.clone();
+        let fallback_authorization_scope = self.authorization_scope.clone();
+        let session_provider = self.session_provider.clone();
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
-        let ensure_session = self.ensure_session.clone();
         let session = self.session.clone();
-        let authorization_scope = self.authorization_scope.clone();
         let native_voice_available = self.native_voice_available();
         runtime_events
             .try_send(RuntimeEvent::VoiceAvailability(
-                interactive_voice_availability(native_voice_available, &authorization_scope),
+                interactive_voice_availability(
+                    native_voice_available,
+                    &fallback_authorization_scope,
+                ),
             ))
             .map_err(io::Error::other)?;
         let environment = InteractivePanelEnvironment {
@@ -1727,16 +1824,41 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
             native_voice_available,
         };
         let task = self.runtime.spawn(async move {
-            let result = run_interactive_panel(
-                panel,
-                service,
-                ensure_session,
-                session,
-                &authorization_scope,
-                environment,
-                task_cancellation.clone(),
+            let prepared = prepare_interactive_operation(
+                session_provider,
+                fallback_service,
+                fallback_http_service,
+                fallback_ensure_session,
+                fallback_authorization_scope,
+                session.clone(),
+                task_cancellation.child_token(),
             )
             .await;
+            let result = match prepared {
+                Ok(prepared) => match prepared.http_service {
+                    Some(service) => {
+                        run_interactive_panel(
+                            panel,
+                            service,
+                            prepared.ensure_session,
+                            session,
+                            &prepared.authorization_scope,
+                            environment,
+                            task_cancellation.clone(),
+                        )
+                        .await
+                    }
+                    None => {
+                        Err("Interactive panels require the authenticated HTTP adapter.".to_owned())
+                    }
+                },
+                Err(InteractivePreparationError::CancelledBeforeDispatch) => {
+                    Err("Operation cancelled.".into())
+                }
+                Err(InteractivePreparationError::Failed(failure)) => {
+                    Err(interactive_preparation_failure_message(failure))
+                }
+            };
             let event = match result {
                 Ok(body) => RuntimeEvent::PanelReady {
                     operation_id,
@@ -1777,27 +1899,59 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 "interactive work is already active",
             ));
         }
-        let service = self.interactive_service.clone().ok_or_else(|| {
-            io::Error::new(
+        if self.interactive_service.is_none() && self.session_provider.is_none() {
+            return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "dietary onboarding requires the authenticated HTTP adapter",
-            )
-        })?;
+            ));
+        }
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
-        let ensure_session = self.ensure_session.clone();
+        let fallback_service = self.service.clone();
+        let fallback_http_service = self.interactive_service.clone();
+        let fallback_ensure_session = self.ensure_session.clone();
+        let fallback_authorization_scope = self.authorization_scope.clone();
+        let session_provider = self.session_provider.clone();
         let session = self.session.clone();
-        let authorization_scope = self.authorization_scope.clone();
         let task = self.runtime.spawn(async move {
-            let result = run_interactive_onboarding(
-                profile,
-                service,
-                ensure_session,
-                session,
-                &authorization_scope,
-                task_cancellation,
+            let prepared = prepare_interactive_operation(
+                session_provider,
+                fallback_service,
+                fallback_http_service,
+                fallback_ensure_session,
+                fallback_authorization_scope,
+                session.clone(),
+                task_cancellation.child_token(),
             )
             .await;
+            let result = match prepared {
+                Ok(prepared) => match prepared.http_service {
+                    Some(service) => {
+                        run_interactive_onboarding(
+                            profile,
+                            service,
+                            prepared.ensure_session,
+                            session,
+                            &prepared.authorization_scope,
+                            task_cancellation,
+                        )
+                        .await
+                    }
+                    None => Err(OnboardingOperationError::Failed(
+                        "Dietary onboarding requires the authenticated HTTP adapter.".into(),
+                    )),
+                },
+                Err(InteractivePreparationError::CancelledBeforeDispatch) => {
+                    Err(OnboardingOperationError::Cancelled(
+                        RunTurnOutcome::CancelledBeforeServerAcceptance,
+                    ))
+                }
+                Err(InteractivePreparationError::Failed(failure)) => {
+                    Err(OnboardingOperationError::Failed(
+                        interactive_preparation_failure_message(failure),
+                    ))
+                }
+            };
             let event = match result {
                 Ok(()) => RuntimeEvent::OnboardingSaved { operation_id },
                 Err(OnboardingOperationError::Failed(message)) => RuntimeEvent::OnboardingFailed {
@@ -1861,7 +2015,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 .map_err(io::Error::other)?;
             return Ok(());
         }
-        let Some(service) = self.interactive_service.clone() else {
+        if self.interactive_service.is_none() && self.session_provider.is_none() {
             runtime_events
                 .try_send(RuntimeEvent::VoiceFailed {
                     operation_id,
@@ -1869,21 +2023,56 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 })
                 .map_err(io::Error::other)?;
             return Ok(());
-        };
+        }
         let stop = CancellationToken::new();
         let cancellation = CancellationToken::new();
         let task_stop = stop.clone();
         let task_cancellation = cancellation.clone();
+        let fallback_service = self.service.clone();
+        let fallback_http_service = self.interactive_service.clone();
+        let fallback_ensure_session = self.ensure_session.clone();
+        let fallback_authorization_scope = self.authorization_scope.clone();
+        let session_provider = self.session_provider.clone();
+        let session = self.session.clone();
         let task = self.runtime.spawn(async move {
-            let event = run_interactive_voice(
-                operation_id,
-                audio_capture,
-                service,
-                task_stop,
-                task_cancellation,
-                runtime_events.clone(),
+            let prepared = prepare_interactive_operation(
+                session_provider,
+                fallback_service,
+                fallback_http_service,
+                fallback_ensure_session,
+                fallback_authorization_scope,
+                session,
+                task_cancellation.child_token(),
             )
             .await;
+            let event = match prepared {
+                Ok(prepared) => match prepared.http_service {
+                    Some(service) => {
+                        run_interactive_voice(
+                            operation_id,
+                            audio_capture,
+                            service,
+                            task_stop,
+                            task_cancellation,
+                            runtime_events.clone(),
+                        )
+                        .await
+                    }
+                    None => RuntimeEvent::VoiceFailed {
+                        operation_id,
+                        message: "Voice transcription requires the authenticated HTTP adapter. Nothing was recorded or submitted.".into(),
+                    },
+                },
+                Err(InteractivePreparationError::CancelledBeforeDispatch) => {
+                    RuntimeEvent::VoiceCancelled { operation_id }
+                }
+                Err(InteractivePreparationError::Failed(failure)) => {
+                    RuntimeEvent::VoiceFailed {
+                        operation_id,
+                        message: interactive_preparation_failure_message(failure),
+                    }
+                }
+            };
             let _ = runtime_events.send(event).await;
         });
         self.turns.push(OwnedInteractiveTurn {
@@ -2064,6 +2253,82 @@ async fn run_interactive_voice(
             message: terminal_safe_text(&error.message),
         },
     }
+}
+
+enum InteractivePreparationError {
+    CancelledBeforeDispatch,
+    Failed(TurnFailure),
+}
+
+fn interactive_preparation_failure_message(failure: TurnFailure) -> String {
+    match failure.kind {
+        TurnFailureKind::AuthenticationRequired => {
+            "Your hello.food sign-in expired. Exit heyfood, run `heyfood login`, then reopen the TUI. No operation was sent.".into()
+        }
+        TurnFailureKind::AuthenticationChanged => {
+            "The connected hello.food account changed. Exit and reopen heyfood before continuing. No operation was sent.".into()
+        }
+        TurnFailureKind::DispatchOutcomeUnknown => {
+            "Account authorization could not be reconciled safely. Exit heyfood and run `heyfood login` before trying again.".into()
+        }
+        TurnFailureKind::Inactivity
+        | TurnFailureKind::StreamInterrupted
+        | TurnFailureKind::Unavailable
+        | TurnFailureKind::Internal => {
+            "hey.food could not prepare this operation. Check your connection, then try again.".into()
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prepare_interactive_operation(
+    provider: Option<Arc<dyn InteractiveSessionProvider>>,
+    fallback_service: Arc<dyn ServicePort>,
+    fallback_http_service: Option<Arc<HttpService>>,
+    fallback_ensure_session: Arc<EnsureSession>,
+    fallback_authorization_scope: Arc<str>,
+    session: Arc<Mutex<SessionSnapshot>>,
+    cancellation: CancellationToken,
+) -> Result<PreparedInteractiveOperation, InteractivePreparationError> {
+    let Some(provider) = provider else {
+        return Ok(PreparedInteractiveOperation {
+            service: fallback_service,
+            http_service: fallback_http_service,
+            ensure_session: fallback_ensure_session,
+            authorization_scope: fallback_authorization_scope,
+        });
+    };
+    if cancellation.is_cancelled() {
+        return Err(InteractivePreparationError::CancelledBeforeDispatch);
+    }
+    let prepared = provider
+        .prepare(cancellation.child_token())
+        .await
+        .map_err(|error| {
+            if error.code == "channel_refresh_cancelled_before_dispatch" {
+                InteractivePreparationError::CancelledBeforeDispatch
+            } else {
+                InteractivePreparationError::Failed(turn_failure_from_one_shot_error(&error))
+            }
+        })?;
+    {
+        let mut current = session.lock().await;
+        if current.credentials.account_id != prepared.snapshot.credentials.account_id {
+            return Err(InteractivePreparationError::Failed(
+                TurnFailure::from_port_error(&PortError::new(
+                    "interactive_account_changed",
+                    "the connected account changed while the TUI was open",
+                )),
+            ));
+        }
+        *current = prepared.snapshot;
+    }
+    Ok(PreparedInteractiveOperation {
+        service: prepared.service,
+        http_service: prepared.http_service,
+        ensure_session: prepared.ensure_session,
+        authorization_scope: prepared.authorization_scope,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3117,9 +3382,96 @@ mod tests {
         }
     }
 
+    struct RotatingSessionProvider {
+        calls: Arc<AtomicUsize>,
+        services: StdMutex<VecDeque<Arc<FixtureService>>>,
+    }
+
+    impl InteractiveSessionProvider for RotatingSessionProvider {
+        fn prepare(
+            &self,
+            _cancellation: CancellationToken,
+        ) -> BoxFuture<'_, Result<InteractiveSessionPreparation, OneShotError>> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            let service = self
+                .services
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("one fresh service per operation");
+            Box::pin(async move {
+                let service_port: Arc<dyn ServicePort> = service;
+                let ensure_session = Arc::new(EnsureSession::new(
+                    service_port.clone(),
+                    Arc::new(MemoryCredentialPort),
+                    Arc::new(FixedClock),
+                ));
+                Ok(InteractiveSessionPreparation::from_service(
+                    service_port,
+                    ensure_session,
+                    SessionSnapshot {
+                        credentials: fixture_credentials(),
+                        reconciliation_required: false,
+                    },
+                    "profile:read",
+                ))
+            })
+        }
+    }
+
+    struct RejectedSessionProvider;
+
+    impl InteractiveSessionProvider for RejectedSessionProvider {
+        fn prepare(
+            &self,
+            _cancellation: CancellationToken,
+        ) -> BoxFuture<'_, Result<InteractiveSessionPreparation, OneShotError>> {
+            Box::pin(async {
+                Err(OneShotError::new(
+                    "login_required",
+                    "private authorization rejection",
+                ))
+            })
+        }
+    }
+
+    struct ChangedAccountSessionProvider {
+        service: Arc<FixtureService>,
+    }
+
+    impl InteractiveSessionProvider for ChangedAccountSessionProvider {
+        fn prepare(
+            &self,
+            _cancellation: CancellationToken,
+        ) -> BoxFuture<'_, Result<InteractiveSessionPreparation, OneShotError>> {
+            let service = self.service.clone();
+            Box::pin(async move {
+                let service_port: Arc<dyn ServicePort> = service;
+                let ensure_session = Arc::new(EnsureSession::new(
+                    service_port.clone(),
+                    Arc::new(MemoryCredentialPort),
+                    Arc::new(FixedClock),
+                ));
+                Ok(InteractiveSessionPreparation::from_service(
+                    service_port,
+                    ensure_session,
+                    SessionSnapshot {
+                        credentials: fixture_credentials_for("account-2"),
+                        reconciliation_required: false,
+                    },
+                    "profile:read",
+                ))
+            })
+        }
+    }
+
     fn fixture_credentials() -> SessionCredentials {
+        fixture_credentials_for("account-1")
+    }
+
+    fn fixture_credentials_for(account_id: &str) -> SessionCredentials {
         SessionCredentials::from_unix_expiry(
-            AccountId::parse("account-1").unwrap(),
+            AccountId::parse(account_id).unwrap(),
             SensitiveString::new("access"),
             SensitiveString::new("refresh"),
             CredentialVersion::new(1),
@@ -3414,6 +3766,157 @@ mod tests {
             requests[1].conversation_id.as_deref(),
             Some("conversation-1")
         );
+    }
+
+    #[test]
+    fn interactive_driver_reprepares_native_authority_before_every_turn() {
+        let fallback_service = Arc::new(FixtureService::default());
+        let first_service = Arc::new(FixtureService::default());
+        let second_service = Arc::new(FixtureService::default());
+        let service_port: Arc<dyn ServicePort> = fallback_service.clone();
+        let ensure_session = Arc::new(EnsureSession::new(
+            service_port.clone(),
+            Arc::new(MemoryCredentialPort),
+            Arc::new(FixedClock),
+        ));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = Arc::new(RotatingSessionProvider {
+            calls: calls.clone(),
+            services: StdMutex::new(VecDeque::from([
+                first_service.clone(),
+                second_service.clone(),
+            ])),
+        });
+        let mut driver = InteractiveTurnDriver::new(
+            service_port,
+            ensure_session,
+            SessionSnapshot {
+                credentials: fixture_credentials(),
+                reconciliation_required: false,
+            },
+        )
+        .unwrap()
+        .with_session_provider(provider);
+        let (sender, mut receiver) = mpsc::channel(16);
+
+        for (operation_id, prompt) in [(1, "first"), (2, "after expiry")] {
+            driver
+                .start_turn(operation_id, prompt.into(), sender.clone())
+                .unwrap();
+            loop {
+                if matches!(
+                    receiver.blocking_recv(),
+                    Some(RuntimeEvent::TurnFinished {
+                        operation_id: finished,
+                        outcome: RunTurnOutcome::Completed
+                    }) if finished == operation_id
+                ) {
+                    break;
+                }
+            }
+            for _ in 0..100 {
+                if driver.turns.iter().all(|turn| turn.task.is_finished()) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+
+        driver.shutdown_and_join(Duration::from_secs(1)).unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        assert!(fallback_service.requests.lock().unwrap().is_empty());
+        assert_eq!(first_service.requests.lock().unwrap().len(), 1);
+        assert_eq!(second_service.requests.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn interactive_driver_does_not_dispatch_when_sign_in_refresh_is_rejected() {
+        let fallback_service = Arc::new(FixtureService::default());
+        let service_port: Arc<dyn ServicePort> = fallback_service.clone();
+        let ensure_session = Arc::new(EnsureSession::new(
+            service_port.clone(),
+            Arc::new(MemoryCredentialPort),
+            Arc::new(FixedClock),
+        ));
+        let mut driver = InteractiveTurnDriver::new(
+            service_port,
+            ensure_session,
+            SessionSnapshot {
+                credentials: fixture_credentials(),
+                reconciliation_required: false,
+            },
+        )
+        .unwrap()
+        .with_session_provider(Arc::new(RejectedSessionProvider));
+        let (sender, mut receiver) = mpsc::channel(16);
+
+        driver
+            .start_turn(1, "What can I eat?".into(), sender)
+            .unwrap();
+        loop {
+            if matches!(
+                receiver.blocking_recv(),
+                Some(RuntimeEvent::TurnFailed {
+                    operation_id: 1,
+                    failure: TurnFailure {
+                        kind: TurnFailureKind::AuthenticationRequired,
+                        ..
+                    },
+                })
+            ) {
+                break;
+            }
+        }
+
+        driver.shutdown_and_join(Duration::from_secs(1)).unwrap();
+        assert!(fallback_service.requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn interactive_driver_does_not_carry_continuity_into_a_replaced_account() {
+        let fallback_service = Arc::new(FixtureService::default());
+        let replacement_service = Arc::new(FixtureService::default());
+        let service_port: Arc<dyn ServicePort> = fallback_service.clone();
+        let ensure_session = Arc::new(EnsureSession::new(
+            service_port.clone(),
+            Arc::new(MemoryCredentialPort),
+            Arc::new(FixedClock),
+        ));
+        let mut driver = InteractiveTurnDriver::new(
+            service_port,
+            ensure_session,
+            SessionSnapshot {
+                credentials: fixture_credentials(),
+                reconciliation_required: false,
+            },
+        )
+        .unwrap()
+        .with_session_provider(Arc::new(ChangedAccountSessionProvider {
+            service: replacement_service.clone(),
+        }));
+        let (sender, mut receiver) = mpsc::channel(16);
+
+        driver
+            .start_turn(1, "What can I eat?".into(), sender)
+            .unwrap();
+        loop {
+            if matches!(
+                receiver.blocking_recv(),
+                Some(RuntimeEvent::TurnFailed {
+                    operation_id: 1,
+                    failure: TurnFailure {
+                        kind: TurnFailureKind::AuthenticationChanged,
+                        ..
+                    },
+                })
+            ) {
+                break;
+            }
+        }
+
+        driver.shutdown_and_join(Duration::from_secs(1)).unwrap();
+        assert!(fallback_service.requests.lock().unwrap().is_empty());
+        assert!(replacement_service.requests.lock().unwrap().is_empty());
     }
 
     #[test]
