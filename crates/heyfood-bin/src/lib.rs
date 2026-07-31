@@ -1988,15 +1988,6 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 "interactive work is already active",
             ));
         }
-        if !authorization_has_scope(&self.authorization_scope, "audio:transcribe") {
-            runtime_events
-                .try_send(RuntimeEvent::VoiceFailed {
-                    operation_id,
-                    message: "Additional authorization (audio:transcribe) is required. Exit the TUI and run `heyfood login`; no microphone was opened.".into(),
-                })
-                .map_err(io::Error::other)?;
-            return Ok(());
-        }
         let Some(audio_capture) = self.audio_capture.clone() else {
             runtime_events
                 .try_send(RuntimeEvent::VoiceFailed {
@@ -2046,23 +2037,37 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
             )
             .await;
             let event = match prepared {
-                Ok(prepared) => match prepared.http_service {
-                    Some(service) => {
-                        run_interactive_voice(
+                Ok(prepared) => {
+                    let availability =
+                        interactive_voice_availability(true, &prepared.authorization_scope);
+                    let _ = runtime_events
+                        .send(RuntimeEvent::VoiceAvailability(availability))
+                        .await;
+                    if availability == VoiceAvailability::AuthorizationRequired {
+                        RuntimeEvent::VoiceFailed {
                             operation_id,
-                            audio_capture,
-                            service,
-                            task_stop,
-                            task_cancellation,
-                            runtime_events.clone(),
-                        )
-                        .await
+                            message: "Additional authorization (audio:transcribe) is required. Exit the TUI and run `heyfood login`; no microphone was opened.".into(),
+                        }
+                    } else {
+                        match prepared.http_service {
+                            Some(service) => {
+                                run_interactive_voice(
+                                    operation_id,
+                                    audio_capture,
+                                    service,
+                                    task_stop,
+                                    task_cancellation,
+                                    runtime_events.clone(),
+                                )
+                                .await
+                            }
+                            None => RuntimeEvent::VoiceFailed {
+                                operation_id,
+                                message: "Voice transcription requires the authenticated HTTP adapter. Nothing was recorded or submitted.".into(),
+                            },
+                        }
                     }
-                    None => RuntimeEvent::VoiceFailed {
-                        operation_id,
-                        message: "Voice transcription requires the authenticated HTTP adapter. Nothing was recorded or submitted.".into(),
-                    },
-                },
+                }
                 Err(InteractivePreparationError::CancelledBeforeDispatch) => {
                     RuntimeEvent::VoiceCancelled { operation_id }
                 }
@@ -3465,6 +3470,38 @@ mod tests {
         }
     }
 
+    struct FreshHttpSessionProvider {
+        service: Arc<HttpService>,
+        authorization_scope: Arc<str>,
+    }
+
+    impl InteractiveSessionProvider for FreshHttpSessionProvider {
+        fn prepare(
+            &self,
+            _cancellation: CancellationToken,
+        ) -> BoxFuture<'_, Result<InteractiveSessionPreparation, OneShotError>> {
+            let service = self.service.clone();
+            let authorization_scope = self.authorization_scope.clone();
+            Box::pin(async move {
+                let service_port: Arc<dyn ServicePort> = service.clone();
+                let ensure_session = Arc::new(EnsureSession::new(
+                    service_port,
+                    Arc::new(MemoryCredentialPort),
+                    Arc::new(FixedClock),
+                ));
+                Ok(InteractiveSessionPreparation::new(
+                    service,
+                    ensure_session,
+                    SessionSnapshot {
+                        credentials: fixture_credentials(),
+                        reconciliation_required: false,
+                    },
+                    authorization_scope,
+                ))
+            })
+        }
+    }
+
     fn fixture_credentials() -> SessionCredentials {
         fixture_credentials_for("account-1")
     }
@@ -3627,6 +3664,10 @@ mod tests {
         .with_audio_capture(capture.clone());
         let (events, mut receiver) = mpsc::channel(8);
         driver.start_voice(11, events).unwrap();
+        assert_eq!(
+            driver.runtime.block_on(receiver.recv()).unwrap(),
+            RuntimeEvent::VoiceAvailability(VoiceAvailability::AuthorizationRequired)
+        );
         let event = driver.runtime.block_on(receiver.recv()).unwrap();
         assert!(matches!(
             event,
@@ -3639,6 +3680,128 @@ mod tests {
         driver
             .shutdown_and_join(QUALIFIED_SHUTDOWN_TIMEOUT)
             .unwrap();
+    }
+
+    #[test]
+    fn fresh_voice_scope_can_authorize_when_launch_scope_is_stale() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let service_url = ServiceUrl::parse(
+            &format!("http://{}", listener.local_addr().unwrap()),
+            NetworkPolicy::DEVELOPMENT,
+        )
+        .unwrap();
+        let service = Arc::new(
+            HttpService::new(service_url, NetworkPolicy::DEVELOPMENT, Default::default()).unwrap(),
+        );
+        let service_port: Arc<dyn ServicePort> = service.clone();
+        let ensure_session = Arc::new(EnsureSession::new(
+            service_port,
+            Arc::new(MemoryCredentialPort),
+            Arc::new(FixedClock),
+        ));
+        let capture = Arc::new(FixtureAudioCapture::default());
+        let mut driver = InteractiveTurnDriver::new_http(
+            service.clone(),
+            ensure_session,
+            SessionSnapshot {
+                credentials: fixture_credentials(),
+                reconciliation_required: false,
+            },
+            "profile:read",
+        )
+        .unwrap()
+        .with_session_provider(Arc::new(FreshHttpSessionProvider {
+            service,
+            authorization_scope: Arc::from("profile:read audio:transcribe"),
+        }))
+        .with_audio_capture(capture.clone());
+        let (events, mut receiver) = mpsc::channel(8);
+
+        driver.start_voice(12, events).unwrap();
+        assert_eq!(
+            driver.runtime.block_on(receiver.recv()).unwrap(),
+            RuntimeEvent::VoiceAvailability(VoiceAvailability::Ready)
+        );
+        for _ in 0..100 {
+            if capture.calls.load(Ordering::Relaxed) == 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(capture.calls.load(Ordering::Relaxed), 1);
+        driver.cancel_voice(12).unwrap();
+        assert!(matches!(
+            driver.runtime.block_on(receiver.recv()),
+            Some(RuntimeEvent::VoiceCancelled { operation_id: 12 })
+        ));
+        driver
+            .shutdown_and_join(QUALIFIED_SHUTDOWN_TIMEOUT)
+            .unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock,
+            "cancelling during capture must not dispatch transcription"
+        );
+    }
+
+    #[test]
+    fn missing_fresh_voice_scope_opens_neither_microphone_nor_network() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let service_url = ServiceUrl::parse(
+            &format!("http://{}", listener.local_addr().unwrap()),
+            NetworkPolicy::DEVELOPMENT,
+        )
+        .unwrap();
+        let service = Arc::new(
+            HttpService::new(service_url, NetworkPolicy::DEVELOPMENT, Default::default()).unwrap(),
+        );
+        let service_port: Arc<dyn ServicePort> = service.clone();
+        let ensure_session = Arc::new(EnsureSession::new(
+            service_port,
+            Arc::new(MemoryCredentialPort),
+            Arc::new(FixedClock),
+        ));
+        let capture = Arc::new(FixtureAudioCapture::default());
+        let mut driver = InteractiveTurnDriver::new_http(
+            service.clone(),
+            ensure_session,
+            SessionSnapshot {
+                credentials: fixture_credentials(),
+                reconciliation_required: false,
+            },
+            "profile:read audio:transcribe",
+        )
+        .unwrap()
+        .with_session_provider(Arc::new(FreshHttpSessionProvider {
+            service,
+            authorization_scope: Arc::from("profile:read"),
+        }))
+        .with_audio_capture(capture.clone());
+        let (events, mut receiver) = mpsc::channel(8);
+
+        driver.start_voice(13, events).unwrap();
+        assert_eq!(
+            driver.runtime.block_on(receiver.recv()).unwrap(),
+            RuntimeEvent::VoiceAvailability(VoiceAvailability::AuthorizationRequired)
+        );
+        assert!(matches!(
+            driver.runtime.block_on(receiver.recv()),
+            Some(RuntimeEvent::VoiceFailed {
+                operation_id: 13,
+                message
+            }) if message.contains("audio:transcribe") && message.contains("no microphone was opened")
+        ));
+        driver
+            .shutdown_and_join(QUALIFIED_SHUTDOWN_TIMEOUT)
+            .unwrap();
+        assert_eq!(capture.calls.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock,
+            "missing fresh scope must not dispatch transcription"
+        );
     }
 
     #[derive(Default)]
