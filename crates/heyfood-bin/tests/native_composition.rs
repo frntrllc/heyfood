@@ -20,10 +20,10 @@ use heyfood_application::{
 };
 use heyfood_bin::{
     InteractiveSessionPreparation, InteractiveSessionProvider, InteractiveTurnDriver, OneShotError,
-    QualifiedTurnDriver, execute_qualified_native_log, prepare_native_log_command,
-    prepare_qualified_native_log,
+    QualifiedTurnDriver, execute_qualified_native_log, execute_qualified_native_one_shot,
+    prepare_native_log_command, prepare_qualified_native_log,
 };
-use heyfood_cli::{LogArgs, MealType, OutputMode};
+use heyfood_cli::{AskArgs, Command as CliCommand, ItemArgs, LogArgs, MealType, OutputMode};
 use heyfood_core::{
     AccountId, AgeEvidenceSourceV1, AgeEvidenceV1, CanonicalDateV1, CanonicalDigestV1,
     CanonicalTimestampV1, CommitId, CredentialVersion, DateOfBirthV1, DisplayName,
@@ -37,8 +37,6 @@ use heyfood_core::{
     ProfileRevision, RelationshipSourceV1, RelationshipV1, SensitiveString, ServiceUrl,
     SessionCredentials, SessionSnapshot, canonical_sha256_v1,
 };
-#[cfg(windows)]
-use heyfood_platform::NativeAuthStore;
 use heyfood_platform::NativeHouseholdMutationAuthorityV1;
 use heyfood_tui::{
     BoundedHouseholdMemberDraftV1, HouseholdAccountBindingDigestV1, HouseholdAgeEvidenceInputV1,
@@ -125,12 +123,14 @@ async fn respond_json(socket: &mut TcpStream, body: Value) {
     socket.write_all(&body).await.unwrap();
 }
 
+#[cfg(not(windows))]
 async fn run(root: &Path, base_url: &str, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_heyfood"))
         .args(args)
         .env("HEYFOOD_STATE_DIR", root)
+        .env("XDG_CONFIG_HOME", root.join("xdg"))
         .env("HEYFOOD_CREDENTIAL_STORE", "native")
-        .env("HEYFOOD_NATIVE_HOUSEHOLD_V1", "0")
+        .env_remove("HEYFOOD_NATIVE_HOUSEHOLD_V1")
         .env("HEYFOOD_API_URL", base_url)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -140,6 +140,7 @@ async fn run(root: &Path, base_url: &str, args: &[&str]) -> std::process::Output
         .unwrap()
 }
 
+#[cfg(not(windows))]
 async fn cleanup(root: &Path) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_heyfood"))
         .arg("--version")
@@ -825,6 +826,15 @@ fn native_driver_with_credentials(
     .with_profile_presentation_mode(ProfilePresentationModeV1::NativeEnabled)
 }
 
+fn native_ensure_session(service: &HttpService) -> EnsureSession {
+    let service: Arc<dyn ServicePort> = Arc::new(service.clone());
+    EnsureSession::new(
+        service,
+        Arc::new(MemoryCredentialPort),
+        Arc::new(FixedClock),
+    )
+}
+
 fn start_native_generation(
     driver: &mut InteractiveTurnDriver,
 ) -> (
@@ -1261,6 +1271,160 @@ fn native_everyone_turn_dispatches_all_local_profiles_and_one_owner_attribution(
     driver
         .shutdown_and_join(std::time::Duration::from_secs(2))
         .unwrap();
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn native_one_shot_ask_retains_and_dispatches_the_exact_active_context() {
+    let mut state = selectable_everyone_native_household();
+    let member_id = state.members[0].member_id.clone();
+    state.active_scope = HouseholdScope::Subject(HouseholdSubjectId::member(member_id.clone()));
+    state.validate().unwrap();
+    let repository = Arc::new(MemoryHouseholdRepository::with_state(state));
+    let household = native_household_session(repository.clone());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let expected_member_id = member_id.as_str().to_owned();
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let request = read_sync_request(&mut socket);
+        assert!(request.starts_with("POST /v1/agent/converse "));
+        let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1)
+            .expect("native one-shot request body");
+        assert_eq!(body["query"], "What can they eat?");
+        assert!(body.get("household_scope").is_none());
+        assert_eq!(body["dietary_context"]["name"], "member-context-canary");
+        assert_eq!(body["dietary_context"]["relationship"], "partner");
+        assert_eq!(body["dietary_context"]["diet_style_ids"], json!(["vegan"]));
+        assert_eq!(body["meal_context"]["active_member_id"], expected_member_id);
+        assert_eq!(
+            body["meal_context"]["active_member_name"],
+            "member-context-canary"
+        );
+        respond_sync_sse(&mut socket);
+    });
+
+    let service = native_http_service(address);
+    let credentials = fixture_credentials();
+    let rendered = execute_qualified_native_one_shot(
+        &service,
+        &native_ensure_session(&service),
+        SessionSnapshot {
+            credentials,
+            reconciliation_required: false,
+        },
+        OutputMode::HumanPlain,
+        CliCommand::Ask(AskArgs {
+            text: vec!["What can they eat?".into()],
+            conversation_id: None,
+            latitude: None,
+            longitude: None,
+        }),
+        &[],
+        CancellationToken::new(),
+        &household,
+    )
+    .await
+    .unwrap();
+
+    assert!(rendered.contains("done"));
+    assert_eq!(repository.active_read_leases(), 0);
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn native_one_shot_rejects_cross_account_state_before_refresh_or_dispatch() {
+    let repository = Arc::new(MemoryHouseholdRepository::with_state(
+        selectable_everyone_native_household(),
+    ));
+    let household = native_household_session(repository.clone());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let service = native_http_service(listener.local_addr().unwrap());
+    let error = execute_qualified_native_one_shot(
+        &service,
+        &native_ensure_session(&service),
+        SessionSnapshot {
+            credentials: credentials_for(AccountId::parse("another-account").unwrap()),
+            reconciliation_required: false,
+        },
+        OutputMode::Json,
+        CliCommand::Ask(AskArgs {
+            text: vec!["private prompt canary".into()],
+            conversation_id: None,
+            latitude: None,
+            longitude: None,
+        }),
+        &[],
+        CancellationToken::new(),
+        &household,
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error.code, "household_account_mismatch");
+    assert_eq!(repository.active_read_leases(), 0);
+    assert!(matches!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    ));
+}
+
+#[tokio::test]
+async fn native_one_shot_item_preserves_its_channel_contract_without_loading_legacy_or_household_selectors()
+ {
+    let repository = Arc::new(MemoryHouseholdRepository::with_state(
+        selectable_everyone_native_household(),
+    ));
+    let household = native_household_session(repository.clone());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let request = read_sync_request(&mut socket);
+        assert!(request.starts_with("POST /v1/channel/tools/explain_item "));
+        let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1)
+            .expect("native item request body");
+        assert_eq!(body["item_name"], "grilled fish");
+        assert_eq!(body["restaurant_name"], "Example Cafe");
+        respond_sync(
+            &mut socket,
+            "200 OK",
+            json!({
+                "item_name": "grilled fish",
+                "status": "compatible",
+                "summary": "Fits."
+            }),
+        );
+    });
+
+    let service = native_http_service(address);
+    let rendered = execute_qualified_native_one_shot(
+        &service,
+        &native_ensure_session(&service),
+        SessionSnapshot {
+            credentials: fixture_credentials(),
+            reconciliation_required: false,
+        },
+        OutputMode::Json,
+        CliCommand::Item(ItemArgs {
+            name: vec!["grilled fish".into()],
+            restaurant: Some("Example Cafe".into()),
+            at: None,
+        }),
+        &[],
+        CancellationToken::new(),
+        &household,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        serde_json::from_str::<Value>(&rendered).unwrap()["status"],
+        "compatible"
+    );
+    assert_eq!(repository.load_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(repository.active_read_leases(), 0);
     server.join().unwrap();
 }
 
@@ -3637,15 +3801,42 @@ fn attempt_count_overflow_fails_closed_before_transport_send() {
 }
 
 #[tokio::test]
+#[cfg(not(windows))]
 async fn default_executable_uses_brokered_native_account_bound_credentials() {
     let root = TempRoot::new();
+    let native_floor = root.0.join("data/compatibility/native-state-floor.v1.json");
+    assert!(!native_floor.exists());
+    let legacy_config_dir = root.0.join("xdg/heyfood");
+    std::fs::create_dir_all(&legacy_config_dir).unwrap();
+    std::fs::write(
+        legacy_config_dir.join("config.json"),
+        serde_json::to_vec(&json!({
+            "account_user_id": "native-composition-account",
+            "credential_store": "file",
+            "first_name": "Owner",
+            "household": {
+                "active_scope": "_self",
+                "members": [{
+                    "id": "_self",
+                    "name": "Owner",
+                    "relationship": "self",
+                    "archived": false
+                }]
+            },
+            "household_local_profiles": {
+                "_self": {"diet_style_ids": ["vegan"]}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}/", listener.local_addr().unwrap());
     let service_url = base_url.clone();
     let server = tokio::spawn(async move {
         let full_scope = "account:link account:delete knowledge:read menu:read menu:watch recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe grocery:read grocery:write";
         let verification_uri = format!("{service_url}authorize");
-        for _ in 0..6 {
+        for _ in 0..12 {
             let (mut socket, _) = listener.accept().await.unwrap();
             let request = read_request(&mut socket).await;
             let path = request
@@ -3662,7 +3853,7 @@ async fn default_executable_uses_brokered_native_account_bound_credentials() {
                         "self_registration": {"status": "available", "regions": ["US"], "identity_methods": ["sms", "email"]},
                         "authorization": {"loopback_pkce": true, "device_code": true, "identity_methods": ["sms", "email"]},
                         "profile_readiness": true,
-                        "application_capabilities": {}
+                            "application_capabilities": {"grocery": "v1"}
                     })).await;
                 }
                 "/v1/channel/oauth/device/authorize" => {
@@ -3731,12 +3922,47 @@ async fn default_executable_uses_brokered_native_account_bound_credentials() {
                             .to_ascii_lowercase()
                             .contains("authorization: bearer session-access")
                     );
+                    let request_body: Value =
+                        serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+                    assert_eq!(
+                        request_body["dietary_context"]["diet_style_ids"],
+                        json!(["vegan"])
+                    );
                     let body = b"event: result\ndata: {\"message\":\"native broker ok\"}\n\nevent: done\ndata: {}\n\n";
                     socket.write_all(format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         body.len()
                     ).as_bytes()).await.unwrap();
                     socket.write_all(body).await.unwrap();
+                }
+                "/v1/channel/tools/explain_item" => {
+                    respond_json(
+                        &mut socket,
+                        json!({
+                            "item_name": "grilled fish",
+                            "status": "compatible",
+                            "summary": "Fits."
+                        }),
+                    )
+                    .await;
+                }
+                "/v1/grocery/list" => {
+                    respond_json(
+                        &mut socket,
+                        json!({
+                            "id": "00000000-0000-4000-8000-000000000123",
+                            "title": "Grocery List",
+                            "state": "active",
+                            "version": 4,
+                            "items": [],
+                            "created_at": "2026-07-21T12:00:00Z",
+                            "updated_at": "2026-07-21T12:00:00Z"
+                        }),
+                    )
+                    .await;
+                }
+                "/v1/menu/watch" => {
+                    respond_json(&mut socket, json!({"watches": [], "count": 0})).await;
                 }
                 _ => panic!("unexpected path: {path}"),
             }
@@ -3762,6 +3988,10 @@ async fn default_executable_uses_brokered_native_account_bound_credentials() {
         String::from_utf8_lossy(&registration.stdout),
         String::from_utf8_lossy(&registration.stderr)
     );
+    assert!(
+        !native_floor.exists(),
+        "registration with onboarding disabled must not bootstrap Household product state"
+    );
     let output = run(
         &root.0,
         &base_url,
@@ -3778,12 +4008,74 @@ async fn default_executable_uses_brokered_native_account_bound_credentials() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    server.await.unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["message"],
         "native broker ok"
     );
+    assert!(
+        native_floor.exists(),
+        "the first ordinary authenticated command must activate native Household by default"
+    );
+    let restarted = run(
+        &root.0,
+        &base_url,
+        &["--json", "ask", "native", "composition", "again"],
+    )
+    .await;
+    assert!(
+        restarted.status.success(),
+        "post-floor ask stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&restarted.stdout),
+        String::from_utf8_lossy(&restarted.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&restarted.stdout).unwrap()["message"],
+        "native broker ok"
+    );
+    for (arguments, expected_field, expected_value) in [
+        (
+            vec![
+                "--json",
+                "reply",
+                "--conversation-id",
+                "conversation-native-1",
+                "continue",
+            ],
+            "message",
+            "native broker ok",
+        ),
+        (
+            vec![
+                "--json",
+                "item",
+                "--restaurant",
+                "Example Cafe",
+                "grilled fish",
+            ],
+            "status",
+            "compatible",
+        ),
+        (vec!["--json", "grocery"], "version", "4"),
+        (vec!["--json", "watch"], "count", "0"),
+    ] {
+        let output = run(&root.0, &base_url, &arguments).await;
+        assert!(
+            output.status.success(),
+            "{} stdout: {}; stderr: {}",
+            arguments.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let observed = document
+            .get(expected_field)
+            .map(|value| match value {
+                Value::String(value) => value.clone(),
+                value => value.to_string(),
+            })
+            .unwrap();
+        assert_eq!(observed, expected_value);
+    }
+    server.await.unwrap();
     assert!(cleanup(&root.0).await.status.success());
-    #[cfg(windows)]
-    NativeAuthStore::open(&root.0).unwrap().delete().unwrap();
 }

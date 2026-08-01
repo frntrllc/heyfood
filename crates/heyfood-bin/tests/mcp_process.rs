@@ -293,3 +293,26 @@ fn clean_profile_discovers_the_exact_protocol_and_gets_a_typed_auth_handoff() {
         .unwrap();
     assert!(diagnostic.is_empty(), "{diagnostic}");
 }
+
+#[test]
+fn mcp_session_preparation_has_no_household_bootstrap_dependency() {
+    let source = include_str!("../src/main.rs");
+    let body = source
+        .split_once("async fn prepare_mcp_session(")
+        .unwrap()
+        .1
+        .split_once("fn production_service_url(")
+        .unwrap()
+        .0;
+    for forbidden in [
+        "prepare_account_household(",
+        "compose_native_household_v1(",
+        "prepare_native_session(",
+    ] {
+        assert!(
+            !body.contains(forbidden),
+            "MCP authentication must remain product-state neutral: {forbidden}"
+        );
+    }
+    assert!(body.contains("PreparedMcpSession"));
+}

@@ -1341,6 +1341,13 @@ struct PreparedNativeSession {
     household_session: Option<HouseholdSession>,
 }
 
+#[cfg(feature = "native-credentials")]
+struct PreparedMcpSession {
+    ensure_session: Arc<EnsureSession>,
+    snapshot: SessionSnapshot,
+    authorization_scope: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReleasedLogHouseholdRoute {
     LegacyCompatibility,
@@ -1393,7 +1400,7 @@ impl heyfood_bin::InteractiveSessionProvider for NativeInteractiveSessionProvide
 #[cfg(feature = "native-credentials")]
 async fn prepare_mcp_session(
     cancellation: CancellationToken,
-) -> Result<PreparedNativeSession, heyfood_bin::OneShotError> {
+) -> Result<PreparedMcpSession, heyfood_bin::OneShotError> {
     let paths =
         NativePaths::discover_platform_default().map_err(heyfood_bin::OneShotError::from)?;
     complete_pending_native_account_teardowns(&paths, cancellation.child_token())
@@ -1427,13 +1434,10 @@ async fn prepare_mcp_session(
                 "No native hello.food account is connected. Run `heyfood login` first.",
             )
         })?;
-    let (household_mode, household_session) = prepare_account_household(
-        &paths,
-        auth.session.account_id.clone(),
-        cancellation.child_token(),
-    )
-    .await?;
-
+    // MCP is a state-neutral read/discovery surface. Authentication and
+    // credential reconciliation must never call `prepare_account_household`:
+    // an agent connection cannot publish the native floor, migrate legacy
+    // household data, or create encrypted product state as a side effect.
     let (service_url, policy) = production_service_url()?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1522,17 +1526,13 @@ async fn prepare_mcp_session(
         credential_store,
         Arc::new(NativeClock),
     ));
-    Ok(PreparedNativeSession {
-        paths,
-        service,
+    Ok(PreparedMcpSession {
         ensure_session,
         snapshot: SessionSnapshot {
             credentials,
             reconciliation_required,
         },
         authorization_scope,
-        household_mode,
-        household_session,
     })
 }
 
@@ -1822,24 +1822,45 @@ async fn one_shot_inner(
     authorize_human_only_command(&command, &stdin, no_input)?;
     let capability = scope_capability_for_command(&command);
     let prepared = prepare_native_session(capability, cancellation.child_token()).await?;
-    if prepared.household_mode != NativeHouseholdModeV1::LegacyCompatibility {
-        return Err(heyfood_bin::OneShotError::new(
-            "native_household_one_shot_not_composed",
-            "This one-shot command requires the live native household consumer seam; no legacy state was opened.",
-        ));
+    match prepared.household_mode {
+        NativeHouseholdModeV1::LegacyCompatibility => {
+            let imported_state = load_selector_state(&prepared.paths, &command)?;
+            heyfood_bin::execute_qualified_one_shot_with_state(
+                prepared.service.as_ref(),
+                prepared.ensure_session.as_ref(),
+                prepared.snapshot,
+                output_mode,
+                command,
+                &stdin,
+                cancellation,
+                imported_state.as_ref(),
+            )
+            .await
+        }
+        NativeHouseholdModeV1::NativeEnabled | NativeHouseholdModeV1::NativeRollbackReadOnly => {
+            let household = prepared.household_session.as_ref().ok_or_else(|| {
+                heyfood_bin::OneShotError::new(
+                    "household_native_session_missing",
+                    "Native household state opened without its account-bound session.",
+                )
+            })?;
+            heyfood_bin::execute_qualified_native_one_shot(
+                prepared.service.as_ref(),
+                prepared.ensure_session.as_ref(),
+                prepared.snapshot,
+                output_mode,
+                command,
+                &stdin,
+                cancellation,
+                household,
+            )
+            .await
+        }
+        _ => Err(heyfood_bin::OneShotError::new(
+            "household_native_mode_invalid",
+            "Native household lifecycle mode is not ready for this command.",
+        )),
     }
-    let imported_state = load_selector_state(&prepared.paths, &command)?;
-    heyfood_bin::execute_qualified_one_shot_with_state(
-        prepared.service.as_ref(),
-        prepared.ensure_session.as_ref(),
-        prepared.snapshot,
-        output_mode,
-        command,
-        &stdin,
-        cancellation,
-        imported_state.as_ref(),
-    )
-    .await
 }
 
 async fn one_shot_log(

@@ -2323,6 +2323,7 @@ pub struct OneShotExecutor<'a> {
     credentials: &'a SessionCredentials,
     output_mode: OutputMode,
     imported_state: Option<&'a ImportedPythonState>,
+    authorized_context: Option<&'a AuthorizedHostedContextV1>,
 }
 
 /// Refresh and durably reconcile the session before entering any authenticated
@@ -2388,6 +2389,67 @@ pub async fn execute_qualified_one_shot_with_state(
         .await
 }
 
+/// Execute a supported one-shot command after native Household activation.
+///
+/// Conversational turns acquire and retain the exact active Household
+/// generation before credential refresh and through the first hosted
+/// dispatch. Non-conversational commands preserve their existing transport
+/// contracts and never reopen retired Python selector state.
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_qualified_native_one_shot(
+    service: &HttpService,
+    ensure_session: &EnsureSession,
+    snapshot: heyfood_core::SessionSnapshot,
+    output_mode: OutputMode,
+    command: Command,
+    stdin: &[u8],
+    cancellation: CancellationToken,
+    household: &HouseholdSession,
+) -> Result<String, OneShotError> {
+    if matches!(command, Command::Log(_)) {
+        return Err(OneShotError::new(
+            "prepared_log_required",
+            "meal logging requires an immutable reviewed command",
+        ));
+    }
+    if &snapshot.credentials.account_id != household.account() {
+        return Err(OneShotError::new(
+            "household_account_mismatch",
+            "Native household context is bound to another account.",
+        ));
+    }
+    let authorized_context = if matches!(command, Command::Ask(_) | Command::Reply(_)) {
+        let authorized = household
+            .acquire_authorized_hosted_context(cancellation.child_token())
+            .await
+            .map_err(OneShotError::from)?;
+        // Validate the exact projection before credential refresh can perform
+        // network work. The retained read lease remains held below.
+        native_household_turn_context(&authorized).map_err(OneShotError::from)?;
+        Some(authorized)
+    } else {
+        None
+    };
+    let credentials = match ensure_session
+        .execute(snapshot, cancellation.child_token())
+        .await
+        .map_err(OneShotError::from)?
+    {
+        EnsureSessionOutcome::Current(credentials)
+        | EnsureSessionOutcome::Refreshed(credentials) => credentials,
+        EnsureSessionOutcome::CancelledBeforeDispatch => {
+            return Err(OneShotError::new(
+                "session_cancelled_before_dispatch",
+                "session refresh was cancelled before dispatch",
+            ));
+        }
+    };
+    OneShotExecutor::new(service, &credentials, output_mode)
+        .with_authorized_context(authorized_context.as_ref())
+        .execute(command, stdin, cancellation)
+        .await
+}
+
 impl<'a> OneShotExecutor<'a> {
     #[must_use]
     pub const fn new(
@@ -2400,6 +2462,7 @@ impl<'a> OneShotExecutor<'a> {
             credentials,
             output_mode,
             imported_state: None,
+            authorized_context: None,
         }
     }
 
@@ -2409,6 +2472,15 @@ impl<'a> OneShotExecutor<'a> {
         imported_state: Option<&'a ImportedPythonState>,
     ) -> Self {
         self.imported_state = imported_state;
+        self
+    }
+
+    #[must_use]
+    const fn with_authorized_context(
+        mut self,
+        authorized_context: Option<&'a AuthorizedHostedContextV1>,
+    ) -> Self {
+        self.authorized_context = authorized_context;
         self
     }
 
@@ -2476,17 +2548,16 @@ impl<'a> OneShotExecutor<'a> {
             arguments.prompt()
         };
         let prompt = required_text(prompt, 500, "prompt")?;
-        self.execute_prompt(
-            prompt,
-            arguments.conversation_id,
-            TurnContext {
-                latitude: arguments.latitude,
-                longitude: arguments.longitude,
-                ..TurnContext::default()
-            },
-            cancellation,
-        )
-        .await
+        let mut context = match self.authorized_context {
+            Some(authorized) => {
+                native_household_turn_context(authorized).map_err(OneShotError::from)?
+            }
+            None => TurnContext::default(),
+        };
+        context.latitude = arguments.latitude;
+        context.longitude = arguments.longitude;
+        self.execute_prompt(prompt, arguments.conversation_id, context, cancellation)
+            .await
     }
 
     async fn execute_item(
@@ -2611,10 +2682,16 @@ impl<'a> OneShotExecutor<'a> {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
+        let private_household_ids = self
+            .authorized_context
+            .into_iter()
+            .flat_map(|authorized| authorized.load().state.members.iter())
+            .map(|member| member.member_id.as_str())
+            .collect::<Vec<_>>();
         Ok(render_agent_result_with_private_authorities(
             &result.document,
             self.output_mode,
-            &[],
+            &private_household_ids,
             &retained_choice_values,
         ))
     }
