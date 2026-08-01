@@ -429,6 +429,14 @@ fn everyone_native_household() -> HouseholdStateV1 {
     state
 }
 
+fn member_native_household() -> HouseholdStateV1 {
+    let mut state = everyone_native_household();
+    state.active_scope = HouseholdScope::Subject(HouseholdSubjectId::member(
+        state.members[0].member_id.clone(),
+    ));
+    state
+}
+
 fn selectable_everyone_native_household() -> HouseholdStateV1 {
     let mut state = everyone_native_household();
     state.active_scope = HouseholdScope::Subject(HouseholdSubjectId::self_());
@@ -692,6 +700,79 @@ fn native_everyone_voice_stops_before_microphone_and_network_dispatch() {
         event,
         RuntimeEvent::VoiceFailed {
             operation_id: 78,
+            message
+        } if message.starts_with("household_hosted_context_not_authorized:")
+    ));
+    assert_eq!(capture.calls.load(Ordering::SeqCst), 0);
+    driver
+        .shutdown_and_join(std::time::Duration::from_secs(2))
+        .unwrap();
+    assert!(matches!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    ));
+}
+
+#[test]
+fn native_member_turn_stops_before_refresh_serialization_and_network_dispatch() {
+    let repository = Arc::new(MemoryHouseholdRepository::with_state(
+        member_native_household(),
+    ));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut driver = native_driver_with_credentials(
+        repository,
+        listener.local_addr().unwrap(),
+        expired_fixture_credentials(),
+    );
+    let prompt_canary = "member-prompt-content-canary";
+    let (events, mut receiver) = mpsc::channel(2);
+    driver
+        .start_turn(79, prompt_canary.to_owned(), events)
+        .unwrap();
+    let event = receiver.blocking_recv().unwrap();
+    let message = match &event {
+        RuntimeEvent::TurnFailed {
+            operation_id: 79,
+            message,
+        } => message,
+        other => panic!("expected local household preflight failure, got {other:?}"),
+    };
+    assert!(message.starts_with("household_hosted_context_not_authorized:"));
+    assert!(!message.contains(prompt_canary));
+    assert!(!message.contains("member-context-canary"));
+    assert!(!message.contains("expired-access-canary"));
+    assert!(!message.contains("expired-refresh-canary"));
+    driver
+        .shutdown_and_join(std::time::Duration::from_secs(2))
+        .unwrap();
+    assert!(matches!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    ));
+}
+
+#[test]
+fn native_member_voice_stops_before_microphone_and_network_dispatch() {
+    let repository = Arc::new(MemoryHouseholdRepository::with_state(
+        member_native_household(),
+    ));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let capture = Arc::new(ProbeAudioCapture::default());
+    let mut driver = native_driver_with_credentials(
+        repository,
+        listener.local_addr().unwrap(),
+        expired_fixture_credentials(),
+    )
+    .with_audio_capture(capture.clone());
+    let (events, mut receiver) = mpsc::channel(2);
+    driver.start_voice(80, events).unwrap();
+    let event = receiver.blocking_recv().unwrap();
+    assert!(matches!(
+        event,
+        RuntimeEvent::VoiceFailed {
+            operation_id: 80,
             message
         } if message.starts_with("household_hosted_context_not_authorized:")
     ));
