@@ -46,6 +46,8 @@ use heyfood_platform::FileCredentialStore as NativeSessionStore;
 use heyfood_platform::FileCredentialStore;
 #[cfg(all(windows, not(feature = "native-credentials")))]
 use heyfood_platform::WindowsCredentialStore as NativeSessionStore;
+#[cfg(not(feature = "native-credentials"))]
+use heyfood_platform::pre_native_global_provenance_absent_v1;
 use heyfood_platform::{
     AuthorizationReplacementJournal, AuthorizationReplacementPhase, HouseholdVault,
     NativeAuthStore, NativeBrowser, NativeClock, NativePaths, NativeStateFloorStore,
@@ -485,6 +487,23 @@ async fn pre_native_login_compatibility_v1(
     Err(PortError::new(
         "household_native_evidence_contradiction",
         "native household account evidence exists without its compatibility floor",
+    ))
+}
+
+/// Refuse a fresh account grant when this credential-portable build cannot
+/// safely attribute or resume durable native household state.
+///
+/// The underlying proof is read-only and treats an absent native root as the
+/// released pre-native state. Keep this before service/client construction so
+/// no device authorization, browser, or network provider can run on failure.
+#[cfg(not(feature = "native-credentials"))]
+fn portable_fresh_authorization_barrier_v1(paths: &NativePaths) -> Result<(), PortError> {
+    if pre_native_global_provenance_absent_v1(paths.data_dir())? {
+        return Ok(());
+    }
+    Err(PortError::new(
+        "household_native_credentials_required",
+        "native household state must be resumed before a fresh account can be connected",
     ))
 }
 
@@ -2696,13 +2715,15 @@ async fn login_inner(
     auth_store
         .finish_authorization_terminal_cleanup()
         .map_err(platform_error)?;
-    let (service_url, policy) = service_url()?;
-    let client = RegistrationClient::new(service_url, policy)?;
+    #[cfg(not(feature = "native-credentials"))]
+    portable_fresh_authorization_barrier_v1(&paths).map_err(platform_error)?;
 
     if let Some(journal) = auth_store
         .pending_authorization_replacement()
         .map_err(platform_error)?
     {
+        let (service_url, policy) = service_url()?;
+        let client = RegistrationClient::new(service_url, policy)?;
         return resume_authorization_replacement(&client, &auth_store, &session_store, journal)
             .await;
     }
@@ -2711,6 +2732,10 @@ async fn login_inner(
         .load_account_bound(&session_store)
         .map_err(platform_error)?;
     let Some(existing_authorization) = existing_authorization else {
+        #[cfg(not(feature = "native-credentials"))]
+        portable_fresh_authorization_barrier_v1(&paths).map_err(platform_error)?;
+        let (service_url, policy) = service_url()?;
+        let client = RegistrationClient::new(service_url, policy)?;
         let authorization = if offer_account_choice {
             client.start_device_connection().await?
         } else {
@@ -2731,6 +2756,8 @@ async fn login_inner(
         .await;
     };
 
+    let (service_url, policy) = service_url()?;
+    let client = RegistrationClient::new(service_url, policy)?;
     let client_transaction_id = OperationId::new().as_uuid().to_string();
     let journal = begin_login_reauthorization_intent_v1(
         &paths,
@@ -3203,6 +3230,8 @@ async fn register_inner(
         });
     }
 
+    #[cfg(not(feature = "native-credentials"))]
+    portable_fresh_authorization_barrier_v1(&paths).map_err(platform_error)?;
     let (service_url, policy) = service_url()?;
     let client = RegistrationClient::new(service_url, policy)?;
     let authorization = client.start_device_registration().await?;
@@ -3311,6 +3340,9 @@ fn platform_error(error: heyfood_application::PortError) -> RegistrationError {
         "auth_exists" => {
             "A hello.food account is already connected. Log out before registering another account."
         }
+        "household_native_credentials_required" => {
+            "Native household state must be resumed before a fresh hello.food account can be connected."
+        }
         "lock_timeout" => "Native account state is busy. Wait a moment and retry.",
         _ => "Could not securely read or save native hello.food account state.",
     };
@@ -3337,6 +3369,9 @@ fn registration_hint(code: &str) -> Option<&'static str> {
         }
         "reauthorization_persistence_outcome_uncertain" => Some(
             "Run one authenticated command; native state will reconcile locally before network dispatch.",
+        ),
+        "household_native_credentials_required" => Some(
+            "Use a heyfood build with native credential support to finish household recovery, then retry.",
         ),
         "session_exchange_outcome_uncertain"
         | "session_exchange_contract_uncertain"
@@ -3980,6 +4015,34 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    #[cfg(all(not(feature = "native-credentials"), not(windows)))]
+    fn portable_fresh_authorization_rechecks_evidence_after_auth_load_window() {
+        let root = LogoutTempRoot(std::env::temp_dir().join(format!(
+            "heyfood-portable-fresh-auth-recheck-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir_all(&root.0).unwrap();
+        let paths = NativePaths::under(root.0.clone());
+
+        portable_fresh_authorization_barrier_v1(&paths).unwrap();
+        assert!(!paths.data_dir().exists());
+
+        let teardown = paths.data_dir().join("household-teardown");
+        heyfood_platform::OwnerOnlyPath::directory(paths.data_dir()).unwrap();
+        heyfood_platform::OwnerOnlyPath::directory(&teardown).unwrap();
+        let journal = teardown.join("teardown-after-auth-load.htj");
+        std::fs::write(&journal, b"pending").unwrap();
+        heyfood_platform::OwnerOnlyPath::file(&journal).unwrap();
+
+        let error = portable_fresh_authorization_barrier_v1(&paths).unwrap_err();
+        assert_eq!(error.code, "household_native_credentials_required");
     }
 
     fn registration_arguments(no_onboard: bool) -> heyfood_cli::RegisterArgs {

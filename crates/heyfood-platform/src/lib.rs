@@ -69,6 +69,7 @@ pub use household_vault::{
 pub use native_household_evidence::{
     ClassifiedNativeHouseholdEvidenceV1, classify_native_household_evidence_v1,
     household_teardown_barrier_present_v1, pre_floor_native_account_provenance_absent_v1,
+    pre_native_global_provenance_absent_v1,
 };
 pub use native_state_floor::{
     MAX_NATIVE_STATE_FLOOR_BYTES, MINIMUM_COMPATIBLE_NATIVE_STATE_VERSION_V1,
