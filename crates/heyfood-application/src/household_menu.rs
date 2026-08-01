@@ -15,12 +15,7 @@ use serde_json::Value;
 /// for rendering the agent's prose summary and any choices.
 #[must_use]
 pub fn render_household_menu(document: &Value) -> Option<String> {
-    let structured = document
-        .get("structured")
-        .or_else(|| (document.get("type").is_some()).then_some(document))?;
-    if structured.get("type").and_then(Value::as_str) != Some("household_menu") {
-        return None;
-    }
+    let structured = household_menu_document(document)?;
     if structured.get("presentation").and_then(Value::as_str) != Some("full_menu") {
         return Some(render_household_recommendations(structured));
     }
@@ -68,6 +63,24 @@ pub fn render_household_menu(document: &Value) -> Option<String> {
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_default();
+    let section_count = sections
+        .iter()
+        .filter(|section| {
+            section
+                .get("items")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty())
+        })
+        .count();
+    let item_count = sections
+        .iter()
+        .filter_map(|section| section.get("items").and_then(Value::as_array))
+        .map(Vec::len)
+        .sum::<usize>();
+    let _ = writeln!(
+        output,
+        "{section_count} sections · {item_count} items · Page Up/Page Down to browse"
+    );
     for section in sections {
         let Some(items) = section.get("items").and_then(Value::as_array) else {
             continue;
@@ -87,6 +100,27 @@ pub fn render_household_menu(document: &Value) -> Option<String> {
     }
 
     Some(output)
+}
+
+/// Return the supported household-menu payload from an agent result document.
+///
+/// Deployed streams have used both a nested `structured` envelope and a
+/// top-level structured document. Keeping this selector shared prevents the
+/// renderer and TUI behavior from accepting different wire shapes.
+#[must_use]
+pub fn household_menu_document(document: &Value) -> Option<&Value> {
+    let structured = document
+        .get("structured")
+        .or_else(|| (document.get("type").is_some()).then_some(document))?;
+    (structured.get("type").and_then(Value::as_str) == Some("household_menu")).then_some(structured)
+}
+
+/// Whether an agent result carries a full household-menu presentation.
+#[must_use]
+pub fn is_full_household_menu(document: &Value) -> bool {
+    household_menu_document(document).is_some_and(|structured| {
+        structured.get("presentation").and_then(Value::as_str) == Some("full_menu")
+    })
 }
 
 fn render_household_recommendations(structured: &Value) -> String {
@@ -689,6 +723,26 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn classifies_nested_and_top_level_full_menu_documents_consistently() {
+        let structured = json!({
+            "type": "household_menu",
+            "presentation": "full_menu",
+            "sections": []
+        });
+        let nested = json!({"structured": structured.clone()});
+
+        assert!(is_full_household_menu(&nested));
+        assert!(is_full_household_menu(&structured));
+        assert!(render_household_menu(&nested).is_some());
+        assert!(render_household_menu(&structured).is_some());
+        assert!(!is_full_household_menu(&json!({
+            "type": "household_menu",
+            "presentation": "recommendations"
+        })));
+        assert!(!is_full_household_menu(&json!({"type": "meal"})));
+    }
 
     #[test]
     fn renders_all_sections_items_prices_and_provenance_without_ansi() {

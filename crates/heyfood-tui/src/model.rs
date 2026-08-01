@@ -9,7 +9,7 @@ pub use heyfood_application::{
 };
 use heyfood_application::{
     RunTurnOutcome, TurnFailure, TurnFailureKind, UNRENDERABLE_AGENT_RESULT_MESSAGE,
-    agent_result_text, render_household_menu,
+    agent_result_text, is_full_household_menu, render_household_menu,
 };
 use heyfood_core::{
     ActionConfirmationEnvelopeWire, AgentConfirmationCommandWire, AgentEvent,
@@ -1382,6 +1382,9 @@ pub struct AppModel {
     household_turn_gate: HouseholdTurnGateV1,
     next_household_operation_id: Option<HouseholdOperationIdV1>,
     next_household_correlation: Option<HouseholdReducerCorrelationV1>,
+    focus_latest_result_on_finish: bool,
+    pub(crate) focus_latest_result_start: bool,
+    pub(crate) latest_result_start_offset: usize,
 }
 
 impl fmt::Debug for AppModel {
@@ -1472,6 +1475,9 @@ impl Default for AppModel {
             household_turn_gate: HouseholdTurnGateV1::Legacy,
             next_household_operation_id: HouseholdOperationIdV1::new(1).ok(),
             next_household_correlation: HouseholdReducerCorrelationV1::new(1).ok(),
+            focus_latest_result_on_finish: false,
+            focus_latest_result_start: false,
+            latest_result_start_offset: 0,
         }
     }
 }
@@ -1976,16 +1982,30 @@ pub fn dispatch(model: &mut AppModel, action: Action) -> Vec<Effect> {
         }
         Action::Exit => {}
         Action::ScrollUp(lines) => {
-            model.follow_tail = false;
-            model.scroll_from_tail = model.scroll_from_tail.saturating_add(lines.max(1));
+            if model.focus_latest_result_start {
+                model.latest_result_start_offset = model
+                    .latest_result_start_offset
+                    .saturating_sub(lines.max(1));
+            } else {
+                model.follow_tail = false;
+                model.scroll_from_tail = model.scroll_from_tail.saturating_add(lines.max(1));
+            }
         }
         Action::ScrollDown(lines) => {
-            model.scroll_from_tail = model.scroll_from_tail.saturating_sub(lines.max(1));
-            if model.scroll_from_tail == 0 {
-                follow_tail(model);
+            if model.focus_latest_result_start {
+                model.latest_result_start_offset = model
+                    .latest_result_start_offset
+                    .saturating_add(lines.max(1));
+            } else {
+                model.scroll_from_tail = model.scroll_from_tail.saturating_sub(lines.max(1));
+                if model.scroll_from_tail == 0 {
+                    follow_tail(model);
+                }
             }
         }
         Action::ScrollTop => {
+            model.focus_latest_result_start = false;
+            model.latest_result_start_offset = 0;
             model.follow_tail = false;
             model.scroll_from_tail = usize::MAX / 2;
         }
@@ -2036,6 +2056,7 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
     if !household_turn_is_authorized(model) {
         return Vec::new();
     }
+    model.focus_latest_result_on_finish = false;
     model.voice_phase = VoicePhase::Idle;
     model.draft_before_voice.clear();
     let prompt = std::mem::take(&mut model.draft);
@@ -5915,6 +5936,7 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             model.activity = Some("Choose an option".into());
         }
         AgentEvent::Result { document, .. } => {
+            let focus_full_menu = is_full_household_menu(&document);
             let confirmation = ActionConfirmationEnvelopeWire::from_result_document(&document);
             let result = agent_result_text(&document).map(terminal_safe_text);
             let household_menu = render_household_menu(&document);
@@ -5965,6 +5987,7 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                 Ok(None) | Err(_) => model.pending_confirmation = None,
             }
             mark_finishing(model);
+            model.focus_latest_result_on_finish = focus_full_menu;
             model.activity = Some("Finishing…".into());
             model.idle_exit_armed = false;
         }
@@ -6294,10 +6317,19 @@ fn finish_stream(model: &mut AppModel, outcome: RunTurnOutcome) {
     model.operation = OperationState::Idle;
     model.activity = None;
     model.idle_exit_armed = false;
-    account_for_new_lines(model, old_lines);
+    if std::mem::take(&mut model.focus_latest_result_on_finish) {
+        model.focus_latest_result_start = true;
+        model.latest_result_start_offset = 0;
+        model.follow_tail = false;
+        model.scroll_from_tail = 0;
+        model.unseen_lines = 0;
+    } else {
+        account_for_new_lines(model, old_lines);
+    }
 }
 
 fn finish_failed_stream(model: &mut AppModel, failure: TurnFailure) {
+    model.focus_latest_result_on_finish = false;
     model.pending_choice_labels.clear();
     let old_lines = model.scrollback.rendered_lines();
     model.scrollback.mutate_last_assistant(|entry| {
@@ -6350,6 +6382,8 @@ fn account_for_new_lines(model: &mut AppModel, old_lines: usize) {
 }
 
 fn follow_tail(model: &mut AppModel) {
+    model.focus_latest_result_start = false;
+    model.latest_result_start_offset = 0;
     model.follow_tail = true;
     model.scroll_from_tail = 0;
     model.unseen_lines = 0;
@@ -7446,6 +7480,7 @@ mod tests {
         let mut model = AppModel {
             draft: "Show me this week's menu".into(),
             cursor: 24,
+            height: 8,
             ..AppModel::default()
         };
         let _ = dispatch(&mut model, Action::Submit);
@@ -7487,6 +7522,13 @@ mod tests {
                 },
             }),
         );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFinished {
+                operation_id: 1,
+                outcome: RunTurnOutcome::Completed,
+            }),
+        );
 
         let entry = model.scrollback.entries().back().unwrap();
         assert!(entry.text.starts_with("Here are the current options.\n\n"));
@@ -7495,6 +7537,7 @@ mod tests {
             "Source: https://example.test/abby-jane",
             "Freshness: Menu updated 2 hours ago",
             "Captured: 2026-07-26T17:27:14Z",
+            "1 sections · 2 items · Page Up/Page Down to browse",
             "Bread",
             "• Baguette  $4.00  [avoid]",
             "• Big Country  $9.00  [caution]",
@@ -7503,6 +7546,9 @@ mod tests {
         }
         assert_eq!(entry.text.matches("• ").count(), 2);
         assert!(!entry.streaming);
+        assert!(!model.follow_tail);
+        assert!(model.focus_latest_result_start);
+        assert_eq!(model.latest_result_start_offset, 0);
     }
 
     #[test]

@@ -39,7 +39,7 @@ pub use household_context::{
     HouseholdContextErrorV1, HouseholdContextSnapshotV1, HouseholdSubjectContextV1,
     PreparedHouseholdTargetV1, resolve_personalized_context_v1, validate_scope_eligibility_v1,
 };
-pub use household_menu::render_household_menu;
+pub use household_menu::{household_menu_document, is_full_household_menu, render_household_menu};
 pub use household_profile_policy::{
     AuthoritativeConsentStateV1, HouseholdProfileEligibilityV1, HouseholdProfileIneligibilityV1,
     HouseholdProfileOperationV1, OwnerProfileActionEligibilityV1, OwnerProfileRetryActionV1,
