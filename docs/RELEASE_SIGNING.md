@@ -38,11 +38,12 @@ manifest are covered by GitHub artifact attestations. Public smoke verifies
 every attestation and the complete asset boundary before executing the product
 and verifier for its target.
 
-Before the standalone verifier runs, protected candidate and tag builds invoke
-`heyfood agent describe --schema-version 2`, require the closed v2 manifest,
-and bind its native-state declaration to the release declaration. The default
+Before the standalone verifier runs, each protected candidate build invokes
+`heyfood agent describe --schema-version 2`, requires the closed v2 manifest,
+and binds its native-state declaration to the release declaration. The default
 v1 self-description remains the compatibility surface and is never passed to
-the v2-only verifier.
+the v2-only verifier. Protected candidate binaries embed
+`distribution_channel=release` because publication reuses their exact bytes.
 
 The immutable v0.6.2 asset set remains exactly its released four product
 archives and checksum manifest. Native-state source does not add verifier or
@@ -80,6 +81,22 @@ aggregate complete-set job pass and an independent reviewer approves the exact
 product SHA and archive digests. Release evidence remains incomplete until the
 subsequently published, downloaded artifacts pass the post-release platform
 checks.
+
+The required native household TUI checklist runs against that exact aggregate
+artifact through the checked-in content-free candidate transport. Only after
+every row passes may release operators set the protected
+`HEYFOOD_APPROVED_CANDIDATE_RUN_ID` and
+`HEYFOOD_APPROVED_CANDIDATE_SHA256SUMS_SHA256` environment variables. The
+manifest digest closes all nine non-manifest assets; the run ID binds their
+successful protected workflow, event, commit, and unexpired aggregate artifact.
+
+The tag workflow does not rebuild, re-sign, repackage, or regenerate candidate
+assets. It requires the approved run to be a successful `workflow_dispatch` of
+`.github/workflows/ci.yml` at the exact tagged `main` commit, downloads only its
+single `protected-candidate-release-set`, verifies the approved manifest digest,
+complete ten-file boundary, and every protected attestation, then attests and
+publishes those same bytes. The content-free approval bindings are not included
+in the public release set.
 
 ## Deferred Windows release
 

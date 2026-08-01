@@ -6,16 +6,63 @@ TUI through a PTY, capture the terminal, take screenshots, or record household
 labels, stable IDs, profile answers, account identifiers, paths, credentials,
 tokens, vault bytes, or authorization responses.
 
+## Exact candidate retrieval and installer transport
+
+Run protected `Native CLI CI` with `qualify_signed_candidate=true` at the exact
+proposed `main` commit. After all protected jobs pass, download only that run's
+aggregate artifact and calculate the digest that closes the release set:
+
+```bash
+approved_run_id=GITHUB_ACTIONS_RUN_ID
+candidate_directory=/absolute/path/to/empty/candidate-release
+gh run download "$approved_run_id" \
+  --repo frntrllc/heyfood \
+  --name protected-candidate-release-set \
+  --dir "$candidate_directory"
+approved_manifest_sha256=$(
+  shasum -a 256 "$candidate_directory/SHA256SUMS" | awk '{print $1}'
+)
+```
+
+Verify every downloaded asset's protected provenance before using it:
+
+```bash
+for asset in \
+  "$candidate_directory"/*.tar.gz \
+  "$candidate_directory"/*.json \
+  "$candidate_directory"/SHA256SUMS; do
+  gh attestation verify "$asset" --repo frntrllc/heyfood
+done
+```
+
+From the clean checkout at that same commit, use the checked-in content-free
+transport fixture whenever a journey invokes the reviewed installer:
+
+```bash
+scripts/release/candidate-transport.sh \
+  "$candidate_directory" \
+  0.6.3 \
+  "$approved_manifest_sha256" \
+  ./install.sh
+```
+
+The fixture verifies the exact ten-file set and approved manifest digest, then
+serves only checksum-bound candidate assets at the installer's expected HTTPS
+release URLs. It does not change `install.sh`, contact a release endpoint,
+launch the TUI, automate a terminal, or record asset contents. `HOME`,
+`HEYFOOD_BIN_DIR`, and `HEYFOOD_STATE_DIR` still select the isolated profile
+for the journey.
+
 ## Preconditions
 
 - Use isolated local OS profiles and disposable hello.food test accounts.
 - Use the exact protected v0.6.3 candidate product/verifier pair, declaration,
   and `SHA256SUMS` intended for publication. Record only the candidate version
   and approved digest.
-- Before publication, route installer downloads through the reviewed
-  content-free qualification transport fixture. The fixture may substitute
-  transport only; it must serve the exact candidate bytes and must not edit the
-  installer or automate the TUI.
+- Before publication, route installer downloads through the checked-in
+  `scripts/release/candidate-transport.sh` fixture using the exact invocation
+  above. It substitutes transport only and must not be used to automate the
+  TUI.
 - Retain the immutable public v0.6.2 installer and host product archive only to
   prepare the pre-migration side of the upgrade journey; do not alter that
   release and do not execute its installer or binary after native migration.
@@ -156,3 +203,25 @@ tokens, vault bytes, or authorization responses.
 The candidate is not release-ready until every row is `PASS`. A failure record
 contains only the allowed category, candidate version, and approved digest. It
 contains no terminal transcript or household content.
+
+Only after every row passes, set these two protected `native-release`
+environment variables to assert the content-free approval:
+
+```bash
+gh variable set HEYFOOD_APPROVED_CANDIDATE_RUN_ID \
+  --repo frntrllc/heyfood \
+  --env native-release \
+  --body "$approved_run_id"
+gh variable set HEYFOOD_APPROVED_CANDIDATE_SHA256SUMS_SHA256 \
+  --repo frntrllc/heyfood \
+  --env native-release \
+  --body "$approved_manifest_sha256"
+```
+
+The tag workflow accepts only that unexpired aggregate artifact from a
+successful `workflow_dispatch` run of `.github/workflows/ci.yml` at the exact
+tagged `main` commit. It checks the approved manifest digest, complete asset
+set, and protected attestations, then attests and publishes those same bytes
+without rebuilding. The run ID and digest contain no household evidence and
+are not included in the ten public release assets. Do not set either binding
+for a failed or incomplete checklist; clear stale bindings after publication.

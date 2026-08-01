@@ -338,6 +338,10 @@ jobs:
     needs: protected-candidate-preflight
     runs-on: ${{ matrix.runner }}
     environment: native-release
+    env:
+      # These signed bytes are the publication candidate. The tag workflow
+      # downloads this exact release-channel set and never rebuilds it.
+      HEYFOOD_DISTRIBUTION_CHANNEL: release
     permissions:
       attestations: write
       contents: read
@@ -404,7 +408,7 @@ jobs:
             --arg commit "$GITHUB_SHA" \
             --arg tree "$(git rev-parse 'HEAD^{tree}')" \
             '.schema_version == 2
-             and .build.distribution_channel == "candidate"
+             and .build.distribution_channel == "release"
              and .build.dirty == false
              and .build.source_commit == $commit
              and .build.source_tree == $tree' \
@@ -548,6 +552,8 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.qualify_signed_candidate }}
     needs: protected-release-candidate
     runs-on: ubuntu-22.04
+    env:
+      HEYFOOD_DISTRIBUTION_CHANNEL: release
     permissions:
       attestations: write
       contents: read

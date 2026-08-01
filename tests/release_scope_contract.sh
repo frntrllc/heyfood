@@ -60,6 +60,7 @@ macos_signer="$ROOT/packaging/macos/sign-and-notarize.sh"
 archive_smoke="$ROOT/scripts/release/smoke-archive.sh"
 agent_setup_smoke="$ROOT/scripts/release/agent-setup-smoke.sh"
 mcp_smoke="$ROOT/scripts/release/mcp-smoke.mjs"
+candidate_transport="$ROOT/scripts/release/candidate-transport.sh"
 
 [[ -x "$macos_signer" ]] ||
   fail "the macOS signing tool must be executable"
@@ -153,25 +154,29 @@ grep -Fq "codesign -vvvv -R=\"notarized\" --check-notarization \"\$binary\"" \
   "$archive_smoke" ||
   fail "archive smoke must check the notarization of packaged standalone macOS code"
 
-assert_four_targets "$RELEASE_WORKFLOW"
 assert_four_targets "$PUBLIC_SMOKE_WORKFLOW"
 assert_four_targets "$protected_slice"
 assert_no_windows_release_path "$RELEASE_WORKFLOW"
 assert_no_windows_release_path "$PUBLIC_SMOKE_WORKFLOW"
 assert_no_windows_release_path "$protected_slice"
-for source in "$RELEASE_WORKFLOW" "$protected_slice"; do
-  v2_manifest_line=$(line_of "$source" 'agent describe --schema-version 2')
-  verifier_line=$(line_of "$source" '"$verifier" verify-native-state')
-  if [[ -z "$v2_manifest_line" || -z "$verifier_line" ||
-    "$v2_manifest_line" -ge "$verifier_line" ]]; then
-    fail "$source must request the closed v2 manifest before native-state verification"
-  fi
-  grep -Fq '.schema_version == 2' "$source" ||
-    fail "$source must assert the explicit candidate manifest schema"
-  if grep -Fq 'agent describe >candidate-agent-manifest.json' "$source"; then
-    fail "$source must not pass the default v1 manifest to the v2-only verifier"
-  fi
-done
+v2_manifest_line=$(line_of "$protected_slice" 'agent describe --schema-version 2')
+verifier_line=$(line_of "$protected_slice" '"$verifier" verify-native-state')
+if [[ -z "$v2_manifest_line" || -z "$verifier_line" ||
+  "$v2_manifest_line" -ge "$verifier_line" ]]; then
+  fail "protected qualification must request the closed v2 manifest before native-state verification"
+fi
+grep -Fq '.schema_version == 2' "$protected_slice" ||
+  fail "protected qualification must assert the explicit candidate manifest schema"
+if grep -Fq 'agent describe >candidate-agent-manifest.json' "$protected_slice"; then
+  fail "protected qualification must not pass the default v1 manifest to the v2-only verifier"
+fi
+grep -Fq 'HEYFOOD_DISTRIBUTION_CHANNEL: release' "$protected_slice" ||
+  fail "protected candidate binaries must embed the release distribution channel"
+grep -Fq '.build.distribution_channel == "release"' "$protected_slice" ||
+  fail "protected qualification must assert the release distribution channel"
+if grep -Fq '.build.distribution_channel == "candidate"' "$protected_slice"; then
+  fail "protected publication candidates must not embed the candidate channel"
+fi
 grep -Fq "if [[ -z \"\${HEYFOOD_QUALIFICATION_KEYCHAIN:-}\" ]]; then" "$protected_slice" ||
   fail "protected cleanup must tolerate a keychain that was never created"
 grep -Fq "if: \${{ always() && hashFiles('candidate-dist/**', 'candidate-evidence/**') != '' }}" \
@@ -249,6 +254,91 @@ done
 [[ "$(find "$native_state_distribution" -maxdepth 1 -type f | wc -l | tr -d '[:space:]')" -eq 10 ]] ||
   fail "v0.6.3 must contain exactly ten public files including SHA256SUMS"
 
+[[ -x "$candidate_transport" ]] ||
+  fail "the content-free candidate transport must be executable"
+[[ "$(git -C "$ROOT" ls-files --stage -- scripts/release/candidate-transport.sh |
+  awk '{print $1}')" == "100755" ]] ||
+  fail "Git must record the content-free candidate transport with mode 100755"
+grep -Fq 'scripts/release/candidate-transport.sh' \
+  "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" ||
+  fail "manual household acceptance must use the checked-in candidate transport"
+
+candidate_manifest_sha256=$(shasum -a 256 \
+  "$native_state_distribution/SHA256SUMS" | awk '{print $1}')
+candidate_transport_output="$CASE_DIR/candidate-transport-output"
+candidate_transport_installer="$CASE_DIR/candidate-transport-installer.sh"
+cat >"$candidate_transport_installer" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT:?}"
+: "${HEYFOOD_VERSION:?}"
+mkdir -p -- "$HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT"
+prefix="https://github.com/frntrllc/heyfood/releases/download/v$HEYFOOD_VERSION"
+curl -qfsSL \
+  --proto '=https' \
+  --tlsv1.2 \
+  --retry 3 \
+  --output "$HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT/SHA256SUMS" \
+  "$prefix/SHA256SUMS"
+curl -qfsSL \
+  --proto '=https' \
+  --tlsv1.2 \
+  --retry 3 \
+  --output "$HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT/product.tar.gz" \
+  "$prefix/heyfood-v$HEYFOOD_VERSION-x86_64-unknown-linux-gnu.tar.gz"
+EOF
+chmod 0755 "$candidate_transport_installer"
+HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT="$candidate_transport_output" \
+  "$candidate_transport" \
+  "$native_state_distribution" \
+  0.6.3 \
+  "$candidate_manifest_sha256" \
+  "$candidate_transport_installer"
+cmp \
+  "$native_state_distribution/SHA256SUMS" \
+  "$candidate_transport_output/SHA256SUMS"
+cmp \
+  "$native_state_distribution/heyfood-v0.6.3-x86_64-unknown-linux-gnu.tar.gz" \
+  "$candidate_transport_output/product.tar.gz"
+
+rejected_transport_output="$CASE_DIR/rejected-candidate-transport-output"
+if HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT="$rejected_transport_output" \
+  "$candidate_transport" \
+  "$native_state_distribution" \
+  0.6.3 \
+  "$(printf '0%.0s' {1..64})" \
+  "$candidate_transport_installer" >/dev/null 2>&1; then
+  fail "the candidate transport accepted an unapproved release-set digest"
+fi
+[[ ! -e "$rejected_transport_output" ]] ||
+  fail "the candidate transport invoked the installer before approving the release-set digest"
+
+unapproved_url_installer="$CASE_DIR/unapproved-url-installer.sh"
+cat >"$unapproved_url_installer" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT:?}"
+mkdir -p -- "$HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT"
+curl -qfsSL \
+  --proto '=https' \
+  --tlsv1.2 \
+  --retry 3 \
+  --output "$HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT/unapproved" \
+  "https://example.com/SHA256SUMS"
+EOF
+chmod 0755 "$unapproved_url_installer"
+unapproved_url_output="$CASE_DIR/unapproved-url-output"
+if HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT="$unapproved_url_output" \
+  "$candidate_transport" \
+  "$native_state_distribution" \
+  0.6.3 \
+  "$candidate_manifest_sha256" \
+  "$unapproved_url_installer" >/dev/null 2>&1; then
+  fail "the candidate transport served an unapproved URL"
+fi
+[[ ! -e "$unapproved_url_output/unapproved" ]] ||
+  fail "the candidate transport wrote bytes for an unapproved URL"
+
 windows_asset="$distribution/heyfood-v0.6.2-x86_64-pc-windows-msvc.zip"
 touch "$windows_asset"
 if "$ROOT/scripts/release/checksums.sh" "$distribution" 0.6.2 >/dev/null 2>&1; then
@@ -258,27 +348,71 @@ if "$ROOT/scripts/release/verify-assets.sh" "$distribution" 0.6.2 >/dev/null 2>&
   fail "complete-set verification must reject a Windows v0.6.2 asset"
 fi
 
-grep -Fq -- '--package heyfood-installer' "$RELEASE_WORKFLOW" ||
-  fail "the release workflow must build the standalone verifier"
-grep -Fq 'scripts/release/package-installer.sh' "$RELEASE_WORKFLOW" ||
-  fail "the release workflow must package the standalone verifier"
-grep -Fq "target/\$TARGET/release/heyfood-installer" "$RELEASE_WORKFLOW" ||
-  fail "the release workflow must sign and smoke the target verifier bytes"
+if grep -Eq \
+  'cargo build --locked --release|scripts/release/package(-installer)?\.sh|packaging/macos/sign-and-notarize\.sh|scripts/release/checksums\.sh|actions/download-artifact' \
+  "$RELEASE_WORKFLOW"; then
+  fail "the tag workflow must not rebuild, re-sign, repackage, regenerate, or download same-run assets"
+fi
+grep -Fq 'environment: native-release' "$RELEASE_WORKFLOW" ||
+  fail "publication must read approval bindings from the protected environment"
+grep -Fq 'actions: read' "$RELEASE_WORKFLOW" ||
+  fail "publication needs read-only access to the explicitly approved workflow artifact"
+grep -Fq 'APPROVED_RUN_ID: ${{ vars.HEYFOOD_APPROVED_CANDIDATE_RUN_ID }}' \
+  "$RELEASE_WORKFLOW" ||
+  fail "publication must bind the approved protected run ID"
+grep -Fq 'APPROVED_SHA256SUMS_SHA256: ${{ vars.HEYFOOD_APPROVED_CANDIDATE_SHA256SUMS_SHA256 }}' \
+  "$RELEASE_WORKFLOW" ||
+  fail "publication must bind the approved release-set digest"
+for required in \
+  '.event == "workflow_dispatch"' \
+  '.status == "completed"' \
+  '.conclusion == "success"' \
+  '.head_sha == $commit' \
+  '.path == ".github/workflows/ci.yml"' \
+  '.name == "Native CLI CI"' \
+  '.total_count == 1' \
+  '.artifacts[0].expired == false' \
+  '.artifacts[0].workflow_run.head_sha == $commit'; do
+  grep -Fq "$required" "$RELEASE_WORKFLOW" ||
+    fail "publication must fail closed on approved-run condition: $required"
+done
+grep -Fq 'artifacts?name=protected-candidate-release-set&per_page=100' \
+  "$RELEASE_WORKFLOW" ||
+  fail "publication must query only the aggregate protected artifact"
+grep -Fq 'gh run download "$APPROVED_RUN_ID"' "$RELEASE_WORKFLOW" ||
+  fail "publication must download from the explicitly approved run"
+grep -Fq -- '--name protected-candidate-release-set' "$RELEASE_WORKFLOW" ||
+  fail "publication must download only the aggregate protected release set"
+grep -Fq 'test "$observed_manifest_sha256" = "$APPROVED_SHA256SUMS_SHA256"' \
+  "$RELEASE_WORKFLOW" ||
+  fail "publication must compare the exact approved SHA256SUMS digest"
+grep -Fq 'scripts/release/verify-assets.sh dist "$VERSION" --native-state' \
+  "$RELEASE_WORKFLOW" ||
+  fail "publication must reverify the immutable ten-file release set"
+grep -Fq 'gh attestation verify "$asset"' "$RELEASE_WORKFLOW" ||
+  fail "publication must verify every protected attestation before publishing"
 grep -Fq 'dist/*.json' "$RELEASE_WORKFLOW" ||
   fail "the release workflow must attest the native-state declaration"
 grep -Fq 'dist/SHA256SUMS' "$RELEASE_WORKFLOW" ||
   fail "the release workflow must attest the checksum manifest"
-grep -Fq 'dist/heyfood-v${{ needs.validate.outputs.version }}-${{ matrix.target }}.tar.gz' \
-  "$RELEASE_WORKFLOW" ||
-  fail "the release workflow must upload each product archive explicitly"
-grep -Fq 'dist/heyfood-installer-v${{ needs.validate.outputs.version }}-${{ matrix.target }}.tar.gz' \
-  "$RELEASE_WORKFLOW" ||
-  fail "the release workflow must upload each verifier archive explicitly"
-[[ "$(grep -Fc 'packaging/macos/sign-and-notarize.sh' "$RELEASE_WORKFLOW")" -eq 2 ]] ||
-  fail "the release workflow must sign and notarize both macOS executables"
-grep -Fq 'scripts/release/smoke-archive.sh dist "$VERSION" "$TARGET"' \
-  "$RELEASE_WORKFLOW" ||
-  fail "the release workflow must smoke each final product/verifier pair"
+metadata_line=$(line_of "$RELEASE_WORKFLOW" 'actions/runs/$APPROVED_RUN_ID"')
+artifact_line=$(line_of "$RELEASE_WORKFLOW" 'artifacts?name=protected-candidate-release-set')
+download_line=$(line_of "$RELEASE_WORKFLOW" 'gh run download "$APPROVED_RUN_ID"')
+digest_line=$(line_of "$RELEASE_WORKFLOW" 'observed_manifest_sha256=')
+verify_line=$(line_of "$RELEASE_WORKFLOW" 'scripts/release/verify-assets.sh')
+protected_attestation_line=$(line_of "$RELEASE_WORKFLOW" 'gh attestation verify "$asset"')
+publish_line=$(line_of "$RELEASE_WORKFLOW" 'gh release create')
+if [[ -z "$metadata_line" || -z "$artifact_line" || -z "$download_line" ||
+  -z "$digest_line" || -z "$verify_line" || -z "$protected_attestation_line" ||
+  -z "$publish_line" ]] ||
+  ! ((metadata_line < artifact_line &&
+    artifact_line < download_line &&
+    download_line < digest_line &&
+    digest_line < verify_line &&
+    verify_line < protected_attestation_line &&
+    protected_attestation_line < publish_line)); then
+  fail "publication must validate run, artifact, digest, set, and attestations before release creation"
+fi
 grep -Fq 'test "${#assets[@]}" -eq 10' "$PUBLIC_SMOKE_WORKFLOW" ||
   fail "public smoke must require all ten v0.6.3 assets"
 grep -Fq 'gh attestation verify "$asset"' "$PUBLIC_SMOKE_WORKFLOW" ||

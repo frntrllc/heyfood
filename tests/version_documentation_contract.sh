@@ -54,6 +54,10 @@ assert_contains "$ROOT/docs/HOUSEHOLD_LOCAL_STATE.md" \
   "cross-device roster sync"
 assert_contains "$ROOT/docs/RELEASE_SIGNING.md" \
   "four \`heyfood\` product archives"
+assert_contains "$ROOT/docs/RELEASE_SIGNING.md" \
+  "The tag workflow does not rebuild, re-sign, repackage, or regenerate candidate"
+assert_contains "$ROOT/docs/RELEASE_SIGNING.md" \
+  "HEYFOOD_APPROVED_CANDIDATE_SHA256SUMS_SHA256"
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
   "Journey A — clean v$version install and household lifecycle"
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
@@ -64,6 +68,16 @@ assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
   "Journey D — logout vault teardown"
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
   "Rotated-session logout refreshes, resumes teardown, removes vault/key, and retains floor"
+assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
+  "scripts/release/candidate-transport.sh"
+assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
+  "HEYFOOD_APPROVED_CANDIDATE_RUN_ID"
+assert_contains "$ROOT/RELEASING.md" \
+  "The tag workflow never rebuilds, re-signs, repackages, or regenerates the"
+assert_contains "$ROOT/RELEASING.md" \
+  "complete public set contains exactly ten files"
+assert_contains "$ROOT/RELEASING.md" \
+  "HEYFOOD_APPROVED_CANDIDATE_SHA256SUMS_SHA256"
 assert_contains "$ROOT/docs/NATIVE_STATE_COMPATIBILITY.md" \
   "Invoking it with \`HEYFOOD_VERSION=0.6.2\` is rejected before"
 assert_contains "$ROOT/docs/NATIVE_STATE_COMPATIBILITY.md" \
