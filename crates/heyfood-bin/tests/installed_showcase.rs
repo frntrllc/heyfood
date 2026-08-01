@@ -2170,6 +2170,7 @@ async fn run_installed_cli(
             "HEYFOOD_API_KEY",
             "HEYFOOD_API_URL",
             "HEYFOOD_CREDENTIAL_STORE",
+            "HEYFOOD_NATIVE_HOUSEHOLD_V1",
             "HEYFOOD_STATE_DIR",
             "BROWSER",
             "HTTPS_PROXY",
@@ -2201,6 +2202,12 @@ async fn run_installed_cli(
             .stderr(Stdio::piped());
         if credential_backend == ShowcaseCredentialBackend::IsolatedFile {
             command
+                // The hermetic compatibility harness deliberately uses the
+                // disclosed file credential backend, which cannot satisfy the
+                // native Household secure-store contract. The dedicated
+                // no-override process matrix covers default activation; final
+                // signed candidates use the real native backend below.
+                .env("HEYFOOD_NATIVE_HOUSEHOLD_V1", "0")
                 .env("HOME", &user_root)
                 .env("USERPROFILE", &user_root)
                 .env("APPDATA", user_root.join("appdata"))
@@ -2264,6 +2271,7 @@ fn run_installed_pty_blocking(
         "HEYFOOD_API_KEY",
         "HEYFOOD_API_URL",
         "HEYFOOD_CREDENTIAL_STORE",
+        "HEYFOOD_NATIVE_HOUSEHOLD_V1",
         "HEYFOOD_STATE_DIR",
         "BROWSER",
         "HTTPS_PROXY",
@@ -2291,6 +2299,9 @@ fn run_installed_pty_blocking(
     // HEYFOOD_STATE_DIR. Otherwise a detached Windows browser can retain a
     // handle under the synthetic profile after the installed client exits.
     if options.credential_backend == ShowcaseCredentialBackend::IsolatedFile {
+        // Keep the file-backed archive harness on the explicit pre-floor hold;
+        // native signed-candidate qualification exercises the default-on path.
+        command.env("HEYFOOD_NATIVE_HOUSEHOLD_V1", "0");
         command.env("HOME", user_root);
         command.env("USERPROFILE", user_root);
         command.env("APPDATA", user_root.join("appdata"));
