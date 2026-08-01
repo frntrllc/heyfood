@@ -1703,7 +1703,12 @@ async fn owner_sync_timeout_and_transport_failure_remain_uncertain() {
         NetworkPolicy::DEVELOPMENT,
     )
     .unwrap();
-    drop(listener);
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        drop(listener);
+        let _request = read_request(&mut socket).await;
+        socket.write_all(b"not-an-http-response\r\n").await.unwrap();
+    });
     let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines()).unwrap();
     let transport = service
         .send_owner_profile_sync_v1(
@@ -1720,6 +1725,7 @@ async fn owner_sync_timeout_and_transport_failure_remain_uncertain() {
             reason: OwnerSyncOutcomeUncertainReasonV1::Transport
         }
     );
+    server.await.unwrap();
 }
 
 #[tokio::test]
