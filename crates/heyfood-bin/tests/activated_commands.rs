@@ -138,6 +138,7 @@ async fn run(
         .env("HEYFOOD_STATE_DIR", root)
         .env("XDG_CONFIG_HOME", root.join("xdg"))
         .env("HEYFOOD_CREDENTIAL_STORE", "file")
+        .env("HEYFOOD_NATIVE_HOUSEHOLD_V1", "0")
         .env("HEYFOOD_API_URL", base_url)
         .env("HEYFOOD_API_KEY", "fixture-api-key")
         .env("HEYFOOD_TEST_FORCE_NO_CONTROLLING_TERMINAL", "1")
@@ -179,6 +180,7 @@ fn run_confirm_with_data_stdin_and_controlling_terminal(
     command.arg(proposal_path);
     command.env("HEYFOOD_STATE_DIR", root);
     command.env("HEYFOOD_CREDENTIAL_STORE", "file");
+    command.env("HEYFOOD_NATIVE_HOUSEHOLD_V1", "0");
     command.env("HEYFOOD_API_URL", base_url);
     command.env("HEYFOOD_API_KEY", "fixture-api-key");
     command.env("NO_PROXY", "127.0.0.1,localhost");
@@ -277,6 +279,7 @@ fn run_log_with_controlling_terminal(
     command.env("HEYFOOD_STATE_DIR", root);
     command.env("XDG_CONFIG_HOME", xdg_root);
     command.env("HEYFOOD_CREDENTIAL_STORE", "file");
+    command.env("HEYFOOD_NATIVE_HOUSEHOLD_V1", "0");
     command.env("HEYFOOD_API_URL", base_url);
     command.env("HEYFOOD_API_KEY", "fixture-api-key");
     command.env("NO_PROXY", "127.0.0.1,localhost");
@@ -2349,6 +2352,7 @@ async fn public_log_no_input_rejects_before_source_or_network_access() {
         .env("HEYFOOD_STATE_DIR", &root.0)
         .env("XDG_CONFIG_HOME", &xdg_root)
         .env("HEYFOOD_CREDENTIAL_STORE", "file")
+        .env("HEYFOOD_NATIVE_HOUSEHOLD_V1", "0")
         .env("HEYFOOD_API_URL", &base_url)
         .env("HEYFOOD_API_KEY", "fixture-api-key")
         .output()
