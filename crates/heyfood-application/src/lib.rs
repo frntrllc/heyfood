@@ -31,7 +31,7 @@ pub use grocery::{
 pub use health::{
     HealthAuthorization, HealthConnection, HealthContext, HealthManagementOutcome, HealthPort,
 };
-pub use household_menu::render_household_menu;
+pub use household_menu::{household_menu_document, is_full_household_menu, render_household_menu};
 pub use logout::{
     Logout, LogoutLocalPort, LogoutOutcome, LogoutRemotePort, LogoutStep, LogoutTeardown,
 };
