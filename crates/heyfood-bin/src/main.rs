@@ -49,9 +49,9 @@ use heyfood_platform::{
 };
 #[cfg(feature = "native-credentials")]
 use heyfood_platform::{
-    AuthorizationSessionStore, HouseholdTeardownJournalStoreV1, HouseholdVault,
-    NativeAccountTeardownV1, NativeStateFloorStore, ProductionNativeAccountTeardownBackendV1,
-    pre_floor_native_account_provenance_absent_v1,
+    AuthorizationSessionStore, HouseholdTeardownJournalStoreV1, HouseholdTeardownJournalV1,
+    HouseholdVault, NativeAccountTeardownBackendV1, NativeAccountTeardownV1, NativeStateFloorStore,
+    ProductionNativeAccountTeardownBackendV1, pre_floor_native_account_provenance_absent_v1,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -443,6 +443,32 @@ fn combine_household_erase_outcomes(outcomes: &[HouseholdEraseOutcome]) -> House
             .all(|outcome| outcome.local_credentials_cleared),
         outcome_uncertain: outcomes.iter().any(|outcome| outcome.outcome_uncertain),
     }
+}
+
+/// Commit content-free, account-bound restart authority before any logout
+/// refresh request can make the credential state uncertain. The journal is
+/// the local logout commit point: a crash or failed refresh may skip remote
+/// revocation, but startup can still finish household and credential cleanup.
+#[cfg(feature = "native-credentials")]
+async fn commit_native_logout_teardown_intent(
+    journals: &HouseholdTeardownJournalStoreV1,
+    backend: &ProductionNativeAccountTeardownBackendV1<NativeSessionStore>,
+    expected: &AuthCredentialBundle,
+    cancellation: CancellationToken,
+) -> Result<(), PortError> {
+    if !journals.scan()?.is_empty() {
+        return Err(PortError::uncertain(
+            "household_teardown_resume_required",
+            "native household teardown must resume before another logout can begin",
+        ));
+    }
+    let (lease, prepared) = backend
+        .acquire_authenticated(expected, cancellation)
+        .await?;
+    let journal = HouseholdTeardownJournalV1::new(prepared)?;
+    journals.replace(&journal)?;
+    drop(lease);
+    Ok(())
 }
 
 #[tokio::main]
@@ -1092,7 +1118,7 @@ impl heyfood_bin::InteractiveSessionProvider for NativeInteractiveSessionProvide
     ) -> BoxFuture<'_, Result<heyfood_bin::InteractiveSessionPreparation, heyfood_bin::OneShotError>>
     {
         Box::pin(async move {
-            let prepared = prepare_native_session(None, cancellation).await?;
+            let prepared = prepare_native_session(ScopeCapability::None, cancellation).await?;
             Ok(heyfood_bin::InteractiveSessionPreparation::new(
                 prepared.service,
                 prepared.ensure_session,
@@ -2086,6 +2112,40 @@ async fn logout_inner() -> Result<LogoutOutcome, PortError> {
         )
     })?;
     let cancellation = CancellationToken::new();
+    let pre_native_compatibility = pre_native_logout_compatibility_v1(
+        &paths,
+        initial_credentials.session.account_id.clone(),
+        cancellation.child_token(),
+    )
+    .await?;
+    let journals = HouseholdTeardownJournalStoreV1::open(paths.data_dir())?;
+    let teardown_session = NativeSessionStore::open(paths.config_dir())?;
+    let teardown_backend = ProductionNativeAccountTeardownBackendV1::open(
+        paths.clone(),
+        teardown_session,
+        Duration::from_secs(15),
+    )?;
+    if !pre_native_compatibility {
+        commit_native_logout_teardown_intent(
+            &journals,
+            &teardown_backend,
+            &initial_credentials,
+            cancellation.child_token(),
+        )
+        .await?;
+    }
+    let local = if pre_native_compatibility {
+        NativeLogoutLocal::PreNativeCompatibility {
+            backend: &teardown_backend,
+            cancellation: cancellation.clone(),
+        }
+    } else {
+        NativeLogoutLocal::Native {
+            journals: &journals,
+            backend: &teardown_backend,
+            cancellation: cancellation.clone(),
+        }
+    };
     let signal_cancellation = cancellation.clone();
     let signal = tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -2105,61 +2165,49 @@ async fn logout_inner() -> Result<LogoutOutcome, PortError> {
         Ok(value) => value,
         Err(error) => {
             signal.abort();
-            auth_store.clear_account_bound_after_preflight_failure(
-                &initial_credentials,
-                session_store.as_ref(),
-            )?;
-            return Ok(LogoutOutcome::preflight_failed(error.outcome_uncertain));
-        }
-    };
-    let pre_native_compatibility = match pre_native_logout_compatibility_v1(
-        &paths,
-        credentials.session.account_id.clone(),
-        cancellation.child_token(),
-    )
-    .await
-    {
-        Ok(value) => value,
-        Err(error) => {
-            signal.abort();
-            return Err(error);
-        }
-    };
-    let journals = match HouseholdTeardownJournalStoreV1::open(paths.data_dir()) {
-        Ok(journals) => journals,
-        Err(error) => {
-            signal.abort();
-            return Err(error);
-        }
-    };
-    let teardown_session = match NativeSessionStore::open(paths.config_dir()) {
-        Ok(session) => session,
-        Err(error) => {
-            signal.abort();
-            return Err(error);
-        }
-    };
-    let teardown_backend = match ProductionNativeAccountTeardownBackendV1::open(
-        paths.clone(),
-        teardown_session,
-        Duration::from_secs(15),
-    ) {
-        Ok(backend) => backend,
-        Err(error) => {
-            signal.abort();
-            return Err(error);
-        }
-    };
-    let local = if pre_native_compatibility {
-        NativeLogoutLocal::PreNativeCompatibility {
-            backend: &teardown_backend,
-            cancellation: cancellation.clone(),
-        }
-    } else {
-        NativeLogoutLocal::Native {
-            journals: &journals,
-            backend: &teardown_backend,
-            cancellation: cancellation.clone(),
+            let local_outcome = if pre_native_compatibility {
+                match local.clear(&initial_credentials).await {
+                    Ok(outcome) => outcome,
+                    Err(local_error)
+                        if error.outcome_uncertain
+                            && local_error.code == "auth_reconciliation_required" =>
+                    {
+                        // The released pre-native shape has no D2 journal or
+                        // account artifact to resume. Preserve v0.6.3's
+                        // binding-safe marker adoption while reporting the
+                        // legacy cleanup as retained rather than claiming it.
+                        auth_store.clear_account_bound_after_preflight_failure(
+                            &initial_credentials,
+                            session_store.as_ref(),
+                        )?;
+                        HouseholdEraseOutcome {
+                            household_key_deleted: false,
+                            household_ciphertext_deleted: false,
+                            import_snapshot_deleted: false,
+                            legacy_source_retained: true,
+                            legacy_credentials_cleared: false,
+                            legacy_credentials_retained: true,
+                            local_credentials_cleared: true,
+                            outcome_uncertain: false,
+                        }
+                    }
+                    Err(local_error) => return Err(local_error),
+                }
+            } else {
+                // The native journal was committed before refresh dispatch.
+                // Adopt either side of a binding-preserving refresh, remove
+                // account authority atomically, then drive the content-free
+                // journal to delete every remaining household artifact.
+                auth_store.clear_account_bound_after_preflight_failure(
+                    &initial_credentials,
+                    session_store.as_ref(),
+                )?;
+                local.clear(&initial_credentials).await?
+            };
+            return Ok(LogoutOutcome::preflight_failed(
+                error.outcome_uncertain,
+                local_outcome,
+            ));
         }
     };
     let result = Logout::new(&service, &local)
@@ -2178,6 +2226,9 @@ async fn prepare_logout_authority(
     policy: NetworkPolicy,
     cancellation: CancellationToken,
 ) -> Result<(AuthCredentialBundle, HttpService), PortError> {
+    let expected_account = credentials.session.account_id.clone();
+    let expected_client_id = credentials.channel.client_id.clone();
+    let expected_device_id = credentials.channel.device_id.clone();
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |value| value.as_secs());
@@ -2227,6 +2278,15 @@ async fn prepare_logout_authority(
                 "native hello.food account authority disappeared before logout",
             )
         })?;
+    if credentials.session.account_id != expected_account
+        || credentials.channel.client_id != expected_client_id
+        || credentials.channel.device_id != expected_device_id
+    {
+        return Err(PortError::new(
+            "logout_account_changed",
+            "active account authorization changed while logout preflight was in progress",
+        ));
+    }
     let api_key = std::env::var("HEYFOOD_API_KEY")
         .ok()
         .filter(|value| !value.is_empty())
@@ -2272,6 +2332,15 @@ async fn prepare_logout_authority(
                 "native hello.food account authority disappeared before logout",
             )
         })?;
+    if credentials.session.account_id != expected_account
+        || credentials.channel.client_id != expected_client_id
+        || credentials.channel.device_id != expected_device_id
+    {
+        return Err(PortError::new(
+            "logout_account_changed",
+            "active account authorization changed while logout preflight was in progress",
+        ));
+    }
     if credentials.session != session {
         return Err(PortError::uncertain(
             "logout_refresh_persistence_outcome_uncertain",

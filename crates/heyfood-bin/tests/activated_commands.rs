@@ -1472,6 +1472,13 @@ async fn uncertain_logout_preflight_removes_refresh_markers_with_local_authority
     let document: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(document["remote_complete"], false);
     assert_eq!(document["local_credentials_cleared"], true);
+    assert_eq!(document["household_key_deleted"], false);
+    assert_eq!(document["household_ciphertext_deleted"], false);
+    assert_eq!(document["import_snapshot_deleted"], false);
+    assert_eq!(document["legacy_source_retained"], true);
+    assert_eq!(document["legacy_credentials_cleared"], false);
+    assert_eq!(document["legacy_credentials_retained"], true);
+    assert_eq!(document["outcome_uncertain"], true);
     for step in ["link", "device", "session"] {
         assert_eq!(document["teardown"][step]["attempted"], false);
         assert_eq!(document["teardown"][step]["outcome_uncertain"], true);

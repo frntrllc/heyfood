@@ -176,16 +176,26 @@ impl LogoutOutcome {
     /// Report a logout that cleared all local authority after credential
     /// preflight failed before any remote teardown request was attempted.
     #[must_use]
-    pub const fn preflight_failed(outcome_uncertain: bool) -> Self {
+    pub const fn preflight_failed(
+        remote_outcome_uncertain: bool,
+        local: HouseholdEraseOutcome,
+    ) -> Self {
         Self {
-            ok: true,
+            ok: local.local_credentials_cleared && !local.outcome_uncertain,
             remote_complete: false,
             teardown: LogoutTeardown {
-                link: LogoutStep::blocked_before_teardown(outcome_uncertain),
-                device: LogoutStep::blocked_before_teardown(outcome_uncertain),
-                session: LogoutStep::blocked_before_teardown(outcome_uncertain),
+                link: LogoutStep::blocked_before_teardown(remote_outcome_uncertain),
+                device: LogoutStep::blocked_before_teardown(remote_outcome_uncertain),
+                session: LogoutStep::blocked_before_teardown(remote_outcome_uncertain),
             },
-            local_credentials_cleared: true,
+            household_key_deleted: local.household_key_deleted,
+            household_ciphertext_deleted: local.household_ciphertext_deleted,
+            import_snapshot_deleted: local.import_snapshot_deleted,
+            legacy_source_retained: local.legacy_source_retained,
+            legacy_credentials_cleared: local.legacy_credentials_cleared,
+            legacy_credentials_retained: local.legacy_credentials_retained,
+            local_credentials_cleared: local.local_credentials_cleared,
+            outcome_uncertain: remote_outcome_uncertain || local.outcome_uncertain,
         }
     }
 }
@@ -452,5 +462,65 @@ mod tests {
         assert!(!json.contains("sentinel"));
         assert!(!json.contains("sensitive"));
         assert_eq!(fixture.calls.lock().unwrap().last(), Some(&"local"));
+    }
+
+    #[test]
+    fn preflight_failure_preserves_truthful_local_household_teardown_evidence() {
+        let outcome = LogoutOutcome::preflight_failed(
+            true,
+            HouseholdEraseOutcome {
+                household_key_deleted: true,
+                household_ciphertext_deleted: true,
+                import_snapshot_deleted: true,
+                legacy_source_retained: false,
+                legacy_credentials_cleared: true,
+                legacy_credentials_retained: false,
+                local_credentials_cleared: true,
+                outcome_uncertain: false,
+            },
+        );
+
+        assert!(outcome.ok);
+        assert!(!outcome.remote_complete);
+        assert!(outcome.household_key_deleted);
+        assert!(outcome.household_ciphertext_deleted);
+        assert!(outcome.import_snapshot_deleted);
+        assert!(!outcome.legacy_source_retained);
+        assert!(outcome.legacy_credentials_cleared);
+        assert!(!outcome.legacy_credentials_retained);
+        assert!(outcome.local_credentials_cleared);
+        assert!(outcome.outcome_uncertain);
+        for step in [
+            &outcome.teardown.link,
+            &outcome.teardown.device,
+            &outcome.teardown.session,
+        ] {
+            assert!(!step.attempted);
+            assert!(step.outcome_uncertain);
+            assert_eq!(step.error, Some("outcome_uncertain"));
+        }
+    }
+
+    #[test]
+    fn incomplete_local_teardown_makes_preflight_failure_unsuccessful() {
+        let outcome = LogoutOutcome::preflight_failed(
+            false,
+            HouseholdEraseOutcome {
+                household_key_deleted: true,
+                household_ciphertext_deleted: false,
+                import_snapshot_deleted: false,
+                legacy_source_retained: true,
+                legacy_credentials_cleared: false,
+                legacy_credentials_retained: true,
+                local_credentials_cleared: false,
+                outcome_uncertain: true,
+            },
+        );
+
+        assert!(!outcome.ok);
+        assert!(!outcome.remote_complete);
+        assert!(!outcome.local_credentials_cleared);
+        assert!(outcome.outcome_uncertain);
+        assert_eq!(outcome.teardown.link.error, Some("request_failed"));
     }
 }
