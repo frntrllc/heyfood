@@ -28,19 +28,22 @@ impl ConfigSchemaVersion {
 /// window. The ordinary configuration document remains credential-free.
 pub const CURRENT_CONFIG_SCHEMA: ConfigSchemaVersion = ConfigSchemaVersion::new(3);
 
-/// Strict rollout switch for D2 native household state. This is a composition
-/// choice only; it never weakens authorization or encryption requirements.
+/// Strict rollout switch for D2 native household state. Native household is
+/// part of the supported v0.6.3 contract, so an ordinary public invocation
+/// enables it. Operators may still set the switch to `0` as a pre-initialization
+/// emergency hold; once native provenance exists, the compatibility floor
+/// continues to fail closed regardless of the flag.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum NativeHouseholdRolloutV1 {
-    #[default]
     Disabled,
+    #[default]
     Enabled,
 }
 
 impl NativeHouseholdRolloutV1 {
     pub fn parse_environment_value(value: Option<&OsStr>) -> Result<Self, &'static str> {
         match value.and_then(OsStr::to_str) {
-            None if value.is_none() => Ok(Self::Disabled),
+            None if value.is_none() => Ok(Self::Enabled),
             Some("0") => Ok(Self::Disabled),
             Some("1") => Ok(Self::Enabled),
             None | Some(_) => Err("HEYFOOD_NATIVE_HOUSEHOLD_V1 must be exactly 0 or 1"),
@@ -130,10 +133,10 @@ mod tests {
     use super::NativeHouseholdRolloutV1;
 
     #[test]
-    fn native_household_rollout_accepts_only_absent_zero_or_one() {
+    fn native_household_rollout_defaults_on_and_accepts_only_zero_or_one() {
         assert_eq!(
             NativeHouseholdRolloutV1::parse_environment_value(None).unwrap(),
-            NativeHouseholdRolloutV1::Disabled
+            NativeHouseholdRolloutV1::Enabled
         );
         assert_eq!(
             NativeHouseholdRolloutV1::parse_environment_value(Some(OsStr::new("0"))).unwrap(),
