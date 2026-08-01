@@ -167,7 +167,11 @@ LIST_ID --out FILE` creates an owner-only file exclusively by default;
 `--overwrite` opts into same-directory atomic replacement. Targets and direct
 parent directories that are symlinks or Windows reparse points are rejected,
 temporary files are removed on pre-commit failure, and export contents never
-enter diagnostics. Windows installs the protected single-owner DACL in the
+enter diagnostics. Human output requires `--out`; without it the command
+refuses before writing private Household annotations to the terminal. In
+machine mode, text and Markdown exports are wrapped as one JSON object carrying
+`format` and exact `content`, preserving the global one-value invariant.
+Windows installs the protected single-owner DACL in the
 creation call, publishes by the still-open file handle without delete sharing,
 and verifies the final ACL and non-reparse identity before success.
 Conversational Grocery proposals use the C3 item-list card in the TUI: `y`

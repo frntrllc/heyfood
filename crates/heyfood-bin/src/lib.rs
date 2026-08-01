@@ -28,14 +28,15 @@ use heyfood_application::{
     ReadActiveGroceryDisplay, ReadGroceryExclusions, ReadStatus, RefreshPolicy, RemoveMenuWatch,
     RunTurnOutcome, SaveMemberDeclaredProfileV1, SaveOwnerProfileAndSyncIntentV1,
     SelectedHouseholdTargetV1, ServicePort, TransitionOwnerSyncIntentV1, TurnContext, TurnFailure,
-    TurnFailureKind, TurnRequest, VoiceReadinessStatus, execute_one_shot_turn,
-    owner_profile_action_eligibility_v1,
+    TurnFailureKind, TurnRequest, UNRENDERABLE_AGENT_RESULT_MESSAGE, VoiceReadinessStatus,
+    execute_one_shot_turn, owner_profile_action_eligibility_v1,
 };
 use heyfood_cli::{
     AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, MealType, MenuWatchCommand,
-    OutputMode, render_agent_result, render_grocery_exclusions, render_grocery_list,
-    render_grocery_proposal, render_health_context, render_item_result, render_json,
-    render_menu_watch, render_menu_watch_list,
+    OutputMode, render_agent_result_with_private_authorities, render_grocery_exclusions,
+    render_grocery_list, render_grocery_mutation_result, render_grocery_proposal,
+    render_health_context, render_item_result, render_json, render_menu_watch,
+    render_menu_watch_list,
 };
 use heyfood_core::{
     AddItemsRequestWire, AgentConfirmationCommandWire, AgentEvent, CanonicalJsonObjectV1,
@@ -64,9 +65,9 @@ use heyfood_tui::{
     HouseholdOperationIdV1, HouseholdPresentationModeV1, HouseholdReducerCorrelationV1,
     NativeOwnerProfileSaveStatusV1, OwnerProfileActionLoadPurposeV1, OwnerProfileRetryActionV1,
     OwnerProfileRetryEligibilityV1, OwnerProfileRetryUnavailableReasonV1, OwnerSyncIntentHandleV1,
-    PanelRequest, ProfileActionsLoadedV1, ProfileConsentFailureV1, ProfileConsentFinishedV1,
-    ProfilePresentationModeV1, ProfileRetrySyncFinishedV1, RuntimeEvent, TuiError,
-    VoiceAvailability,
+    PanelRequest, PresentedHouseholdContextV1, ProfileActionsLoadedV1, ProfileConsentFailureV1,
+    ProfileConsentFinishedV1, ProfilePresentationModeV1, ProfileRetrySyncFinishedV1, RuntimeEvent,
+    TuiError, VoiceAvailability,
 };
 use serde_json::{Map, Value, json};
 use tokio::{
@@ -78,6 +79,10 @@ use tokio_util::sync::CancellationToken;
 
 pub const QUALIFIED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 pub const MAX_CONFIRMATION_STDIN_BYTES: usize = 1024 * 1024;
+const HOUSEHOLD_LOG_HUMAN_ERROR_MESSAGE: &str =
+    "hey.food could not complete this Household request. Review current state before trying again.";
+const AGENT_HUMAN_ERROR_MESSAGE: &str = "hey.food could not complete this request. Try again.";
+const GROCERY_EXPORT_REQUIRES_PROTECTED_FILE_MESSAGE: &str = "Grocery exports can contain private Household data. Use `--out FILE` to write an owner-only export.";
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct OneShotError {
@@ -2128,6 +2133,12 @@ pub async fn execute_qualified_prepared_log(
     prepared: PreparedLogCommand<DispatchReady>,
     cancellation: CancellationToken,
 ) -> Result<String, OneShotError> {
+    let private_household_ids = prepared
+        .household_snapshot
+        .members
+        .iter()
+        .map(|member| member.id.clone())
+        .collect::<Vec<_>>();
     let result = execute_one_shot_turn(
         service,
         prepared.into_request(),
@@ -2135,8 +2146,19 @@ pub async fn execute_qualified_prepared_log(
         OperationId::new(),
         cancellation,
     )
-    .await?;
-    Ok(render_agent_result(&result.document, output_mode))
+    .await
+    .map_err(|error| {
+        sanitize_household_log_error(error.into(), output_mode, &private_household_ids)
+    })?;
+    let private_household_ids = private_household_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    Ok(render_household_log_result(
+        &result,
+        output_mode,
+        &private_household_ids,
+    ))
 }
 
 /// Resolve one native Household meal target, acquire its exact revision under
@@ -2232,6 +2254,16 @@ pub async fn execute_qualified_native_log(
         request,
         authorized_context,
     } = prepared;
+    let private_household_ids = std::iter::once("_self".to_owned())
+        .chain(
+            authorized_context
+                .load()
+                .state
+                .members
+                .iter()
+                .map(|member| member.member_id.as_str().to_owned()),
+        )
+        .collect::<Vec<_>>();
     let result = execute_one_shot_turn(
         service,
         request,
@@ -2239,10 +2271,49 @@ pub async fn execute_qualified_native_log(
         OperationId::new(),
         cancellation,
     )
-    .await;
+    .await
+    .map_err(|error| {
+        sanitize_household_log_error(error.into(), output_mode, &private_household_ids)
+    })?;
+    let private_household_ids = private_household_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let rendered = render_household_log_result(&result, output_mode, &private_household_ids);
     drop(authorized_context);
-    let result = result?;
-    Ok(render_agent_result(&result.document, output_mode))
+    Ok(rendered)
+}
+
+fn sanitize_household_log_error(
+    mut error: OneShotError,
+    output_mode: OutputMode,
+    _retained_private_household_ids: &[String],
+) -> OneShotError {
+    if output_mode != OutputMode::Json {
+        error.message = HOUSEHOLD_LOG_HUMAN_ERROR_MESSAGE.to_owned();
+    }
+    error
+}
+
+fn render_household_log_result(
+    result: &heyfood_application::OneShotTurnResult,
+    output_mode: OutputMode,
+    private_household_ids: &[&str],
+) -> String {
+    if output_mode != OutputMode::Json && result.partial_text_promoted {
+        return format!("{UNRENDERABLE_AGENT_RESULT_MESSAGE}\n");
+    }
+    let retained_choice_values = result
+        .streamed_choice_value_authorities
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    render_agent_result_with_private_authorities(
+        &result.document,
+        output_mode,
+        private_household_ids,
+        &retained_choice_values,
+    )
 }
 
 /// Phase 2 executor over explicit, already-validated native state. The public
@@ -2527,8 +2598,25 @@ impl<'a> OneShotExecutor<'a> {
             OperationId::new(),
             cancellation,
         )
-        .await?;
-        Ok(render_agent_result(&result.document, self.output_mode))
+        .await
+        .map_err(|error| {
+            let mut error = OneShotError::from(error);
+            if self.output_mode != OutputMode::Json && error.code == "agent_error" {
+                error.message = AGENT_HUMAN_ERROR_MESSAGE.to_owned();
+            }
+            error
+        })?;
+        let retained_choice_values = result
+            .streamed_choice_value_authorities
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        Ok(render_agent_result_with_private_authorities(
+            &result.document,
+            self.output_mode,
+            &[],
+            &retained_choice_values,
+        ))
     }
 
     async fn execute_grocery(
@@ -2679,6 +2767,12 @@ impl<'a> OneShotExecutor<'a> {
                 Ok(render_grocery_proposal(&proposal, self.output_mode))
             }
             GroceryCommand::Export(arguments) => {
+                if arguments.out.is_none() && self.output_mode != OutputMode::Json {
+                    return Err(OneShotError::new(
+                        "grocery_export_requires_out",
+                        GROCERY_EXPORT_REQUIRES_PROTECTED_FILE_MESSAGE,
+                    ));
+                }
                 let export = ExportGroceryList::new(self.service)
                     .execute(
                         capabilities,
@@ -2707,12 +2801,7 @@ impl<'a> OneShotExecutor<'a> {
                         terminal_safe_text(&path.display().to_string())
                     ));
                 }
-                match export {
-                    GroceryExport::Json(list) => render_json(&list).map_err(|_| {
-                        OneShotError::new("output_json", "could not encode Grocery export")
-                    }),
-                    GroceryExport::Markdown(text) | GroceryExport::Text(text) => Ok(text),
-                }
+                render_grocery_export_stdout(export, self.output_mode)
             }
             GroceryCommand::Confirm(arguments) => {
                 if !arguments.proposal_stdin {
@@ -2752,9 +2841,7 @@ impl<'a> OneShotExecutor<'a> {
                         cancellation,
                     )
                     .await?;
-                render_json(&result).map_err(|_| {
-                    OneShotError::new("output_json", "could not encode confirmation result")
-                })
+                Ok(render_grocery_mutation_result(&result, self.output_mode))
             }
         }
     }
@@ -2978,6 +3065,32 @@ fn grocery_export_bytes(export: &GroceryExport) -> Result<Vec<u8>, OneShotError>
             Ok(bytes)
         }
         GroceryExport::Markdown(text) | GroceryExport::Text(text) => Ok(text.as_bytes().to_vec()),
+    }
+}
+
+fn render_grocery_export_stdout(
+    export: GroceryExport,
+    output_mode: OutputMode,
+) -> Result<String, OneShotError> {
+    if output_mode != OutputMode::Json {
+        return Err(OneShotError::new(
+            "grocery_export_requires_out",
+            GROCERY_EXPORT_REQUIRES_PROTECTED_FILE_MESSAGE,
+        ));
+    }
+    match export {
+        GroceryExport::Json(list) => render_json(&list)
+            .map_err(|_| OneShotError::new("output_json", "could not encode Grocery export")),
+        GroceryExport::Markdown(content) => render_json(&json!({
+            "format": "markdown",
+            "content": content
+        }))
+        .map_err(|_| OneShotError::new("output_json", "could not encode Grocery export")),
+        GroceryExport::Text(content) => render_json(&json!({
+            "format": "text",
+            "content": content
+        }))
+        .map_err(|_| OneShotError::new("output_json", "could not encode Grocery export")),
     }
 }
 
@@ -4764,10 +4877,62 @@ struct OwnedSignalForwarder {
     task: JoinHandle<io::Result<()>>,
 }
 
+#[derive(Clone, Eq, PartialEq)]
+struct NativeHouseholdContextBindingV1 {
+    household_revision: HouseholdRevision,
+    active_scope: HouseholdScope,
+}
+
+impl NativeHouseholdContextBindingV1 {
+    fn from_load(load: &HouseholdLoad) -> Self {
+        Self {
+            household_revision: load.state.revision,
+            active_scope: load.state.active_scope.clone(),
+        }
+    }
+
+    fn from_authorized(context: &AuthorizedHostedContextV1) -> Self {
+        Self {
+            household_revision: context.snapshot().household_revision,
+            active_scope: context.snapshot().scope.clone(),
+        }
+    }
+
+    fn matches_presented(&self, presented: &PresentedHouseholdContextV1) -> bool {
+        self.household_revision == presented.household_revision()
+            && self.active_scope == *presented.active_scope()
+    }
+}
+
 #[derive(Default)]
 struct InteractiveContinuity {
     conversation_id: Option<String>,
     household_scope: Option<String>,
+    native_context: Option<NativeHouseholdContextBindingV1>,
+}
+
+impl InteractiveContinuity {
+    fn clear_conversation(&mut self) {
+        self.conversation_id = None;
+        self.native_context = None;
+    }
+
+    fn conversation_for_native_context(
+        &mut self,
+        authorized: &NativeHouseholdContextBindingV1,
+        presented: Option<&PresentedHouseholdContextV1>,
+    ) -> Result<Option<String>, RunTurnOutcome> {
+        let chrome_is_stale =
+            presented.is_none_or(|presented| !authorized.matches_presented(presented));
+        let conversation_is_stale =
+            self.conversation_id.is_some() && self.native_context.as_ref() != Some(authorized);
+        if chrome_is_stale || conversation_is_stale {
+            self.clear_conversation();
+            return Err(RunTurnOutcome::StaleGeneration);
+        }
+        self.native_context = Some(authorized.clone());
+        Ok(self.conversation_id.clone())
+    }
 }
 
 /// Fresh native authorization and session composition for one interactive
@@ -5018,6 +5183,7 @@ impl InteractiveTurnDriver {
         operation_id: u64,
         prompt: String,
         confirmation: Option<AgentConfirmationCommandWire>,
+        presented_household_context: Option<PresentedHouseholdContextV1>,
         runtime_events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()> {
         self.reap_finished();
@@ -5099,6 +5265,7 @@ impl InteractiveTurnDriver {
                         prepared.http_service,
                         local_state,
                         hosted_context,
+                        presented_household_context,
                         task_cancellation,
                         runtime_events.clone(),
                     )
@@ -5427,18 +5594,32 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         &mut self,
         operation_id: u64,
         prompt: String,
+        presented_household_context: Option<PresentedHouseholdContextV1>,
         runtime_events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()> {
-        self.start_conversational_input(operation_id, prompt, None, runtime_events)
+        self.start_conversational_input(
+            operation_id,
+            prompt,
+            None,
+            presented_household_context,
+            runtime_events,
+        )
     }
 
     fn start_confirmation(
         &mut self,
         operation_id: u64,
         command: AgentConfirmationCommandWire,
+        presented_household_context: Option<PresentedHouseholdContextV1>,
         runtime_events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()> {
-        self.start_conversational_input(operation_id, String::new(), Some(command), runtime_events)
+        self.start_conversational_input(
+            operation_id,
+            String::new(),
+            Some(command),
+            presented_household_context,
+            runtime_events,
+        )
     }
 
     fn start_household_management_load(
@@ -6207,8 +6388,10 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                                 .is_some();
                             if evidence_consumed {
                                 let mut continuity = continuity.lock().await;
-                                continuity.conversation_id = None;
+                                continuity.clear_conversation();
                                 continuity.household_scope = None;
+                                continuity.native_context =
+                                    Some(NativeHouseholdContextBindingV1::from_load(&load));
                                 RuntimeEvent::HouseholdContextAppliedV1 {
                                     binding,
                                     resulting_household_revision,
@@ -7181,7 +7364,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
 
     fn reset_conversation(&mut self) -> io::Result<()> {
         self.runtime.block_on(async {
-            self.continuity.lock().await.conversation_id = None;
+            self.continuity.lock().await.clear_conversation();
         });
         Ok(())
     }
@@ -7684,9 +7867,25 @@ async fn run_interactive_turn(
     context_service: Option<Arc<HttpService>>,
     local_state: Option<Arc<ImportedPythonState>>,
     hosted_context: Option<AuthorizedHostedContextV1>,
+    presented_household_context: Option<PresentedHouseholdContextV1>,
     cancellation: CancellationToken,
     runtime_events: mpsc::Sender<RuntimeEvent>,
 ) -> Result<RunTurnOutcome, TurnFailure> {
+    let native_context = hosted_context
+        .as_ref()
+        .map(NativeHouseholdContextBindingV1::from_authorized);
+    let conversation_id = if let Some(native_context) = native_context.as_ref() {
+        match continuity
+            .lock()
+            .await
+            .conversation_for_native_context(native_context, presented_household_context.as_ref())
+        {
+            Ok(conversation_id) => conversation_id,
+            Err(outcome) => return Ok(outcome),
+        }
+    } else {
+        continuity.lock().await.conversation_id.clone()
+    };
     let snapshot = session.lock().await.clone();
     let credentials = match ensure_session
         .execute(snapshot.clone(), cancellation.child_token())
@@ -7730,7 +7929,7 @@ async fn run_interactive_turn(
     context.confirmation = confirmation;
     let request = TurnRequest {
         prompt,
-        conversation_id: continuity.lock().await.conversation_id.clone(),
+        conversation_id,
         context,
         refresh: RefreshPolicy::Never,
     };
@@ -7779,7 +7978,11 @@ async fn run_interactive_turn(
             ..
         } = &event
         {
-            continuity.lock().await.conversation_id = Some(next_conversation.clone());
+            let mut continuity = continuity.lock().await;
+            continuity.conversation_id = Some(next_conversation.clone());
+            if let Some(native_context) = native_context.as_ref() {
+                continuity.native_context = Some(native_context.clone());
+            }
         }
         if runtime_events
             .send(RuntimeEvent::TurnEvent {
@@ -8360,6 +8563,7 @@ pub trait QualifiedTurnDriver {
         &mut self,
         operation_id: u64,
         prompt: String,
+        presented_household_context: Option<PresentedHouseholdContextV1>,
         events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()>;
 
@@ -8367,6 +8571,7 @@ pub trait QualifiedTurnDriver {
         &mut self,
         _operation_id: u64,
         _command: AgentConfirmationCommandWire,
+        _presented_household_context: Option<PresentedHouseholdContextV1>,
         _events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()> {
         Err(io::Error::new(
@@ -8709,14 +8914,26 @@ fn route_effect(
         Effect::SubmitTurn {
             operation_id,
             prompt,
+            presented_household_context,
         } => driver
-            .start_turn(operation_id, prompt, runtime_sender.clone())
+            .start_turn(
+                operation_id,
+                prompt,
+                presented_household_context,
+                runtime_sender.clone(),
+            )
             .map_err(CompositionError::Driver),
         Effect::ConfirmAction {
             operation_id,
             command,
+            presented_household_context,
         } => driver
-            .start_confirmation(operation_id, command, runtime_sender.clone())
+            .start_confirmation(
+                operation_id,
+                command,
+                presented_household_context,
+                runtime_sender.clone(),
+            )
             .map_err(CompositionError::Driver),
         Effect::OpenPanel {
             operation_id,
@@ -8823,6 +9040,37 @@ mod tests {
             status,
             body: body.into(),
         })
+    }
+
+    #[test]
+    fn grocery_text_exports_require_a_protected_file_for_human_output() {
+        let private_content = "onion for maya-uuid\n";
+        for (format, export) in [
+            (
+                "markdown",
+                GroceryExport::Markdown(private_content.to_owned()),
+            ),
+            ("text", GroceryExport::Text(private_content.to_owned())),
+        ] {
+            let error = render_grocery_export_stdout(export.clone(), OutputMode::HumanPlain)
+                .expect_err("human export without --out must fail closed");
+            assert_eq!(error.code, "grocery_export_requires_out");
+            assert_eq!(
+                error.message,
+                GROCERY_EXPORT_REQUIRES_PROTECTED_FILE_MESSAGE
+            );
+            assert!(!error.message.contains("maya-uuid"));
+
+            let rendered = render_grocery_export_stdout(export.clone(), OutputMode::Json)
+                .expect("machine export is one JSON value");
+            let decoded: Value = serde_json::from_str(&rendered).unwrap();
+            assert_eq!(decoded["format"], format);
+            assert_eq!(decoded["content"], private_content);
+            assert_eq!(
+                grocery_export_bytes(&export).unwrap(),
+                private_content.as_bytes()
+            );
+        }
     }
 
     #[test]
@@ -8985,6 +9233,147 @@ mod tests {
                 {"id": "member-sarah", "name": "Sarah", "relationship": "partner", "archived": false}
             ]
         })
+    }
+
+    #[test]
+    fn household_log_human_agent_error_always_uses_reviewed_copy() {
+        let error = OneShotError {
+            code: "agent_error",
+            message: "A server-selected explanation.".to_owned(),
+            outcome_uncertain: true,
+        };
+
+        let sanitized = sanitize_household_log_error(error, OutputMode::HumanPlain, &[]);
+
+        assert_eq!(sanitized.code, "agent_error");
+        assert_eq!(sanitized.message, HOUSEHOLD_LOG_HUMAN_ERROR_MESSAGE);
+        assert!(sanitized.outcome_uncertain);
+    }
+
+    #[test]
+    fn household_log_human_server_error_with_generic_private_id_uses_reviewed_copy() {
+        let error = OneShotError::new(
+            "service_error",
+            "Server rejected member 3f1c9c2e-2f5a-4a5b-8f1e-9d2b7c6a4e01.",
+        );
+
+        let sanitized = sanitize_household_log_error(error, OutputMode::HumanAnsi, &[]);
+
+        assert_eq!(sanitized.code, "service_error");
+        assert_eq!(sanitized.message, HOUSEHOLD_LOG_HUMAN_ERROR_MESSAGE);
+        assert!(!sanitized.outcome_uncertain);
+    }
+
+    #[test]
+    fn household_log_human_server_error_with_whitespace_transformed_roster_id_is_sanitized() {
+        let error = OneShotError {
+            code: "service_error",
+            message: "Server rejected opaque- member-\nseven.".to_owned(),
+            outcome_uncertain: true,
+        };
+        let private_household_ids = vec!["opaque-member-seven".to_owned()];
+
+        let sanitized =
+            sanitize_household_log_error(error, OutputMode::HumanPlain, &private_household_ids);
+
+        assert_eq!(sanitized.code, "service_error");
+        assert_eq!(sanitized.message, HOUSEHOLD_LOG_HUMAN_ERROR_MESSAGE);
+        assert!(sanitized.outcome_uncertain);
+    }
+
+    #[test]
+    fn household_log_human_server_error_with_only_roster_id_prefix_uses_reviewed_copy() {
+        let error = OneShotError {
+            code: "service_error",
+            message: "Server rejected opaque-member.".to_owned(),
+            outcome_uncertain: true,
+        };
+        let private_household_ids = vec!["opaque-member-seven".to_owned()];
+
+        let sanitized =
+            sanitize_household_log_error(error, OutputMode::HumanPlain, &private_household_ids);
+
+        assert_eq!(sanitized.code, "service_error");
+        assert_eq!(sanitized.message, HOUSEHOLD_LOG_HUMAN_ERROR_MESSAGE);
+        assert!(sanitized.outcome_uncertain);
+    }
+
+    #[test]
+    fn household_log_json_error_keeps_exact_machine_semantics() {
+        let error = OneShotError {
+            code: "agent_error",
+            message: "Server rejected opaque- member-\nseven and _self.".to_owned(),
+            outcome_uncertain: true,
+        };
+        let private_household_ids = vec!["opaque-member-seven".to_owned()];
+
+        let sanitized =
+            sanitize_household_log_error(error.clone(), OutputMode::Json, &private_household_ids);
+
+        assert_eq!(sanitized, error);
+    }
+
+    #[test]
+    fn household_log_human_success_never_promotes_partial_only_text() {
+        let result = heyfood_application::OneShotTurnResult {
+            document: json!({"text": "Prepared for legacyOpa"}),
+            conversation_id: Some("conversation-1".into()),
+            partial_text_promoted: true,
+            streamed_choice_value_authorities: Vec::new(),
+        };
+
+        let human =
+            render_household_log_result(&result, OutputMode::HumanPlain, &["legacyOpaque7"]);
+        assert_eq!(human.trim_end(), UNRENDERABLE_AGENT_RESULT_MESSAGE);
+        assert!(!human.contains("legacyOpa"));
+
+        let machine = render_household_log_result(&result, OutputMode::Json, &["legacyOpaque7"]);
+        assert_eq!(
+            serde_json::from_str::<Value>(&machine).unwrap(),
+            result.document
+        );
+    }
+
+    #[test]
+    fn household_log_human_terminal_text_rejects_a_known_id_prefix() {
+        let result = heyfood_application::OneShotTurnResult {
+            document: json!({"message": "Prepared for legacyOpa"}),
+            conversation_id: None,
+            partial_text_promoted: false,
+            streamed_choice_value_authorities: Vec::new(),
+        };
+
+        let human =
+            render_household_log_result(&result, OutputMode::HumanPlain, &["legacyOpaque7"]);
+        assert_eq!(human.trim_end(), UNRENDERABLE_AGENT_RESULT_MESSAGE);
+        assert!(!human.contains("legacyOpa"));
+    }
+
+    #[test]
+    fn household_log_human_result_retains_replaced_choice_value_authority() {
+        let result = heyfood_application::OneShotTurnResult {
+            document: json!({
+                "message": "Prepared for foreignOpaque7",
+                "choices": {
+                    "choices": ["Continue"],
+                    "choice_details": [{"label": "Continue", "value": "next"}],
+                    "allow_multiple": false
+                }
+            }),
+            conversation_id: None,
+            partial_text_promoted: false,
+            streamed_choice_value_authorities: vec!["foreignOpaque7".into(), "next".into()],
+        };
+
+        let human = render_household_log_result(&result, OutputMode::HumanPlain, &[]);
+        assert_eq!(human.trim_end(), UNRENDERABLE_AGENT_RESULT_MESSAGE);
+        assert!(!human.contains("foreignOpaque7"));
+
+        let machine = render_household_log_result(&result, OutputMode::Json, &[]);
+        assert_eq!(
+            serde_json::from_str::<Value>(&machine).unwrap(),
+            result.document
+        );
     }
 
     #[test]
@@ -10035,6 +10424,7 @@ mod tests {
             &mut self,
             operation_id: u64,
             prompt: String,
+            _presented_household_context: Option<PresentedHouseholdContextV1>,
             events: mpsc::Sender<RuntimeEvent>,
         ) -> io::Result<()> {
             self.started.push((operation_id, prompt));
@@ -10057,6 +10447,7 @@ mod tests {
             &mut self,
             operation_id: u64,
             command: AgentConfirmationCommandWire,
+            _presented_household_context: Option<PresentedHouseholdContextV1>,
             _events: mpsc::Sender<RuntimeEvent>,
         ) -> io::Result<()> {
             self.confirmed.push((operation_id, command));
@@ -10093,7 +10484,7 @@ mod tests {
             .expect("native signal forwarding starts with the session");
 
         driver
-            .start_turn(1, "first question".into(), sender.clone())
+            .start_turn(1, "first question".into(), None, sender.clone())
             .unwrap();
         let mut first_events = Vec::new();
         loop {
@@ -10125,7 +10516,7 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
         driver
-            .start_turn(2, "follow up".into(), sender)
+            .start_turn(2, "follow up".into(), None, sender)
             .expect("completed turn is reaped before the next turn");
         loop {
             if matches!(
@@ -10182,7 +10573,7 @@ mod tests {
 
         for (operation_id, prompt) in [(1, "first"), (2, "after expiry")] {
             driver
-                .start_turn(operation_id, prompt.into(), sender.clone())
+                .start_turn(operation_id, prompt.into(), None, sender.clone())
                 .unwrap();
             loop {
                 if matches!(
@@ -10232,7 +10623,7 @@ mod tests {
         let (sender, mut receiver) = mpsc::channel(16);
 
         driver
-            .start_turn(1, "What can I eat?".into(), sender)
+            .start_turn(1, "What can I eat?".into(), None, sender)
             .unwrap();
         loop {
             if matches!(
@@ -10278,7 +10669,7 @@ mod tests {
         let (sender, mut receiver) = mpsc::channel(16);
 
         driver
-            .start_turn(1, "What can I eat?".into(), sender)
+            .start_turn(1, "What can I eat?".into(), None, sender)
             .unwrap();
         loop {
             if matches!(
@@ -10405,7 +10796,7 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
         driver
-            .start_turn(2, "fresh household question".into(), sender)
+            .start_turn(2, "fresh household question".into(), None, sender)
             .unwrap();
         loop {
             if matches!(
@@ -10537,9 +10928,11 @@ mod tests {
             Arc::new(Mutex::new(InteractiveContinuity {
                 conversation_id: None,
                 household_scope: Some("member-sarah".into()),
+                ..InteractiveContinuity::default()
             })),
             Some(service),
             Some(state),
+            None,
             None,
             CancellationToken::new(),
             events,
@@ -10859,6 +11252,7 @@ mod tests {
             Effect::SubmitTurn {
                 operation_id: 7,
                 prompt: "lunch".into(),
+                presented_household_context: None,
             },
         )
         .unwrap();
@@ -10888,6 +11282,7 @@ mod tests {
                     decision: heyfood_core::ConfirmationDecisionWire::Cancel,
                     edits: None,
                 },
+                presented_household_context: None,
             },
         )
         .unwrap();

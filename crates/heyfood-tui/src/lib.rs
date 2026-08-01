@@ -25,8 +25,8 @@ pub use model::{
     MAX_SCROLLBACK_ENTRIES, NativeOwnerProfileSaveStatusV1, OnboardingTargetV1, OperationState,
     OwnerProfileActionEligibilityV1, OwnerProfileActionLoadPurposeV1, OwnerProfileRetryActionV1,
     OwnerProfileRetryEligibilityV1, OwnerProfileRetryUnavailableReasonV1, OwnerSyncIntentHandleV1,
-    PanelRequest, ProfileActionsLoadedV1, ProfileConsentFailureV1, ProfileConsentFinishedV1,
-    ProfileConsentReview, ProfileCopyStateV1, ProfilePresentationModeV1,
+    PanelRequest, PresentedHouseholdContextV1, ProfileActionsLoadedV1, ProfileConsentFailureV1,
+    ProfileConsentFinishedV1, ProfileConsentReview, ProfileCopyStateV1, ProfilePresentationModeV1,
     ProfileRetrySyncFinishedV1, RuntimeEvent, SLASH_COMMAND_REGISTRY, Scrollback, SemanticEntry,
     SlashCommandSpec, Speaker, VoiceAvailability, dispatch, slash_suggestions,
 };

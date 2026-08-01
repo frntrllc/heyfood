@@ -518,6 +518,7 @@ impl QualifiedTurnDriver for SupervisedQualificationDriver {
         &mut self,
         operation_id: u64,
         prompt: String,
+        _presented_household_context: Option<heyfood_tui::PresentedHouseholdContextV1>,
         runtime_events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()> {
         let (run_turn, snapshot) = self.prepared.take().ok_or_else(|| {

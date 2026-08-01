@@ -163,6 +163,10 @@ heyfood grocery export UUID --format markdown [--out FILE [--overwrite]]
 heyfood grocery confirm --decision accept --proposal-stdin < proposal.json
 ```
 
+Omitting `--out` on `grocery export` is supported only with `--json`. Human
+output requires an owner-only export file and refuses before the export request
+is sent.
+
 Mutation commands prepare a proposal and do not commit it. The human must type
 `PREPARE` before the capability-bearing proposal is emitted. Confirmation
 reads the proposal from stdin so authorization material does not enter shell

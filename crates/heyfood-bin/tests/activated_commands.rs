@@ -857,6 +857,94 @@ async fn public_binary_writes_json_export_to_an_owner_only_file() {
 }
 
 #[tokio::test]
+async fn human_grocery_export_without_out_refuses_before_the_export_get() {
+    let root = TempRoot::new("export-human-requires-out");
+    initialize(&root.0, FULL_SCOPE);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(
+            request.starts_with("GET /v1/auth/capabilities "),
+            "{request}"
+        );
+        let body = serde_json::to_vec(&capabilities(true)).unwrap();
+        respond(&mut socket, "application/json", &body).await;
+        tokio::time::timeout(Duration::from_millis(250), listener.accept())
+            .await
+            .is_err()
+    });
+
+    let output = run(
+        &root.0,
+        &base_url,
+        &["grocery", "export", LIST_ID, "--format", "markdown"],
+        None,
+    )
+    .await;
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("Use `--out FILE`"), "{error}");
+    assert!(!error.contains("maya-uuid"));
+    assert!(server.await.unwrap(), "human export issued a product GET");
+}
+
+#[tokio::test]
+async fn machine_text_exports_are_one_lossless_json_value() {
+    for (format, content_type, content) in [
+        (
+            "markdown",
+            "text/markdown",
+            "# Grocery\n\n- onion for maya-uuid\n",
+        ),
+        ("text", "text/plain", "Grocery\nonion for maya-uuid\n"),
+    ] {
+        let root = TempRoot::new(&format!("export-machine-{format}"));
+        initialize(&root.0, FULL_SCOPE);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let expected_query = format!("format={format}");
+        let server = tokio::spawn(async move {
+            for index in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_request(&mut socket).await;
+                if index == 0 {
+                    assert!(request.starts_with("GET /v1/auth/capabilities "));
+                    let body = serde_json::to_vec(&capabilities(true)).unwrap();
+                    respond(&mut socket, "application/json", &body).await;
+                } else {
+                    assert!(
+                        request.starts_with(&format!("GET /v1/grocery/lists/{LIST_ID}/export?")),
+                        "{request}"
+                    );
+                    assert!(request.contains(&expected_query), "{request}");
+                    respond(&mut socket, content_type, content.as_bytes()).await;
+                }
+            }
+        });
+
+        let output = run(
+            &root.0,
+            &base_url,
+            &["--json", "grocery", "export", LIST_ID, "--format", format],
+            None,
+        )
+        .await;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["format"], format);
+        assert_eq!(value["content"], content);
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn public_binary_fails_closed_before_route_dispatch_for_scope_deferral_capability_and_confirmation()
  {
     let old = TempRoot::new("old-scope");

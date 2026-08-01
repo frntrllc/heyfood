@@ -28,7 +28,12 @@ pub const MAX_SCROLLBACK_BYTES: usize = 4 * 1024 * 1024;
 const TRUNCATION_NOTICE: &str = "[… earlier content truncated …]\n";
 const MAX_PROMPT_HISTORY: usize = 100;
 const MAX_CONFIRMATION_SOURCES_PER_ITEM: usize = 8;
+const MAX_PENDING_CHOICE_VALUE_AUTHORITIES: usize = heyfood_core::agent::MAX_AGENT_CHOICES;
+const MAX_PENDING_CHOICE_VALUE_AUTHORITY_BYTES: usize = MAX_SCROLLBACK_BYTES;
 const UNPRESENTABLE_AGENT_CHOICES_MESSAGE: &str = "hey.food returned choices this version can’t display safely. Ask the question again without selecting one of these options.";
+const UNPRESENTABLE_ACTION_CONFIRMATION_MESSAGE: &str = "hey.food returned a change confirmation this version can’t display safely. Nothing changed; ask to prepare the change again.";
+const NATIVE_HOUSEHOLD_AGENT_ERROR_MESSAGE: &str =
+    "hey.food could not complete this Household request. Review current state before trying again.";
 
 const PROFILE_USAGE: &str = "/profile | /profile consent | /profile retry-sync";
 
@@ -1083,6 +1088,7 @@ struct PendingActionConfirmation {
     confirmation_id: heyfood_core::GroceryConfirmationId,
     idempotency_key: heyfood_core::GroceryIdempotencyKey,
     editable_items: Option<Vec<serde_json::Map<String, serde_json::Value>>>,
+    private_household_ids: Vec<String>,
 }
 
 impl fmt::Debug for PendingActionConfirmation {
@@ -1090,6 +1096,10 @@ impl fmt::Debug for PendingActionConfirmation {
         formatter
             .debug_struct("PendingActionConfirmation")
             .field("has_editable_items", &self.editable_items.is_some())
+            .field(
+                "private_household_id_count",
+                &self.private_household_ids.len(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -1148,6 +1158,58 @@ struct HouseholdManagementSnapshotV1 {
     household_revision: HouseholdRevision,
     active_scope: HouseholdScope,
     members: Vec<HouseholdMemberPresentationV1>,
+}
+
+/// Exact native Household revision and scope currently accepted by the TUI
+/// reducer and visible in its Household chrome. Conversational adapters must
+/// carry this value back to the native driver; repository state alone cannot
+/// prove what the person saw before submitting a turn.
+#[derive(Clone, Eq, PartialEq)]
+pub struct PresentedHouseholdContextV1 {
+    household_revision: HouseholdRevision,
+    active_scope: HouseholdScope,
+}
+
+impl PresentedHouseholdContextV1 {
+    #[must_use]
+    pub const fn new(household_revision: HouseholdRevision, active_scope: HouseholdScope) -> Self {
+        Self {
+            household_revision,
+            active_scope,
+        }
+    }
+
+    #[must_use]
+    pub const fn household_revision(&self) -> HouseholdRevision {
+        self.household_revision
+    }
+
+    #[must_use]
+    pub const fn active_scope(&self) -> &HouseholdScope {
+        &self.active_scope
+    }
+}
+
+impl fmt::Debug for PresentedHouseholdContextV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PresentedHouseholdContextV1")
+            .field("household_revision", &self.household_revision.get())
+            .field(
+                "active_scope_kind",
+                &household_scope_kind(&self.active_scope),
+            )
+            .finish()
+    }
+}
+
+impl From<&HouseholdManagementSnapshotV1> for PresentedHouseholdContextV1 {
+    fn from(snapshot: &HouseholdManagementSnapshotV1) -> Self {
+        Self {
+            household_revision: snapshot.household_revision,
+            active_scope: snapshot.active_scope.clone(),
+        }
+    }
 }
 
 impl fmt::Debug for HouseholdManagementSnapshotV1 {
@@ -1363,6 +1425,8 @@ pub struct AppModel {
     history_index: Option<usize>,
     history_draft: String,
     pending_choice_labels: Vec<String>,
+    pending_choice_value_authorities: Vec<String>,
+    pending_choice_authority_failed_closed: bool,
     pending_agent_partial: String,
     pending_confirmation: Option<PendingActionConfirmation>,
     onboarding: Option<OnboardingFlow>,
@@ -1407,6 +1471,14 @@ impl fmt::Debug for AppModel {
             .field("idle_exit_armed", &self.idle_exit_armed)
             .field("prompt_history_count", &self.prompt_history.len())
             .field("pending_choice_count", &self.pending_choice_labels.len())
+            .field(
+                "pending_choice_value_authority_count",
+                &self.pending_choice_value_authorities.len(),
+            )
+            .field(
+                "pending_choice_authority_failed_closed",
+                &self.pending_choice_authority_failed_closed,
+            )
             .field(
                 "pending_agent_partial_bytes",
                 &self.pending_agent_partial.len(),
@@ -1461,6 +1533,8 @@ impl Default for AppModel {
             history_index: None,
             history_draft: String::new(),
             pending_choice_labels: Vec::new(),
+            pending_choice_value_authorities: Vec::new(),
+            pending_choice_authority_failed_closed: false,
             pending_agent_partial: String::new(),
             pending_confirmation: None,
             onboarding: None,
@@ -1812,10 +1886,12 @@ pub enum Effect {
     SubmitTurn {
         operation_id: u64,
         prompt: String,
+        presented_household_context: Option<PresentedHouseholdContextV1>,
     },
     ConfirmAction {
         operation_id: u64,
         command: AgentConfirmationCommandWire,
+        presented_household_context: Option<PresentedHouseholdContextV1>,
     },
     OpenPanel {
         operation_id: u64,
@@ -2050,11 +2126,14 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
     if !household_turn_is_authorized(model) {
         return Vec::new();
     }
+    let presented_household_context = presented_household_context(model);
     model.focus_latest_result_on_finish = false;
     model.voice_phase = VoicePhase::Idle;
     model.draft_before_voice.clear();
     let prompt = std::mem::take(&mut model.draft);
     model.pending_choice_labels.clear();
+    model.pending_choice_value_authorities.clear();
+    model.pending_choice_authority_failed_closed = false;
     model.pending_agent_partial.clear();
     remember_prompt(model, &prompt);
     model.cursor = 0;
@@ -2076,6 +2155,7 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
     vec![Effect::SubmitTurn {
         operation_id,
         prompt,
+        presented_household_context,
     }]
 }
 
@@ -2299,6 +2379,7 @@ fn submit_confirmation(
     };
     let editing = edits.is_some();
     let command = pending.command(decision, edits);
+    let presented_household_context = presented_household_context(model);
     model.pending_agent_partial.clear();
     model.draft.clear();
     model.cursor = 0;
@@ -2330,6 +2411,7 @@ fn submit_confirmation(
     vec![Effect::ConfirmAction {
         operation_id,
         command,
+        presented_household_context,
     }]
 }
 
@@ -4396,6 +4478,8 @@ fn handle_household_mutation_failed(
 fn clear_subject_bound_transients(model: &mut AppModel) {
     model.pending_confirmation = None;
     model.pending_choice_labels.clear();
+    model.pending_choice_value_authorities.clear();
+    model.pending_choice_authority_failed_closed = false;
     model.pending_agent_partial.clear();
     model.pending_household_choice = None;
     model.profile_consent_review = None;
@@ -5196,6 +5280,20 @@ fn household_turn_is_authorized(model: &mut AppModel) -> bool {
     true
 }
 
+fn presented_household_context(model: &AppModel) -> Option<PresentedHouseholdContextV1> {
+    model
+        .household_generation
+        .as_ref()
+        .is_some_and(|generation| generation.mode == HouseholdPresentationModeV1::NativeEnabled)
+        .then(|| {
+            model
+                .household_snapshot
+                .as_ref()
+                .map(PresentedHouseholdContextV1::from)
+        })
+        .flatten()
+}
+
 fn cancel_or_exit(model: &mut AppModel) -> Vec<Effect> {
     if has_active_household_work(model) {
         return cancel_household_draft(model);
@@ -5394,6 +5492,8 @@ fn invalidate_household_generation(
     model.onboarding = None;
     model.pending_confirmation = None;
     model.pending_choice_labels.clear();
+    model.pending_choice_value_authorities.clear();
+    model.pending_choice_authority_failed_closed = false;
     model.pending_agent_partial.clear();
     model.profile_consent_review = None;
     model.owner_profile_actions = None;
@@ -5656,6 +5756,13 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
             && !has_pending_household_driver_operation(model) =>
         {
             finish_stream(model, outcome);
+            if outcome == RunTurnOutcome::StaleGeneration && model.household_generation.is_some() {
+                // A pending confirmation was authorized by the old displayed
+                // Household context. It must not survive the exact-context
+                // mismatch or be replayed after reconciliation.
+                model.pending_confirmation = None;
+                return begin_household_load(model, HouseholdLoadIntentV1::Bootstrap);
+            }
         }
         RuntimeEvent::TurnFailed {
             operation_id,
@@ -5853,17 +5960,10 @@ fn finish_panel(model: &mut AppModel, panel: PanelRequest, result: Result<String
 }
 
 fn thinking_activity(stage: Option<&str>, message: Option<&str>) -> String {
-    let safe_message = message.map(terminal_safe_text);
-    if let Some(message) = safe_message
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .filter(|value| !contains_private_household_identifier(value))
-        .filter(|value| !looks_like_machine_identifier(value.trim()))
-    {
-        return message.to_owned();
-    }
-
-    [stage, safe_message.as_deref()]
+    // Activity arrives before the terminal result can declare Household
+    // identity authority. Only fixed copy selected by an allowlisted protocol
+    // identifier is safe to surface at this point.
+    [stage, message]
         .into_iter()
         .flatten()
         .find_map(|value| human_activity_for_identifier(value.trim()))
@@ -5891,23 +5991,170 @@ fn human_activity_for_identifier(value: &str) -> Option<String> {
     Some(message.into())
 }
 
-fn looks_like_machine_identifier(value: &str) -> bool {
-    value.contains('_')
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
-}
-
 fn contains_private_model_text(model: &AppModel, value: &str) -> bool {
     contains_private_household_identifier(value)
         || model.household_snapshot.as_ref().is_some_and(|snapshot| {
             snapshot.members.iter().any(|member| {
-                member
-                    .subject()
-                    .as_member()
-                    .is_some_and(|member_id| value.contains(member_id.as_str()))
+                member.subject().as_member().is_some_and(|member_id| {
+                    contains_wrapped_private_identifier(value, member_id.as_str())
+                })
             })
         })
+        || model.pending_confirmation.as_ref().is_some_and(|pending| {
+            pending
+                .private_household_ids
+                .iter()
+                .any(|identifier| contains_wrapped_private_identifier(value, identifier.as_str()))
+        })
+        || model.pending_choice_authority_failed_closed
+        || model
+            .pending_choice_value_authorities
+            .iter()
+            .any(|authority| choice_label_contains_value_authority(value, authority))
+}
+
+fn contains_wrapped_private_identifier(value: &str, identifier: &str) -> bool {
+    const MIN_PRIVATE_ID_PREFIX_CHARACTERS: usize = 8;
+
+    if identifier.is_empty() {
+        return false;
+    }
+    if identifier == "_self" {
+        return value.contains("_self");
+    }
+    if value.contains(identifier) {
+        return true;
+    }
+    let compact_identifier = identifier
+        .chars()
+        .filter(|character| !character.is_whitespace() && *character != '_')
+        .collect::<String>();
+    if compact_identifier.is_empty() {
+        return false;
+    }
+    let compact_value = value
+        .chars()
+        .filter(|character| !character.is_whitespace() && *character != '_')
+        .collect::<String>();
+    compact_value.contains(&compact_identifier) || {
+        let compact_value = compact_value.to_ascii_lowercase();
+        let compact_identifier = compact_identifier.to_ascii_lowercase();
+        compact_value.contains(&compact_identifier)
+            || (compact_identifier.chars().count() >= MIN_PRIVATE_ID_PREFIX_CHARACTERS
+                && compact_value.contains(
+                    &compact_identifier
+                        .chars()
+                        .take(MIN_PRIVATE_ID_PREFIX_CHARACTERS)
+                        .collect::<String>(),
+                ))
+    }
+}
+
+fn contains_private_model_text_or_ids(
+    model: &AppModel,
+    value: &str,
+    private_household_ids: &[&str],
+) -> bool {
+    contains_private_model_text(model, value)
+        || private_household_ids
+            .iter()
+            .any(|identifier| contains_wrapped_private_identifier(value, identifier))
+}
+
+fn choice_label_contains_value_authority(label: &str, authority: &str) -> bool {
+    const MIN_TRANSFORMED_AUTHORITY_CHARACTERS: usize = 8;
+
+    if authority.is_empty() {
+        return false;
+    }
+    if authority == "_self" {
+        return label.contains("_self");
+    }
+    if label.contains(authority) {
+        return true;
+    }
+    if authority.chars().count() < MIN_TRANSFORMED_AUTHORITY_CHARACTERS {
+        return false;
+    }
+    contains_wrapped_private_identifier(label, authority)
+}
+
+fn record_choice_value_authorities(model: &mut AppModel, authorities: Vec<String>) {
+    if model.pending_choice_authority_failed_closed {
+        return;
+    }
+    let Some(mut retained_bytes) = model
+        .pending_choice_value_authorities
+        .iter()
+        .try_fold(0usize, |total, authority| {
+            total.checked_add(authority.len())
+        })
+    else {
+        model.pending_choice_authority_failed_closed = true;
+        return;
+    };
+    for authority in authorities {
+        if model
+            .pending_choice_value_authorities
+            .iter()
+            .any(|retained| retained == &authority)
+        {
+            continue;
+        }
+        let Some(next_bytes) = retained_bytes.checked_add(authority.len()) else {
+            model.pending_choice_authority_failed_closed = true;
+            return;
+        };
+        if model.pending_choice_value_authorities.len() >= MAX_PENDING_CHOICE_VALUE_AUTHORITIES
+            || next_bytes > MAX_PENDING_CHOICE_VALUE_AUTHORITY_BYTES
+        {
+            model.pending_choice_authority_failed_closed = true;
+            return;
+        }
+        retained_bytes = next_bytes;
+        model.pending_choice_value_authorities.push(authority);
+    }
+}
+
+fn collect_declared_household_ids(value: &serde_json::Value) -> Option<Vec<&str>> {
+    const MAX_IDENTITY_NESTING: usize = 32;
+    const MAX_IDENTITY_VALUES: usize = 4_096;
+
+    let mut identifiers = Vec::new();
+    let mut pending = vec![(value, 0usize)];
+    let mut visited = 0usize;
+    while let Some((value, depth)) = pending.pop() {
+        visited = visited.checked_add(1)?;
+        if visited > MAX_IDENTITY_VALUES || depth > MAX_IDENTITY_NESTING {
+            return None;
+        }
+        match value {
+            serde_json::Value::Object(object) => {
+                for (key, value) in object {
+                    if matches!(
+                        key.as_str(),
+                        "member_id" | "intended_for" | "affected_member" | "active_member_id"
+                    ) {
+                        match value {
+                            serde_json::Value::String(identifier)
+                                if !identifier.is_empty() && identifier.trim() == identifier =>
+                            {
+                                identifiers.push(identifier.as_str());
+                            }
+                            serde_json::Value::Null => {}
+                            _ => return None,
+                        }
+                    }
+                    pending.push((value, depth + 1));
+                }
+            }
+            serde_json::Value::Array(values) => {
+                pending.extend(values.iter().map(|value| (value, depth + 1)));
+            }
+            _ => {}
+        }
+    }
+    Some(identifiers)
 }
 
 fn append_agent_partial_buffer(model: &mut AppModel, text: &str) {
@@ -5938,15 +6185,10 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             current,
             total,
         } => {
-            let message = terminal_safe_text(&message);
-            let message = if contains_private_model_text(model, &message) {
-                "Making progress…".into()
-            } else if looks_like_machine_identifier(message.trim()) {
-                human_activity_for_identifier(message.trim())
-                    .unwrap_or_else(|| "Making progress…".into())
-            } else {
-                message
-            };
+            // As with Thinking, arbitrary pre-terminal prose cannot be
+            // screened against identity declarations that may arrive later.
+            let message = human_activity_for_identifier(message.trim())
+                .unwrap_or_else(|| "Making progress…".into());
             model.activity = match (current, total) {
                 (Some(current), Some(total)) => Some(format!("{message} ({current}/{total})")),
                 _ => Some(message),
@@ -5962,6 +6204,12 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                 .iter()
                 .map(|choice| terminal_safe_text(&choice.label))
                 .collect::<Vec<_>>();
+            let choice_value_authorities = choices
+                .iter()
+                .filter_map(|choice| choice.value.as_deref())
+                .map(terminal_safe_text)
+                .collect::<Vec<_>>();
+            record_choice_value_authorities(model, choice_value_authorities);
             if choice_labels
                 .iter()
                 .any(|label| contains_private_model_text(model, label))
@@ -5972,21 +6220,29 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                 });
                 model.activity = Some("Responding…".into());
             } else {
-                model.pending_choice_labels = choice_labels.clone();
-                model.scrollback.mutate_last_assistant(|entry| {
-                    if !entry.text.is_empty() {
-                        entry.text.push('\n');
-                    }
-                    for label in choice_labels {
-                        entry.text.push_str("• ");
-                        entry.text.push_str(&label);
-                        entry.text.push('\n');
-                    }
-                });
+                // Choice labels are untrusted until the terminal document has
+                // supplied any sibling Household identity declarations. Keep
+                // them reducer-local and render only after that document has
+                // been screened.
+                model.pending_choice_labels = choice_labels;
                 model.activity = Some("Choose an option".into());
             }
         }
         AgentEvent::Result { document, .. } => {
+            let declared_household_ids = collect_declared_household_ids(&document);
+            let identity_declarations_are_malformed = declared_household_ids.is_none();
+            let pending_private_household_ids = model
+                .pending_confirmation
+                .as_ref()
+                .map(|pending| pending.private_household_ids.clone())
+                .unwrap_or_default();
+            let mut private_household_ids = pending_private_household_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            if let Some(declared_household_ids) = declared_household_ids.as_ref() {
+                private_household_ids.extend(declared_household_ids.iter().copied());
+            }
             let focus_full_menu = is_full_household_menu(&document);
             let confirmation = ActionConfirmationEnvelopeWire::from_result_document(&document);
             let household_evaluation_candidate = household_evaluation_document(&document).is_some();
@@ -5994,27 +6250,98 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             let household_evaluation = render_household_evaluation(&document);
             let household_menu = render_household_menu(&document);
             let mut choice_labels = std::mem::take(&mut model.pending_choice_labels);
+            let choice_value_authorities = model.pending_choice_value_authorities.clone();
             let buffered_partial = std::mem::take(&mut model.pending_agent_partial);
-            let result_is_private = result
+            let result_is_private = identity_declarations_are_malformed
+                || result.as_ref().is_some_and(|value| {
+                    contains_private_model_text_or_ids(model, value, &private_household_ids)
+                });
+            let household_evaluation_is_private = household_evaluation
                 .as_ref()
-                .is_some_and(|value| contains_private_model_text(model, value));
-            let buffered_partial_is_private = contains_private_model_text(model, &buffered_partial);
-            if choice_labels
-                .iter()
-                .any(|label| contains_private_model_text(model, label))
+                .ok()
+                .and_then(|evaluation| evaluation.as_ref())
+                .is_some_and(|evaluation| {
+                    contains_private_model_text_or_ids(model, evaluation, &private_household_ids)
+                })
+                || identity_declarations_are_malformed;
+            let household_menu_is_private = identity_declarations_are_malformed
+                || household_menu.as_ref().is_some_and(|menu| {
+                    contains_private_model_text_or_ids(model, menu, &private_household_ids)
+                });
+            let rendered_confirmation = confirmation
+                .as_ref()
+                .ok()
+                .and_then(|confirmation| confirmation.as_ref())
+                .map(|confirmation| render_action_confirmation_for_model(model, confirmation));
+            let confirmation_is_private = confirmation
+                .as_ref()
+                .ok()
+                .and_then(|confirmation| confirmation.as_ref())
+                .zip(rendered_confirmation.as_ref())
+                .is_some_and(|(confirmation, presentation)| {
+                    let declared_member_ids = confirmation_declared_member_ids(confirmation);
+                    identity_declarations_are_malformed
+                        || contains_private_model_text_or_ids(
+                            model,
+                            presentation,
+                            &private_household_ids,
+                        )
+                        || declared_member_ids.is_none()
+                        || !confirmation_household_authority_is_valid(
+                            model,
+                            declared_member_ids.as_deref().unwrap_or_default(),
+                        )
+                });
+            let confirmation_parse_error_is_private =
+                confirmation.as_ref().err().is_some_and(|message| {
+                    identity_declarations_are_malformed
+                        || contains_private_model_text_or_ids(
+                            model,
+                            message,
+                            &private_household_ids,
+                        )
+                });
+            let buffered_partial_is_private = identity_declarations_are_malformed
+                || contains_private_model_text_or_ids(
+                    model,
+                    &buffered_partial,
+                    &private_household_ids,
+                );
+            let buffered_partial_is_presentable = model.profile_presentation_mode
+                == ProfilePresentationModeV1::LegacyCompatibility
+                && !buffered_partial_is_private;
+            if identity_declarations_are_malformed
+                || choice_labels.iter().any(|label| {
+                    contains_private_model_text_or_ids(model, label, &private_household_ids)
+                        || choice_value_authorities.iter().any(|authority| {
+                            choice_label_contains_value_authority(label, authority)
+                        })
+                })
             {
                 choice_labels.clear();
             }
+            model.pending_choice_value_authorities.clear();
+            model.pending_choice_authority_failed_closed = false;
             model.scrollback.mutate_last_assistant(|entry| {
                 match confirmation.as_ref() {
                     Ok(Some(envelope)) => {
-                        entry.text = render_action_confirmation(envelope);
+                        entry.text = if confirmation_is_private {
+                            UNPRESENTABLE_ACTION_CONFIRMATION_MESSAGE.into()
+                        } else {
+                            rendered_confirmation
+                                .clone()
+                                .unwrap_or_else(|| render_action_confirmation(envelope))
+                        };
                     }
                     Err(message) => {
-                        entry.text = format!(
-                            "Unable to present this confirmation safely: {}",
-                            terminal_safe_text(message)
-                        );
+                        entry.text = if confirmation_parse_error_is_private {
+                            "Unable to present this confirmation safely.".into()
+                        } else {
+                            format!(
+                                "Unable to present this confirmation safely: {}",
+                                terminal_safe_text(message)
+                            )
+                        };
                     }
                     Ok(None) => {
                         if let Err(error) = household_evaluation.as_ref() {
@@ -6024,14 +6351,25 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                             .ok()
                             .and_then(|evaluation| evaluation.as_ref())
                         {
-                            entry.text = evaluation.clone();
+                            entry.text = if household_evaluation_is_private {
+                                heyfood_application::UNPRESENTABLE_HOUSEHOLD_EVALUATION_MESSAGE
+                                    .into()
+                            } else {
+                                evaluation.clone()
+                            };
                         } else if let Some(menu) = household_menu {
-                            entry.text = menu;
+                            entry.text = if household_menu_is_private {
+                                heyfood_application::household_menu::UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE
+                                    .into()
+                            } else {
+                                menu
+                            };
                         } else if household_evaluation_candidate {
                             entry.text = result
                                 .filter(|value| !value.is_empty() && !result_is_private)
                                 .or_else(|| {
-                                    (!buffered_partial.is_empty() && !buffered_partial_is_private)
+                                    (!buffered_partial.is_empty()
+                                        && buffered_partial_is_presentable)
                                         .then(|| buffered_partial.clone())
                                 })
                                 .unwrap_or_else(|| UNRENDERABLE_AGENT_RESULT_MESSAGE.into());
@@ -6043,7 +6381,7 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                         } else if result_is_private {
                             entry.text = UNRENDERABLE_AGENT_RESULT_MESSAGE.into();
                         } else if !buffered_partial.is_empty()
-                            && !buffered_partial_is_private
+                            && buffered_partial_is_presentable
                             && document.get("structured").is_none()
                             && document.get("structured_content").is_none()
                             && document.get("structuredContent").is_none()
@@ -6058,15 +6396,22 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                 entry.streaming = false;
             });
             match confirmation {
-                Ok(Some(envelope)) => {
+                Ok(Some(envelope)) if !confirmation_is_private => {
                     let editable_items = editable_grocery_items(&envelope);
+                    let private_household_ids = declared_household_ids
+                        .as_ref()
+                        .into_iter()
+                        .flatten()
+                        .map(|identifier| (*identifier).to_owned())
+                        .collect();
                     model.pending_confirmation = Some(PendingActionConfirmation {
                         confirmation_id: envelope.confirmation_id,
                         idempotency_key: envelope.idempotency_key,
                         editable_items,
+                        private_household_ids,
                     });
                 }
-                Ok(None) | Err(_) => model.pending_confirmation = None,
+                Ok(Some(_)) | Ok(None) | Err(_) => model.pending_confirmation = None,
             }
             mark_finishing(model);
             model.focus_latest_result_on_finish = focus_full_menu;
@@ -6074,7 +6419,21 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             model.idle_exit_armed = false;
         }
         AgentEvent::Error { error } => {
+            let pending_private_household_ids = model
+                .pending_confirmation
+                .as_ref()
+                .map(|pending| pending.private_household_ids.clone())
+                .unwrap_or_default();
+            let pending_private_household_ids = pending_private_household_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            let pending_choice_value_authorities = model.pending_choice_value_authorities.clone();
+            let pending_choice_authority_failed_closed =
+                model.pending_choice_authority_failed_closed;
             model.pending_choice_labels.clear();
+            model.pending_choice_value_authorities.clear();
+            model.pending_choice_authority_failed_closed = false;
             model.pending_agent_partial.clear();
             if !confirmation_error_preserves_pending(&error.code) {
                 model.pending_confirmation = None;
@@ -6083,9 +6442,27 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             if message.trim().is_empty() {
                 message = "hey.food could not complete this request. You can try again now.".into();
             }
-            let message_is_private = contains_private_model_text(model, &message);
+            let message_is_private =
+                contains_private_model_text_or_ids(model, &message, &pending_private_household_ids)
+                    || pending_choice_authority_failed_closed
+                    || pending_choice_value_authorities.iter().any(|authority| {
+                        choice_label_contains_value_authority(&message, authority)
+                    });
+            let native_household_context =
+                model.profile_presentation_mode != ProfilePresentationModeV1::LegacyCompatibility;
             model.scrollback.mutate_last_assistant(|entry| {
-                if message_is_private || contains_private_household_identifier(&entry.text) {
+                if native_household_context {
+                    entry.text = NATIVE_HOUSEHOLD_AGENT_ERROR_MESSAGE.into();
+                } else if message_is_private
+                    || contains_private_household_identifier(&entry.text)
+                    || pending_private_household_ids.iter().any(|identifier| {
+                        contains_wrapped_private_identifier(&entry.text, identifier)
+                    })
+                    || pending_choice_value_authorities.iter().any(|authority| {
+                        choice_label_contains_value_authority(&entry.text, authority)
+                    })
+                    || pending_choice_authority_failed_closed
+                {
                     entry.text =
                         "hey.food could not complete this request. You can try again now.".into();
                 } else {
@@ -6107,7 +6484,97 @@ fn confirmation_error_preserves_pending(code: &str) -> bool {
     matches!(code, "edit_invalid" | "temporarily_unavailable")
 }
 
+fn confirmation_declared_member_ids(
+    envelope: &ActionConfirmationEnvelopeWire,
+) -> Option<Vec<&str>> {
+    const MAX_CONFIRMATION_NESTING: usize = 32;
+    const MAX_CONFIRMATION_VALUES: usize = 4_096;
+
+    let Some(preview) = envelope.structured_preview.as_ref() else {
+        return Some(Vec::new());
+    };
+    let mut identifiers = Vec::new();
+    let mut pending = vec![(preview, 0usize)];
+    let mut visited = 0usize;
+    while let Some((value, depth)) = pending.pop() {
+        visited = visited.checked_add(1)?;
+        if visited > MAX_CONFIRMATION_VALUES || depth > MAX_CONFIRMATION_NESTING {
+            return None;
+        }
+        match value {
+            serde_json::Value::Object(object) => {
+                for (key, value) in object {
+                    if matches!(key.as_str(), "member_id" | "intended_for") {
+                        match value {
+                            serde_json::Value::String(identifier) if !identifier.is_empty() => {
+                                identifiers.push(identifier.as_str());
+                            }
+                            serde_json::Value::Null => {}
+                            _ => return None,
+                        }
+                    }
+                    pending.push((value, depth + 1));
+                }
+            }
+            serde_json::Value::Array(values) => {
+                pending.extend(values.iter().map(|value| (value, depth + 1)));
+            }
+            _ => {}
+        }
+    }
+    Some(identifiers)
+}
+
+fn confirmation_household_authority_is_valid(model: &AppModel, identifiers: &[&str]) -> bool {
+    if model.profile_presentation_mode == ProfilePresentationModeV1::LegacyCompatibility {
+        return true;
+    }
+    let Some(snapshot) = model.household_snapshot.as_ref() else {
+        return false;
+    };
+    identifiers
+        .iter()
+        .all(|identifier| confirmation_member_is_in_active_scope(snapshot, identifier))
+}
+
+fn confirmation_member_is_in_active_scope(
+    snapshot: &HouseholdManagementSnapshotV1,
+    identifier: &str,
+) -> bool {
+    match &snapshot.active_scope {
+        HouseholdScope::Subject(HouseholdSubjectId::Self_) => identifier == "_self",
+        HouseholdScope::Subject(HouseholdSubjectId::Member(member_id)) => {
+            identifier == member_id.as_str()
+        }
+        HouseholdScope::Everyone => snapshot.members.iter().any(|member| {
+            household_subject_is_scope_eligible(member)
+                && match member.subject() {
+                    HouseholdSubjectId::Self_ => identifier == "_self",
+                    HouseholdSubjectId::Member(member_id) => identifier == member_id.as_str(),
+                }
+        }),
+    }
+}
+
 fn render_action_confirmation(envelope: &ActionConfirmationEnvelopeWire) -> String {
+    render_action_confirmation_with_snapshot(envelope, None)
+}
+
+fn render_action_confirmation_for_model(
+    model: &AppModel,
+    envelope: &ActionConfirmationEnvelopeWire,
+) -> String {
+    let snapshot = (model.profile_presentation_mode
+        != ProfilePresentationModeV1::LegacyCompatibility)
+        .then_some(model.household_snapshot.as_ref())
+        .flatten();
+    render_action_confirmation_with_snapshot(envelope, snapshot)
+}
+
+fn render_action_confirmation_with_snapshot(
+    envelope: &ActionConfirmationEnvelopeWire,
+    snapshot: Option<&HouseholdManagementSnapshotV1>,
+) -> String {
     let mut output = format!(
         "Review before changing anything\n\n{}\n",
         terminal_safe_text(&envelope.preview)
@@ -6147,7 +6614,7 @@ fn render_action_confirmation(envelope: &ActionConfirmationEnvelopeWire) -> Stri
             };
             let _ = writeln!(output, "{}. {name}{intended}{amount}", index + 1);
             render_confirmation_sources(&mut output, item);
-            render_confirmation_safety(&mut output, item, intended_for);
+            render_confirmation_safety_with_snapshot(&mut output, item, intended_for, snapshot);
         }
     }
     if let Some(expires_at) = envelope.expires_at.as_deref() {
@@ -6290,10 +6757,20 @@ fn render_confirmation_sources(output: &mut String, item: &serde_json::Value) {
     }
 }
 
+#[cfg(test)]
 fn render_confirmation_safety(
     output: &mut String,
     item: &serde_json::Value,
     intended_for: Option<&str>,
+) {
+    render_confirmation_safety_with_snapshot(output, item, intended_for, None);
+}
+
+fn render_confirmation_safety_with_snapshot(
+    output: &mut String,
+    item: &serde_json::Value,
+    intended_for: Option<&str>,
+    snapshot: Option<&HouseholdManagementSnapshotV1>,
 ) {
     // The generic C3 v1 item card placed flags at `item.safety_flags`.
     // Grocery Phase A's frozen production fixture specializes that shape as
@@ -6317,13 +6794,17 @@ fn render_confirmation_safety(
     if let Some(flags) = flags {
         for flag in flags {
             let member_id = flag.get("member_id").and_then(serde_json::Value::as_str);
-            let member = flag
-                .get("label")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|value| required_text(value, 80).ok())
-                .map(|value| terminal_safe_text(&value))
-                .or_else(|| (member_id == Some("_self")).then(|| "You".to_owned()))
-                .unwrap_or_else(|| "Household member".into());
+            let member = snapshot.map_or_else(
+                || {
+                    flag.get("label")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|value| required_text(value, 80).ok())
+                        .map(|value| terminal_safe_text(&value))
+                        .or_else(|| (member_id == Some("_self")).then(|| "You".to_owned()))
+                        .unwrap_or_else(|| "Household member".into())
+                },
+                |snapshot| trusted_confirmation_member_label(snapshot, member_id),
+            );
             let status = flag
                 .get("status")
                 .and_then(serde_json::Value::as_str)
@@ -6360,6 +6841,33 @@ fn render_confirmation_safety(
     }
 }
 
+fn trusted_confirmation_member_label(
+    snapshot: &HouseholdManagementSnapshotV1,
+    member_id: Option<&str>,
+) -> String {
+    let Some(member_id) = member_id else {
+        return "Household member".into();
+    };
+    if member_id == "_self" {
+        return "You".into();
+    }
+    snapshot
+        .members
+        .iter()
+        .find(|member| {
+            member
+                .subject()
+                .as_member()
+                .is_some_and(|candidate| candidate.as_str() == member_id)
+        })
+        .map(|member| terminal_safe_text(member.display_label()))
+        .filter(|label| {
+            !contains_private_household_identifier(label)
+                && !contains_wrapped_private_identifier(label, member_id)
+        })
+        .unwrap_or_else(|| "Household member".into())
+}
+
 fn human_safety_status(status: &str) -> &'static str {
     match status {
         "generally_safer" => "generally safer",
@@ -6394,6 +6902,8 @@ fn mark_finishing(model: &mut AppModel) {
 
 fn finish_stream(model: &mut AppModel, outcome: RunTurnOutcome) {
     model.pending_choice_labels.clear();
+    model.pending_choice_value_authorities.clear();
+    model.pending_choice_authority_failed_closed = false;
     model.pending_agent_partial.clear();
     let old_lines = model.scrollback.rendered_lines();
     model.scrollback.mutate_last_assistant(|entry| {
@@ -6436,8 +6946,13 @@ fn finish_failed_stream(model: &mut AppModel, failure: TurnFailure) {
     model.focus_latest_result_on_finish = false;
     model.pending_choice_labels.clear();
     let buffered_partial = std::mem::take(&mut model.pending_agent_partial);
-    let release_buffered_partial =
-        !buffered_partial.is_empty() && !contains_private_model_text(model, &buffered_partial);
+    let native_household_context =
+        model.profile_presentation_mode != ProfilePresentationModeV1::LegacyCompatibility;
+    let release_buffered_partial = !native_household_context
+        && !buffered_partial.is_empty()
+        && !contains_private_model_text(model, &buffered_partial);
+    model.pending_choice_value_authorities.clear();
+    model.pending_choice_authority_failed_closed = false;
     let old_lines = model.scrollback.rendered_lines();
     model.scrollback.mutate_last_assistant(|entry| {
         let notice = match failure.kind {
@@ -6559,6 +7074,89 @@ mod tests {
             Action::Runtime(RuntimeEvent::ProfilePresentationMode(
                 ProfilePresentationModeV1::NativeEnabled,
             )),
+        );
+        model
+    }
+
+    fn model_with_known_opaque_member(draft: &str, raw_member_id: &str) -> AppModel {
+        let member_id = MemberId::parse_preserved(raw_member_id).unwrap();
+        let owner = HouseholdMemberPresentationV1::new(
+            HouseholdSubjectId::self_(),
+            "Me",
+            RelationshipV1::Self_,
+            HouseholdLifecycleV1::Active,
+            HouseholdProfileStateV1::LocalOnly,
+            Some(ProfileRevision::new(1).unwrap()),
+        )
+        .unwrap();
+        let member = HouseholdMemberPresentationV1::new(
+            HouseholdSubjectId::member(member_id),
+            "Maya",
+            RelationshipV1::Child,
+            HouseholdLifecycleV1::Active,
+            HouseholdProfileStateV1::LocalOnly,
+            Some(ProfileRevision::new(1).unwrap()),
+        )
+        .unwrap();
+        AppModel {
+            draft: draft.into(),
+            cursor: draft.chars().count(),
+            household_snapshot: Some(HouseholdManagementSnapshotV1 {
+                household_revision: HouseholdRevision::new(1).unwrap(),
+                active_scope: HouseholdScope::Subject(HouseholdSubjectId::self_()),
+                members: vec![owner, member],
+            }),
+            ..AppModel::default()
+        }
+    }
+
+    fn model_with_legacy_pending_confirmation(private_member_id: &str) -> AppModel {
+        let mut model = AppModel {
+            draft: "add oats".into(),
+            cursor: 8,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "structured": {
+                            "type": "action_confirmation",
+                            "confirmation_id": "00000000-0000-4000-8000-000000000001",
+                            "idempotency_key": "00000000-0000-4000-8000-000000000002",
+                            "action": "grocery_list_add_items",
+                            "preview": "Add one reviewed item",
+                            "card_form": "item_list",
+                            "structured_preview": {
+                                "items": [{
+                                    "name": "oats",
+                                    "quantity": 1,
+                                    "unit": "bag",
+                                    "intended_for": private_member_id
+                                }]
+                            }
+                        }
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFinished {
+                operation_id: 1,
+                outcome: RunTurnOutcome::Completed,
+            }),
+        );
+        assert_eq!(
+            model
+                .pending_confirmation
+                .as_ref()
+                .map(|pending| pending.private_household_ids.as_slice()),
+            Some([private_member_id.to_owned()].as_slice())
         );
         model
     }
@@ -7038,6 +7636,32 @@ mod tests {
     }
 
     #[test]
+    fn native_agent_errors_never_release_untrusted_household_id_prefixes() {
+        let member_id = "opaque-member-seven";
+        let mut model = model_with_known_opaque_member("question", member_id);
+        let _ = dispatch(&mut model, Action::Submit);
+        model.profile_presentation_mode = ProfilePresentationModeV1::NativeEnabled;
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Error {
+                    error: AgentFailure {
+                        code: "agent_error".into(),
+                        message: "Request failed for opaque-member-sev".into(),
+                        retryable: false,
+                    },
+                },
+            }),
+        );
+
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert_eq!(text, NATIVE_HOUSEHOLD_AGENT_ERROR_MESSAGE);
+        assert!(!text.contains("opaque-member-sev"));
+        assert!(!text.contains(member_id));
+    }
+
+    #[test]
     fn terminal_result_rejects_known_opaque_member_ids_even_without_household_shape() {
         let member_id = MemberId::parse_preserved("opaque-member-seven").unwrap();
         let member = HouseholdMemberPresentationV1::new(
@@ -7097,6 +7721,376 @@ mod tests {
         let text = &model.scrollback.entries().back().unwrap().text;
         assert_eq!(text, UNRENDERABLE_AGENT_RESULT_MESSAGE);
         assert!(!text.contains(member_id.as_str()));
+    }
+
+    #[test]
+    fn terminal_result_uses_declared_identity_authority_without_a_local_roster() {
+        let private_member_id = "foreignOpaque7";
+        let mut model = AppModel {
+            draft: "question".into(),
+            cursor: 8,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "message": format!("Prepared for {private_member_id}"),
+                        "member_id": private_member_id
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert_eq!(text, UNRENDERABLE_AGENT_RESULT_MESSAGE);
+        assert!(!text.contains(private_member_id));
+    }
+
+    #[test]
+    fn malformed_terminal_identity_declarations_fail_closed() {
+        let mut model = AppModel {
+            draft: "question".into(),
+            cursor: 8,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "message": "This would otherwise be displayed.",
+                        "member_id": 7
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+
+        assert_eq!(
+            model.scrollback.entries().back().unwrap().text,
+            UNRENDERABLE_AGENT_RESULT_MESSAGE
+        );
+    }
+
+    #[test]
+    fn self_identity_is_screened_raw_without_hiding_ordinary_prose() {
+        assert!(contains_wrapped_private_identifier(
+            "internal subject _self",
+            "_self"
+        ));
+        assert!(!contains_wrapped_private_identifier(
+            "Choose this for yourself.",
+            "_self"
+        ));
+    }
+
+    #[test]
+    fn choices_wait_for_sibling_terminal_identity_screening() {
+        let private_member_id = "foreignOpaque7";
+        let mut model = AppModel {
+            draft: "question".into(),
+            cursor: 8,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Choices {
+                    choices: vec![
+                        heyfood_core::AgentChoice::from_untrusted(
+                            format!("Choose {private_member_id}"),
+                            Some("choice-1".into()),
+                        )
+                        .unwrap(),
+                    ],
+                    allow_multiple: false,
+                },
+            }),
+        );
+        assert!(model.scrollback.entries().back().unwrap().text.is_empty());
+
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "message": "Choose a reviewed option.",
+                        "intended_for": private_member_id
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert_eq!(text, "Choose a reviewed option.");
+        assert!(!text.contains(private_member_id));
+    }
+
+    #[test]
+    fn choice_values_are_private_authority_for_their_labels() {
+        let private_member_id = "foreignOpaque7";
+        let mut model = AppModel {
+            draft: "question".into(),
+            cursor: 8,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Choices {
+                    choices: vec![
+                        heyfood_core::AgentChoice::from_untrusted(
+                            format!("Choose {private_member_id}"),
+                            Some(private_member_id.into()),
+                        )
+                        .unwrap(),
+                    ],
+                    allow_multiple: false,
+                },
+            }),
+        );
+        let interim = &model.scrollback.entries().back().unwrap().text;
+        assert_eq!(interim, UNPRESENTABLE_AGENT_CHOICES_MESSAGE);
+        assert!(!interim.contains(private_member_id));
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({"message": "Choose a reviewed option."}),
+                    conversation_id: None,
+                },
+            }),
+        );
+
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert_eq!(text, "Choose a reviewed option.");
+        assert!(!text.contains(private_member_id));
+    }
+
+    #[test]
+    fn choice_value_authority_is_preserved_across_all_later_turn_surfaces() {
+        let private_member_id = "foreignOpaque7";
+        let start_turn = || {
+            let mut model = AppModel {
+                draft: "question".into(),
+                cursor: 8,
+                ..AppModel::default()
+            };
+            let _ = dispatch(&mut model, Action::Submit);
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Choices {
+                        choices: vec![
+                            heyfood_core::AgentChoice::from_untrusted(
+                                "For a household member".into(),
+                                Some(private_member_id.into()),
+                            )
+                            .unwrap(),
+                        ],
+                        allow_multiple: false,
+                    },
+                }),
+            );
+            assert!(model.scrollback.entries().back().unwrap().text.is_empty());
+            model
+        };
+
+        let mut result_model = start_turn();
+        let _ = dispatch(
+            &mut result_model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "message": format!("Prepared for {private_member_id}")
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+        assert_eq!(
+            result_model.scrollback.entries().back().unwrap().text,
+            UNRENDERABLE_AGENT_RESULT_MESSAGE
+        );
+
+        let mut error_model = start_turn();
+        let _ = dispatch(
+            &mut error_model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Error {
+                    error: AgentFailure {
+                        code: "service_error".into(),
+                        message: format!("Request failed for {private_member_id}"),
+                        retryable: true,
+                    },
+                },
+            }),
+        );
+        let error_text = &error_model.scrollback.entries().back().unwrap().text;
+        assert_eq!(
+            error_text,
+            "hey.food could not complete this request. You can try again now."
+        );
+        assert!(!error_text.contains(private_member_id));
+
+        let mut interrupted_model = start_turn();
+        let _ = dispatch(
+            &mut interrupted_model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Thinking {
+                    stage: None,
+                    message: Some(format!("Thinking about {private_member_id}")),
+                },
+            }),
+        );
+        assert_eq!(
+            interrupted_model.activity.as_deref(),
+            Some("Working through your question…")
+        );
+        let _ = dispatch(
+            &mut interrupted_model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Progress {
+                    message: format!("Preparing for {private_member_id}"),
+                    current: None,
+                    total: None,
+                },
+            }),
+        );
+        assert_eq!(
+            interrupted_model.activity.as_deref(),
+            Some("Making progress…")
+        );
+        let _ = dispatch(
+            &mut interrupted_model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Partial {
+                    text: format!("Prepared for {private_member_id}"),
+                },
+            }),
+        );
+        let failure = TurnFailure::from_port_error(&heyfood_application::PortError::new(
+            "sse_transport",
+            "stream ended before a terminal event",
+        ));
+        let _ = dispatch(
+            &mut interrupted_model,
+            Action::Runtime(RuntimeEvent::TurnFailed {
+                operation_id: 1,
+                failure,
+            }),
+        );
+        let interrupted_text = &interrupted_model.scrollback.entries().back().unwrap().text;
+        assert!(!interrupted_text.contains(private_member_id));
+        assert!(!interrupted_text.contains("Prepared for"));
+        assert!(interrupted_text.contains("interrupted before it finished"));
+    }
+
+    #[test]
+    fn repeated_choices_monotonically_retain_earlier_value_authority() {
+        let private_member_id = "foreignOpaque7";
+        let mut model = AppModel {
+            draft: "question".into(),
+            cursor: 8,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        for (label, value) in [
+            ("For a household member", private_member_id),
+            ("Continue", "next"),
+        ] {
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Choices {
+                        choices: vec![
+                            heyfood_core::AgentChoice::from_untrusted(
+                                label.into(),
+                                Some(value.into()),
+                            )
+                            .unwrap(),
+                        ],
+                        allow_multiple: false,
+                    },
+                }),
+            );
+        }
+        assert_eq!(
+            model.pending_choice_value_authorities,
+            [private_member_id.to_owned(), "next".to_owned()]
+        );
+
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "message": format!("Prepared for {private_member_id}")
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert_eq!(text, UNRENDERABLE_AGENT_RESULT_MESSAGE);
+        assert!(!text.contains(private_member_id));
+    }
+
+    #[test]
+    fn choice_value_authority_union_is_deduplicated_bounded_and_fail_closed() {
+        let mut model = AppModel::default();
+        record_choice_value_authorities(
+            &mut model,
+            vec!["same-authority".into(), "same-authority".into()],
+        );
+        assert_eq!(model.pending_choice_value_authorities.len(), 1);
+        record_choice_value_authorities(
+            &mut model,
+            (0..MAX_PENDING_CHOICE_VALUE_AUTHORITIES)
+                .map(|index| format!("authority-{index}"))
+                .collect(),
+        );
+        assert!(model.pending_choice_authority_failed_closed);
+        assert!(
+            model.pending_choice_value_authorities.len() <= MAX_PENDING_CHOICE_VALUE_AUTHORITIES
+        );
+        assert!(contains_private_model_text(
+            &model,
+            "otherwise ordinary output"
+        ));
+
+        model.draft = "new turn".into();
+        model.cursor = 8;
+        assert!(matches!(
+            dispatch(&mut model, Action::Submit).as_slice(),
+            [Effect::SubmitTurn {
+                operation_id: 1,
+                ..
+            }]
+        ));
+        assert!(!model.pending_choice_authority_failed_closed);
+        assert!(model.pending_choice_value_authorities.is_empty());
     }
 
     #[test]
@@ -7256,7 +8250,7 @@ mod tests {
         );
         assert_eq!(
             thinking_activity(Some("evaluating_menu"), Some("Reviewing 22 menu items…")),
-            "Reviewing 22 menu items…"
+            "Checking the menu against your profile…"
         );
     }
 
@@ -7347,6 +8341,53 @@ mod tests {
         );
         assert_eq!(model.activity.as_deref(), Some("Making progress… (1/2)"));
         assert!(!model.activity.as_deref().unwrap().contains(member_id));
+    }
+
+    #[test]
+    fn pre_terminal_activity_does_not_outpace_late_identity_declarations() {
+        let private_member_id = "foreignOpaque7";
+        let mut model = AppModel {
+            draft: "question".into(),
+            cursor: 8,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Progress {
+                    message: format!("Checking {private_member_id}"),
+                    current: Some(1),
+                    total: Some(2),
+                },
+            }),
+        );
+        assert_eq!(model.activity.as_deref(), Some("Making progress… (1/2)"));
+        assert!(
+            !model
+                .activity
+                .as_deref()
+                .unwrap()
+                .contains(private_member_id)
+        );
+
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "message": "Done.",
+                        "member_id": private_member_id
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert_eq!(text, "Done.");
+        assert!(!text.contains(private_member_id));
     }
 
     #[test]
@@ -7473,7 +8514,7 @@ mod tests {
 
         let text = &model.scrollback.entries().back().unwrap().text;
         assert!(text.contains("I can consider your saved dietary profile."));
-        assert_eq!(text.matches("Review my profile").count(), 1);
+        assert_eq!(text.matches("Review my profile").count(), 0);
         assert!(text.contains("This response stopped before it finished."));
         assert!(text.contains("hey.food did not retry it."));
         assert!(text.contains("You can ask a new question now."));
@@ -7490,13 +8531,14 @@ mod tests {
             dispatch(&mut model, Action::Submit).as_slice(),
             [Effect::SubmitTurn {
                 operation_id: 2,
-                prompt
+                prompt,
+                ..
             }] if prompt == "Try an independent question"
         ));
     }
 
     #[test]
-    fn interrupted_stream_never_releases_a_known_opaque_household_member_id() {
+    fn interrupted_native_stream_never_releases_even_a_prefix_of_a_household_member_id() {
         let member_id = MemberId::parse_preserved("opaque-member-seven").unwrap();
         let owner = HouseholdMemberPresentationV1::new(
             HouseholdSubjectId::self_(),
@@ -7527,12 +8569,13 @@ mod tests {
             ..AppModel::default()
         };
         let _ = dispatch(&mut model, Action::Submit);
+        model.profile_presentation_mode = ProfilePresentationModeV1::NativeEnabled;
         let _ = dispatch(
             &mut model,
             Action::Runtime(RuntimeEvent::TurnEvent {
                 operation_id: 1,
                 event: AgentEvent::Partial {
-                    text: format!("Unreviewed prose for {}.", member_id.as_str()),
+                    text: "Unreviewed prose for opaque-member-sev".into(),
                 },
             }),
         );
@@ -7551,6 +8594,7 @@ mod tests {
 
         let text = &model.scrollback.entries().back().unwrap().text;
         assert!(!text.contains(member_id.as_str()));
+        assert!(!text.contains("opaque-member-sev"));
         assert!(!text.contains("Unreviewed prose"));
         assert!(text.contains("This response stopped before it finished."));
     }
@@ -7865,6 +8909,121 @@ mod tests {
     }
 
     #[test]
+    fn terminal_household_menu_rejects_a_known_opaque_id_omitted_from_the_payload_roster() {
+        let member_id = "legacyOpaque7";
+        let mut model = model_with_known_opaque_member("Show the household menu", member_id);
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "structured": {
+                            "type": "household_menu",
+                            "presentation": "full_menu",
+                            "restaurant_name": member_id,
+                            "sections": []
+                        }
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+
+        let entry = model.scrollback.entries().back().unwrap();
+        assert_eq!(
+            entry.text,
+            heyfood_application::household_menu::UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE
+        );
+        assert!(!entry.text.contains(member_id));
+        assert!(!entry.streaming);
+    }
+
+    #[test]
+    fn terminal_household_menu_rejects_wrapped_and_whitespace_normalized_roster_ids() {
+        let long_member_id = format!("legacy{}", "a".repeat(94));
+        let wrapped_member_id = format!("{}\n{}", &long_member_id[..50], &long_member_id[50..]);
+        for (member_id, rendered_member_id) in [
+            (long_member_id.as_str(), wrapped_member_id.as_str()),
+            ("legacy  Opaque7", "legacy Opaque7"),
+        ] {
+            let mut model = model_with_known_opaque_member("Show the household menu", member_id);
+            let _ = dispatch(&mut model, Action::Submit);
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Result {
+                        document: serde_json::json!({
+                            "structured": {
+                                "type": "household_menu",
+                                "presentation": "full_menu",
+                                "restaurant_name": rendered_member_id,
+                                "sections": []
+                            }
+                        }),
+                        conversation_id: None,
+                    },
+                }),
+            );
+
+            let entry = model.scrollback.entries().back().unwrap();
+            assert_eq!(
+                entry.text,
+                heyfood_application::household_menu::UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE
+            );
+            assert!(!entry.text.contains(rendered_member_id));
+        }
+    }
+
+    #[test]
+    fn terminal_household_menu_rejects_ids_transformed_by_allergen_humanization() {
+        let member_id = "legacy_opaque7";
+        let mut model = model_with_known_opaque_member("Show the household menu", member_id);
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "structured": {
+                            "type": "household_menu",
+                            "presentation": "full_menu",
+                            "member_summaries": [{"member_id": member_id, "label": "Maya"}],
+                            "sections": [{
+                                "name": "Dinner",
+                                "items": [{
+                                    "name": "Soup",
+                                    "composite_level": "avoid",
+                                    "safety": {
+                                        (member_id): {
+                                            "label": "Maya",
+                                            "level": "avoid",
+                                            "reason": "Contains a restricted ingredient."
+                                        }
+                                    },
+                                    "allergen_detail": [{"allergen_label": member_id}]
+                                }]
+                            }]
+                        }
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+
+        let entry = model.scrollback.entries().back().unwrap();
+        assert_eq!(
+            entry.text,
+            heyfood_application::household_menu::UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE
+        );
+        assert!(!entry.text.contains(member_id));
+        assert!(!entry.text.contains("legacy opaque7"));
+    }
+
+    #[test]
     fn terminal_result_renders_the_structured_household_menu_without_model_prose() {
         let mut model = AppModel {
             draft: "Show me this week's menu".into(),
@@ -8004,6 +9163,38 @@ mod tests {
         ] {
             assert!(!entry.text.contains(forbidden), "{}", entry.text);
         }
+        assert!(!entry.streaming);
+    }
+
+    #[test]
+    fn terminal_household_evaluation_rejects_a_known_opaque_id_outside_its_payload_roster() {
+        let member_id = "legacyOpaque7";
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/contracts/household-backend/v1/fixtures/household_evaluation/founding_scenario_maya_menu.json"
+        )))
+        .unwrap();
+        let mut result = fixture["result"].clone();
+        result["restaurant_name"] = serde_json::json!(member_id);
+        let mut model = model_with_known_opaque_member("What can everyone eat?", member_id);
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({"structured_content": result}),
+                    conversation_id: None,
+                },
+            }),
+        );
+
+        let entry = model.scrollback.entries().back().unwrap();
+        assert_eq!(
+            entry.text,
+            heyfood_application::UNPRESENTABLE_HOUSEHOLD_EVALUATION_MESSAGE
+        );
+        assert!(!entry.text.contains(member_id));
         assert!(!entry.streaming);
     }
 
@@ -8371,12 +9562,286 @@ mod tests {
         let effects = dispatch(&mut model, Action::Submit);
         assert!(matches!(
             effects.as_slice(),
-            [Effect::ConfirmAction { operation_id: 2, command }]
+            [Effect::ConfirmAction { operation_id: 2, command, .. }]
                 if command.decision == ConfirmationDecisionWire::Accept
                     && command.edits.is_none()
                     && command.confirmation_id.as_uuid().to_string()
                         == "00000000-0000-0000-0000-000000000001"
         ));
+    }
+
+    #[test]
+    fn pending_confirmation_identity_screens_follow_up_results_and_errors() {
+        let private_member_id = "foreignOpaque7";
+
+        let mut result_model = model_with_legacy_pending_confirmation(private_member_id);
+        assert!(matches!(
+            submit_text(&mut result_model, "y").as_slice(),
+            [Effect::ConfirmAction {
+                operation_id: 2,
+                ..
+            }]
+        ));
+        let _ = dispatch(
+            &mut result_model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 2,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "message": format!("Added groceries for {private_member_id}")
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+        let result_text = &result_model.scrollback.entries().back().unwrap().text;
+        assert_eq!(result_text, UNRENDERABLE_AGENT_RESULT_MESSAGE);
+        assert!(!result_text.contains(private_member_id));
+        assert!(result_model.pending_confirmation.is_none());
+
+        let mut error_model = model_with_legacy_pending_confirmation(private_member_id);
+        assert!(matches!(
+            submit_text(&mut error_model, "y").as_slice(),
+            [Effect::ConfirmAction {
+                operation_id: 2,
+                ..
+            }]
+        ));
+        let _ = dispatch(
+            &mut error_model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 2,
+                event: AgentEvent::Error {
+                    error: AgentFailure {
+                        code: "service_error".into(),
+                        message: format!("Could not add groceries for {private_member_id}"),
+                        retryable: true,
+                    },
+                },
+            }),
+        );
+        let error_text = &error_model.scrollback.entries().back().unwrap().text;
+        assert_eq!(
+            error_text,
+            "hey.food could not complete this request. You can try again now."
+        );
+        assert!(!error_text.contains(private_member_id));
+        assert!(error_model.pending_confirmation.is_none());
+    }
+
+    #[test]
+    fn pending_confirmation_identity_screens_activity_and_failed_stream_partial() {
+        let private_member_id = "foreignOpaque7";
+        let mut model = model_with_legacy_pending_confirmation(private_member_id);
+        assert!(matches!(
+            submit_text(&mut model, "y").as_slice(),
+            [Effect::ConfirmAction {
+                operation_id: 2,
+                ..
+            }]
+        ));
+
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 2,
+                event: AgentEvent::Thinking {
+                    stage: None,
+                    message: Some(format!("Reviewing {private_member_id}")),
+                },
+            }),
+        );
+        assert_eq!(
+            model.activity.as_deref(),
+            Some("Working through your question…")
+        );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 2,
+                event: AgentEvent::Progress {
+                    message: format!("Updating {private_member_id}"),
+                    current: None,
+                    total: None,
+                },
+            }),
+        );
+        assert_eq!(model.activity.as_deref(), Some("Making progress…"));
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 2,
+                event: AgentEvent::Partial {
+                    text: format!("Added groceries for {private_member_id}"),
+                },
+            }),
+        );
+        let failure = TurnFailure::from_port_error(&heyfood_application::PortError::new(
+            "sse_transport",
+            "stream ended before a terminal event",
+        ));
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFailed {
+                operation_id: 2,
+                failure,
+            }),
+        );
+
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert!(!text.contains(private_member_id));
+        assert!(!text.contains("Added groceries"));
+        assert!(text.contains("interrupted before it finished"));
+    }
+
+    #[test]
+    fn confirmation_with_a_known_opaque_member_id_is_refused_and_cannot_be_accepted() {
+        let member_id = "legacyOpaque7";
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fixtures/contracts/grocery-backend/phase-a/fixtures/grocery/confirmation_round_trip.json"
+        ))
+        .unwrap();
+        let mut structured = fixture["card"].clone();
+        let structured = structured.as_object_mut().unwrap();
+        structured.insert(
+            "confirmation_id".into(),
+            fixture["accept_payload"]["confirmation_id"].clone(),
+        );
+        structured.insert(
+            "idempotency_key".into(),
+            fixture["accept_payload"]["idempotency_key"].clone(),
+        );
+        structured.insert("preview".into(), serde_json::json!(member_id));
+        let mut model = model_with_known_opaque_member("add ingredients", member_id);
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({"structured": structured}),
+                    conversation_id: None,
+                },
+            }),
+        );
+
+        let card = &model.scrollback.entries().back().unwrap().text;
+        assert_eq!(card, UNPRESENTABLE_ACTION_CONFIRMATION_MESSAGE);
+        assert!(!card.contains(member_id));
+        assert!(model.pending_confirmation.is_none());
+
+        let foreign_id = "foreignOpaque7";
+        structured.insert("preview".into(), serde_json::json!("Add one ingredient"));
+        structured["structured_preview"]["items"][0]["safety"]["member_flags"][0]["member_id"] =
+            serde_json::json!(foreign_id);
+        structured["structured_preview"]["items"][0]["safety"]["member_flags"][0]["label"] =
+            serde_json::json!(foreign_id);
+        let mut model = AppModel {
+            draft: "add ingredients".into(),
+            cursor: 15,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({"structured": structured}),
+                    conversation_id: None,
+                },
+            }),
+        );
+        let card = &model.scrollback.entries().back().unwrap().text;
+        assert_eq!(card, UNPRESENTABLE_ACTION_CONFIRMATION_MESSAGE);
+        assert!(!card.contains(foreign_id));
+        assert!(model.pending_confirmation.is_none());
+    }
+
+    #[test]
+    fn native_confirmation_authority_covers_all_member_id_shapes_and_trusted_labels() {
+        let make_document = |structured_preview: serde_json::Value| {
+            serde_json::json!({
+                "structured": {
+                    "type": "action_confirmation",
+                    "confirmation_id": "00000000-0000-4000-8000-000000000001",
+                    "idempotency_key": "00000000-0000-4000-8000-000000000002",
+                    "action": "grocery_list_add_items",
+                    "preview": "Review this change",
+                    "card_form": "item_list",
+                    "structured_preview": structured_preview
+                }
+            })
+        };
+
+        for structured_preview in [
+            serde_json::json!({
+                "items": [{
+                    "name": "onion",
+                    "safety_flags": [{
+                        "member_id": "foreignOpaque7",
+                        "label": "Guest",
+                        "status": "risky"
+                    }]
+                }]
+            }),
+            serde_json::json!({
+                "meal_name": "Soup",
+                "member_id": "foreignOpaque7",
+                "member_name": "Guest"
+            }),
+            serde_json::json!({
+                "items": [{
+                    "name": "onion",
+                    "intended_for": "legacyOpaque7"
+                }]
+            }),
+        ] {
+            let mut model = model_with_known_opaque_member("prepare change", "legacyOpaque7");
+            let _ = dispatch(&mut model, Action::Submit);
+            model.profile_presentation_mode = ProfilePresentationModeV1::NativeEnabled;
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::TurnEvent {
+                    operation_id: 1,
+                    event: AgentEvent::Result {
+                        document: make_document(structured_preview),
+                        conversation_id: None,
+                    },
+                }),
+            );
+            let card = &model.scrollback.entries().back().unwrap().text;
+            assert_eq!(card, UNPRESENTABLE_ACTION_CONFIRMATION_MESSAGE);
+            assert!(model.pending_confirmation.is_none());
+        }
+
+        let mut model = model_with_known_opaque_member("prepare change", "legacyOpaque7");
+        let _ = dispatch(&mut model, Action::Submit);
+        model.profile_presentation_mode = ProfilePresentationModeV1::NativeEnabled;
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: make_document(serde_json::json!({
+                        "items": [{
+                            "name": "onion",
+                            "intended_for": "_self",
+                            "safety_flags": [{
+                                "member_id": "_self",
+                                "label": "Maya",
+                                "status": "risky"
+                            }]
+                        }]
+                    })),
+                    conversation_id: None,
+                },
+            }),
+        );
+        let card = &model.scrollback.entries().back().unwrap().text;
+        assert!(card.contains("You: risky · intended"), "{card}");
+        assert!(!card.contains("Maya"), "{card}");
+        assert!(model.pending_confirmation.is_some());
     }
 
     #[test]
@@ -8440,6 +9905,7 @@ mod tests {
                 confirmation_id: envelope.confirmation_id,
                 idempotency_key: envelope.idempotency_key,
                 editable_items: Some(editable_items),
+                private_household_ids: Vec::new(),
             }),
             ..AppModel::default()
         };
@@ -8450,6 +9916,7 @@ mod tests {
                 Effect::ConfirmAction {
                     operation_id: 1,
                     command,
+                    ..
                 },
             ] => command,
             effects => panic!("expected edited confirmation, got {effects:?}"),
@@ -8611,13 +10078,14 @@ mod tests {
                 )
                 .unwrap(),
                 editable_items: None,
+                private_household_ids: Vec::new(),
             }),
             ..AppModel::default()
         };
         let effects = dispatch(&mut model, Action::CancelOrExit);
         assert!(matches!(
             effects.as_slice(),
-            [Effect::ConfirmAction { operation_id: 1, command }]
+            [Effect::ConfirmAction { operation_id: 1, command, .. }]
                 if command.decision == ConfirmationDecisionWire::Cancel
         ));
         assert!(model.draft.is_empty());
@@ -8643,6 +10111,7 @@ mod tests {
                     )
                     .unwrap(),
                     editable_items: None,
+                    private_household_ids: Vec::new(),
                 }),
                 ..AppModel::default()
             };
@@ -8679,7 +10148,7 @@ mod tests {
             let replay = dispatch(&mut model, Action::Submit);
             assert!(matches!(
                 replay.as_slice(),
-                [Effect::ConfirmAction { operation_id: 2, command }]
+                [Effect::ConfirmAction { operation_id: 2, command, .. }]
                     if command == &first_command
             ));
         }
@@ -8697,6 +10166,7 @@ mod tests {
             )
             .unwrap(),
             editable_items: None,
+            private_household_ids: Vec::new(),
         };
         let mut model = AppModel {
             operation: OperationState::Running(1),
@@ -8752,6 +10222,38 @@ mod tests {
     }
 
     #[test]
+    fn native_partial_only_terminal_document_never_releases_a_member_id_prefix() {
+        let member_id = "legacyOpaque7";
+        let mut model = model_with_known_opaque_member("question", member_id);
+        let _ = dispatch(&mut model, Action::Submit);
+        model.profile_presentation_mode = ProfilePresentationModeV1::NativeEnabled;
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Partial {
+                    text: "Unreviewed response for legacyOpa".into(),
+                },
+            }),
+        );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({"conversation_id": "conversation-1"}),
+                    conversation_id: Some("conversation-1".into()),
+                },
+            }),
+        );
+
+        let entry = model.scrollback.entries().back().unwrap();
+        assert_eq!(entry.text, UNRENDERABLE_AGENT_RESULT_MESSAGE);
+        assert!(!entry.text.contains("legacyOpa"));
+        assert!(!entry.streaming);
+    }
+
+    #[test]
     fn voice_capture_transcription_review_and_submit_share_the_typed_turn_path() {
         let mut model = AppModel::default();
         let _ = dispatch(
@@ -8802,6 +10304,7 @@ mod tests {
             vec![Effect::SubmitTurn {
                 operation_id: 2,
                 prompt: "Log oatmeal and berries for breakfast".into(),
+                presented_household_context: None,
             }]
         );
         assert_eq!(model.voice_phase, VoicePhase::Idle);
@@ -9891,6 +11394,17 @@ mod tests {
         assert!(submit_text(&mut model, "/household").is_empty());
         assert!(model.pending_household_load.is_some());
 
+        let member_id = MemberId::parse_preserved("late-member-b").unwrap();
+        let member_scope = HouseholdScope::Subject(HouseholdSubjectId::member(member_id.clone()));
+        let member = HouseholdMemberPresentationV1::new(
+            HouseholdSubjectId::member(member_id),
+            "Maya",
+            RelationshipV1::Child,
+            HouseholdLifecycleV1::Active,
+            HouseholdProfileStateV1::LocalOnly,
+            Some(ProfileRevision::new(1).unwrap()),
+        )
+        .unwrap();
         assert!(
             dispatch(
                 &mut model,
@@ -9900,9 +11414,9 @@ mod tests {
                     reducer_correlation: *reducer_correlation,
                     purpose: HouseholdManagementLoadPurposeV1::AddMember,
                     account_binding_digest: digest,
-                    household_revision: HouseholdRevision::new(1).unwrap(),
-                    active_scope: HouseholdScope::Subject(HouseholdSubjectId::self_()),
-                    members: vec![owner],
+                    household_revision: HouseholdRevision::new(2).unwrap(),
+                    active_scope: member_scope,
+                    members: vec![owner, member],
                 }),
             )
             .is_empty()
@@ -9910,6 +11424,16 @@ mod tests {
         assert!(model.pending_household_load.is_none());
         assert!(model.onboarding.is_none());
         assert_eq!(model.operation, OperationState::Idle);
+        let submitted = submit_text(&mut model, "use the context still on screen");
+        assert!(matches!(
+            submitted.as_slice(),
+            [Effect::SubmitTurn {
+                presented_household_context: Some(context),
+                ..
+            }] if context.household_revision().get() == 1
+                && context.active_scope()
+                    == &HouseholdScope::Subject(HouseholdSubjectId::self_())
+        ));
         assert!(
             model
                 .scrollback
@@ -9917,6 +11441,144 @@ mod tests {
                 .iter()
                 .any(|entry| entry.text.contains("No household mutation was dispatched"))
         );
+    }
+
+    #[test]
+    fn stale_native_turn_reloads_the_accepted_context_before_another_dispatch() {
+        let mut model = AppModel::default();
+        let generation = HouseholdModeGenerationV1::new(1).unwrap();
+        let digest = HouseholdAccountBindingDigestV1::from_bytes([0x4a; 32]);
+        let bootstrap = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::HouseholdGenerationReadyV1 {
+                session_mode_generation: generation,
+                mode: HouseholdPresentationModeV1::NativeEnabled,
+                account_binding_digest: digest,
+            }),
+        );
+        let [
+            Effect::LoadHouseholdManagementV1 {
+                operation_id,
+                reducer_correlation,
+                ..
+            },
+        ] = bootstrap.as_slice()
+        else {
+            panic!("expected initial Household bootstrap");
+        };
+        let owner = HouseholdMemberPresentationV1::new(
+            HouseholdSubjectId::self_(),
+            "Me",
+            RelationshipV1::Self_,
+            HouseholdLifecycleV1::Active,
+            HouseholdProfileStateV1::LocalOnly,
+            Some(ProfileRevision::new(1).unwrap()),
+        )
+        .unwrap();
+        assert!(
+            dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::HouseholdManagementLoadedV1 {
+                    operation_id: *operation_id,
+                    session_mode_generation: generation,
+                    reducer_correlation: *reducer_correlation,
+                    purpose: HouseholdManagementLoadPurposeV1::Bootstrap,
+                    account_binding_digest: digest,
+                    household_revision: HouseholdRevision::new(1).unwrap(),
+                    active_scope: HouseholdScope::Subject(HouseholdSubjectId::self_()),
+                    members: vec![owner.clone()],
+                }),
+            )
+            .is_empty()
+        );
+
+        let initial_turn = submit_text(&mut model, "owner question");
+        assert!(matches!(
+            initial_turn.as_slice(),
+            [Effect::SubmitTurn {
+                operation_id: 1,
+                presented_household_context: Some(context),
+                ..
+            }] if context.household_revision().get() == 1
+                && context.active_scope()
+                    == &HouseholdScope::Subject(HouseholdSubjectId::self_())
+        ));
+        model.pending_confirmation = Some(PendingActionConfirmation {
+            confirmation_id: heyfood_core::GroceryConfirmationId::parse(
+                "00000000-0000-4000-8000-000000000011",
+            )
+            .unwrap(),
+            idempotency_key: heyfood_core::GroceryIdempotencyKey::parse(
+                "00000000-0000-4000-8000-000000000012",
+            )
+            .unwrap(),
+            editable_items: None,
+            private_household_ids: Vec::new(),
+        });
+
+        let reconciliation = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFinished {
+                operation_id: 1,
+                outcome: RunTurnOutcome::StaleGeneration,
+            }),
+        );
+        let [
+            Effect::LoadHouseholdManagementV1 {
+                operation_id: refresh_operation,
+                reducer_correlation: refresh_correlation,
+                purpose: HouseholdManagementLoadPurposeV1::Bootstrap,
+                ..
+            },
+        ] = reconciliation.as_slice()
+        else {
+            panic!("stale native turn must request an exact Household reload");
+        };
+        assert!(model.pending_confirmation.is_none());
+        assert!(model.household_snapshot.is_none());
+        assert!(matches!(
+            model.household_turn_gate,
+            HouseholdTurnGateV1::Loading
+        ));
+        assert!(submit_text(&mut model, "must remain blocked").is_empty());
+
+        let member_id = MemberId::parse_preserved("member-context-b").unwrap();
+        let member_scope = HouseholdScope::Subject(HouseholdSubjectId::member(member_id.clone()));
+        let member = HouseholdMemberPresentationV1::new(
+            HouseholdSubjectId::member(member_id),
+            "Maya",
+            RelationshipV1::Child,
+            HouseholdLifecycleV1::Active,
+            HouseholdProfileStateV1::LocalOnly,
+            Some(ProfileRevision::new(1).unwrap()),
+        )
+        .unwrap();
+        assert!(
+            dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::HouseholdManagementLoadedV1 {
+                    operation_id: *refresh_operation,
+                    session_mode_generation: generation,
+                    reducer_correlation: *refresh_correlation,
+                    purpose: HouseholdManagementLoadPurposeV1::Bootstrap,
+                    account_binding_digest: digest,
+                    household_revision: HouseholdRevision::new(2).unwrap(),
+                    active_scope: member_scope.clone(),
+                    members: vec![owner, member],
+                }),
+            )
+            .is_empty()
+        );
+        let next_turn = submit_text(&mut model, "member question");
+        assert!(matches!(
+            next_turn.as_slice(),
+            [Effect::SubmitTurn {
+                operation_id: 2,
+                presented_household_context: Some(context),
+                ..
+            }] if context.household_revision().get() == 2
+                && context.active_scope() == &member_scope
+        ));
     }
 
     #[test]
@@ -9962,6 +11624,10 @@ mod tests {
         let member_label = "member-label-debug-canary";
         let member_id = MemberId::parse_preserved("member-id-debug-canary").unwrap();
         let subject = HouseholdSubjectId::member(member_id);
+        let presented = PresentedHouseholdContextV1::new(
+            HouseholdRevision::new(11).unwrap(),
+            HouseholdScope::Subject(subject.clone()),
+        );
         let binding = HouseholdOperationBindingV1::new(
             HouseholdOperationIdV1::new(7).unwrap(),
             HouseholdModeGenerationV1::new(3).unwrap(),
@@ -10005,7 +11671,7 @@ mod tests {
             streaming: false,
         });
 
-        let combined = format!("{effect:?}\n{event:?}\n{model:?}");
+        let combined = format!("{effect:?}\n{event:?}\n{model:?}\n{presented:?}");
         for canary in [
             member_label,
             "member-id-debug-canary",

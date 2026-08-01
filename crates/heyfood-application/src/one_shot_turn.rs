@@ -1,5 +1,6 @@
 //! Bounded, renderer-neutral one-shot conversation use case.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use heyfood_core::{AgentChoice, AgentEvent, OperationId, SessionCredentials, terminal_safe_text};
@@ -15,6 +16,14 @@ pub const MAX_ONE_SHOT_STREAM_BYTES: usize = 4 * 1024 * 1024;
 pub struct OneShotTurnResult {
     pub document: Value,
     pub conversation_id: Option<String>,
+    /// True only when streamed partial text was promoted into `document.text`
+    /// because the terminal result carried no complete text field.
+    pub partial_text_promoted: bool,
+    /// Every opaque value supplied by any Choices event in this turn. The
+    /// terminal document retains only the latest choice presentation, so human
+    /// renderers use this bounded provenance to screen later text without
+    /// altering machine JSON parity.
+    pub streamed_choice_value_authorities: Vec<String>,
 }
 
 impl fmt::Debug for OneShotTurnResult {
@@ -23,6 +32,11 @@ impl fmt::Debug for OneShotTurnResult {
             .debug_struct("OneShotTurnResult")
             .field("document", &"[REDACTED]")
             .field("has_conversation_id", &self.conversation_id.is_some())
+            .field("partial_text_promoted", &self.partial_text_promoted)
+            .field(
+                "streamed_choice_value_authority_count",
+                &self.streamed_choice_value_authorities.len(),
+            )
             .finish()
     }
 }
@@ -53,6 +67,7 @@ pub async fn execute_one_shot_turn(
     let mut stream_bytes = 0_usize;
     let mut partial_text = String::new();
     let mut choices: Option<(Vec<AgentChoice>, bool)> = None;
+    let mut streamed_choice_value_authorities = BTreeSet::new();
 
     loop {
         let next = accepted.events.next();
@@ -95,11 +110,16 @@ pub async fn execute_one_shot_turn(
                 mut document,
                 conversation_id,
             } => {
-                merge_stream_content(&mut document, &partial_text, choices.take());
+                let partial_text_promoted =
+                    merge_stream_content(&mut document, &partial_text, choices.take());
                 accepted.events.close().await?;
                 return Ok(OneShotTurnResult {
                     document,
                     conversation_id,
+                    partial_text_promoted,
+                    streamed_choice_value_authorities: streamed_choice_value_authorities
+                        .into_iter()
+                        .collect(),
                 });
             }
             AgentEvent::Error { error } => {
@@ -113,7 +133,14 @@ pub async fn execute_one_shot_turn(
             AgentEvent::Choices {
                 choices: streamed_choices,
                 allow_multiple,
-            } => choices = Some((streamed_choices, allow_multiple)),
+            } => {
+                streamed_choice_value_authorities.extend(
+                    streamed_choices
+                        .iter()
+                        .filter_map(|choice| choice.value.as_ref().cloned()),
+                );
+                choices = Some((streamed_choices, allow_multiple));
+            }
             AgentEvent::Thinking { .. } | AgentEvent::Progress { .. } => {}
         }
     }
@@ -145,12 +172,13 @@ fn merge_stream_content(
     document: &mut Value,
     partial_text: &str,
     choices: Option<(Vec<AgentChoice>, bool)>,
-) {
+) -> bool {
     let has_final_text = agent_result_text(document).is_some();
     let Some(fields) = document.as_object_mut() else {
-        return;
+        return false;
     };
-    if !partial_text.is_empty() && !has_final_text {
+    let partial_text_promoted = !partial_text.is_empty() && !has_final_text;
+    if partial_text_promoted {
         fields.insert("text".into(), Value::String(partial_text.to_owned()));
     }
     if let Some((choices, allow_multiple)) = choices {
@@ -181,4 +209,5 @@ fn merge_stream_content(
         choice_document.insert("allow_multiple".into(), Value::Bool(allow_multiple));
         fields.insert("choices".into(), Value::Object(choice_document));
     }
+    partial_text_promoted
 }

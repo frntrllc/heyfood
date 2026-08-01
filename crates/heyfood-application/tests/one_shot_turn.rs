@@ -189,6 +189,7 @@ async fn partials_and_choices_are_merged_into_the_terminal_document() {
     .await;
 
     assert_eq!(result.document["text"], "hello world");
+    assert!(result.partial_text_promoted);
     assert_eq!(result.document["choices"]["allow_multiple"], true);
     assert_eq!(result.document["choices"]["choices"][0], "One");
 }
@@ -211,10 +212,42 @@ async fn terminal_text_wins_but_streamed_choices_are_preserved() {
     .await;
 
     assert_eq!(result.document["message"], "final");
+    assert!(!result.partial_text_promoted);
     assert!(result.document.get("text").is_none());
     assert_eq!(result.document["choices"]["choices"][0], "First");
     assert_eq!(
         result.document["choices"]["choice_details"][0],
         json!({"label": "First", "value": "1"})
+    );
+    assert_eq!(result.streamed_choice_value_authorities, ["1"]);
+}
+
+#[tokio::test]
+async fn repeated_choices_retain_every_value_authority_outside_machine_document() {
+    let result = execute_success(vec![
+        AgentEvent::Choices {
+            choices: vec![
+                AgentChoice::from_untrusted("For member".into(), Some("foreignOpaque7".into()))
+                    .unwrap(),
+            ],
+            allow_multiple: false,
+        },
+        AgentEvent::Choices {
+            choices: vec![
+                AgentChoice::from_untrusted("Continue".into(), Some("next".into())).unwrap(),
+            ],
+            allow_multiple: false,
+        },
+        AgentEvent::Result {
+            document: json!({"message": "Prepared for foreignOpaque7"}),
+            conversation_id: None,
+        },
+    ])
+    .await;
+
+    assert_eq!(result.document["choices"]["choices"], json!(["Continue"]));
+    assert_eq!(
+        result.streamed_choice_value_authorities,
+        ["foreignOpaque7", "next"]
     );
 }

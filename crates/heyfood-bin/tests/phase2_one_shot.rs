@@ -8,7 +8,7 @@ use clap::Parser;
 use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
 use heyfood_application::{
     BoxFuture, ClockPort, CredentialCommit, CredentialPort, EnsureSession, EnsureSessionError,
-    PortError,
+    PortError, UNRENDERABLE_AGENT_RESULT_MESSAGE,
 };
 use heyfood_bin::{
     OneShotError, OneShotExecutor, execute_qualified_one_shot, execute_qualified_prepared_log,
@@ -659,6 +659,69 @@ async fn streamed_choices_match_the_frozen_python_json_and_human_oracle() {
         expected["choice_details"]
     );
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn replaced_streamed_choice_values_remain_private_for_human_one_shot_output() {
+    const PRIVATE_VALUE: &str = "foreignOpaque7";
+    const STREAM: &[u8] = b"event: choices\ndata: {\"choices\":[{\"label\":\"For member\",\"value\":\"foreignOpaque7\"}],\"allow_multiple\":false}\n\nevent: choices\ndata: {\"choices\":[{\"label\":\"Continue\",\"value\":\"next\"}],\"allow_multiple\":false}\n\nevent: result\ndata: {\"message\":\"Prepared for foreignOpaque7\"}\n\nevent: done\ndata: {}\n\n";
+
+    for mode in [OutputMode::HumanPlain, OutputMode::Json] {
+        let (listener, service) = fixture_service().await;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = read_request(&mut socket).await;
+            respond_stream(&mut socket, STREAM).await;
+        });
+        let parsed = CommandLine::try_parse_from(["heyfood", "ask", "choose"]).unwrap();
+        let output = OneShotExecutor::new(&service, &credentials(), mode)
+            .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+            .await
+            .unwrap();
+
+        if mode == OutputMode::Json {
+            let document: Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(document["message"], format!("Prepared for {PRIVATE_VALUE}"));
+            assert_eq!(document["choices"]["choices"], json!(["Continue"]));
+            assert_eq!(document["choices"]["choice_details"][0]["value"], "next");
+        } else {
+            assert_eq!(output.trim_end(), UNRENDERABLE_AGENT_RESULT_MESSAGE);
+            assert!(!output.contains(PRIVATE_VALUE));
+        }
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn agent_error_after_choices_uses_reviewed_human_copy_and_exact_json_error() {
+    const PRIVATE_VALUE: &str = "foreignOpaque7";
+    const STREAM: &[u8] = b"event: choices\ndata: {\"choices\":[{\"label\":\"For member\",\"value\":\"foreignOpaque7\"}],\"allow_multiple\":false}\n\nevent: error\ndata: {\"code\":\"failed\",\"message\":\"Could not prepare foreignOpaque7\",\"retryable\":false}\n\nevent: done\ndata: {}\n\n";
+
+    for mode in [OutputMode::HumanPlain, OutputMode::Json] {
+        let (listener, service) = fixture_service().await;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = read_request(&mut socket).await;
+            respond_stream(&mut socket, STREAM).await;
+        });
+        let parsed = CommandLine::try_parse_from(["heyfood", "ask", "choose"]).unwrap();
+        let error = OneShotExecutor::new(&service, &credentials(), mode)
+            .execute(parsed.command.unwrap(), &[], CancellationToken::new())
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "agent_error");
+        if mode == OutputMode::Json {
+            assert_eq!(error.message, format!("Could not prepare {PRIVATE_VALUE}"));
+        } else {
+            assert_eq!(
+                error.message,
+                "hey.food could not complete this request. Try again."
+            );
+            assert!(!error.message.contains(PRIVATE_VALUE));
+        }
+        server.await.unwrap();
+    }
 }
 
 #[tokio::test]

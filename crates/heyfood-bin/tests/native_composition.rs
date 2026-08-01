@@ -47,8 +47,8 @@ use heyfood_tui::{
     HouseholdOperationBindingV1, HouseholdOperationIdV1, HouseholdPresentationModeV1,
     HouseholdReducerCorrelationV1, NativeOwnerProfileSaveStatusV1, OwnerProfileActionLoadPurposeV1,
     OwnerProfileRetryActionV1, OwnerProfileRetryEligibilityV1,
-    OwnerProfileRetryUnavailableReasonV1, OwnerSyncIntentHandleV1, ProfileActionsLoadedV1,
-    ProfilePresentationModeV1, ProfileRetrySyncFinishedV1, RuntimeEvent,
+    OwnerProfileRetryUnavailableReasonV1, OwnerSyncIntentHandleV1, PresentedHouseholdContextV1,
+    ProfileActionsLoadedV1, ProfilePresentationModeV1, ProfileRetrySyncFinishedV1, RuntimeEvent,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -745,6 +745,11 @@ fn native_household_session(repository: Arc<MemoryHouseholdRepository>) -> House
     )
 }
 
+fn presented_native_context(repository: &MemoryHouseholdRepository) -> PresentedHouseholdContextV1 {
+    let state = repository.snapshot();
+    PresentedHouseholdContextV1::new(state.revision, state.active_scope)
+}
+
 fn native_http_service(address: std::net::SocketAddr) -> HttpService {
     let service_url =
         ServiceUrl::parse(&format!("http://{address}"), NetworkPolicy::DEVELOPMENT).unwrap();
@@ -952,14 +957,19 @@ fn native_ineligible_everyone_turn_stops_before_refresh_serialization_and_networ
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let mut driver = native_driver_with_credentials(
-        repository,
+        repository.clone(),
         listener.local_addr().unwrap(),
         expired_fixture_credentials(),
     );
     let prompt_canary = "prompt-content-canary";
     let (events, mut receiver) = mpsc::channel(2);
     driver
-        .start_turn(77, prompt_canary.to_owned(), events)
+        .start_turn(
+            77,
+            prompt_canary.to_owned(),
+            Some(presented_native_context(&repository)),
+            events,
+        )
         .unwrap();
     let event = receiver.blocking_recv().unwrap();
     let failure = match &event {
@@ -996,7 +1006,7 @@ fn native_ineligible_everyone_voice_stops_before_microphone_and_network_dispatch
     listener.set_nonblocking(true).unwrap();
     let capture = Arc::new(ProbeAudioCapture::default());
     let mut driver = native_driver_with_credentials(
-        repository,
+        repository.clone(),
         listener.local_addr().unwrap(),
         expired_fixture_credentials(),
     )
@@ -1029,14 +1039,19 @@ fn native_ineligible_member_turn_stops_before_refresh_serialization_and_network_
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let mut driver = native_driver_with_credentials(
-        repository,
+        repository.clone(),
         listener.local_addr().unwrap(),
         expired_fixture_credentials(),
     );
     let prompt_canary = "member-prompt-content-canary";
     let (events, mut receiver) = mpsc::channel(2);
     driver
-        .start_turn(79, prompt_canary.to_owned(), events)
+        .start_turn(
+            79,
+            prompt_canary.to_owned(),
+            Some(presented_native_context(&repository)),
+            events,
+        )
         .unwrap();
     let event = receiver.blocking_recv().unwrap();
     let failure = match &event {
@@ -1140,10 +1155,15 @@ fn native_member_turn_dispatches_exact_local_profile_and_member_attribution() {
         respond_sync_sse(&mut socket);
     });
 
-    let mut driver = native_driver(repository, address);
+    let mut driver = native_driver(repository.clone(), address);
     let (events, mut receiver) = mpsc::channel(8);
     driver
-        .start_turn(83, "Use the selected member profile".into(), events)
+        .start_turn(
+            83,
+            "Use the selected member profile".into(),
+            Some(presented_native_context(&repository)),
+            events,
+        )
         .unwrap();
     loop {
         match receiver.blocking_recv().unwrap() {
@@ -1208,10 +1228,15 @@ fn native_everyone_turn_dispatches_all_local_profiles_and_one_owner_attribution(
         respond_sync_sse(&mut socket);
     });
 
-    let mut driver = native_driver(repository, address);
+    let mut driver = native_driver(repository.clone(), address);
     let (events, mut receiver) = mpsc::channel(8);
     driver
-        .start_turn(84, "Evaluate this for everyone".into(), events)
+        .start_turn(
+            84,
+            "Evaluate this for everyone".into(),
+            Some(presented_native_context(&repository)),
+            events,
+        )
         .unwrap();
     loop {
         match receiver.blocking_recv().unwrap() {
@@ -1519,7 +1544,12 @@ fn native_unknown_and_archived_scopes_fail_before_provider_or_network_dispatch()
             .with_session_provider(provider.clone());
         let (events, mut receiver) = mpsc::channel(4);
         driver
-            .start_turn(85, "must never dispatch".into(), events)
+            .start_turn(
+                85,
+                "must never dispatch".into(),
+                Some(presented_native_context(&repository)),
+                events,
+            )
             .unwrap();
         let failure = match receiver.blocking_recv().unwrap() {
             RuntimeEvent::TurnFailed {
@@ -1553,7 +1583,12 @@ fn native_household_context_cancellation_opens_no_network_and_commits_no_mutatio
     let mut driver = native_driver(repository.clone(), listener.local_addr().unwrap());
     let (events, mut receiver) = mpsc::channel(4);
     driver
-        .start_turn(86, "cancel before context dispatch".into(), events)
+        .start_turn(
+            86,
+            "cancel before context dispatch".into(),
+            Some(presented_native_context(&repository)),
+            events,
+        )
         .unwrap();
     barrier.wait();
     driver.cancel_turn(86).unwrap();
@@ -1576,11 +1611,46 @@ fn native_household_context_cancellation_opens_no_network_and_commits_no_mutatio
 }
 
 #[test]
+fn native_turn_without_a_presented_household_context_is_stale_and_never_dispatches() {
+    let repository = Arc::new(MemoryHouseholdRepository::with_state(
+        selectable_everyone_native_household(),
+    ));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut driver = native_driver(repository, listener.local_addr().unwrap());
+    let (events, mut receiver) = mpsc::channel(2);
+
+    driver
+        .start_turn(87, "must wait for bootstrap".into(), None, events)
+        .unwrap();
+    assert!(matches!(
+        receiver.blocking_recv(),
+        Some(RuntimeEvent::TurnFinished {
+            operation_id: 87,
+            outcome: heyfood_application::RunTurnOutcome::StaleGeneration,
+        })
+    ));
+    driver
+        .shutdown_and_join(std::time::Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
 fn native_cross_member_scope_change_clears_conversation_continuity_before_next_dispatch() {
     let state = selectable_everyone_native_household();
     let member_id = state.members[0].member_id.clone();
     let expected_member_id = member_id.as_str().to_owned();
     let repository = Arc::new(MemoryHouseholdRepository::with_state(state));
+    let external_repository: Arc<dyn HouseholdRepositoryPort> = repository.clone();
+    let external_session = HouseholdSession::new(
+        native_account(),
+        external_repository,
+        Arc::new(NativeHouseholdMutationAuthorityV1::new()),
+    );
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = thread::spawn(move || {
@@ -1606,8 +1676,41 @@ fn native_cross_member_scope_change_clears_conversation_continuity_before_next_d
 
     let mut driver = native_driver(repository, address);
     let (events, mut receiver, generation, digest) = start_native_generation(&mut driver);
+    let bootstrap_operation = HouseholdOperationIdV1::new(86).unwrap();
+    let bootstrap_correlation = HouseholdReducerCorrelationV1::new(86).unwrap();
     driver
-        .start_turn(87, "owner question".into(), events.clone())
+        .start_household_management_load(
+            bootstrap_operation,
+            generation,
+            digest,
+            bootstrap_correlation,
+            HouseholdManagementLoadPurposeV1::Bootstrap,
+            events.clone(),
+        )
+        .unwrap();
+    assert!(matches!(
+        receiver.blocking_recv(),
+        Some(RuntimeEvent::HouseholdManagementLoadedV1 {
+            operation_id,
+            reducer_correlation,
+            household_revision,
+            active_scope: HouseholdScope::Subject(HouseholdSubjectId::Self_),
+            ..
+        }) if operation_id == bootstrap_operation
+            && reducer_correlation == bootstrap_correlation
+            && household_revision.get() == 1
+    ));
+    let owner_presented = PresentedHouseholdContextV1::new(
+        HouseholdRevision::new(1).unwrap(),
+        HouseholdScope::Subject(HouseholdSubjectId::self_()),
+    );
+    driver
+        .start_turn(
+            87,
+            "owner question".into(),
+            Some(owner_presented.clone()),
+            events.clone(),
+        )
         .unwrap();
     loop {
         match receiver.blocking_recv().unwrap() {
@@ -1622,67 +1725,77 @@ fn native_cross_member_scope_change_clears_conversation_continuity_before_next_d
         }
     }
 
-    let binding = HouseholdOperationBindingV1::new(
-        HouseholdOperationIdV1::new(88).unwrap(),
-        generation,
-        digest,
-        HouseholdRevision::new(1).unwrap(),
-        HouseholdReducerCorrelationV1::new(88).unwrap(),
-    );
     let selected_scope = HouseholdScope::Subject(HouseholdSubjectId::member(member_id));
-    driver
-        .start_native_household_scope_selection(
-            binding.clone(),
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(external_session.select_scope(
+            HouseholdRevision::new(1).unwrap(),
             selected_scope.clone(),
-            events.clone(),
-        )
+            CancellationToken::new(),
+        ))
         .unwrap();
-    let revision = match receiver.blocking_recv().unwrap() {
-        RuntimeEvent::HouseholdMutationCommittedV1 {
-            binding: event_binding,
-            resulting_household_revision,
-            active_scope,
-            ..
-        } => {
-            assert_eq!(event_binding, binding);
-            assert_eq!(active_scope, selected_scope);
-            resulting_household_revision
-        }
-        other => panic!("expected committed member scope, got {other:?}"),
-    };
+
     driver
-        .start_household_context_apply(
-            binding.clone(),
-            revision,
-            match &selected_scope {
-                HouseholdScope::Subject(subject) => Some(subject.clone()),
-                HouseholdScope::Everyone => None,
-            },
-            selected_scope,
-            "member-context-canary".into(),
+        .start_turn(
+            88,
+            "stale member question".into(),
+            Some(owner_presented),
             events.clone(),
         )
         .unwrap();
     assert!(matches!(
         receiver.blocking_recv(),
-        Some(RuntimeEvent::HouseholdContextAppliedV1 {
-            binding: event_binding,
-            resulting_household_revision,
+        Some(RuntimeEvent::TurnFinished {
+            operation_id: 88,
+            outcome: heyfood_application::RunTurnOutcome::StaleGeneration,
+        })
+    ));
+
+    let refresh_operation = HouseholdOperationIdV1::new(89).unwrap();
+    let refresh_correlation = HouseholdReducerCorrelationV1::new(89).unwrap();
+    driver
+        .start_household_management_load(
+            refresh_operation,
+            generation,
+            digest,
+            refresh_correlation,
+            HouseholdManagementLoadPurposeV1::Bootstrap,
+            events.clone(),
+        )
+        .unwrap();
+    assert!(matches!(
+        receiver.blocking_recv(),
+        Some(RuntimeEvent::HouseholdManagementLoadedV1 {
+            operation_id,
+            reducer_correlation,
+            household_revision,
+            active_scope,
             ..
-        }) if event_binding == binding && resulting_household_revision == revision
+        }) if operation_id == refresh_operation
+            && reducer_correlation == refresh_correlation
+            && household_revision.get() == 2
+            && active_scope == selected_scope
     ));
 
     driver
-        .start_turn(89, "member question".into(), events)
+        .start_turn(
+            90,
+            "member question".into(),
+            Some(PresentedHouseholdContextV1::new(
+                HouseholdRevision::new(2).unwrap(),
+                selected_scope,
+            )),
+            events,
+        )
         .unwrap();
     loop {
         match receiver.blocking_recv().unwrap() {
             RuntimeEvent::TurnFinished {
-                operation_id: 89,
+                operation_id: 90,
                 outcome: heyfood_application::RunTurnOutcome::Completed,
             } => break,
             RuntimeEvent::TurnEvent {
-                operation_id: 89, ..
+                operation_id: 90, ..
             } => {}
             other => panic!("unexpected second continuity event: {other:?}"),
         }
@@ -1712,7 +1825,12 @@ fn external_valid_scope_change_after_text_preflight_is_frozen_before_provider_re
         .with_session_provider(provider.clone());
         let (events, mut receiver) = mpsc::channel(4);
         driver
-            .start_turn(81, "serializer-content-canary".into(), events)
+            .start_turn(
+                81,
+                "serializer-content-canary".into(),
+                Some(presented_native_context(&repository)),
+                events,
+            )
             .unwrap();
 
         barrier.wait();
@@ -1912,10 +2030,15 @@ fn restarted_native_owner_turns_bind_exact_local_profile_and_self_meal_context()
 
         // A fresh driver for every persisted readiness row models a process
         // restart; no imported Python snapshot is composed.
-        let mut restarted = native_driver(repository, address);
+        let mut restarted = native_driver(repository.clone(), address);
         let (events, mut receiver) = mpsc::channel(8);
         restarted
-            .start_turn(91, "Use my exact profile".into(), events)
+            .start_turn(
+                91,
+                "Use my exact profile".into(),
+                Some(presented_native_context(&repository)),
+                events,
+            )
             .unwrap();
         loop {
             match receiver.blocking_recv().unwrap() {
@@ -1967,10 +2090,15 @@ fn restarted_native_owner_turn_omits_null_severity_from_deployed_context() {
         respond_sync_sse(&mut socket);
     });
 
-    let mut restarted = native_driver(repository, address);
+    let mut restarted = native_driver(repository.clone(), address);
     let (events, mut receiver) = mpsc::channel(8);
     restarted
-        .start_turn(92, "Do not serialize null severity".into(), events)
+        .start_turn(
+            92,
+            "Do not serialize null severity".into(),
+            Some(presented_native_context(&repository)),
+            events,
+        )
         .unwrap();
     loop {
         match receiver.blocking_recv().unwrap() {
@@ -2024,10 +2152,15 @@ fn native_owner_safety_projection_accepts_the_exact_deployed_bound() {
         respond_sync_sse(&mut socket);
     });
 
-    let mut driver = native_driver(repository, address);
+    let mut driver = native_driver(repository.clone(), address);
     let (events, mut receiver) = mpsc::channel(8);
     driver
-        .start_turn(93, "Use the exact projection bound".into(), events)
+        .start_turn(
+            93,
+            "Use the exact projection bound".into(),
+            Some(presented_native_context(&repository)),
+            events,
+        )
         .unwrap();
     loop {
         match receiver.blocking_recv().unwrap() {
@@ -2063,10 +2196,16 @@ fn native_owner_safety_projection_overflow_fails_before_network() {
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
     let provider = Arc::new(ProbeSessionProvider::default());
-    let mut driver = native_driver(repository, address).with_session_provider(provider.clone());
+    let mut driver =
+        native_driver(repository.clone(), address).with_session_provider(provider.clone());
     let (events, mut receiver) = mpsc::channel(4);
     driver
-        .start_turn(94, "Refuse an overflowing projection".into(), events)
+        .start_turn(
+            94,
+            "Refuse an overflowing projection".into(),
+            Some(presented_native_context(&repository)),
+            events,
+        )
         .unwrap();
     let failure = match receiver.blocking_recv().unwrap() {
         RuntimeEvent::TurnFailed {
