@@ -32,6 +32,8 @@ use uuid::Uuid;
 #[cfg(feature = "native-credentials")]
 use crate::household_vault::HouseholdTeardownVaultTargetV1;
 #[cfg(feature = "native-credentials")]
+use crate::persistence::NativeLogoutBindingV1;
+#[cfg(feature = "native-credentials")]
 use crate::python_import::LegacyPythonCredentialSourceLeaseV1;
 use crate::{
     AtomicFile, HouseholdMigrationSourceIdentityV1, OwnerOnlyPath,
@@ -59,6 +61,10 @@ const TEARDOWN_PREFIX: &str = "teardown-";
 const TEARDOWN_SUFFIX: &str = ".htj";
 const ACCOUNT_DIGEST_DOMAIN: &[u8] = b"heyfood.household.account-digest.v1";
 const ACCOUNT_LOCATOR_DOMAIN: &[u8] = b"heyfood.household.account-locator.v1";
+#[cfg(any(feature = "native-credentials", test))]
+const AUTH_CLIENT_ID_DIGEST_DOMAIN: &[u8] = b"heyfood.household-teardown.auth-client-id.v1";
+#[cfg(any(feature = "native-credentials", test))]
+const AUTH_DEVICE_ID_DIGEST_DOMAIN: &[u8] = b"heyfood.household-teardown.auth-device-id.v1";
 const JOURNAL_LIMITS: CompatibilityJsonLimitsV1 = CompatibilityJsonLimitsV1 {
     maximum_bytes: MAX_HOUSEHOLD_TEARDOWN_JOURNAL_BYTES,
     maximum_depth: 5,
@@ -153,6 +159,8 @@ pub struct HouseholdTeardownJournalV1 {
     pub native_root_instance_digest: CanonicalDigestV1,
     pub account_digest: CanonicalDigestV1,
     pub account_locator_digest: CanonicalDigestV1,
+    pub auth_client_id_digest: CanonicalDigestV1,
+    pub auth_device_id_digest: CanonicalDigestV1,
     pub expected_guard_state: HouseholdTeardownGuardStateV1,
     pub expected_guard_revision: u64,
     pub blocked_after_logout_guard_revision: Option<u64>,
@@ -175,6 +183,8 @@ impl HouseholdTeardownJournalV1 {
             native_root_instance_digest: prepared.native_root_instance_digest,
             account_digest: prepared.account_digest,
             account_locator_digest: prepared.account_locator_digest,
+            auth_client_id_digest: prepared.auth_client_id_digest,
+            auth_device_id_digest: prepared.auth_device_id_digest,
             expected_guard_state: prepared.expected_guard_state,
             expected_guard_revision: prepared.expected_guard_revision,
             blocked_after_logout_guard_revision: None,
@@ -314,6 +324,8 @@ pub struct PreparedHouseholdTeardownV1 {
     pub native_root_instance_digest: CanonicalDigestV1,
     pub account_digest: CanonicalDigestV1,
     pub account_locator_digest: CanonicalDigestV1,
+    pub auth_client_id_digest: CanonicalDigestV1,
+    pub auth_device_id_digest: CanonicalDigestV1,
     pub expected_guard_state: HouseholdTeardownGuardStateV1,
     pub expected_guard_revision: u64,
     pub source_identity: HouseholdMigrationSourceIdentityV1,
@@ -458,6 +470,30 @@ where
         expected: &AuthCredentialBundle,
         cancellation: CancellationToken,
     ) -> Result<HouseholdEraseOutcome, PortError> {
+        self.clear_pre_native_account_inner(expected, false, cancellation)
+            .await
+    }
+
+    /// Complete the released pre-native cleanup after logout refresh failed.
+    /// Binding-preserving channel/session rotation is accepted, while account,
+    /// client, device, staged replacement, and marker provenance remain
+    /// fail-closed. Legacy credentials are scrubbed before auth is removed so
+    /// a crash cannot strand unresumable legacy authority.
+    pub async fn clear_pre_native_account_after_preflight_failure(
+        &self,
+        expected: &AuthCredentialBundle,
+        cancellation: CancellationToken,
+    ) -> Result<HouseholdEraseOutcome, PortError> {
+        self.clear_pre_native_account_inner(expected, true, cancellation)
+            .await
+    }
+
+    async fn clear_pre_native_account_inner(
+        &self,
+        expected: &AuthCredentialBundle,
+        adopt_preflight_refresh: bool,
+        cancellation: CancellationToken,
+    ) -> Result<HouseholdEraseOutcome, PortError> {
         if cancellation.is_cancelled() {
             return Err(cancelled());
         }
@@ -470,8 +506,21 @@ where
                 cancellation.child_token(),
             )
             .await?;
-        let observed = self.auth.load_account_bound(&self.session)?;
-        if observed.as_ref() != Some(expected) {
+        let observed = if adopt_preflight_refresh {
+            Some(
+                self.auth
+                    .load_account_bound_after_preflight_failure(expected, &self.session)?,
+            )
+        } else {
+            self.auth.load_account_bound(&self.session)?
+        };
+        if (!adopt_preflight_refresh && observed.as_ref() != Some(expected))
+            || observed.as_ref().is_some_and(|credentials| {
+                credentials.session.account_id != expected.session.account_id
+                    || credentials.channel.client_id != expected.channel.client_id
+                    || credentials.channel.device_id != expected.channel.device_id
+            })
+        {
             return Err(PortError::new(
                 "household_teardown_account_changed",
                 "active account authorization changed before legacy credential cleanup",
@@ -610,7 +659,13 @@ where
         // account comparison inside `clear_account_bound` prevents a newer
         // login from being erased.
         drop(source_lease);
-        match self.auth.clear_account_bound(expected, &self.session) {
+        let auth_clear = if adopt_preflight_refresh {
+            self.auth
+                .clear_account_bound_after_preflight_failure(expected, &self.session)
+        } else {
+            self.auth.clear_account_bound(expected, &self.session)
+        };
+        match auth_clear {
             Ok(()) => Ok(pre_native_outcome(true, true)),
             Err(_) => Ok(pre_native_outcome(true, false)),
         }
@@ -780,6 +835,14 @@ where
             account_locator_digest: CanonicalDigestV1::from_bytes(
                 vault.account_slot().account_locator_digest(),
             ),
+            auth_client_id_digest: CanonicalDigestV1::from_bytes(domain_hash(
+                AUTH_CLIENT_ID_DIGEST_DOMAIN,
+                &[expected.channel.client_id.as_bytes()],
+            )?),
+            auth_device_id_digest: CanonicalDigestV1::from_bytes(domain_hash(
+                AUTH_DEVICE_ID_DIGEST_DOMAIN,
+                &[expected.channel.device_id.as_bytes()],
+            )?),
             expected_guard_state: teardown_guard_state(guard.state())?,
             expected_guard_revision: guard.guard_revision(),
             source_identity: guard.source_identity().clone(),
@@ -1479,41 +1542,20 @@ where
                 )
             })?;
             lifecycle.validate_for(lease.target.account_slot())?;
-            match self.auth.finish_account_bound_logout_for_account_digest(
-                *journal.account_digest.as_bytes(),
-                &self.session,
-            ) {
-                Ok(true) => {
-                    lifecycle.validate_for(lease.target.account_slot())?;
-                    return Ok(HouseholdTeardownAttemptV1::Verified(()));
-                }
-                Ok(false) => {}
-                Err(_) => return Ok(HouseholdTeardownAttemptV1::Incomplete),
-            }
-            let observed = match self.auth.load_account_bound(&self.session) {
-                Ok(observed) => observed,
-                Err(_) => return Ok(HouseholdTeardownAttemptV1::Incomplete),
+            let binding = NativeLogoutBindingV1 {
+                account_digest: *journal.account_digest.as_bytes(),
+                client_id_digest: *journal.auth_client_id_digest.as_bytes(),
+                device_id_digest: *journal.auth_device_id_digest.as_bytes(),
             };
-            match observed {
-                None => {
+            match self
+                .auth
+                .finish_native_teardown_for_binding(binding, &self.session)
+            {
+                Ok(true) => {
                     lifecycle.validate_for(lease.target.account_slot())?;
                     Ok(HouseholdTeardownAttemptV1::Verified(()))
                 }
-                Some(credentials) => {
-                    let digest = CanonicalDigestV1::from_bytes(domain_hash(
-                        ACCOUNT_DIGEST_DOMAIN,
-                        &[credentials.session.account_id.as_str().as_bytes()],
-                    )?);
-                    if digest != journal.account_digest {
-                        return Ok(HouseholdTeardownAttemptV1::Incomplete);
-                    }
-                    let _clear = self.auth.clear_account_bound(&credentials, &self.session);
-                    lifecycle.validate_for(lease.target.account_slot())?;
-                    match self.auth.load_account_bound(&self.session) {
-                        Ok(None) => Ok(HouseholdTeardownAttemptV1::Verified(())),
-                        Ok(Some(_)) | Err(_) => Ok(HouseholdTeardownAttemptV1::Incomplete),
-                    }
-                }
+                Ok(false) | Err(_) => Ok(HouseholdTeardownAttemptV1::Incomplete),
             }
         })
     }
@@ -3018,6 +3060,12 @@ mod tests {
             native_root_instance_digest: store.native_root_instance_digest(),
             account_digest,
             account_locator_digest,
+            auth_client_id_digest: CanonicalDigestV1::from_bytes(
+                domain_hash(AUTH_CLIENT_ID_DIGEST_DOMAIN, &[b"client-1"]).unwrap(),
+            ),
+            auth_device_id_digest: CanonicalDigestV1::from_bytes(
+                domain_hash(AUTH_DEVICE_ID_DIGEST_DOMAIN, &[b"device-1"]).unwrap(),
+            ),
             expected_guard_state: if repair_without_key {
                 HouseholdTeardownGuardStateV1::BlockedRepair
             } else {

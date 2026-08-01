@@ -1476,14 +1476,132 @@ async fn uncertain_logout_preflight_removes_refresh_markers_with_local_authority
     assert_eq!(document["household_ciphertext_deleted"], false);
     assert_eq!(document["import_snapshot_deleted"], false);
     assert_eq!(document["legacy_source_retained"], true);
-    assert_eq!(document["legacy_credentials_cleared"], false);
-    assert_eq!(document["legacy_credentials_retained"], true);
+    assert_eq!(document["legacy_credentials_cleared"], true);
+    assert_eq!(document["legacy_credentials_retained"], false);
     assert_eq!(document["outcome_uncertain"], true);
     for step in ["link", "device", "session"] {
         assert_eq!(document["teardown"][step]["attempted"], false);
         assert_eq!(document["teardown"][step]["outcome_uncertain"], true);
         assert_eq!(document["teardown"][step]["error"], "outcome_uncertain");
     }
+    assert_eq!(auth_store.load().unwrap(), None);
+    assert_eq!(session_store.load().await.unwrap(), None);
+    assert!(!root.0.join("auth.reconciliation").exists());
+    assert!(!root.0.join("credentials.reconciliation").exists());
+}
+
+#[tokio::test]
+#[cfg(feature = "native-credentials")]
+async fn incomplete_pre_native_logout_cleanup_is_never_reported_as_success() {
+    let root = TempRoot::new("logout-refresh-incomplete-legacy");
+    initialize_expired_mature_session(&root.0, FULL_SCOPE);
+    let source_dir = root.0.join("xdg/heyfood");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("config.json"), b"{malformed").unwrap();
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/channel/oauth/token "));
+        drop(socket);
+        listener
+    });
+
+    let output = run(&root.0, &base_url, &["--json", "logout"], None).await;
+    assert!(!output.status.success());
+    let listener = server.await.unwrap();
+    let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["ok"], false);
+    assert_eq!(document["remote_complete"], false);
+    assert_eq!(document["local_credentials_cleared"], false);
+    assert_eq!(document["legacy_credentials_cleared"], false);
+    assert_eq!(document["legacy_credentials_retained"], true);
+    assert_eq!(document["outcome_uncertain"], true);
+    let repeated = run(&root.0, &base_url, &["--json", "logout"], None).await;
+    assert!(!repeated.status.success());
+    let repeated: Value = serde_json::from_slice(&repeated.stdout).unwrap();
+    assert_eq!(repeated["ok"], false);
+    assert_eq!(repeated["local_credentials_cleared"], false);
+    assert_eq!(repeated["legacy_credentials_retained"], true);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "incomplete local cleanup dispatched remote teardown"
+    );
+    assert!(auth_store.load().is_err());
+    assert!(session_store.load().await.unwrap().is_some());
+    assert!(root.0.join("auth.reconciliation").exists());
+}
+
+#[tokio::test]
+#[cfg(feature = "native-credentials")]
+async fn uncertain_session_refresh_logout_scrubs_pre_native_authority_without_remote_teardown() {
+    let root = TempRoot::new("logout-session-refresh-uncertain");
+    initialize_expired_mature_session(&root.0, FULL_SCOPE);
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server_scope = FULL_SCOPE.to_owned();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/channel/oauth/token "));
+        respond(
+            &mut socket,
+            "application/json",
+            &serde_json::to_vec(&json!({
+                "access_token": "channel-access-new",
+                "refresh_token": "channel-refresh-new",
+                "token_type": "bearer",
+                "expires_in": 3600,
+                "scope": server_scope
+            }))
+            .unwrap(),
+        )
+        .await;
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/auth/session/refresh "));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("x-device-id: heyfood-activated-device\r\n")
+        );
+        drop(socket);
+        listener
+    });
+
+    let output = run(&root.0, &base_url, &["--json", "logout"], None).await;
+    assert!(
+        output.status.success(),
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let listener = server.await.unwrap();
+    let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["remote_complete"], false);
+    assert_eq!(document["local_credentials_cleared"], true);
+    assert_eq!(document["legacy_credentials_cleared"], true);
+    assert_eq!(document["legacy_credentials_retained"], false);
+    assert_eq!(document["outcome_uncertain"], true);
+    for step in ["link", "device", "session"] {
+        assert_eq!(document["teardown"][step]["attempted"], false);
+        assert_eq!(document["teardown"][step]["outcome_uncertain"], true);
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "failed session refresh dispatched remote teardown"
+    );
     assert_eq!(auth_store.load().unwrap(), None);
     assert_eq!(session_store.load().await.unwrap(), None);
     assert!(!root.0.join("auth.reconciliation").exists());
@@ -1526,6 +1644,45 @@ async fn restarted_logout_adopts_uncertain_channel_refresh_without_network_teard
             .await
             .is_err(),
         "restart recovery dispatched a teardown request"
+    );
+    assert_eq!(auth_store.load().unwrap(), None);
+    assert_eq!(session_store.load().await.unwrap(), None);
+    assert!(!root.0.join("auth.reconciliation").exists());
+    assert!(!root.0.join("credentials.reconciliation").exists());
+}
+
+#[tokio::test]
+#[cfg(feature = "native-credentials")]
+async fn restarted_logout_adopts_uncertain_session_refresh_without_network_teardown() {
+    let root = TempRoot::new("logout-session-refresh-uncertain-restart");
+    initialize_expired_mature_session(&root.0, FULL_SCOPE);
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    std::fs::write(
+        root.0.join("credentials.reconciliation"),
+        format!("{}\n", heyfood_core::CommitId::new().as_uuid()),
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+
+    let output = run(&root.0, &base_url, &["--json", "logout"], None).await;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["remote_complete"], false);
+    assert_eq!(document["local_credentials_cleared"], true);
+    assert_eq!(document["legacy_credentials_cleared"], true);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "session-refresh restart recovery dispatched a teardown request"
     );
     assert_eq!(auth_store.load().unwrap(), None);
     assert_eq!(session_store.load().await.unwrap(), None);
