@@ -13,6 +13,12 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use cap_fs_ext::DirExt as _;
+#[cfg(unix)]
+use cap_std::ambient_authority;
+#[cfg(unix)]
+use cap_std::fs::Dir as CapDir;
 use fs2::FileExt as _;
 use heyfood_application::PortError;
 use heyfood_core::to_canonical_bytes_v1;
@@ -20,7 +26,9 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::household_vault::household_native_root_instance_digest_v1;
-use crate::persistence::{AtomicFile, OwnerOnlyPath};
+use crate::persistence::AtomicFile;
+#[cfg(any(not(unix), test))]
+use crate::persistence::OwnerOnlyPath;
 
 pub const NATIVE_STATE_FLOOR_REVISION_V1: u64 = 1;
 pub const NATIVE_STATE_FLOOR_SCHEMA_VERSION_V1: u64 = 1;
@@ -39,6 +47,8 @@ const FLOOR_FILE: &str = "native-state-floor.v1.json";
 const FLOOR_LOCK: &str = "native-state-floor.lock";
 const FLOOR_LOCK_TIMEOUT: Duration = Duration::from_secs(1);
 const FLOOR_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(10);
+#[cfg(unix)]
+const FLOOR_ARTIFACT_READY_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -209,20 +219,13 @@ impl NativeStateFloorStore {
         }
         self.verify_root_identity()?;
         let directory = self.native_root.join(FLOOR_DIRECTORY);
-        match fs::symlink_metadata(&directory) {
-            Ok(metadata) => validate_owner_only_directory(&metadata, &self.native_root)?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                OwnerOnlyPath::directory(&directory)?;
-                let metadata = fs::symlink_metadata(&directory).map_err(|_| floor_unavailable())?;
-                validate_owner_only_directory(&metadata, &self.native_root)?;
-            }
-            Err(_) => return Err(floor_unavailable()),
-        }
-        let _lock = NativeStateFloorLock::acquire(&self.lock_path(), &self.native_root)?;
+        ensure_floor_directory(&directory, &self.native_root)?;
+        let lock = NativeStateFloorLock::acquire(&self.lock_path(), &self.native_root)?;
         if cancellation.is_cancelled() {
             return Err(cancelled());
         }
         self.verify_root_identity()?;
+        lock.validate_directory(&directory, &self.native_root)?;
 
         let expected = NativeStateFloorV1::expected(self.native_root_instance_digest);
         let expected_bytes = expected.canonical_bytes()?;
@@ -241,7 +244,9 @@ impl NativeStateFloorStore {
         if cancellation.is_cancelled() {
             return Err(cancelled());
         }
+        lock.validate_directory(&directory, &self.native_root)?;
         AtomicFile::replace(&self.floor_path(), &expected_bytes)?;
+        lock.validate_directory(&directory, &self.native_root)?;
         let current =
             read_floor_bytes(&self.floor_path(), &self.native_root)?.ok_or_else(|| {
                 PortError::uncertain(
@@ -286,8 +291,227 @@ impl NativeStateFloorStore {
     }
 }
 
+#[cfg(unix)]
+fn ensure_floor_directory(directory: &Path, native_root: &Path) -> Result<(), PortError> {
+    match fs::symlink_metadata(directory) {
+        Ok(metadata) => {
+            return validate_floor_directory_after_concurrent_create(
+                directory,
+                &metadata,
+                native_root,
+            );
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(floor_unavailable()),
+    }
+
+    match create_new_floor_directory(directory, native_root) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(directory).map_err(|_| floor_unavailable())?;
+            return validate_floor_directory_after_concurrent_create(
+                directory,
+                &metadata,
+                native_root,
+            );
+        }
+        Err(_) => return Err(floor_unavailable()),
+    }
+
+    let metadata = fs::symlink_metadata(directory).map_err(|_| floor_unavailable())?;
+    validate_owner_only_directory(&metadata, native_root)
+}
+
+#[cfg(not(unix))]
+fn ensure_floor_directory(directory: &Path, native_root: &Path) -> Result<(), PortError> {
+    match fs::symlink_metadata(directory) {
+        Ok(metadata) => validate_owner_only_directory(&metadata, native_root),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            OwnerOnlyPath::directory(directory)?;
+            let metadata = fs::symlink_metadata(directory).map_err(|_| floor_unavailable())?;
+            validate_owner_only_directory(&metadata, native_root)
+        }
+        Err(_) => Err(floor_unavailable()),
+    }
+}
+
+#[cfg(unix)]
+fn create_new_floor_directory(directory: &Path, native_root: &Path) -> std::io::Result<()> {
+    use cap_std::fs::{DirBuilderExt as _, MetadataExt as _};
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    if directory.parent() != Some(native_root)
+        || directory.file_name() != Some(FLOOR_DIRECTORY.as_ref())
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "native state floor directory must be one direct child",
+        ));
+    }
+
+    let parent = CapDir::open_ambient_dir(native_root, ambient_authority())?;
+    let parent_path_metadata = fs::symlink_metadata(native_root)?;
+    let parent_open_metadata = parent.dir_metadata()?;
+    if parent_path_metadata.file_type().is_symlink()
+        || !parent_path_metadata.is_dir()
+        || parent_path_metadata.dev() != parent_open_metadata.dev()
+        || parent_path_metadata.ino() != parent_open_metadata.ino()
+    {
+        return Err(std::io::Error::other(
+            "native state floor parent identity changed",
+        ));
+    }
+
+    let mut builder = cap_std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    parent.create_dir_with(FLOOR_DIRECTORY, &builder)?;
+    let created = parent.symlink_metadata(FLOOR_DIRECTORY)?;
+    if created.file_type().is_symlink()
+        || !created.is_dir()
+        || created.uid() != parent_open_metadata.uid()
+    {
+        return Err(std::io::Error::other(
+            "native state floor directory identity changed",
+        ));
+    }
+
+    parent.set_symlink_permissions(
+        FLOOR_DIRECTORY,
+        cap_std::fs::Permissions::from_std(fs::Permissions::from_mode(0o700)),
+    )?;
+    let opened = parent.open_dir_nofollow(FLOOR_DIRECTORY)?;
+    let opened_metadata = opened.dir_metadata()?;
+    let path_metadata = fs::symlink_metadata(directory)?;
+    if path_metadata.file_type().is_symlink()
+        || !path_metadata.is_dir()
+        || created.dev() != opened_metadata.dev()
+        || created.ino() != opened_metadata.ino()
+        || created.dev() != path_metadata.dev()
+        || created.ino() != path_metadata.ino()
+    {
+        return Err(std::io::Error::other(
+            "native state floor directory identity changed",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_floor_directory_after_concurrent_create(
+    directory: &Path,
+    initial: &fs::Metadata,
+    native_root: &Path,
+) -> Result<(), PortError> {
+    if validate_owner_only_directory(initial, native_root).is_ok() {
+        return Ok(());
+    }
+    if !is_floor_directory_creation_in_progress(initial, native_root)? {
+        return Err(floor_invalid());
+    }
+
+    use std::os::unix::fs::MetadataExt as _;
+
+    let expected_device = initial.dev();
+    let expected_inode = initial.ino();
+    let started = Instant::now();
+    loop {
+        if started.elapsed() >= FLOOR_ARTIFACT_READY_TIMEOUT {
+            return Err(floor_invalid());
+        }
+        thread::sleep(FLOOR_LOCK_RETRY_INTERVAL);
+        let current = fs::symlink_metadata(directory).map_err(|_| floor_unavailable())?;
+        if current.dev() != expected_device || current.ino() != expected_inode {
+            return Err(floor_unavailable());
+        }
+        if validate_owner_only_directory(&current, native_root).is_ok() {
+            return Ok(());
+        }
+        if !is_floor_directory_creation_in_progress(&current, native_root)? {
+            return Err(floor_invalid());
+        }
+    }
+}
+
+#[cfg(unix)]
+fn is_floor_directory_creation_in_progress(
+    metadata: &fs::Metadata,
+    native_root: &Path,
+) -> Result<bool, PortError> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let root = fs::metadata(native_root).map_err(|_| floor_unavailable())?;
+    let mode = metadata.permissions().mode() & 0o777;
+    Ok(!metadata.file_type().is_symlink()
+        && metadata.is_dir()
+        && metadata.uid() == root.uid()
+        && mode & 0o077 == 0
+        && mode != 0o700)
+}
+
+#[cfg(unix)]
+fn validate_floor_lock_after_concurrent_create(
+    path: &Path,
+    initial: &fs::Metadata,
+    native_root: &Path,
+) -> Result<(), PortError> {
+    if validate_owner_only_lock_file(initial, native_root).is_ok() {
+        return Ok(());
+    }
+    if !is_floor_lock_creation_in_progress(initial, native_root)? {
+        return Err(floor_invalid());
+    }
+
+    use std::os::unix::fs::MetadataExt as _;
+
+    let expected_device = initial.dev();
+    let expected_inode = initial.ino();
+    let started = Instant::now();
+    loop {
+        if started.elapsed() >= FLOOR_ARTIFACT_READY_TIMEOUT {
+            return Err(floor_invalid());
+        }
+        thread::sleep(FLOOR_LOCK_RETRY_INTERVAL);
+        let current = fs::symlink_metadata(path).map_err(|_| floor_unavailable())?;
+        if current.dev() != expected_device || current.ino() != expected_inode {
+            return Err(floor_unavailable());
+        }
+        if validate_owner_only_lock_file(&current, native_root).is_ok() {
+            return Ok(());
+        }
+        if !is_floor_lock_creation_in_progress(&current, native_root)? {
+            return Err(floor_invalid());
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn validate_floor_lock_after_concurrent_create(
+    _path: &Path,
+    initial: &fs::Metadata,
+    native_root: &Path,
+) -> Result<(), PortError> {
+    validate_owner_only_lock_file(initial, native_root)
+}
+
+#[cfg(unix)]
+fn is_floor_lock_creation_in_progress(
+    metadata: &fs::Metadata,
+    native_root: &Path,
+) -> Result<bool, PortError> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let root = fs::metadata(native_root).map_err(|_| floor_unavailable())?;
+    let mode = metadata.permissions().mode() & 0o777;
+    Ok(!metadata.file_type().is_symlink()
+        && metadata.is_file()
+        && metadata.uid() == root.uid()
+        && mode & 0o177 == 0
+        && mode != 0o600)
+}
+
 struct NativeStateFloorLock {
     file: fs::File,
+    directory: fs::Metadata,
 }
 
 impl NativeStateFloorLock {
@@ -299,7 +523,7 @@ impl NativeStateFloorLock {
         let file = loop {
             match fs::symlink_metadata(path) {
                 Ok(metadata) => {
-                    validate_owner_only_lock_file(&metadata, native_root)?;
+                    validate_floor_lock_after_concurrent_create(path, &metadata, native_root)?;
                     break OpenOptions::new()
                         .read(true)
                         .write(true)
@@ -347,7 +571,24 @@ impl NativeStateFloorLock {
         if !same_file(&opened, &after) {
             return Err(floor_unavailable());
         }
-        Ok(Self { file })
+        let current_parent = fs::symlink_metadata(parent).map_err(|_| floor_unavailable())?;
+        validate_owner_only_directory(&current_parent, native_root)?;
+        if !same_directory(&parent_metadata, &current_parent) {
+            return Err(floor_unavailable());
+        }
+        Ok(Self {
+            file,
+            directory: current_parent,
+        })
+    }
+
+    fn validate_directory(&self, path: &Path, native_root: &Path) -> Result<(), PortError> {
+        let current = fs::symlink_metadata(path).map_err(|_| floor_unavailable())?;
+        validate_owner_only_directory(&current, native_root)?;
+        if !same_directory(&self.directory, &current) {
+            return Err(floor_unavailable());
+        }
+        Ok(())
     }
 }
 
@@ -550,6 +791,18 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.mtime_nsec() == right.mtime_nsec()
 }
 
+#[cfg(unix)]
+fn same_directory(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn same_directory(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.is_dir() && right.is_dir()
+}
+
 #[cfg(not(unix))]
 fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len()
@@ -700,13 +953,19 @@ mod tests {
                 .enable_all()
                 .build()
                 .unwrap();
-            runtime
-                .block_on(
-                    store.ensure_after_secure_store_probe(CancellationToken::new(), |_| async {
+            let first = store.clone();
+            let second = store.clone();
+            let (left, right) = runtime.block_on(async move {
+                tokio::join!(
+                    first.ensure_after_secure_store_probe(CancellationToken::new(), |_| async {
                         Ok(())
-                    }),
+                    },),
+                    second.ensure_after_secure_store_probe(CancellationToken::new(), |_| async {
+                        Ok(())
+                    },)
                 )
-                .unwrap();
+            });
+            assert_eq!(left.unwrap(), right.unwrap());
             use std::os::unix::fs::PermissionsExt as _;
             assert_eq!(
                 fs::metadata(store.lock_path())

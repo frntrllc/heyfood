@@ -1537,6 +1537,8 @@ dependencies = [
 name = "heyfood-platform"
 version = "0.6.3"
 dependencies = [
+ "cap-fs-ext",
+ "cap-std",
  "chacha20poly1305",
  "directories",
  "fs2",
