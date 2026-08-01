@@ -17,18 +17,21 @@ use heyfood_agent_runtime::{
 };
 #[cfg(feature = "native-credentials")]
 use heyfood_application::EnsureSessionError;
+use heyfood_application::PortError;
 use heyfood_application::{
     BoxFuture, BrowserPort, EnsureSession, EnsureSessionOutcome, HouseholdSession,
     NativeHouseholdModeV1,
 };
 #[cfg(feature = "native-credentials")]
 use heyfood_application::{
-    CredentialCommit, CredentialPort, HouseholdEraseOutcome, Logout, LogoutLocalPort,
-    LogoutOutcome, PortError,
+    CredentialCommit, CredentialPort, HouseholdEraseOutcome, Logout, LogoutLocalPort, LogoutOutcome,
 };
 use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
+use heyfood_core::AuthCredentialBundle;
 #[cfg(feature = "native-credentials")]
-use heyfood_core::{AuthCredentialBundle, CommitId, SessionCredentials};
+use heyfood_core::CommitId;
+#[cfg(any(feature = "native-credentials", test))]
+use heyfood_core::SessionCredentials;
 use heyfood_core::{
     BrowserUrl, HouseholdProfileStateV1, NetworkPolicy, OperationId, ProfileStatus,
     SensitiveString, ServiceUrl, SessionSnapshot, terminal_safe_text,
@@ -44,15 +47,15 @@ use heyfood_platform::FileCredentialStore;
 #[cfg(all(windows, not(feature = "native-credentials")))]
 use heyfood_platform::WindowsCredentialStore as NativeSessionStore;
 use heyfood_platform::{
-    AuthorizationReplacementJournal, AuthorizationReplacementPhase, NativeAuthStore, NativeBrowser,
-    NativeClock, NativePaths, PythonStateImporter,
+    AuthorizationReplacementJournal, AuthorizationReplacementPhase, HouseholdVault,
+    NativeAuthStore, NativeBrowser, NativeClock, NativePaths, NativeStateFloorStore,
+    PythonStateImporter, pre_floor_native_account_provenance_absent_v1,
 };
 #[cfg(feature = "native-credentials")]
 use heyfood_platform::{
     AuthorizationSessionStore, HouseholdTeardownJournalStoreV1, HouseholdTeardownJournalV1,
-    HouseholdVault, NativeAccountTeardownBackendV1, NativeAccountTeardownV1, NativeStateFloorStore,
+    NativeAccountTeardownBackendV1, NativeAccountTeardownV1,
     ProductionNativeAccountTeardownBackendV1, household_teardown_barrier_present_v1,
-    pre_floor_native_account_provenance_absent_v1,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -400,21 +403,16 @@ impl LogoutLocalPort for NativeLogoutLocal<'_> {
     }
 }
 
-/// Preserve the released flag-off logout path only while the immutable D2
-/// floor and every exact account-scoped D2 locator are absent. Once either
-/// exists, logout must use the journaled native coordinator even if rollout is
-/// disabled.
+/// Preserve the released pre-native logout path while the immutable D2 floor
+/// and every exact account-scoped D2 locator are absent. The rollout flag is
+/// not permission for logout to create native account evidence: only a
+/// durable floor selects the journaled native coordinator.
 #[cfg(feature = "native-credentials")]
 async fn pre_native_logout_compatibility_v1(
     paths: &NativePaths,
     account: heyfood_core::AccountId,
     cancellation: CancellationToken,
 ) -> Result<bool, PortError> {
-    use heyfood_bin::native_household_composition::native_household_rollout_from_environment_v1;
-
-    if native_household_rollout_from_environment_v1()?.is_enabled() {
-        return Ok(false);
-    }
     match std::fs::symlink_metadata(paths.data_dir()) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
         Err(_) => {
@@ -452,7 +450,6 @@ async fn pre_native_logout_compatibility_v1(
 /// storage. Only an already durable floor selects the lifecycle-serialized
 /// path; flag-on without a floor remains pre-native here, and contradictory
 /// account provenance fails closed without creating an account directory.
-#[cfg(feature = "native-credentials")]
 async fn pre_native_login_compatibility_v1(
     paths: &NativePaths,
     account: heyfood_core::AccountId,
@@ -497,7 +494,6 @@ async fn pre_native_login_compatibility_v1(
 /// directory.
 /// Native accounts retain `account-lifecycle.lock` across the exact teardown
 /// barrier check and the auth-then-session replacement marker commit.
-#[cfg(feature = "native-credentials")]
 async fn begin_login_reauthorization_intent_v1(
     paths: &NativePaths,
     auth_store: &NativeAuthStore,
@@ -506,6 +502,11 @@ async fn begin_login_reauthorization_intent_v1(
     client_transaction_id: String,
     cancellation: CancellationToken,
 ) -> Result<AuthorizationReplacementJournal, PortError> {
+    // The auth-intent guard closes the pre-native classification window.
+    // Floor publication may proceed concurrently, but a native logout cannot
+    // pass its final auth comparison and commit a teardown journal until this
+    // guard either commits the replacement marker or is released.
+    let auth_intent = auth_store.begin_authorization_intent()?;
     if pre_native_login_compatibility_v1(
         paths,
         expected.session.account_id.clone(),
@@ -513,23 +514,33 @@ async fn begin_login_reauthorization_intent_v1(
     )
     .await?
     {
-        return auth_store.begin_authorization_replacement_if_current(
+        return auth_intent.begin_authorization_replacement_if_current(
             client_transaction_id,
             expected,
             session_store,
         );
     }
+    drop(auth_intent);
 
-    let vault = HouseholdVault::from_native_paths(paths, expected.session.account_id.clone())?;
-    begin_native_login_reauthorization_intent_v1(
-        &vault,
-        auth_store,
-        session_store,
-        expected,
-        client_transaction_id,
-        cancellation,
-    )
-    .await
+    #[cfg(feature = "native-credentials")]
+    {
+        let vault = HouseholdVault::from_native_paths(paths, expected.session.account_id.clone())?;
+        return begin_native_login_reauthorization_intent_v1(
+            &vault,
+            auth_store,
+            session_store,
+            expected,
+            client_transaction_id,
+            cancellation,
+        )
+        .await;
+    }
+
+    #[cfg(not(feature = "native-credentials"))]
+    Err(PortError::new(
+        "household_native_credentials_required",
+        "native household state exists; reauthorization requires a build with native credential support",
+    ))
 }
 
 #[cfg(feature = "native-credentials")]
@@ -550,11 +561,13 @@ async fn begin_native_login_reauthorization_intent_v1(
             "native household teardown must resume before login can replace authorization",
         ));
     }
-    let journal = auth_store.begin_authorization_replacement_if_current(
+    let auth_intent = auth_store.begin_authorization_intent()?;
+    let journal = auth_intent.begin_authorization_replacement_if_current(
         client_transaction_id,
         expected,
         session_store,
     )?;
+    drop(auth_intent);
     drop(lifecycle);
     Ok(journal)
 }
@@ -628,6 +641,8 @@ fn combine_household_erase_outcomes(outcomes: &[HouseholdEraseOutcome]) -> House
 async fn commit_native_logout_teardown_intent(
     journals: &HouseholdTeardownJournalStoreV1,
     backend: &ProductionNativeAccountTeardownBackendV1<NativeSessionStore>,
+    auth_store: &NativeAuthStore,
+    session_store: &NativeSessionStore,
     expected: &AuthCredentialBundle,
     cancellation: CancellationToken,
 ) -> Result<(), PortError> {
@@ -640,8 +655,35 @@ async fn commit_native_logout_teardown_intent(
     let (lease, prepared) = backend
         .acquire_authenticated(expected, cancellation)
         .await?;
+    commit_prepared_native_logout_teardown_intent(
+        journals,
+        auth_store,
+        session_store,
+        expected,
+        lease,
+        prepared,
+    )
+}
+
+#[cfg(feature = "native-credentials")]
+fn commit_prepared_native_logout_teardown_intent<Lease>(
+    journals: &HouseholdTeardownJournalStoreV1,
+    auth_store: &NativeAuthStore,
+    session_store: &NativeSessionStore,
+    expected: &AuthCredentialBundle,
+    lease: Lease,
+    prepared: heyfood_platform::PreparedHouseholdTeardownV1,
+) -> Result<(), PortError> {
+    // `acquire_authenticated` deliberately releases its short auth read while
+    // it prepares native evidence. Reacquire the auth-intent fence while the
+    // lifecycle lease is still retained, recheck both credential stores, and
+    // keep the fence through the teardown-journal commit. A pre-native login
+    // can therefore never publish a replacement marker in this final window.
+    let auth_intent = auth_store.begin_authorization_intent()?;
+    auth_intent.verify_account_bound_current(expected, session_store)?;
     let journal = HouseholdTeardownJournalV1::new(prepared)?;
     journals.replace(&journal)?;
+    drop(auth_intent);
     drop(lease);
     Ok(())
 }
@@ -2390,6 +2432,8 @@ async fn logout_inner() -> Result<LogoutOutcome, PortError> {
         commit_native_logout_teardown_intent(
             &journals,
             &teardown_backend,
+            &auth_store,
+            session_store.as_ref(),
             &initial_credentials,
             cancellation.child_token(),
         )
@@ -2688,7 +2732,6 @@ async fn login_inner(
     };
 
     let client_transaction_id = OperationId::new().as_uuid().to_string();
-    #[cfg(feature = "native-credentials")]
     let journal = begin_login_reauthorization_intent_v1(
         &paths,
         &auth_store,
@@ -2699,14 +2742,6 @@ async fn login_inner(
     )
     .await
     .map_err(platform_error)?;
-    #[cfg(not(feature = "native-credentials"))]
-    let journal = auth_store
-        .begin_authorization_replacement_if_current(
-            client_transaction_id.clone(),
-            &existing_authorization,
-            &session_store,
-        )
-        .map_err(platform_error)?;
     let authorization = client
         .start_device_reauthorization(
             &journal.previous.channel.scope,
@@ -3336,8 +3371,10 @@ fn failure(
 mod tests {
     use std::io::Cursor;
 
-    #[cfg(all(feature = "native-credentials", not(windows)))]
+    #[cfg(not(windows))]
     use std::path::PathBuf;
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    use std::sync::Barrier;
 
     use clap::Parser;
 
@@ -3355,17 +3392,17 @@ mod tests {
 
     use super::*;
 
-    #[cfg(all(feature = "native-credentials", not(windows)))]
+    #[cfg(not(windows))]
     struct LogoutTempRoot(PathBuf);
 
-    #[cfg(all(feature = "native-credentials", not(windows)))]
+    #[cfg(not(windows))]
     impl Drop for LogoutTempRoot {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
-    #[cfg(all(feature = "native-credentials", not(windows)))]
+    #[cfg(not(windows))]
     fn lifecycle_test_bundle(account: &str) -> AuthCredentialBundle {
         AuthCredentialBundle {
             channel: heyfood_core::ChannelCredentials::from_unix_expiry(
@@ -3393,6 +3430,14 @@ mod tests {
         vault: &HouseholdVault,
         store: &HouseholdTeardownJournalStoreV1,
     ) -> HouseholdTeardownJournalV1 {
+        HouseholdTeardownJournalV1::new(lifecycle_test_teardown_prepared(vault, store)).unwrap()
+    }
+
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    fn lifecycle_test_teardown_prepared(
+        vault: &HouseholdVault,
+        store: &HouseholdTeardownJournalStoreV1,
+    ) -> PreparedHouseholdTeardownV1 {
         let slot = vault.account_slot();
         let target_kinds = [
             HouseholdTeardownLegacyTargetKindV1::CurrentConfigFile,
@@ -3400,7 +3445,7 @@ mod tests {
             HouseholdTeardownLegacyTargetKindV1::CurrentConfigKeyring,
             HouseholdTeardownLegacyTargetKindV1::LegacyConfigKeyring,
         ];
-        HouseholdTeardownJournalV1::new(PreparedHouseholdTeardownV1 {
+        PreparedHouseholdTeardownV1 {
             native_root_instance_digest: store.native_root_instance_digest(),
             account_digest: CanonicalDigestV1::from_bytes(slot.account_digest()),
             account_locator_digest: CanonicalDigestV1::from_bytes(slot.account_locator_digest()),
@@ -3432,8 +3477,7 @@ mod tests {
                     outcome: HouseholdTeardownLegacyTargetOutcomeV1::Pending,
                 })
                 .collect(),
-        })
-        .unwrap()
+        }
     }
 
     #[cfg(all(feature = "native-credentials", not(windows)))]
@@ -3617,6 +3661,8 @@ mod tests {
         let error = commit_native_logout_teardown_intent(
             &journals,
             &backend,
+            &auth,
+            &native_session,
             &expected,
             CancellationToken::new(),
         )
@@ -3633,6 +3679,157 @@ mod tests {
             journals.scan().unwrap().is_empty(),
             "replacement authority must prevent a teardown journal"
         );
+    }
+
+    #[tokio::test]
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    async fn floor_publication_between_pre_native_classification_and_marker_cannot_commit_logout() {
+        let root = LogoutTempRoot(std::env::temp_dir().join(format!(
+            "heyfood-reauthorization-floor-race-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir_all(&root.0).unwrap();
+        let paths = NativePaths::under(root.0.clone());
+        let auth = NativeAuthStore::open(paths.config_dir()).unwrap();
+        let session = FileCredentialStore::open(paths.config_dir()).unwrap();
+        let expected = lifecycle_test_bundle("reauthorization-floor-race");
+        auth.initialize_account_bound(&expected, &session).unwrap();
+        let vault =
+            HouseholdVault::from_native_paths(&paths, expected.session.account_id.clone()).unwrap();
+
+        // Actor A retains the production auth-intent fence across the exact
+        // pre-native classification. Actor B then publishes the floor before
+        // A commits its marker, reproducing the former transition window.
+        let login_intent = auth.begin_authorization_intent().unwrap();
+        assert!(
+            pre_native_login_compatibility_v1(
+                &paths,
+                expected.session.account_id.clone(),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap()
+        );
+        install_lifecycle_test_floor(&paths, &vault).await;
+
+        // Actor C has retained the lifecycle lease and is ready for the final
+        // exact auth check plus teardown-journal commit. It must wait for A.
+        let lifecycle = vault
+            .acquire_lifecycle_lease(CancellationToken::new())
+            .await
+            .unwrap();
+        let journals = HouseholdTeardownJournalStoreV1::open(paths.data_dir()).unwrap();
+        let prepared = lifecycle_test_teardown_prepared(&vault, &journals);
+        let worker_auth = auth.clone();
+        let worker_journals = journals.clone();
+        let worker_expected = expected.clone();
+        let worker_session = NativeSessionStore::OwnerOnlyFile(
+            FileCredentialStore::open(paths.config_dir()).unwrap(),
+        );
+        let started = Arc::new(Barrier::new(2));
+        let worker_started = Arc::clone(&started);
+        let logout = tokio::task::spawn_blocking(move || {
+            worker_started.wait();
+            commit_prepared_native_logout_teardown_intent(
+                &worker_journals,
+                &worker_auth,
+                &worker_session,
+                &worker_expected,
+                lifecycle,
+                prepared,
+            )
+        });
+        started.wait();
+
+        let replacement = login_intent
+            .begin_authorization_replacement_if_current(
+                "client-transaction-floor-race".to_owned(),
+                &expected,
+                &session,
+            )
+            .unwrap();
+        drop(login_intent);
+        let error = logout.await.unwrap().unwrap_err();
+
+        assert_eq!(error.code, "auth_reconciliation_required");
+        assert!(error.outcome_uncertain);
+        assert_eq!(
+            auth.pending_authorization_replacement().unwrap(),
+            Some(replacement)
+        );
+        assert!(
+            journals.scan().unwrap().is_empty(),
+            "the delayed native logout must not coexist with replacement authority"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    async fn retained_logout_intent_blocks_concurrent_reauthorization_until_journal_commit() {
+        let root = LogoutTempRoot(std::env::temp_dir().join(format!(
+            "heyfood-logout-intent-race-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir_all(&root.0).unwrap();
+        let paths = NativePaths::under(root.0.clone());
+        let auth = NativeAuthStore::open(paths.config_dir()).unwrap();
+        let session = FileCredentialStore::open(paths.config_dir()).unwrap();
+        let expected = lifecycle_test_bundle("logout-intent-race");
+        auth.initialize_account_bound(&expected, &session).unwrap();
+        let vault =
+            HouseholdVault::from_native_paths(&paths, expected.session.account_id.clone()).unwrap();
+        install_lifecycle_test_floor(&paths, &vault).await;
+        let lifecycle = vault
+            .acquire_lifecycle_lease(CancellationToken::new())
+            .await
+            .unwrap();
+        let journals = HouseholdTeardownJournalStoreV1::open(paths.data_dir()).unwrap();
+        let teardown = lifecycle_test_teardown_journal(&vault, &journals);
+        let logout_intent = auth.begin_authorization_intent().unwrap();
+        logout_intent
+            .verify_account_bound_current(&expected, &session)
+            .unwrap();
+
+        let worker_paths = paths.clone();
+        let worker_auth = auth.clone();
+        let worker_expected = expected.clone();
+        let worker_session = NativeSessionStore::OwnerOnlyFile(
+            FileCredentialStore::open(paths.config_dir()).unwrap(),
+        );
+        let started = Arc::new(Barrier::new(2));
+        let worker_started = Arc::clone(&started);
+        let runtime = tokio::runtime::Handle::current();
+        let login = tokio::task::spawn_blocking(move || {
+            worker_started.wait();
+            runtime.block_on(begin_login_reauthorization_intent_v1(
+                &worker_paths,
+                &worker_auth,
+                &worker_session,
+                &worker_expected,
+                "client-transaction-logout-race".to_owned(),
+                CancellationToken::new(),
+            ))
+        });
+        started.wait();
+
+        journals.replace(&teardown).unwrap();
+        drop(logout_intent);
+        drop(lifecycle);
+        let error = login.await.unwrap().unwrap_err();
+
+        assert_eq!(error.code, "household_teardown_resume_required");
+        assert!(error.outcome_uncertain);
+        assert!(auth.pending_authorization_replacement().unwrap().is_none());
+        assert_eq!(journals.scan().unwrap(), vec![teardown]);
+        assert_eq!(auth.load_account_bound(&session).unwrap(), Some(expected));
     }
 
     #[tokio::test]
@@ -3674,6 +3871,114 @@ mod tests {
         assert!(
             !paths.data_dir().exists(),
             "pre-native reauthorization must leave the native root absent"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(all(not(feature = "native-credentials"), not(windows)))]
+    async fn no_default_reauthorization_is_nonmutating_pre_native_and_rejects_native_evidence() {
+        let root = LogoutTempRoot(std::env::temp_dir().join(format!(
+            "heyfood-no-default-reauthorization-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir_all(&root.0).unwrap();
+
+        let clean_paths = NativePaths::under(root.0.join("clean"));
+        let clean_auth = NativeAuthStore::open(clean_paths.config_dir()).unwrap();
+        let clean_session = NativeSessionStore::open(clean_paths.config_dir()).unwrap();
+        let clean_expected = lifecycle_test_bundle("no-default-clean");
+        clean_auth
+            .initialize_account_bound(&clean_expected, &clean_session)
+            .unwrap();
+        begin_login_reauthorization_intent_v1(
+            &clean_paths,
+            &clean_auth,
+            &clean_session,
+            &clean_expected,
+            "client-transaction-no-default-clean".to_owned(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(!clean_paths.data_dir().exists());
+
+        let floor_paths = NativePaths::under(root.0.join("floor"));
+        let floor_auth = NativeAuthStore::open(floor_paths.config_dir()).unwrap();
+        let floor_session = NativeSessionStore::open(floor_paths.config_dir()).unwrap();
+        let floor_expected = lifecycle_test_bundle("no-default-floor");
+        floor_auth
+            .initialize_account_bound(&floor_expected, &floor_session)
+            .unwrap();
+        heyfood_platform::OwnerOnlyPath::directory(floor_paths.data_dir()).unwrap();
+        let floor_vault = HouseholdVault::from_native_paths(
+            &floor_paths,
+            floor_expected.session.account_id.clone(),
+        )
+        .unwrap();
+        NativeStateFloorStore::open(
+            floor_paths.data_dir(),
+            floor_vault.account_slot().native_root_instance_digest(),
+        )
+        .unwrap()
+        .ensure_after_secure_store_probe(CancellationToken::new(), |_| async { Ok(()) })
+        .await
+        .unwrap();
+        let floor_error = begin_login_reauthorization_intent_v1(
+            &floor_paths,
+            &floor_auth,
+            &floor_session,
+            &floor_expected,
+            "client-transaction-no-default-floor".to_owned(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(floor_error.code, "household_native_credentials_required");
+        assert!(
+            floor_auth
+                .pending_authorization_replacement()
+                .unwrap()
+                .is_none()
+        );
+        assert!(!floor_paths.data_dir().join("accounts").exists());
+
+        let evidence_paths = NativePaths::under(root.0.join("evidence"));
+        let evidence_auth = NativeAuthStore::open(evidence_paths.config_dir()).unwrap();
+        let evidence_session = NativeSessionStore::open(evidence_paths.config_dir()).unwrap();
+        let evidence_expected = lifecycle_test_bundle("no-default-evidence");
+        evidence_auth
+            .initialize_account_bound(&evidence_expected, &evidence_session)
+            .unwrap();
+        heyfood_platform::OwnerOnlyPath::directory(evidence_paths.data_dir()).unwrap();
+        let evidence_vault = HouseholdVault::from_native_paths(
+            &evidence_paths,
+            evidence_expected.session.account_id.clone(),
+        )
+        .unwrap();
+        heyfood_platform::OwnerOnlyPath::directory(&evidence_vault.account_directory()).unwrap();
+        let evidence_error = begin_login_reauthorization_intent_v1(
+            &evidence_paths,
+            &evidence_auth,
+            &evidence_session,
+            &evidence_expected,
+            "client-transaction-no-default-evidence".to_owned(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            evidence_error.code,
+            "household_native_evidence_contradiction"
+        );
+        assert!(
+            evidence_auth
+                .pending_authorization_replacement()
+                .unwrap()
+                .is_none()
         );
     }
 

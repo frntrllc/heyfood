@@ -435,6 +435,41 @@ fn expected_current_reauthorization_rejects_a_changed_session_without_a_marker()
 
 #[test]
 #[cfg(not(windows))]
+fn retained_auth_intent_guard_compares_the_exact_composed_bundle_without_mutation() {
+    let root = TempRoot::new("authorization-intent-exact-current");
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let expected = auth_bundle();
+    auth_store.initialize(&expected).unwrap();
+    session_store.initialize(&expected.session).unwrap();
+
+    let mut changed = expected.clone();
+    changed.channel.access_token = SensitiveString::new("changed-channel-access");
+    auth_store.replace(&changed).unwrap();
+    let intent = auth_store.begin_authorization_intent().unwrap();
+    let error = intent
+        .verify_account_bound_current(&expected, &session_store)
+        .unwrap_err();
+
+    assert_eq!(error.code, "authorization_version_conflict");
+    drop(intent);
+    assert!(
+        auth_store
+            .pending_authorization_replacement()
+            .unwrap()
+            .is_none()
+    );
+    assert!(!root.0.join("auth.reconciliation").exists());
+    let current = auth_store
+        .load_account_bound(&session_store)
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.channel, changed.channel);
+    assert_eq!(current.session, expected.session);
+}
+
+#[test]
+#[cfg(not(windows))]
 fn partial_pending_session_write_replays_exact_prepared_journal() {
     struct FailingSessionStore;
     impl AuthorizationSessionStore for FailingSessionStore {

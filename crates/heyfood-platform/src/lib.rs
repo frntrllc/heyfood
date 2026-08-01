@@ -83,8 +83,8 @@ pub use persistence::WindowsCredentialQualificationCleanup;
 pub use persistence::WindowsCredentialStore;
 pub use persistence::{
     AtomicFile, AuthorizationReplacementJournal, AuthorizationReplacementPhase,
-    AuthorizationSessionStore, FileCredentialStore, NativeAuthRefreshGuard, NativeAuthStore,
-    NativeConfigStore, OwnerOnlyPath, SensitiveExportWriter,
+    AuthorizationSessionStore, FileCredentialStore, NativeAuthIntentGuard, NativeAuthRefreshGuard,
+    NativeAuthStore, NativeConfigStore, OwnerOnlyPath, SensitiveExportWriter,
 };
 pub use python_import::{
     LegacyLocationRestartV1, LegacyPythonConfigKindV1, LegacyPythonConfigRootV1,

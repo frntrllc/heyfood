@@ -1019,6 +1019,17 @@ pub struct NativeAuthRefreshGuard<'a> {
     _lock: FileLock,
 }
 
+/// Retained authorization-intent fence.
+///
+/// Callers that coordinate authorization replacement with a broader native
+/// lifecycle retain this guard from their final exact account comparison
+/// through the durable local intent commit. The fixed native ordering is
+/// lifecycle, then this authorization fence, then the session-store lock.
+pub struct NativeAuthIntentGuard<'a> {
+    store: &'a NativeAuthStore,
+    _lock: FileLock,
+}
+
 /// Session-store half of an explicit authorization replacement. Implementors
 /// must either leave the previous credential intact or return an uncertain
 /// error; the auth-store transaction marker blocks use after either outcome.
@@ -1173,6 +1184,43 @@ impl NativeAuthRefreshGuard<'_> {
     /// rotating grant was not accepted, or after the replacement is durable.
     pub fn clear_reconciliation_required(&self) -> Result<(), PortError> {
         clear_any_reconciliation_marker(&self.store.reconciliation_path)
+    }
+}
+
+#[cfg(any(not(windows), feature = "native-credentials"))]
+impl NativeAuthIntentGuard<'_> {
+    /// Verify that both active credential stores still exactly match the
+    /// caller's earlier account-bound read while retaining the auth lock.
+    pub fn verify_account_bound_current(
+        &self,
+        expected: &AuthCredentialBundle,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<(), PortError> {
+        let current = self
+            .store
+            .load_current_account_bound_unlocked(session_store)?;
+        if &current != expected {
+            return Err(PortError::new(
+                "authorization_version_conflict",
+                "account-bound authorization changed before its native intent was committed",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Commit an authorization replacement while retaining the same auth
+    /// fence used for pre-native classification or native lifecycle ordering.
+    pub fn begin_authorization_replacement_if_current(
+        &self,
+        client_transaction_id: String,
+        expected: &AuthCredentialBundle,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<AuthorizationReplacementJournal, PortError> {
+        self.store.begin_authorization_replacement_unlocked(
+            client_transaction_id,
+            Some(expected),
+            session_store,
+        )
     }
 }
 
@@ -1872,6 +1920,18 @@ impl NativeAuthStore {
         })
     }
 
+    /// Acquire the retained authorization-intent fence. Native callers take
+    /// this only after any account lifecycle lease; pre-native callers may
+    /// take it before their read-only native-state classification because they
+    /// must not create a lifecycle artifact merely to synchronize.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn begin_authorization_intent(&self) -> Result<NativeAuthIntentGuard<'_>, PortError> {
+        Ok(NativeAuthIntentGuard {
+            store: self,
+            _lock: FileLock::acquire(&self.lock_path, true)?,
+        })
+    }
+
     #[cfg(any(not(windows), feature = "native-credentials"))]
     fn ensure_reconciled_unlocked(&self) -> Result<(), PortError> {
         if self.reconciliation_path.exists()
@@ -1927,25 +1987,23 @@ impl NativeAuthStore {
         expected: Option<&AuthCredentialBundle>,
         session_store: &impl AuthorizationSessionStore,
     ) -> Result<AuthorizationReplacementJournal, PortError> {
-        validate_transaction_id("client transaction", &client_transaction_id)?;
         let _lock = FileLock::acquire(&self.lock_path, true)?;
-        self.ensure_reconciled_unlocked()?;
-        let current_auth = self
-            .load_unlocked()?
-            .ok_or_else(|| PortError::new("auth_missing", "authorization state is missing"))?;
-        let current_session = session_store
-            .load_authorized_session()?
-            .ok_or_else(|| PortError::new("credentials_missing", "credentials are missing"))?;
-        if current_auth.session.account_id != current_session.account_id {
-            return Err(PortError::new(
-                "authorization_account_conflict",
-                "authorization and active session belong to different accounts",
-            ));
-        }
-        let current = AuthCredentialBundle {
-            channel: current_auth.channel,
-            session: current_session,
-        };
+        self.begin_authorization_replacement_unlocked(
+            client_transaction_id,
+            expected,
+            session_store,
+        )
+    }
+
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    fn begin_authorization_replacement_unlocked(
+        &self,
+        client_transaction_id: String,
+        expected: Option<&AuthCredentialBundle>,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<AuthorizationReplacementJournal, PortError> {
+        validate_transaction_id("client transaction", &client_transaction_id)?;
+        let current = self.load_current_account_bound_unlocked(session_store)?;
         if expected.is_some_and(|expected| expected != &current) {
             return Err(PortError::new(
                 "authorization_version_conflict",
@@ -1971,6 +2029,31 @@ impl NativeAuthStore {
         )
         .map_err(|error| PortError::uncertain("auth_reconciliation_write", error.to_string()))?;
         Ok(journal)
+    }
+
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    fn load_current_account_bound_unlocked(
+        &self,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<AuthCredentialBundle, PortError> {
+        self.ensure_reconciled_unlocked()?;
+        let current_auth = self
+            .load_unlocked()?
+            .ok_or_else(|| PortError::new("auth_missing", "authorization state is missing"))?;
+        let current_session = session_store
+            .load_authorized_session()?
+            .ok_or_else(|| PortError::new("credentials_missing", "credentials are missing"))?;
+        if current_auth.session.account_id != current_session.account_id {
+            return Err(PortError::new(
+                "authorization_account_conflict",
+                "authorization and active session belong to different accounts",
+            ));
+        }
+        let current = AuthCredentialBundle {
+            channel: current_auth.channel,
+            session: current_session,
+        };
+        Ok(current)
     }
 
     #[cfg(any(not(windows), feature = "native-credentials"))]
