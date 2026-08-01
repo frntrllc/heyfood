@@ -1050,9 +1050,9 @@ pub(crate) type LegacyPythonSourceVaultLeaseTransactionV1 =
 pub(crate) type LegacyPythonSnapshotVaultLeaseTransactionV1 =
     LegacyPythonVaultLeaseTransactionV1<LegacyPythonSnapshotLeaseV1>;
 
-/// Opaque public authority for Phase B. It never exposes ownership of source
-/// and vault leases separately, so downstream callers cannot release lifecycle
-/// before the legacy source locks.
+/// Opaque public authority for Phase B. Its public API exposes shared borrows
+/// only; downstream callers can neither extract nor replace the retained vault
+/// lease and therefore cannot release lifecycle before legacy source locks.
 pub struct LegacyPythonSourceVaultLeaseV1 {
     transaction: Option<LegacyPythonSourceVaultLeaseTransactionV1>,
 }
@@ -1074,7 +1074,10 @@ impl LegacyPythonSourceVaultLeaseV1 {
             .vault_lease()
     }
 
-    pub fn vault_lease_mut(&mut self) -> &mut HouseholdVaultLease {
+    // Unit-only mutation lets migration tests seed guarded state without
+    // exposing replaceable composite authority in production builds.
+    #[cfg(test)]
+    pub(crate) fn vault_lease_mut(&mut self) -> &mut HouseholdVaultLease {
         self.transaction
             .as_mut()
             .expect("active source/vault lease retains its transaction")
@@ -1091,7 +1094,9 @@ impl fmt::Debug for LegacyPythonSourceVaultLeaseV1 {
     }
 }
 
-/// Opaque snapshot/vault authority for committed crash recovery.
+/// Opaque snapshot/vault authority for committed crash recovery. Its public
+/// API exposes shared borrows only, preventing replacement of either retained
+/// authority.
 pub struct LegacyPythonSnapshotVaultLeaseV1 {
     transaction: Option<LegacyPythonSnapshotVaultLeaseTransactionV1>,
 }
@@ -1111,13 +1116,6 @@ impl LegacyPythonSnapshotVaultLeaseV1 {
             .as_ref()
             .expect("active snapshot/vault lease retains its transaction")
             .vault_lease()
-    }
-
-    pub fn vault_lease_mut(&mut self) -> &mut HouseholdVaultLease {
-        self.transaction
-            .as_mut()
-            .expect("active snapshot/vault lease retains its transaction")
-            .vault_lease_mut()
     }
 }
 
