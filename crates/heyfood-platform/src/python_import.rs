@@ -47,7 +47,8 @@ use crate::credential_broker::{
     LegacyPythonKeyringLocatorV1,
 };
 use crate::household_vault::{
-    HouseholdAccountSlotV1, HouseholdLifecycleLease, HouseholdVaultLease,
+    AcquiredNarrowerVaultLease, HouseholdAccountSlotV1, HouseholdLifecycleLease,
+    HouseholdVaultLease,
 };
 use crate::persistence::{AtomicFile, FileLock, create_private_dir};
 
@@ -897,6 +898,49 @@ pub struct LegacyPythonHouseholdMigrationV1 {
     snapshot_path: PathBuf,
 }
 
+#[cfg(test)]
+struct LegacySourceLockDropObserver {
+    label: &'static str,
+    events: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+}
+
+struct LegacySourceFileLock {
+    lock: Option<FileLock>,
+    #[cfg(test)]
+    drop_observer: Option<LegacySourceLockDropObserver>,
+}
+
+impl LegacySourceFileLock {
+    fn new(lock: FileLock) -> Self {
+        Self {
+            lock: Some(lock),
+            #[cfg(test)]
+            drop_observer: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn observe_drop(
+        &mut self,
+        label: &'static str,
+        events: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+    ) {
+        self.drop_observer = Some(LegacySourceLockDropObserver { label, events });
+    }
+}
+
+impl Drop for LegacySourceFileLock {
+    fn drop(&mut self) {
+        drop(self.lock.take());
+        #[cfg(test)]
+        if let Some(observer) = &self.drop_observer
+            && let Ok(mut events) = observer.events.lock()
+        {
+            events.push(observer.label);
+        }
+    }
+}
+
 /// Retained lock authority for one exact legacy source bundle.
 ///
 /// Acquisition consumes the already-held per-account lifecycle lease and
@@ -906,14 +950,14 @@ pub struct LegacyPythonHouseholdMigrationV1 {
 /// held across Phase A, guard reservation, Phase B, vault verification, and
 /// exact snapshot retirement.
 pub struct LegacyPythonSourceLeaseV1 {
+    _snapshot_lock: LegacySourceFileLock,
+    _legacy_config_lock: LegacySourceFileLock,
+    _current_config_lock: LegacySourceFileLock,
     lifecycle: Option<HouseholdLifecycleLease>,
     account_slot: HouseholdAccountSlotV1,
     current_config_locator_digest: CanonicalDigestV1,
     legacy_config_locator_digest: CanonicalDigestV1,
     snapshot_locator_digest: CanonicalDigestV1,
-    _current_config_lock: FileLock,
-    _legacy_config_lock: FileLock,
-    _snapshot_lock: FileLock,
 }
 
 /// Exact current/legacy Python `config.lock` authority for the released
@@ -927,21 +971,51 @@ pub struct LegacyPythonSourceLeaseV1 {
 /// have been scrubbed or authoritatively classified complete.
 #[cfg(feature = "native-credentials")]
 pub(crate) struct LegacyPythonCredentialSourceLeaseV1 {
+    _legacy_config_lock: LegacySourceFileLock,
+    _current_config_lock: LegacySourceFileLock,
     account_slot: HouseholdAccountSlotV1,
     current_config_locator_digest: CanonicalDigestV1,
     legacy_config_locator_digest: CanonicalDigestV1,
-    _current_config_lock: FileLock,
-    _legacy_config_lock: FileLock,
 }
 
 /// Snapshot-only crash-recovery authority used after a committed native vault
 /// has made every mixed Python config/keyring source permanently ineligible.
 /// It intentionally has no config-root or keyring field.
 pub struct LegacyPythonSnapshotLeaseV1 {
+    _snapshot_lock: LegacySourceFileLock,
     lifecycle: Option<HouseholdLifecycleLease>,
     account_slot: HouseholdAccountSlotV1,
     snapshot_locator_digest: CanonicalDigestV1,
-    _snapshot_lock: FileLock,
+}
+
+/// One exact legacy-source/vault critical section. The acquired wrapper is
+/// already composite at the blocking-worker boundary, so cancellation cannot
+/// expose a raw source/vault tuple before validated migration binding.
+pub(crate) type LegacyPythonVaultLeaseTransactionV1<S> = AcquiredNarrowerVaultLease<S>;
+pub(crate) type LegacyPythonSourceVaultLeaseTransactionV1 =
+    LegacyPythonVaultLeaseTransactionV1<LegacyPythonSourceLeaseV1>;
+pub(crate) type LegacyPythonSnapshotVaultLeaseTransactionV1 =
+    LegacyPythonVaultLeaseTransactionV1<LegacyPythonSnapshotLeaseV1>;
+
+struct LegacyPythonSourceLifecycleReleaseV1<S> {
+    source_lease: Option<S>,
+    lifecycle_lease: Option<HouseholdLifecycleLease>,
+}
+
+impl<S> LegacyPythonSourceLifecycleReleaseV1<S> {
+    fn new(source_lease: S, lifecycle_lease: HouseholdLifecycleLease) -> Self {
+        Self {
+            source_lease: Some(source_lease),
+            lifecycle_lease: Some(lifecycle_lease),
+        }
+    }
+}
+
+impl<S> Drop for LegacyPythonSourceLifecycleReleaseV1<S> {
+    fn drop(&mut self) {
+        drop(self.source_lease.take());
+        drop(self.lifecycle_lease.take());
+    }
 }
 
 impl fmt::Debug for LegacyPythonSnapshotLeaseV1 {
@@ -1063,15 +1137,18 @@ impl LegacyPythonHouseholdMigrationV1 {
         let current_lock = acquire_source_file_lock(&current_lock_path, &cancellation).await?;
         let legacy_lock = acquire_source_file_lock(&legacy_lock_path, &cancellation).await?;
         let snapshot_lock = acquire_source_file_lock(&snapshot_lock_path, &cancellation).await?;
+        let current_config_locator_digest = path_locator_digest(current_path)?;
+        let legacy_config_locator_digest = path_locator_digest(legacy_path)?;
+        let snapshot_locator_digest = path_locator_digest(&self.snapshot_path)?;
         let lease = LegacyPythonSourceLeaseV1 {
+            _snapshot_lock: snapshot_lock,
+            _legacy_config_lock: legacy_lock,
+            _current_config_lock: current_lock,
             lifecycle: Some(lifecycle),
             account_slot,
-            current_config_locator_digest: path_locator_digest(current_path)?,
-            legacy_config_locator_digest: path_locator_digest(legacy_path)?,
-            snapshot_locator_digest: path_locator_digest(&self.snapshot_path)?,
-            _current_config_lock: current_lock,
-            _legacy_config_lock: legacy_lock,
-            _snapshot_lock: snapshot_lock,
+            current_config_locator_digest,
+            legacy_config_locator_digest,
+            snapshot_locator_digest,
         };
         self.validate_source_lease_for_phase_a(&lease)?;
         migration_checkpoint(&cancellation).await?;
@@ -1098,12 +1175,14 @@ impl LegacyPythonHouseholdMigrationV1 {
         // The released Python order is current config then legacy config.
         let current_lock = acquire_source_file_lock(&current_lock_path, &cancellation).await?;
         let legacy_lock = acquire_source_file_lock(&legacy_lock_path, &cancellation).await?;
+        let current_config_locator_digest = path_locator_digest(current_path)?;
+        let legacy_config_locator_digest = path_locator_digest(legacy_path)?;
         let lease = LegacyPythonCredentialSourceLeaseV1 {
-            account_slot,
-            current_config_locator_digest: path_locator_digest(current_path)?,
-            legacy_config_locator_digest: path_locator_digest(legacy_path)?,
-            _current_config_lock: current_lock,
             _legacy_config_lock: legacy_lock,
+            _current_config_lock: current_lock,
+            account_slot,
+            current_config_locator_digest,
+            legacy_config_locator_digest,
         };
         self.validate_credential_source_lease(&lease)?;
         migration_checkpoint(&cancellation).await?;
@@ -1149,11 +1228,12 @@ impl LegacyPythonHouseholdMigrationV1 {
             .ok_or_else(legacy_root_ambiguous)?
             .join(IMPORT_LOCK_NAME);
         let snapshot_lock = acquire_source_file_lock(&snapshot_lock_path, &cancellation).await?;
+        let snapshot_locator_digest = path_locator_digest(&self.snapshot_path)?;
         let lease = LegacyPythonSnapshotLeaseV1 {
+            _snapshot_lock: snapshot_lock,
             lifecycle: Some(lifecycle),
             account_slot,
-            snapshot_locator_digest: path_locator_digest(&self.snapshot_path)?,
-            _snapshot_lock: snapshot_lock,
+            snapshot_locator_digest,
         };
         self.validate_snapshot_lease_for_phase_a(&lease)?;
         migration_checkpoint(&cancellation).await?;
@@ -1198,6 +1278,51 @@ impl LegacyPythonHouseholdMigrationV1 {
                 "legacy Python snapshot lifecycle authority was already transferred",
             )
         })
+    }
+
+    pub(crate) fn bind_snapshot_vault_transaction(
+        &self,
+        transaction: LegacyPythonSnapshotVaultLeaseTransactionV1,
+    ) -> Result<LegacyPythonSnapshotVaultLeaseTransactionV1, PortError> {
+        if transaction.source_lease().lifecycle.is_some() {
+            return Err(PortError::new(
+                "legacy_python_snapshot_lease_mismatch",
+                "legacy Python snapshot lease retained duplicate lifecycle authority",
+            ));
+        }
+        self.validate_snapshot_lease_for_vault(
+            transaction.source_lease(),
+            transaction.vault_lease(),
+        )?;
+        Ok(transaction)
+    }
+
+    pub(crate) async fn release_snapshot_vault_transaction(
+        &self,
+        mut transaction: LegacyPythonSnapshotVaultLeaseTransactionV1,
+        cancellation: CancellationToken,
+    ) -> Result<HouseholdLifecycleLease, PortError> {
+        let operation = transaction
+            .vault_lease()
+            .acquire_operation(&cancellation)
+            .await?;
+        self.validate_snapshot_lease_for_vault(
+            transaction.source_lease(),
+            transaction.vault_lease(),
+        )?;
+        let account_slot = transaction.source_lease().account_slot.clone();
+        let Some((snapshot_lease, vault_lease)) = transaction.take_parts() else {
+            drop(operation);
+            return Err(PortError::new(
+                "legacy_python_snapshot_lease_mismatch",
+                "legacy Python snapshot/vault transaction is incomplete",
+            ));
+        };
+        let lifecycle = vault_lease.into_lifecycle_after_vault_drop_for_cleanup();
+        drop(operation);
+        drop(snapshot_lease);
+        lifecycle.validate_for(&account_slot)?;
+        Ok(lifecycle)
     }
 
     fn validate_snapshot_lease_for_vault(
@@ -1270,21 +1395,71 @@ impl LegacyPythonHouseholdMigrationV1 {
         })
     }
 
+    pub(crate) fn bind_source_vault_transaction(
+        &self,
+        transaction: LegacyPythonSourceVaultLeaseTransactionV1,
+    ) -> Result<LegacyPythonSourceVaultLeaseTransactionV1, PortError> {
+        if transaction.source_lease().lifecycle.is_some() {
+            return Err(PortError::new(
+                "legacy_python_source_lease_mismatch",
+                "legacy Python source lease retained duplicate lifecycle authority",
+            ));
+        }
+        self.validate_source_lease_for_vault(
+            transaction.source_lease(),
+            transaction.vault_lease(),
+        )?;
+        Ok(transaction)
+    }
+
+    pub(crate) async fn release_source_vault_transaction(
+        &self,
+        mut transaction: LegacyPythonSourceVaultLeaseTransactionV1,
+        cancellation: CancellationToken,
+    ) -> Result<HouseholdLifecycleLease, PortError> {
+        let operation = transaction
+            .vault_lease()
+            .acquire_operation(&cancellation)
+            .await?;
+        self.validate_source_lease_for_vault(
+            transaction.source_lease(),
+            transaction.vault_lease(),
+        )?;
+        let account_slot = transaction.source_lease().account_slot.clone();
+        let Some((source_lease, vault_lease)) = transaction.take_parts() else {
+            drop(operation);
+            return Err(PortError::new(
+                "legacy_python_source_lease_mismatch",
+                "legacy Python source/vault transaction is incomplete",
+            ));
+        };
+        let lifecycle = vault_lease.into_lifecycle_after_vault_drop_for_cleanup();
+        drop(operation);
+        drop(source_lease);
+        lifecycle.validate_for(&account_slot)?;
+        Ok(lifecycle)
+    }
+
     pub fn restore_lifecycle_after_vault_release(
         &self,
         source_lease: &mut LegacyPythonSourceLeaseV1,
         lifecycle: HouseholdLifecycleLease,
     ) -> Result<(), PortError> {
         if source_lease.lifecycle.is_some() {
+            // A duplicate lifecycle hand-back is an invalid authority state.
+            // Retain the unexpected authority until process exit rather than
+            // releasing it ahead of the still-held source locks.
+            std::mem::forget(lifecycle);
             return Err(PortError::new(
                 "legacy_python_source_lease_mismatch",
                 "legacy Python source lease already retains lifecycle authority",
             ));
         }
-        lifecycle.validate_for(&source_lease.account_slot)?;
-        self.validate_source_lease_binding(source_lease)?;
+        let validation = lifecycle
+            .validate_for(&source_lease.account_slot)
+            .and_then(|()| self.validate_source_lease_binding(source_lease));
         source_lease.lifecycle = Some(lifecycle);
-        Ok(())
+        validation
     }
 
     /// Release all exact legacy config/import locks while returning the
@@ -1299,6 +1474,19 @@ impl LegacyPythonHouseholdMigrationV1 {
         source_lease: LegacyPythonSourceLeaseV1,
         lifecycle: HouseholdLifecycleLease,
     ) -> Result<HouseholdLifecycleLease, PortError> {
+        let mut release = LegacyPythonSourceLifecycleReleaseV1::new(source_lease, lifecycle);
+        let Some(source_lease) = release.source_lease.as_ref() else {
+            return Err(PortError::new(
+                "legacy_python_source_lease_mismatch",
+                "legacy Python source lease is unavailable during release",
+            ));
+        };
+        let Some(lifecycle) = release.lifecycle_lease.as_ref() else {
+            return Err(PortError::new(
+                "legacy_python_source_lease_mismatch",
+                "legacy Python lifecycle lease is unavailable during release",
+            ));
+        };
         if source_lease.lifecycle.is_some() {
             return Err(PortError::new(
                 "legacy_python_source_lease_mismatch",
@@ -1306,7 +1494,19 @@ impl LegacyPythonHouseholdMigrationV1 {
             ));
         }
         lifecycle.validate_for(&source_lease.account_slot)?;
-        self.validate_source_lease_binding(&source_lease)?;
+        self.validate_source_lease_binding(source_lease)?;
+        let source_lease = release.source_lease.take().ok_or_else(|| {
+            PortError::new(
+                "legacy_python_source_lease_mismatch",
+                "legacy Python source lease is unavailable during release",
+            )
+        })?;
+        let lifecycle = release.lifecycle_lease.take().ok_or_else(|| {
+            PortError::new(
+                "legacy_python_source_lease_mismatch",
+                "legacy Python lifecycle lease is unavailable during release",
+            )
+        })?;
         drop(source_lease);
         lifecycle.validate_for(lifecycle.account_slot())?;
         Ok(lifecycle)
@@ -2460,19 +2660,21 @@ fn sibling_config_lock_path(config_path: &Path) -> Result<PathBuf, PortError> {
 async fn acquire_source_file_lock(
     path: &Path,
     cancellation: &CancellationToken,
-) -> Result<FileLock, PortError> {
+) -> Result<LegacySourceFileLock, PortError> {
     tokio::select! {
         biased;
         () = cancellation.cancelled() => Err(PortError::new(
             "legacy_python_migration_cancelled",
             "legacy household migration was cancelled while acquiring its source locks",
         )),
-        result = FileLock::acquire_async(path, true) => result.map_err(|error| {
-            PortError::new(
-                "legacy_python_source_lock",
-                format!("legacy household source lock could not be acquired: {}", error.code),
-            )
-        }),
+        result = FileLock::acquire_async(path, true) => result
+            .map(LegacySourceFileLock::new)
+            .map_err(|error| {
+                PortError::new(
+                    "legacy_python_source_lock",
+                    format!("legacy household source lock could not be acquired: {}", error.code),
+                )
+            }),
     }
 }
 
@@ -5868,6 +6070,336 @@ fn valid_sha256(value: &str) -> bool {
 #[cfg(test)]
 mod fingerprint_golden_tests {
     use super::*;
+
+    fn lock_order_fixture(
+        name: &str,
+    ) -> (
+        PathBuf,
+        LegacyPythonHouseholdMigrationV1,
+        crate::HouseholdVault,
+    ) {
+        let root = std::env::temp_dir().join(format!(
+            "heyfood-python-lock-order-{name}-{}",
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let migration = LegacyPythonHouseholdMigrationV1::new(
+            LegacyPythonConfigRootV1::from_absolute_root(root.join("legacy-config")).unwrap(),
+            root.join("native/python-state-import.v1.json"),
+        );
+        let vault = crate::HouseholdVault::open(
+            &root.join("native"),
+            AccountId::parse("acct-lock-order").unwrap(),
+        )
+        .unwrap();
+        (root, migration, vault)
+    }
+
+    fn observe_source_transaction_release(
+        transaction: &mut LegacyPythonSourceVaultLeaseTransactionV1,
+    ) -> std::sync::Arc<std::sync::Mutex<Vec<&'static str>>> {
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        transaction
+            .vault_lease_mut()
+            .observe_lock_release_order(std::sync::Arc::clone(&events));
+        let source = transaction.source_lease_mut();
+        source
+            ._current_config_lock
+            .observe_drop("current", std::sync::Arc::clone(&events));
+        source
+            ._legacy_config_lock
+            .observe_drop("legacy", std::sync::Arc::clone(&events));
+        source
+            ._snapshot_lock
+            .observe_drop("snapshot", std::sync::Arc::clone(&events));
+        events
+    }
+
+    fn observe_pending_source_release(
+        source: &mut LegacyPythonSourceLeaseV1,
+        lifecycle: &mut HouseholdLifecycleLease,
+    ) -> std::sync::Arc<std::sync::Mutex<Vec<&'static str>>> {
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        source
+            ._current_config_lock
+            .observe_drop("current", std::sync::Arc::clone(&events));
+        source
+            ._legacy_config_lock
+            .observe_drop("legacy", std::sync::Arc::clone(&events));
+        source
+            ._snapshot_lock
+            .observe_drop("snapshot", std::sync::Arc::clone(&events));
+        lifecycle.observe_lock_release("lifecycle", std::sync::Arc::clone(&events));
+        events
+    }
+
+    async fn source_transaction_fixture(
+        name: &str,
+    ) -> (
+        PathBuf,
+        LegacyPythonHouseholdMigrationV1,
+        LegacyPythonSourceVaultLeaseTransactionV1,
+        std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+    ) {
+        let (root, migration, vault) = lock_order_fixture(name);
+        let lifecycle = vault
+            .acquire_lifecycle_lease(CancellationToken::new())
+            .await
+            .unwrap();
+        let mut source = migration
+            .acquire_source_lease(lifecycle, CancellationToken::new())
+            .await
+            .unwrap();
+        let lifecycle = migration.take_lifecycle_for_vault(&mut source).unwrap();
+        let acquired = vault
+            .acquire_vault_lease_after_narrower(
+                source,
+                lifecycle,
+                crate::HouseholdVaultLeaseModeV1::CreateIfMissing,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let mut transaction = migration.bind_source_vault_transaction(acquired).unwrap();
+        let events = observe_source_transaction_release(&mut transaction);
+        (root, migration, transaction, events)
+    }
+
+    fn fail_with_question_mark(
+        _transaction: LegacyPythonSourceVaultLeaseTransactionV1,
+    ) -> Result<(), PortError> {
+        Err(PortError::new(
+            "lock_order_test",
+            "exercise implicit transaction cleanup",
+        ))?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn validated_source_transaction_release_is_exact_reverse_acquisition_order() {
+        let (root, migration, transaction, events) = source_transaction_fixture("success").await;
+        let debug = format!("{transaction:?}");
+        assert!(debug.contains("vault_lease_retained: true"));
+        assert!(debug.contains("source_lease_retained: true"));
+        assert!(!debug.contains("acct-lock-order"));
+        assert!(!debug.contains(root.to_string_lossy().as_ref()));
+
+        let lifecycle = migration
+            .release_source_vault_transaction(transaction, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["vault", "snapshot", "legacy", "current"]
+        );
+        drop(lifecycle);
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["vault", "snapshot", "legacy", "current", "lifecycle"]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn question_mark_error_releases_composite_in_exact_reverse_order() {
+        let (root, _migration, transaction, events) =
+            source_transaction_fixture("question-mark").await;
+
+        assert_eq!(
+            fail_with_question_mark(transaction).unwrap_err().code,
+            "lock_order_test"
+        );
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["vault", "snapshot", "legacy", "current", "lifecycle"]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_validated_release_falls_back_to_exact_composite_drop_order() {
+        let (root, migration, transaction, events) = source_transaction_fixture("cancelled").await;
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        assert_eq!(
+            migration
+                .release_source_vault_transaction(transaction, cancellation)
+                .await
+                .unwrap_err()
+                .code,
+            "household_operation_cancelled"
+        );
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["vault", "snapshot", "legacy", "current", "lifecycle"]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_vault_acquisition_releases_source_before_lifecycle() {
+        let (root, migration, vault) = lock_order_fixture("acquire-cancelled");
+        let lifecycle = vault
+            .acquire_lifecycle_lease(CancellationToken::new())
+            .await
+            .unwrap();
+        let mut source = migration
+            .acquire_source_lease(lifecycle, CancellationToken::new())
+            .await
+            .unwrap();
+        let mut lifecycle = migration.take_lifecycle_for_vault(&mut source).unwrap();
+        let events = observe_pending_source_release(&mut source, &mut lifecycle);
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        assert_eq!(
+            vault
+                .acquire_vault_lease_after_narrower(
+                    source,
+                    lifecycle,
+                    crate::HouseholdVaultLeaseModeV1::CreateIfMissing,
+                    cancellation,
+                )
+                .await
+                .unwrap_err()
+                .code,
+            "household_operation_cancelled"
+        );
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["snapshot", "legacy", "current", "lifecycle"]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_vault_acquisition_releases_source_before_lifecycle() {
+        let (root, migration, vault) = lock_order_fixture("acquire-error");
+        let lifecycle = vault
+            .acquire_lifecycle_lease(CancellationToken::new())
+            .await
+            .unwrap();
+        let mut source = migration
+            .acquire_source_lease(lifecycle, CancellationToken::new())
+            .await
+            .unwrap();
+        let mut lifecycle = migration.take_lifecycle_for_vault(&mut source).unwrap();
+        let events = observe_pending_source_release(&mut source, &mut lifecycle);
+
+        let error = vault
+            .acquire_vault_lease_after_narrower(
+                source,
+                lifecycle,
+                crate::HouseholdVaultLeaseModeV1::RequireExisting,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "household_vault_path");
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["snapshot", "legacy", "current", "lifecycle"]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn validated_snapshot_transaction_release_is_vault_snapshot_lifecycle() {
+        let (root, migration, vault) = lock_order_fixture("snapshot-success");
+        let lifecycle = vault
+            .acquire_lifecycle_lease(CancellationToken::new())
+            .await
+            .unwrap();
+        let mut snapshot = migration
+            .acquire_snapshot_retirement_lease(lifecycle, CancellationToken::new())
+            .await
+            .unwrap();
+        let lifecycle = migration
+            .take_snapshot_lifecycle_for_vault(&mut snapshot)
+            .unwrap();
+        let acquired = vault
+            .acquire_vault_lease_after_narrower(
+                snapshot,
+                lifecycle,
+                crate::HouseholdVaultLeaseModeV1::CreateIfMissing,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let mut transaction = migration.bind_snapshot_vault_transaction(acquired).unwrap();
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        transaction
+            .vault_lease_mut()
+            .observe_lock_release_order(std::sync::Arc::clone(&events));
+        transaction
+            .source_lease_mut()
+            ._snapshot_lock
+            .observe_drop("snapshot", std::sync::Arc::clone(&events));
+
+        let lifecycle = migration
+            .release_snapshot_vault_transaction(transaction, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(*events.lock().unwrap(), vec!["vault", "snapshot"]);
+        drop(lifecycle);
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["vault", "snapshot", "lifecycle"]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn snapshot_and_credential_leases_release_their_narrow_locks_in_reverse_order() {
+        let (root, migration, vault) = lock_order_fixture("narrow-leases");
+        let lifecycle = vault
+            .acquire_lifecycle_lease(CancellationToken::new())
+            .await
+            .unwrap();
+        let mut snapshot = migration
+            .acquire_snapshot_retirement_lease(lifecycle, CancellationToken::new())
+            .await
+            .unwrap();
+        let snapshot_events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        snapshot
+            ._snapshot_lock
+            .observe_drop("snapshot", std::sync::Arc::clone(&snapshot_events));
+        snapshot
+            .lifecycle
+            .as_mut()
+            .unwrap()
+            .observe_lock_release("lifecycle", std::sync::Arc::clone(&snapshot_events));
+        drop(snapshot);
+        assert_eq!(
+            *snapshot_events.lock().unwrap(),
+            vec!["snapshot", "lifecycle"]
+        );
+
+        #[cfg(feature = "native-credentials")]
+        {
+            let mut credential = migration
+                .acquire_credential_source_lease(
+                    vault.account_slot().clone(),
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+            let credential_events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            credential
+                ._current_config_lock
+                .observe_drop("current", std::sync::Arc::clone(&credential_events));
+            credential
+                ._legacy_config_lock
+                .observe_drop("legacy", std::sync::Arc::clone(&credential_events));
+            drop(credential);
+            assert_eq!(
+                *credential_events.lock().unwrap(),
+                vec!["legacy", "current"]
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn d2_phase_a_candidate_has_no_structural_slot_for_credential_values() {

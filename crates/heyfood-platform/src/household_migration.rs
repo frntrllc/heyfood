@@ -240,16 +240,18 @@ pub async fn resume_native_household_artifacts_v1(
         .acquire_snapshot_retirement_lease(lifecycle, cancellation.child_token())
         .await?;
     let lifecycle = migration.take_snapshot_lifecycle_for_vault(&mut snapshot_lease)?;
-    let mut vault_lease = vault
-        .acquire_vault_lease(
+    let acquired = vault
+        .acquire_vault_lease_after_narrower(
+            snapshot_lease,
             lifecycle,
             HouseholdVaultLeaseModeV1::RequireExisting,
             cancellation.child_token(),
         )
         .await?;
+    let mut transaction = migration.bind_snapshot_vault_transaction(acquired)?;
     let guard = HouseholdMigrationGuardStore::load(
         secure_store.as_ref(),
-        vault_lease.lifecycle_lease(),
+        transaction.vault_lease().lifecycle_lease(),
         cancellation.child_token(),
     )
     .await?
@@ -262,7 +264,7 @@ pub async fn resume_native_household_artifacts_v1(
     guard.validate_for(vault.account_slot())?;
     let key = crate::HouseholdKeyStore::load(
         secure_store.as_ref(),
-        vault_lease.lifecycle_lease(),
+        transaction.vault_lease().lifecycle_lease(),
         cancellation.child_token(),
     )
     .await?;
@@ -287,7 +289,7 @@ pub async fn resume_native_household_artifacts_v1(
             })?;
             let topology = vault
                 .classify_startup_artifacts(
-                    &mut vault_lease,
+                    transaction.vault_lease_mut(),
                     Some(key),
                     Some(guard.initial_commit_id()),
                     guard.initial_state_digest(),
@@ -298,7 +300,7 @@ pub async fn resume_native_household_artifacts_v1(
                 HouseholdVaultStartupArtifactsV1::MatchingUncommitted => {
                     repository
                         .resume_uncommitted_initialization_with_retained_leases(
-                            &mut vault_lease,
+                            transaction.vault_lease_mut(),
                             cancellation.child_token(),
                         )
                         .await?
@@ -306,7 +308,7 @@ pub async fn resume_native_household_artifacts_v1(
                 HouseholdVaultStartupArtifactsV1::MatchingCommitted => {
                     repository
                         .finalize_committed_initialization_with_retained_leases(
-                            &mut vault_lease,
+                            transaction.vault_lease_mut(),
                             cancellation.child_token(),
                         )
                         .await?
@@ -322,7 +324,10 @@ pub async fn resume_native_household_artifacts_v1(
         HouseholdMigrationGuardStateV1::Migrated
         | HouseholdMigrationGuardStateV1::InitializedNoSource => {
             repository
-                .load_committed_with_retained_leases(&mut vault_lease, cancellation.child_token())
+                .load_committed_with_retained_leases(
+                    transaction.vault_lease_mut(),
+                    cancellation.child_token(),
+                )
                 .await?
         }
         _ => {
@@ -334,7 +339,7 @@ pub async fn resume_native_household_artifacts_v1(
     };
     let committed_guard = HouseholdMigrationGuardStore::load(
         secure_store.as_ref(),
-        vault_lease.lifecycle_lease(),
+        transaction.vault_lease().lifecycle_lease(),
         CancellationToken::new(),
     )
     .await?
@@ -345,14 +350,22 @@ pub async fn resume_native_household_artifacts_v1(
         )
     })?;
     let authority = migration.committed_snapshot_retirement_authority(
-        &snapshot_lease,
-        &vault_lease,
+        transaction.source_lease(),
+        transaction.vault_lease(),
         &committed_guard,
         &readback,
     )?;
     migration
-        .retire_committed_snapshot(&snapshot_lease, &authority, CancellationToken::new())
+        .retire_committed_snapshot(
+            transaction.source_lease(),
+            &authority,
+            CancellationToken::new(),
+        )
         .await?;
+    let lifecycle = migration
+        .release_snapshot_vault_transaction(transaction, CancellationToken::new())
+        .await?;
+    drop(lifecycle);
 
     Ok(NativeHouseholdArtifactResumeCompletionV1 {
         repository,
@@ -446,16 +459,18 @@ where
                 deterministic_phase_a_failure(&error),
             ) {
                 let lifecycle = migration.take_lifecycle_for_vault(&mut source_lease)?;
-                let mut vault_lease = vault
-                    .acquire_vault_lease(
+                let acquired = vault
+                    .acquire_vault_lease_after_narrower(
+                        source_lease,
                         lifecycle,
                         HouseholdVaultLeaseModeV1::CreateIfMissing,
                         CancellationToken::new(),
                     )
                     .await?;
+                let mut transaction = migration.bind_source_vault_transaction(acquired)?;
                 vault
                     .abort_invalid_initialization_to_blocked_repair(
-                        &mut vault_lease,
+                        transaction.vault_lease_mut(),
                         secure_store.as_ref(),
                         guard.initialization_id(),
                         None,
@@ -494,17 +509,19 @@ where
     // remains held while the lifecycle authority moves into the narrower
     // vault lease.
     let lifecycle = migration.take_lifecycle_for_vault(&mut source_lease)?;
-    let mut vault_lease = vault
-        .acquire_vault_lease(
+    let acquired = vault
+        .acquire_vault_lease_after_narrower(
+            source_lease,
             lifecycle,
             HouseholdVaultLeaseModeV1::CreateIfMissing,
             cancellation.child_token(),
         )
         .await?;
+    let mut transaction = migration.bind_source_vault_transaction(acquired)?;
     if let Some(error) = source_mismatch {
         vault
             .abort_invalid_initialization_to_blocked_repair(
-                &mut vault_lease,
+                transaction.vault_lease_mut(),
                 secure_store.as_ref(),
                 reserved.initialization_id(),
                 None,
@@ -517,7 +534,7 @@ where
     let reserved = if reserved.guard_revision() == 1
         && HouseholdMigrationGuardStore::load(
             secure_store.as_ref(),
-            vault_lease.lifecycle_lease(),
+            transaction.vault_lease().lifecycle_lease(),
             CancellationToken::new(),
         )
         .await?
@@ -525,7 +542,7 @@ where
     {
         compare_exchange_guard_and_reconcile(
             secure_store.as_ref(),
-            &mut vault_lease,
+            transaction.vault_lease_mut(),
             MigrationGuardExpectation::Absent,
             None,
             reserved,
@@ -547,8 +564,8 @@ where
             &phase_a,
             &context,
             vault.account_slot(),
-            &vault_lease,
-            &source_lease,
+            transaction.vault_lease(),
+            transaction.source_lease(),
             &probes,
             cancellation.child_token(),
         )
@@ -559,7 +576,7 @@ where
             if let Some(failure) = deterministic_phase_b_failure(&error) {
                 vault
                     .abort_invalid_initialization_to_blocked_repair(
-                        &mut vault_lease,
+                        transaction.vault_lease_mut(),
                         secure_store.as_ref(),
                         reserved.initialization_id(),
                         None,
@@ -580,7 +597,7 @@ where
             )?;
             compare_exchange_guard_and_reconcile(
                 secure_store.as_ref(),
-                &mut vault_lease,
+                transaction.vault_lease_mut(),
                 MigrationGuardExpectation::Revision(reserved.guard_revision()),
                 Some(reserved.clone()),
                 ready_candidate,
@@ -614,19 +631,27 @@ where
     repository
         .initialize_with_retained_leases(
             resolved.command.clone(),
-            &mut vault_lease,
+            transaction.vault_lease_mut(),
             cancellation.child_token(),
         )
         .await?;
     let readback = repository
-        .load_committed_with_retained_leases(&mut vault_lease, CancellationToken::new())
+        .load_committed_with_retained_leases(
+            transaction.vault_lease_mut(),
+            CancellationToken::new(),
+        )
         .await?;
     let verification = phase_b.verify_vault_readback(&resolved.command, &readback.state)?;
     migration
-        .retire_verified_snapshot(&source_lease, &verification, CancellationToken::new())
+        .retire_verified_snapshot(
+            transaction.source_lease(),
+            &verification,
+            CancellationToken::new(),
+        )
         .await?;
-    let lifecycle = vault_lease.release_vault(CancellationToken::new()).await?;
-    let lifecycle = migration.release_source_locks_retaining_lifecycle(source_lease, lifecycle)?;
+    let lifecycle = migration
+        .release_source_vault_transaction(transaction, CancellationToken::new())
+        .await?;
     drop(lifecycle);
 
     Ok(NativeHouseholdMigrationCompletionV1 {

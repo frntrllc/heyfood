@@ -583,6 +583,17 @@ impl HouseholdLifecycleLease {
         validate_held_lock(&self.lock, &self.lock_path)?;
         Ok(())
     }
+
+    #[cfg(test)]
+    pub(crate) fn observe_lock_release(
+        &mut self,
+        label: &'static str,
+        events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    ) {
+        Arc::get_mut(&mut self.lock)
+            .expect("lifecycle lock must not be shared before observation")
+            .observe_drop(label, events);
+    }
 }
 
 impl fmt::Debug for HouseholdLifecycleLease {
@@ -628,13 +639,26 @@ impl HouseholdVaultLease {
         self,
         cancellation: CancellationToken,
     ) -> Result<HouseholdLifecycleLease, PortError> {
-        let _operation = self.acquire_operation(&cancellation).await?;
+        let operation = self.acquire_operation(&cancellation).await?;
         self.validate_for(self.account_slot()).map_err(|_| {
             PortError::uncertain(
                 "household_vault_release",
                 "household vault lease release requires reconciliation",
             )
         })?;
+        let lifecycle_lease = self.into_lifecycle_after_vault_drop_for_cleanup();
+        drop(operation);
+        Ok(lifecycle_lease)
+    }
+
+    /// Consume this lease during an already-unwinding composite transaction.
+    ///
+    /// This is deliberately crate-private and cleanup-only: it performs no
+    /// validation or asynchronous operation-gate acquisition. Production
+    /// success paths must validate under an acquired operation guard before
+    /// calling it. The returned lifecycle authority lets the composite drop
+    /// narrower legacy locks after `vault.lock` but before lifecycle.
+    pub(crate) fn into_lifecycle_after_vault_drop_for_cleanup(self) -> HouseholdLifecycleLease {
         let Self {
             lifecycle_lease,
             vault_lock,
@@ -644,7 +668,28 @@ impl HouseholdVaultLease {
             operation_gate: _,
         } = self;
         drop(vault_lock);
-        Ok(lifecycle_lease)
+        lifecycle_lease
+    }
+
+    /// Synchronous implicit-drop variant that first proves no detached vault
+    /// operation remains. A caller that receives `Err(self)` must retain all
+    /// authorities rather than releasing narrower locks out of order.
+    pub(crate) fn try_into_lifecycle_after_vault_drop_for_implicit_cleanup(
+        self,
+    ) -> Result<(HouseholdLifecycleLease, tokio::sync::OwnedMutexGuard<()>), Box<Self>> {
+        if Arc::strong_count(&self.vault_lock) != 1
+            || Arc::strong_count(&self.lifecycle_lease.lock) != 1
+            || Arc::strong_count(&self.operation_gate) != 1
+        {
+            return Err(Box::new(self));
+        }
+        let operation_gate = Arc::clone(&self.operation_gate);
+        let operation = match operation_gate.try_lock_owned() {
+            Ok(operation) => operation,
+            Err(_) => return Err(Box::new(self)),
+        };
+        let lifecycle = self.into_lifecycle_after_vault_drop_for_cleanup();
+        Ok((lifecycle, operation))
     }
 
     pub(crate) fn validate_for(
@@ -657,6 +702,18 @@ impl HouseholdVaultLease {
         #[cfg(not(unix))]
         validate_held_lock(&self.vault_lock, &self.vault_lock_path)?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_lock_release_order(
+        &mut self,
+        events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    ) {
+        Arc::get_mut(&mut self.vault_lock)
+            .expect("vault lock must not be shared before an operation is detached")
+            .observe_drop("vault", Arc::clone(&events));
+        self.lifecycle_lease
+            .observe_lock_release("lifecycle", events);
     }
 
     pub(crate) async fn acquire_operation(
@@ -695,6 +752,137 @@ pub(crate) struct HouseholdVaultLeaseOperationGuard {
     _vault_lock: Arc<LockedFile>,
     _lifecycle_lock: Arc<LockedFile>,
     _gate: tokio::sync::OwnedMutexGuard<()>,
+}
+
+/// Carries already-acquired narrower locks through asynchronous vault-lock
+/// acquisition. Any acquisition error, cancellation, or worker unwind drops
+/// the narrower authority before lifecycle.
+struct NarrowerLifecycleVaultAcquisition<S> {
+    narrower: Option<S>,
+    lifecycle: Option<HouseholdLifecycleLease>,
+}
+
+impl<S> NarrowerLifecycleVaultAcquisition<S> {
+    fn new(narrower: S, lifecycle: HouseholdLifecycleLease) -> Self {
+        Self {
+            narrower: Some(narrower),
+            lifecycle: Some(lifecycle),
+        }
+    }
+
+    fn lifecycle(&self) -> &HouseholdLifecycleLease {
+        self.lifecycle
+            .as_ref()
+            .expect("pending vault acquisition retains lifecycle authority")
+    }
+
+    fn take(&mut self) -> (S, HouseholdLifecycleLease) {
+        let lifecycle = self
+            .lifecycle
+            .take()
+            .expect("pending vault acquisition retains lifecycle authority");
+        let narrower = self
+            .narrower
+            .take()
+            .expect("pending vault acquisition retains narrower authority");
+        (narrower, lifecycle)
+    }
+}
+
+impl<S> Drop for NarrowerLifecycleVaultAcquisition<S> {
+    fn drop(&mut self) {
+        drop(self.narrower.take());
+        drop(self.lifecycle.take());
+    }
+}
+
+/// A completed narrower-source/vault acquisition that remains drop-ordered
+/// while it crosses the blocking-worker boundary.
+///
+/// The asynchronous caller can be cancelled after the worker acquires
+/// `vault.lock` but before it receives this value. `Drop` therefore consumes
+/// vault authority first, then the narrower authority, then lifecycle. This
+/// type is also retained as the migration transaction so there is no raw
+/// `(narrower, vault)` hand-off window before validated binding.
+pub(crate) struct AcquiredNarrowerVaultLease<S> {
+    vault_lease: Option<HouseholdVaultLease>,
+    source_lease: Option<S>,
+}
+
+impl<S> AcquiredNarrowerVaultLease<S> {
+    fn new(source_lease: S, vault_lease: HouseholdVaultLease) -> Self {
+        Self {
+            vault_lease: Some(vault_lease),
+            source_lease: Some(source_lease),
+        }
+    }
+
+    pub(crate) fn vault_lease(&self) -> &HouseholdVaultLease {
+        self.vault_lease
+            .as_ref()
+            .expect("active narrower/vault transaction retains its vault lease")
+    }
+
+    pub(crate) fn vault_lease_mut(&mut self) -> &mut HouseholdVaultLease {
+        self.vault_lease
+            .as_mut()
+            .expect("active narrower/vault transaction retains its vault lease")
+    }
+
+    pub(crate) fn source_lease(&self) -> &S {
+        self.source_lease
+            .as_ref()
+            .expect("active narrower/vault transaction retains its source lease")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_lease_mut(&mut self) -> &mut S {
+        self.source_lease
+            .as_mut()
+            .expect("active narrower/vault transaction retains its source lease")
+    }
+
+    pub(crate) fn take_parts(&mut self) -> Option<(S, HouseholdVaultLease)> {
+        let vault_lease = self.vault_lease.take()?;
+        let source_lease = self.source_lease.take()?;
+        Some((source_lease, vault_lease))
+    }
+}
+
+impl<S> fmt::Debug for AcquiredNarrowerVaultLease<S> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AcquiredNarrowerVaultLease")
+            .field("vault_lease_retained", &self.vault_lease.is_some())
+            .field("source_lease_retained", &self.source_lease.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<S> Drop for AcquiredNarrowerVaultLease<S> {
+    fn drop(&mut self) {
+        let vault_lease = self.vault_lease.take();
+        let source_lease = self.source_lease.take();
+        if let Some(vault_lease) = vault_lease {
+            match vault_lease.try_into_lifecycle_after_vault_drop_for_implicit_cleanup() {
+                Ok((lifecycle, operation)) => {
+                    drop(source_lease);
+                    drop(lifecycle);
+                    drop(operation);
+                }
+                Err(vault_lease) => {
+                    // An illegally detached operation still owns vault and
+                    // lifecycle authority. Retaining the outer authorities
+                    // until process exit is the only synchronous fail-closed
+                    // choice that cannot release source locks before vault.
+                    std::mem::forget(source_lease);
+                    std::mem::forget(vault_lease);
+                }
+            }
+        } else {
+            drop(source_lease);
+        }
+    }
 }
 
 impl fmt::Debug for HouseholdVaultLease {
@@ -832,18 +1020,23 @@ impl HouseholdTeardownVaultTargetV1 {
             })?
     }
 
-    pub(crate) async fn acquire_vault_lease(
+    pub(crate) async fn acquire_vault_lease_after_narrower<S>(
         &self,
+        narrower: S,
         lifecycle_lease: HouseholdLifecycleLease,
         cancellation: CancellationToken,
-    ) -> Result<HouseholdVaultLease, PortError> {
+    ) -> Result<AcquiredNarrowerVaultLease<S>, PortError>
+    where
+        S: Send + 'static,
+    {
+        let pending = NarrowerLifecycleVaultAcquisition::new(narrower, lifecycle_lease);
         if cancellation.is_cancelled() {
             return Err(cancelled_error());
         }
-        lifecycle_lease.validate_for(&self.account_slot)?;
+        pending.lifecycle().validate_for(&self.account_slot)?;
         let target = self.clone();
         tokio::task::spawn_blocking(move || {
-            target.acquire_vault_lease_blocking(lifecycle_lease, &cancellation)
+            target.acquire_vault_lease_after_narrower_blocking(pending, &cancellation)
         })
         .await
         .map_err(|_| {
@@ -979,11 +1172,11 @@ impl HouseholdTeardownVaultTargetV1 {
         })
     }
 
-    fn acquire_vault_lease_blocking(
+    fn acquire_vault_lock_blocking(
         &self,
-        lifecycle_lease: HouseholdLifecycleLease,
+        lifecycle_lease: &HouseholdLifecycleLease,
         cancellation: &CancellationToken,
-    ) -> Result<HouseholdVaultLease, PortError> {
+    ) -> Result<(LockedFile, PathBuf), PortError> {
         lifecycle_lease.validate_for(&self.account_slot)?;
         let account_directory = self
             .native_root
@@ -994,14 +1187,28 @@ impl HouseholdTeardownVaultTargetV1 {
         ensure_private_directory(&household_directory)?;
         let vault_lock_path = household_directory.join("vault.lock");
         let vault_lock = self.acquire_lock(&vault_lock_path, cancellation)?;
-        Ok(HouseholdVaultLease {
-            vault_lock: Arc::new(vault_lock),
-            vault_lock_path,
-            #[cfg(unix)]
-            owner_uid: self.owner_uid,
-            lifecycle_lease,
-            operation_gate: Arc::new(tokio::sync::Mutex::new(())),
-        })
+        Ok((vault_lock, vault_lock_path))
+    }
+
+    fn acquire_vault_lease_after_narrower_blocking<S>(
+        &self,
+        mut pending: NarrowerLifecycleVaultAcquisition<S>,
+        cancellation: &CancellationToken,
+    ) -> Result<AcquiredNarrowerVaultLease<S>, PortError> {
+        let (vault_lock, vault_lock_path) =
+            self.acquire_vault_lock_blocking(pending.lifecycle(), cancellation)?;
+        let (narrower, lifecycle_lease) = pending.take();
+        Ok(AcquiredNarrowerVaultLease::new(
+            narrower,
+            HouseholdVaultLease {
+                vault_lock: Arc::new(vault_lock),
+                vault_lock_path,
+                #[cfg(unix)]
+                owner_uid: self.owner_uid,
+                lifecycle_lease,
+                operation_gate: Arc::new(tokio::sync::Mutex::new(())),
+            },
+        ))
     }
 
     fn ensure_artifacts_absent_blocking(
@@ -1536,6 +1743,34 @@ impl HouseholdVault {
         let vault = self.clone();
         tokio::task::spawn_blocking(move || {
             vault.acquire_vault_lease_blocking(lifecycle_lease, mode, &cancellation)
+        })
+        .await
+        .map_err(|_| {
+            PortError::new(
+                "household_vault_lease_task",
+                "household vault lease task did not complete",
+            )
+        })?
+    }
+
+    pub(crate) async fn acquire_vault_lease_after_narrower<S>(
+        &self,
+        narrower: S,
+        lifecycle_lease: HouseholdLifecycleLease,
+        mode: HouseholdVaultLeaseModeV1,
+        cancellation: CancellationToken,
+    ) -> Result<AcquiredNarrowerVaultLease<S>, PortError>
+    where
+        S: Send + 'static,
+    {
+        let pending = NarrowerLifecycleVaultAcquisition::new(narrower, lifecycle_lease);
+        if cancellation.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        pending.lifecycle().validate_for(&self.account_slot)?;
+        let vault = self.clone();
+        tokio::task::spawn_blocking(move || {
+            vault.acquire_vault_lease_after_narrower_blocking(pending, mode, &cancellation)
         })
         .await
         .map_err(|_| {
@@ -3129,8 +3364,8 @@ impl HouseholdVault {
             validate_private_directory(&household_directory)?;
             self.check_cancelled(cancellation)?;
             return Ok(VaultLocks {
-                _lifecycle: None,
                 _vault: None,
+                _lifecycle: None,
             });
         }
         ensure_private_directory(&accounts_directory)?;
@@ -3147,8 +3382,8 @@ impl HouseholdVault {
         }
         let vault = self.acquire_lock(&household_directory.join("vault.lock"), cancellation)?;
         Ok(VaultLocks {
-            _lifecycle: Some(lifecycle),
             _vault: Some(vault),
+            _lifecycle: Some(lifecycle),
         })
     }
 
@@ -3180,6 +3415,47 @@ impl HouseholdVault {
         mode: HouseholdVaultLeaseModeV1,
         cancellation: &CancellationToken,
     ) -> Result<HouseholdVaultLease, PortError> {
+        let (vault_lock, vault_lock_path) =
+            self.acquire_vault_lock_blocking(&lifecycle_lease, mode, cancellation)?;
+        Ok(HouseholdVaultLease {
+            vault_lock: Arc::new(vault_lock),
+            vault_lock_path,
+            #[cfg(unix)]
+            owner_uid: self.owner_uid,
+            lifecycle_lease,
+            operation_gate: Arc::new(tokio::sync::Mutex::new(())),
+        })
+    }
+
+    fn acquire_vault_lease_after_narrower_blocking<S>(
+        &self,
+        pending: NarrowerLifecycleVaultAcquisition<S>,
+        mode: HouseholdVaultLeaseModeV1,
+        cancellation: &CancellationToken,
+    ) -> Result<AcquiredNarrowerVaultLease<S>, PortError> {
+        let mut pending = pending;
+        let (vault_lock, vault_lock_path) =
+            self.acquire_vault_lock_blocking(pending.lifecycle(), mode, cancellation)?;
+        let (narrower, lifecycle_lease) = pending.take();
+        Ok(AcquiredNarrowerVaultLease::new(
+            narrower,
+            HouseholdVaultLease {
+                vault_lock: Arc::new(vault_lock),
+                vault_lock_path,
+                #[cfg(unix)]
+                owner_uid: self.owner_uid,
+                lifecycle_lease,
+                operation_gate: Arc::new(tokio::sync::Mutex::new(())),
+            },
+        ))
+    }
+
+    fn acquire_vault_lock_blocking(
+        &self,
+        lifecycle_lease: &HouseholdLifecycleLease,
+        mode: HouseholdVaultLeaseModeV1,
+        cancellation: &CancellationToken,
+    ) -> Result<(LockedFile, PathBuf), PortError> {
         lifecycle_lease.validate_for(&self.account_slot)?;
         let accounts_directory = self.native_root.join("accounts");
         let account_directory = self.account_directory();
@@ -3200,14 +3476,7 @@ impl HouseholdVault {
         validate_private_directory(&account_directory)?;
         validate_private_directory(&household_directory)?;
         self.check_cancelled(cancellation)?;
-        Ok(HouseholdVaultLease {
-            vault_lock: Arc::new(vault_lock),
-            vault_lock_path,
-            #[cfg(unix)]
-            owner_uid: self.owner_uid,
-            lifecycle_lease,
-            operation_gate: Arc::new(tokio::sync::Mutex::new(())),
-        })
+        Ok((vault_lock, vault_lock_path))
     }
 
     fn acquire_existing_vault_lease_if_present_blocking(
@@ -3534,19 +3803,17 @@ impl Drop for LockedFile {
     fn drop(&mut self) {
         let _ = self.file.unlock();
         #[cfg(test)]
-        if let Some(observer) = &self.drop_observer {
-            observer
-                .events
-                .lock()
-                .expect("lock drop observer poisoned")
-                .push(observer.label);
+        if let Some(observer) = &self.drop_observer
+            && let Ok(mut events) = observer.events.lock()
+        {
+            events.push(observer.label);
         }
     }
 }
 
 struct VaultLocks {
-    _lifecycle: Option<LockedFile>,
     _vault: Option<LockedFile>,
+    _lifecycle: Option<LockedFile>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -5466,13 +5733,96 @@ mod tests {
         vault_lease: &mut HouseholdVaultLease,
     ) -> Arc<std::sync::Mutex<Vec<&'static str>>> {
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
-        Arc::get_mut(&mut vault_lease.vault_lock)
-            .expect("vault lock must not be shared before an operation is detached")
-            .observe_drop("vault", Arc::clone(&events));
-        Arc::get_mut(&mut vault_lease.lifecycle_lease.lock)
-            .expect("lifecycle lock must not be shared before an operation is detached")
-            .observe_drop("lifecycle", Arc::clone(&events));
+        vault_lease.observe_lock_release_order(Arc::clone(&events));
         events
+    }
+
+    struct ObservedNarrowerDrop {
+        events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    impl Drop for ObservedNarrowerDrop {
+        fn drop(&mut self) {
+            if let Ok(mut events) = self.events.lock() {
+                events.push("source");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_outer_future_drops_completed_worker_result_in_reverse_lock_order() {
+        let test_root = std::env::temp_dir().join(format!(
+            "heyfood-vault-worker-result-order-{}",
+            Uuid::new_v4()
+        ));
+        let vault = HouseholdVault::open(
+            &test_root.join("data"),
+            AccountId::parse("acct_example_01").unwrap(),
+        )
+        .unwrap();
+        let lifecycle = vault
+            .acquire_lifecycle_lease(CancellationToken::new())
+            .await
+            .unwrap();
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let source = ObservedNarrowerDrop {
+            events: Arc::clone(&events),
+        };
+        let worker_vault = vault.clone();
+        let worker_events = Arc::clone(&events);
+        let (worker_ready_tx, worker_ready_rx) = tokio::sync::oneshot::channel();
+        let (worker_return_tx, worker_return_rx) = std::sync::mpsc::channel();
+
+        let outer = tokio::spawn(async move {
+            tokio::task::spawn_blocking(move || {
+                let mut acquired = worker_vault
+                    .acquire_vault_lease_after_narrower_blocking(
+                        NarrowerLifecycleVaultAcquisition::new(source, lifecycle),
+                        HouseholdVaultLeaseModeV1::CreateIfMissing,
+                        &CancellationToken::new(),
+                    )
+                    .unwrap();
+                acquired
+                    .vault_lease_mut()
+                    .observe_lock_release_order(worker_events);
+                worker_ready_tx.send(()).unwrap();
+                worker_return_rx.recv().unwrap();
+                acquired
+            })
+            .await
+            .unwrap()
+        });
+
+        worker_ready_rx.await.unwrap();
+        outer.abort();
+        assert!(outer.await.unwrap_err().is_cancelled());
+        worker_return_tx.send(()).unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if events
+                    .lock()
+                    .map(|events| events.len() == 3)
+                    .unwrap_or(false)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["vault", "source", "lifecycle"]
+        );
+        drop(
+            vault
+                .acquire_lifecycle_lease(CancellationToken::new())
+                .await
+                .unwrap(),
+        );
+        let _ = std::fs::remove_dir_all(test_root);
     }
 
     #[tokio::test]
@@ -5507,6 +5857,38 @@ mod tests {
                 .await
                 .unwrap(),
         );
+        let _ = std::fs::remove_dir_all(test_root);
+    }
+
+    #[test]
+    fn internal_vault_lock_bundle_releases_vault_before_lifecycle() {
+        let test_root = std::env::temp_dir().join(format!(
+            "heyfood-internal-vault-lock-order-{}",
+            Uuid::new_v4()
+        ));
+        let vault = HouseholdVault::open(
+            &test_root.join("data"),
+            AccountId::parse("acct_example_01").unwrap(),
+        )
+        .unwrap();
+        let mut locks = vault
+            .acquire_locks(&CancellationToken::new(), true, false)
+            .unwrap();
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        locks
+            ._vault
+            .as_mut()
+            .unwrap()
+            .observe_drop("vault", Arc::clone(&events));
+        locks
+            ._lifecycle
+            .as_mut()
+            .unwrap()
+            .observe_drop("lifecycle", Arc::clone(&events));
+
+        drop(locks);
+
+        assert_eq!(*events.lock().unwrap(), vec!["vault", "lifecycle"]);
         let _ = std::fs::remove_dir_all(test_root);
     }
 

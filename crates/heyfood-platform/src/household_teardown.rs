@@ -34,7 +34,9 @@ use crate::household_vault::HouseholdTeardownVaultTargetV1;
 #[cfg(feature = "native-credentials")]
 use crate::persistence::NativeLogoutBindingV1;
 #[cfg(feature = "native-credentials")]
-use crate::python_import::LegacyPythonCredentialSourceLeaseV1;
+use crate::python_import::{
+    LegacyPythonCredentialSourceLeaseV1, LegacyPythonSourceVaultLeaseTransactionV1,
+};
 use crate::{
     AtomicFile, HouseholdMigrationSourceIdentityV1, OwnerOnlyPath,
     household_native_root_instance_digest_v1,
@@ -46,8 +48,8 @@ use crate::{
     HouseholdMigrationGuardStateV1, HouseholdMigrationGuardStore, HouseholdVault,
     HouseholdVaultLease, HouseholdVaultLoad, LegacyPythonConfigKindV1,
     LegacyPythonCredentialProbeResultV1, LegacyPythonCredentialScrubResultV1,
-    LegacyPythonHouseholdMigrationV1, LegacyPythonKeyringLocatorV1, LegacyPythonSourceLeaseV1,
-    MigrationGuardExpectation, NativeAuthStore, NativePaths,
+    LegacyPythonHouseholdMigrationV1, LegacyPythonKeyringLocatorV1, MigrationGuardExpectation,
+    NativeAuthStore, NativePaths,
 };
 #[cfg(feature = "native-credentials")]
 use zeroize::Zeroizing;
@@ -429,8 +431,7 @@ enum LegacyCredentialLockAuthorityV1<'a> {
 #[doc(hidden)]
 pub struct ProductionNativeAccountTeardownLeaseV1 {
     target: HouseholdTeardownVaultTargetV1,
-    source_lease: Option<LegacyPythonSourceLeaseV1>,
-    vault_lease: Option<HouseholdVaultLease>,
+    native_state_transaction: Option<LegacyPythonSourceVaultLeaseTransactionV1>,
     lifecycle_lease: Option<HouseholdLifecycleLease>,
 }
 
@@ -686,13 +687,13 @@ where
             .acquire_source_lease(lifecycle, cancellation.child_token())
             .await?;
         let lifecycle = self.migration.take_lifecycle_for_vault(&mut source_lease)?;
-        let vault_lease = target
-            .acquire_vault_lease(lifecycle, cancellation.child_token())
+        let acquired = target
+            .acquire_vault_lease_after_narrower(source_lease, lifecycle, cancellation.child_token())
             .await?;
+        let native_state_transaction = self.migration.bind_source_vault_transaction(acquired)?;
         Ok(ProductionNativeAccountTeardownLeaseV1 {
             target,
-            source_lease: Some(source_lease),
-            vault_lease: Some(vault_lease),
+            native_state_transaction: Some(native_state_transaction),
             lifecycle_lease: None,
         })
     }
@@ -796,20 +797,16 @@ where
             .legacy_python_snapshot()
             .map(|evidence| evidence.content_digest);
         {
-            let source_lease = lease.source_lease.as_ref().ok_or_else(|| {
+            let transaction = lease.native_state_transaction.as_ref().ok_or_else(|| {
                 PortError::new(
                     "household_teardown_lock_state",
-                    "legacy source locks are not retained during teardown preparation",
+                    "native state lock transaction is not retained during teardown preparation",
                 )
             })?;
-            let vault_lease = lease.vault_lease.as_ref().ok_or_else(|| {
-                PortError::new(
-                    "household_teardown_lock_state",
-                    "vault lock is not retained during teardown preparation",
-                )
-            })?;
-            self.migration
-                .validate_source_lease_for_vault(source_lease, vault_lease)?;
+            self.migration.validate_source_lease_for_vault(
+                transaction.source_lease(),
+                transaction.vault_lease(),
+            )?;
         }
         let target = lease.target.clone();
         let snapshot_path = self.migration.snapshot_path().to_owned();
@@ -1504,25 +1501,16 @@ where
         cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<HouseholdTeardownAttemptV1<()>, PortError>> {
         Box::pin(async move {
-            if lease.lifecycle_lease.is_some()
-                && lease.vault_lease.is_none()
-                && lease.source_lease.is_none()
-            {
+            if lease.lifecycle_lease.is_some() && lease.native_state_transaction.is_none() {
                 return Ok(HouseholdTeardownAttemptV1::Verified(()));
             }
-            let Some(vault_lease) = lease.vault_lease.take() else {
+            let Some(transaction) = lease.native_state_transaction.take() else {
                 return Ok(HouseholdTeardownAttemptV1::Incomplete);
-            };
-            let lifecycle = vault_lease.release_vault(cancellation).await?;
-            let Some(source_lease) = lease.source_lease.take() else {
-                return Err(PortError::new(
-                    "household_teardown_lock_state",
-                    "legacy source locks are not retained",
-                ));
             };
             let lifecycle = self
                 .migration
-                .release_source_locks_retaining_lifecycle(source_lease, lifecycle)?;
+                .release_source_vault_transaction(transaction, cancellation)
+                .await?;
             lease.lifecycle_lease = Some(lifecycle);
             Ok(HouseholdTeardownAttemptV1::Verified(()))
         })
@@ -1565,12 +1553,16 @@ where
 fn required_vault_lease(
     lease: &mut ProductionNativeAccountTeardownLeaseV1,
 ) -> Result<&mut HouseholdVaultLease, PortError> {
-    lease.vault_lease.as_mut().ok_or_else(|| {
-        PortError::new(
-            "household_teardown_lock_state",
-            "household teardown no longer retains the vault lock",
-        )
-    })
+    lease
+        .native_state_transaction
+        .as_mut()
+        .map(LegacyPythonSourceVaultLeaseTransactionV1::vault_lease_mut)
+        .ok_or_else(|| {
+            PortError::new(
+                "household_teardown_lock_state",
+                "household teardown no longer retains the native state lock transaction",
+            )
+        })
 }
 
 #[cfg(feature = "native-credentials")]
