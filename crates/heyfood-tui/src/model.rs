@@ -4750,7 +4750,11 @@ fn profile_event(model: &mut AppModel, event: RuntimeEvent) -> Vec<Effect> {
         ) && matches!(
             model.profile_presentation_mode,
             ProfilePresentationModeV1::NativeEnabled
-        ) && model.operation == OperationState::Running(operation_id) =>
+        ) && matches!(
+            model.operation,
+            OperationState::Running(current) | OperationState::Cancelling(current)
+                if current == operation_id
+        ) =>
         {
             model.profile_consent_review = None;
             let text = match result {
@@ -4816,7 +4820,11 @@ fn profile_event(model: &mut AppModel, event: RuntimeEvent) -> Vec<Effect> {
         ) && matches!(
             model.profile_presentation_mode,
             ProfilePresentationModeV1::NativeEnabled
-        ) && model.operation == OperationState::Running(operation_id) =>
+        ) && matches!(
+            model.operation,
+            OperationState::Running(current) | OperationState::Cancelling(current)
+                if current == operation_id
+        ) =>
         {
             model.pending_profile_action = None;
             let text = match outcome {
@@ -4857,10 +4865,21 @@ fn profile_actions_loaded(
     else {
         return Vec::new();
     };
-    if current != operation_id
-        || model.operation != OperationState::Running(operation_id)
-        || model.profile_presentation_mode != mode
-    {
+    if current != operation_id || model.profile_presentation_mode != mode {
+        return Vec::new();
+    }
+    if model.operation == OperationState::Cancelling(operation_id) {
+        model.pending_profile_action = None;
+        let text = match purpose {
+            OwnerProfileActionLoadPurposeV1::View => "Profile action cancelled.",
+            OwnerProfileActionLoadPurposeV1::ExplicitRetry => {
+                "Owner profile sync retry was cancelled before it started."
+            }
+        };
+        finish_profile_action(model, operation_id, text.into());
+        return Vec::new();
+    }
+    if model.operation != OperationState::Running(operation_id) {
         return Vec::new();
     }
     match (purpose, loaded) {
@@ -5232,7 +5251,6 @@ fn cancel_or_exit(model: &mut AppModel) -> Vec<Effect> {
     }
     match model.operation {
         OperationState::Running(operation_id) => {
-            model.pending_profile_action = None;
             model.operation = OperationState::Cancelling(operation_id);
             model.activity = Some("Stopping…".into());
             vec![Effect::CancelTurn { operation_id }]
@@ -8706,6 +8724,157 @@ mod tests {
                 crate::render::profile_copy(ProfileCopyStateV1::ConsentCancelled)
             );
         }
+    }
+
+    #[test]
+    fn cancelling_explicit_retry_load_never_dispatches_the_retry() {
+        let mut model = native_model();
+        assert_eq!(
+            submit_text(&mut model, "/profile retry-sync"),
+            vec![Effect::LoadOwnerProfileActionsV1 {
+                operation_id: 1,
+                purpose: OwnerProfileActionLoadPurposeV1::ExplicitRetry,
+            }]
+        );
+        assert_eq!(
+            dispatch(&mut model, Action::CancelOrExit),
+            vec![Effect::CancelTurn { operation_id: 1 }]
+        );
+        assert_eq!(model.operation, OperationState::Cancelling(1));
+        assert!(matches!(
+            model.pending_profile_action,
+            Some(PendingProfileActionV1::Loading {
+                operation_id: 1,
+                ..
+            })
+        ));
+
+        let effects = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::ProfileActionsLoaded {
+                operation_id: 1,
+                loaded: ProfileActionsLoadedV1::NativeActions(available_owner_actions(
+                    OwnerProfileRetryEligibilityV1::ResumeReadyToDispatch,
+                )),
+            }),
+        );
+        assert!(effects.is_empty());
+        assert_eq!(model.operation, OperationState::Idle);
+        assert!(model.pending_profile_action.is_none());
+        assert_eq!(
+            model.scrollback.entries().back().unwrap().text,
+            "Owner profile sync retry was cancelled before it started."
+        );
+    }
+
+    #[test]
+    fn cancelling_active_profile_retry_finishes_from_its_terminal_outcome() {
+        let mut model = native_model();
+        let _ = submit_text(&mut model, "/profile retry-sync");
+        let actions =
+            available_owner_actions(OwnerProfileRetryEligibilityV1::ResumeReadyToDispatch);
+        assert!(matches!(
+            dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::ProfileActionsLoaded {
+                    operation_id: 1,
+                    loaded: ProfileActionsLoadedV1::NativeActions(actions),
+                }),
+            )
+            .as_slice(),
+            [Effect::RetryOwnerProfileSyncV1 {
+                operation_id: 1,
+                ..
+            }]
+        ));
+        assert_eq!(
+            dispatch(&mut model, Action::CancelOrExit),
+            vec![Effect::CancelTurn { operation_id: 1 }]
+        );
+        assert_eq!(model.operation, OperationState::Cancelling(1));
+        assert!(matches!(
+            model.pending_profile_action,
+            Some(PendingProfileActionV1::Retrying {
+                operation_id: 1,
+                ..
+            })
+        ));
+
+        assert!(
+            dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::ProfileRetrySyncFinished {
+                    operation_id: 1,
+                    outcome: ProfileRetrySyncFinishedV1::Interrupted,
+                }),
+            )
+            .is_empty()
+        );
+        assert_eq!(model.operation, OperationState::Idle);
+        assert!(model.pending_profile_action.is_none());
+        assert_eq!(
+            model.scrollback.entries().back().unwrap().text,
+            crate::render::profile_copy(ProfileCopyStateV1::InterruptedRetry)
+        );
+    }
+
+    #[test]
+    fn cancelling_consent_grant_finishes_from_its_terminal_result() {
+        let mut cancelled = native_model();
+        let _ = submit_text(&mut cancelled, "/profile consent");
+        assert_eq!(
+            submit_text(&mut cancelled, "y"),
+            vec![Effect::GrantOwnerProfileConsentV1 { operation_id: 1 }]
+        );
+        assert_eq!(
+            dispatch(&mut cancelled, Action::CancelOrExit),
+            vec![Effect::CancelTurn { operation_id: 1 }]
+        );
+        assert!(
+            dispatch(
+                &mut cancelled,
+                Action::Runtime(RuntimeEvent::ProfileConsentFinished {
+                    operation_id: 1,
+                    result: Err(ProfileConsentFailureV1::Cancelled),
+                }),
+            )
+            .is_empty()
+        );
+        assert_eq!(cancelled.operation, OperationState::Idle);
+        assert!(cancelled.profile_consent_review.is_none());
+        assert_eq!(
+            cancelled.scrollback.entries().back().unwrap().text,
+            crate::render::profile_copy(ProfileCopyStateV1::ConsentCancelled)
+        );
+
+        let mut completed = native_model();
+        let _ = submit_text(&mut completed, "/profile consent");
+        let _ = submit_text(&mut completed, "y");
+        let _ = dispatch(&mut completed, Action::CancelOrExit);
+        assert!(
+            dispatch(
+                &mut completed,
+                Action::Runtime(RuntimeEvent::ProfileConsentFinished {
+                    operation_id: 1,
+                    result: Ok(ProfileConsentFinishedV1 {
+                        consent_version: ConsentVersionV1::new(3).unwrap(),
+                        retry_offered: false,
+                    }),
+                }),
+            )
+            .is_empty()
+        );
+        assert_eq!(completed.operation, OperationState::Idle);
+        assert!(completed.profile_consent_review.is_none());
+        assert!(
+            completed
+                .scrollback
+                .entries()
+                .back()
+                .unwrap()
+                .text
+                .contains("version 3")
+        );
     }
 
     #[test]

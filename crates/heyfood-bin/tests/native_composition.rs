@@ -382,6 +382,32 @@ impl InteractiveSessionProvider for ProbeSessionProvider {
     }
 }
 
+struct CancellationBlockingSessionProvider {
+    entered: std_mpsc::Sender<()>,
+    cancelled: std_mpsc::Sender<()>,
+}
+
+impl InteractiveSessionProvider for CancellationBlockingSessionProvider {
+    fn prepare(
+        &self,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<InteractiveSessionPreparation, OneShotError>> {
+        Box::pin(async move {
+            self.entered
+                .send(())
+                .expect("retry preparation entry receiver remains available");
+            cancellation.cancelled().await;
+            self.cancelled
+                .send(())
+                .expect("retry cancellation receiver remains available");
+            Err(OneShotError::new(
+                "channel_refresh_cancelled_before_dispatch",
+                "retry preparation cancelled before dispatch",
+            ))
+        })
+    }
+}
+
 #[derive(Default)]
 struct ProbeAudioCapture {
     calls: AtomicUsize,
@@ -2347,8 +2373,6 @@ fn consent_grant_does_not_advance_local_only_intent_and_only_explicit_retry_cas_
         owner_intent(&local_only).phase,
         OwnerSyncIntentPhaseV1::LocalOnlyNoConsent
     );
-    thread::sleep(std::time::Duration::from_millis(10));
-
     driver
         .start_owner_profile_consent(2, events.clone())
         .unwrap();
@@ -2365,8 +2389,6 @@ fn consent_grant_does_not_advance_local_only_intent_and_only_explicit_retry_cas_
         owner_intent(&after_consent).phase,
         OwnerSyncIntentPhaseV1::LocalOnlyNoConsent
     );
-    thread::sleep(std::time::Duration::from_millis(10));
-
     driver
         .start_owner_profile_actions(
             3,
@@ -2387,14 +2409,13 @@ fn consent_grant_does_not_advance_local_only_intent_and_only_explicit_retry_cas_
     );
     let action = actions.retry.available_action().unwrap();
     let handle = actions.intent.unwrap();
-    thread::sleep(std::time::Duration::from_millis(10));
     driver
-        .start_owner_profile_retry(4, action, handle, events)
+        .start_owner_profile_retry(3, action, handle, events)
         .unwrap();
     assert!(matches!(
         receiver.blocking_recv(),
         Some(RuntimeEvent::ProfileRetrySyncFinished {
-            operation_id: 4,
+            operation_id: 3,
             ..
         })
     ));
@@ -2470,7 +2491,7 @@ fn cancellation_after_send_is_durably_classified_as_outcome_uncertain() {
         .start_onboarding(1, OnboardingProfileInput::default(), events)
         .unwrap();
     accepted_rx
-        .recv_timeout(std::time::Duration::from_secs(2))
+        .recv_timeout(std::time::Duration::from_secs(10))
         .unwrap();
     driver.cancel_turn(1).unwrap();
     release_tx.send(()).unwrap();
@@ -2488,8 +2509,6 @@ fn cancellation_after_send_is_durably_classified_as_outcome_uncertain() {
     );
     assert_eq!(owner_intent(&state).attempt_count, 1);
     assert!(owner_intent(&state).last_definite_error.is_none());
-    thread::sleep(std::time::Duration::from_millis(10));
-
     let (events, mut receiver) = mpsc::channel(2);
     driver
         .start_owner_profile_actions(
@@ -2509,7 +2528,6 @@ fn cancellation_after_send_is_durably_classified_as_outcome_uncertain() {
         actions.retry,
         OwnerProfileRetryEligibilityV1::ReconcileOutcomeUncertain
     );
-    thread::sleep(std::time::Duration::from_millis(10));
     driver
         .start_owner_profile_retry(
             3,
@@ -2562,6 +2580,9 @@ fn mismatched_authenticated_account_blocks_retry_without_http_or_local_transitio
             status: NativeOwnerProfileSaveStatusV1::SyncPending
         })
     ));
+    driver
+        .cancel_turn(1)
+        .expect("a terminal-event sender tail remains cancellable");
     let before_retry = repository.snapshot();
     assert_eq!(
         owner_intent(&before_retry).phase,
@@ -2595,6 +2616,111 @@ fn mismatched_authenticated_account_blocks_retry_without_http_or_local_transitio
         listener.accept().unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
     );
+}
+
+#[test]
+fn same_operation_id_retry_cancellation_targets_newest_turn() {
+    let repository = Arc::new(MemoryHouseholdRepository::with_state(
+        owner_context_household(HouseholdProfileStateV1::PendingSync),
+    ));
+    let before = repository.snapshot();
+    let handle = owner_intent_handle(&before);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let request = read_sync_request(&mut socket);
+        assert!(request.starts_with("GET /v1/profile/consent "));
+        respond_sync(
+            &mut socket,
+            "200 OK",
+            json!({"has_consent":true,"consent_version":7}),
+        );
+    });
+    let mut driver = native_driver(repository.clone(), address);
+    let (events, mut receiver) = mpsc::channel(1);
+    events
+        .try_send(RuntimeEvent::Notice {
+            message: "sender-tail-backpressure-canary".into(),
+        })
+        .unwrap();
+    driver
+        .start_owner_profile_actions(
+            3,
+            OwnerProfileActionLoadPurposeV1::ExplicitRetry,
+            events.clone(),
+        )
+        .unwrap();
+    server.join().unwrap();
+
+    let (entered_tx, entered_rx) = std_mpsc::channel();
+    let (cancelled_tx, cancelled_rx) = std_mpsc::channel();
+    driver = driver.with_session_provider(Arc::new(CancellationBlockingSessionProvider {
+        entered: entered_tx,
+        cancelled: cancelled_tx,
+    }));
+
+    // Keep the action-loader terminal send backpressured so both turns with
+    // operation ID 3 remain owned by the driver. The retry is accepted only
+    // after the loader publishes its follow-up-ready marker.
+    let retry_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match driver.start_owner_profile_retry(
+            3,
+            OwnerProfileRetryActionV1::ResumeNeedsConsentCheck,
+            handle.clone(),
+            events.clone(),
+        ) {
+            Ok(()) => break,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists
+                    && std::time::Instant::now() < retry_deadline =>
+            {
+                thread::yield_now();
+            }
+            Err(error) => panic!("same-ID retry did not start behind sender tail: {error}"),
+        }
+    }
+    drop(events);
+    entered_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    driver.cancel_turn(3).unwrap();
+    cancelled_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("same-ID cancellation must reach the newest retry token");
+
+    assert!(matches!(
+        receiver.blocking_recv(),
+        Some(RuntimeEvent::Notice { message }) if message == "sender-tail-backpressure-canary"
+    ));
+    let mut saw_actions = false;
+    let mut saw_retry = false;
+    for _ in 0..2 {
+        match receiver.blocking_recv() {
+            Some(RuntimeEvent::ProfileActionsLoaded {
+                operation_id: 3,
+                loaded: ProfileActionsLoadedV1::NativeActions(actions),
+            }) => {
+                assert_eq!(
+                    actions.retry,
+                    OwnerProfileRetryEligibilityV1::ResumeNeedsConsentCheck
+                );
+                saw_actions = true;
+            }
+            Some(RuntimeEvent::ProfileRetrySyncFinished {
+                operation_id: 3,
+                outcome: ProfileRetrySyncFinishedV1::Interrupted,
+            }) => saw_retry = true,
+            other => panic!("unexpected same-ID cancellation event: {other:?}"),
+        }
+    }
+    assert!(saw_actions);
+    assert!(saw_retry);
+    driver
+        .shutdown_and_join(std::time::Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(repository.snapshot(), before);
 }
 
 #[test]
@@ -2647,8 +2773,6 @@ fn attempt_count_overflow_fails_closed_before_transport_send() {
         intent.attempt_count = u32::MAX;
         state.validate().unwrap();
     });
-    thread::sleep(std::time::Duration::from_millis(10));
-
     driver
         .start_owner_profile_actions(
             2,
@@ -2667,7 +2791,6 @@ fn attempt_count_overflow_fails_closed_before_transport_send() {
         actions.retry,
         OwnerProfileRetryEligibilityV1::ResumeReadyToDispatch
     );
-    thread::sleep(std::time::Duration::from_millis(10));
     driver
         .start_owner_profile_retry(
             3,

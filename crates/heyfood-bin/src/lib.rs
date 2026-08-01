@@ -4331,18 +4331,18 @@ impl NativeHouseholdCommittedEvidenceV1 {
 struct OwnedInteractiveTurn {
     operation_id: u64,
     household_binding: Option<HouseholdOperationBindingV1>,
-    completed_household_operation: Option<Arc<AtomicBool>>,
+    /// Set with `Release` immediately before this turn sends its terminal
+    /// event. The driver reads it with `Acquire` so an event-triggered
+    /// follow-up does not have to wait for the sender task's scheduler tail.
+    followup_ready: Arc<AtomicBool>,
     cancellation: CancellationToken,
     stop: Option<CancellationToken>,
     task: JoinHandle<()>,
 }
 
 impl OwnedInteractiveTurn {
-    fn blocks_household_followup(&self) -> bool {
-        !self
-            .completed_household_operation
-            .as_ref()
-            .is_some_and(|completed| completed.load(AtomicOrdering::Acquire))
+    fn blocks_interactive_followup(&self) -> bool {
+        !self.followup_ready.load(AtomicOrdering::Acquire)
     }
 }
 
@@ -4594,6 +4594,12 @@ impl InteractiveTurnDriver {
         self.turns.retain(|turn| !turn.task.is_finished());
     }
 
+    fn has_blocking_interactive_work(&self) -> bool {
+        self.turns
+            .iter()
+            .any(OwnedInteractiveTurn::blocks_interactive_followup)
+    }
+
     fn start_conversational_input(
         &mut self,
         operation_id: u64,
@@ -4602,7 +4608,7 @@ impl InteractiveTurnDriver {
         runtime_events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()> {
         self.reap_finished();
-        if !self.turns.is_empty() {
+        if self.has_blocking_interactive_work() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "a conversational turn is already active",
@@ -4611,6 +4617,8 @@ impl InteractiveTurnDriver {
 
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
+        let followup_ready = Arc::new(AtomicBool::new(false));
+        let task_followup_ready = followup_ready.clone();
         let fallback_service = self.service.clone();
         let fallback_http_service = self.interactive_service.clone();
         let fallback_ensure_session = self.ensure_session.clone();
@@ -4646,6 +4654,7 @@ impl InteractiveTurnDriver {
                         failure,
                     },
                 };
+                task_followup_ready.store(true, AtomicOrdering::Release);
                 let _ = runtime_events.send(terminal_event).await;
                 return;
             }
@@ -4697,12 +4706,13 @@ impl InteractiveTurnDriver {
                     failure,
                 },
             };
+            task_followup_ready.store(true, AtomicOrdering::Release);
             let _ = runtime_events.send(terminal_event).await;
         });
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
             household_binding: None,
-            completed_household_operation: None,
+            followup_ready,
             cancellation,
             stop: None,
             task,
@@ -5031,7 +5041,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         if self
             .turns
             .iter()
-            .any(OwnedInteractiveTurn::blocks_household_followup)
+            .any(OwnedInteractiveTurn::blocks_interactive_followup)
         {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -5136,7 +5146,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         self.turns.push(OwnedInteractiveTurn {
             operation_id: operation_id.get(),
             household_binding: None,
-            completed_household_operation: Some(completed_household_operation),
+            followup_ready: completed_household_operation,
             cancellation,
             stop: None,
             task,
@@ -5155,7 +5165,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         if self
             .turns
             .iter()
-            .any(OwnedInteractiveTurn::blocks_household_followup)
+            .any(OwnedInteractiveTurn::blocks_interactive_followup)
         {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -5307,7 +5317,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
             household_binding: Some(owned_binding),
-            completed_household_operation: Some(completed_household_operation),
+            followup_ready: completed_household_operation,
             cancellation,
             stop: None,
             task,
@@ -5327,7 +5337,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         if self
             .turns
             .iter()
-            .any(OwnedInteractiveTurn::blocks_household_followup)
+            .any(OwnedInteractiveTurn::blocks_interactive_followup)
         {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -5480,7 +5490,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
             household_binding: Some(owned_binding),
-            completed_household_operation: Some(completed_household_operation),
+            followup_ready: completed_household_operation,
             cancellation,
             stop: None,
             task,
@@ -5498,7 +5508,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         if self
             .turns
             .iter()
-            .any(OwnedInteractiveTurn::blocks_household_followup)
+            .any(OwnedInteractiveTurn::blocks_interactive_followup)
         {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -5632,7 +5642,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
             household_binding: Some(owned_binding),
-            completed_household_operation: Some(completed_household_operation),
+            followup_ready: completed_household_operation,
             cancellation,
             stop: None,
             task,
@@ -5651,7 +5661,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
     ) -> io::Result<()> {
         self.reap_finished();
         if self.turns.iter().any(|turn| {
-            turn.blocks_household_followup()
+            turn.blocks_interactive_followup()
                 && turn
                     .household_binding
                     .as_ref()
@@ -5809,7 +5819,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
             household_binding: Some(owned_binding),
-            completed_household_operation: Some(completed_household_operation),
+            followup_ready: completed_household_operation,
             cancellation,
             stop: None,
             task,
@@ -5836,7 +5846,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         runtime_events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()> {
         self.reap_finished();
-        if !self.turns.is_empty() {
+        if self.has_blocking_interactive_work() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "interactive work is already active",
@@ -5846,6 +5856,8 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         let continuity = self.continuity.clone();
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
+        let followup_ready = Arc::new(AtomicBool::new(false));
+        let task_followup_ready = followup_ready.clone();
         let task = self.runtime.spawn(async move {
             let result = local_state
                 .as_deref()
@@ -5876,12 +5888,13 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                     message,
                 },
             };
+            task_followup_ready.store(true, AtomicOrdering::Release);
             let _ = runtime_events.send(event).await;
         });
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
             household_binding: None,
-            completed_household_operation: None,
+            followup_ready,
             cancellation,
             stop: None,
             task,
@@ -5896,7 +5909,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         runtime_events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()> {
         self.reap_finished();
-        if !self.turns.is_empty() {
+        if self.has_blocking_interactive_work() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "interactive work is already active",
@@ -5915,6 +5928,8 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         let session_provider = self.session_provider.clone();
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
+        let followup_ready = Arc::new(AtomicBool::new(false));
+        let task_followup_ready = followup_ready.clone();
         let session = self.session.clone();
         let native_voice_available = self.native_voice_available();
         runtime_events
@@ -5981,12 +5996,13 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                     message,
                 },
             };
+            task_followup_ready.store(true, AtomicOrdering::Release);
             let _ = runtime_events.send(event).await;
         });
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
             household_binding: None,
-            completed_household_operation: None,
+            followup_ready,
             cancellation,
             stop: None,
             task,
@@ -6001,7 +6017,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         runtime_events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()> {
         self.reap_finished();
-        if !self.turns.is_empty() {
+        if self.has_blocking_interactive_work() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "interactive work is already active",
@@ -6065,6 +6081,8 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         let session_provider = self.session_provider.clone();
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
+        let followup_ready = Arc::new(AtomicBool::new(false));
+        let task_followup_ready = followup_ready.clone();
         let session = self.session.clone();
         let environment = InteractivePanelEnvironment {
             local_state: self.local_state.clone(),
@@ -6138,6 +6156,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 };
                 ProfileActionsLoadedV1::LegacyPanel { body }
             };
+            task_followup_ready.store(true, AtomicOrdering::Release);
             let _ = runtime_events
                 .send(RuntimeEvent::ProfileActionsLoaded {
                     operation_id,
@@ -6148,7 +6167,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
             household_binding: None,
-            completed_household_operation: None,
+            followup_ready,
             cancellation,
             stop: None,
             task,
@@ -6166,7 +6185,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
             ProfilePresentationModeV1::NativeEnabled
         ) {
             self.reap_finished();
-            if !self.turns.is_empty() {
+            if self.has_blocking_interactive_work() {
                 return Err(io::Error::new(
                     io::ErrorKind::AlreadyExists,
                     "interactive work is already active",
@@ -6192,6 +6211,8 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
             }
             let cancellation = CancellationToken::new();
             let task_cancellation = cancellation.clone();
+            let followup_ready = Arc::new(AtomicBool::new(false));
+            let task_followup_ready = followup_ready.clone();
             let fallback_service = self.service.clone();
             let fallback_http_service = self.interactive_service.clone();
             let fallback_ensure_session = self.ensure_session.clone();
@@ -6231,6 +6252,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                         Err(ProfileConsentFailureV1::Unavailable)
                     }
                 };
+                task_followup_ready.store(true, AtomicOrdering::Release);
                 let _ = runtime_events
                     .send(RuntimeEvent::ProfileConsentFinished {
                         operation_id,
@@ -6241,7 +6263,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
             self.turns.push(OwnedInteractiveTurn {
                 operation_id,
                 household_binding: None,
-                completed_household_operation: None,
+                followup_ready,
                 cancellation,
                 stop: None,
                 task,
@@ -6268,7 +6290,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
             ProfilePresentationModeV1::NativeEnabled
         ) {
             self.reap_finished();
-            if !self.turns.is_empty() {
+            if self.has_blocking_interactive_work() {
                 return Err(io::Error::new(
                     io::ErrorKind::AlreadyExists,
                     "interactive work is already active",
@@ -6298,6 +6320,8 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
             }
             let cancellation = CancellationToken::new();
             let task_cancellation = cancellation.clone();
+            let followup_ready = Arc::new(AtomicBool::new(false));
+            let task_followup_ready = followup_ready.clone();
             let fallback_service = self.service.clone();
             let fallback_http_service = self.interactive_service.clone();
             let fallback_ensure_session = self.ensure_session.clone();
@@ -6345,6 +6369,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                         }
                     }
                 };
+                task_followup_ready.store(true, AtomicOrdering::Release);
                 let _ = runtime_events
                     .send(RuntimeEvent::ProfileRetrySyncFinished {
                         operation_id,
@@ -6355,7 +6380,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
             self.turns.push(OwnedInteractiveTurn {
                 operation_id,
                 household_binding: None,
-                completed_household_operation: None,
+                followup_ready,
                 cancellation,
                 stop: None,
                 task,
@@ -6379,7 +6404,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         runtime_events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()> {
         self.reap_finished();
-        if !self.turns.is_empty() {
+        if self.has_blocking_interactive_work() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "interactive work is already active",
@@ -6430,6 +6455,8 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         }
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
+        let followup_ready = Arc::new(AtomicBool::new(false));
+        let task_followup_ready = followup_ready.clone();
         let fallback_service = self.service.clone();
         let fallback_http_service = self.interactive_service.clone();
         let fallback_ensure_session = self.ensure_session.clone();
@@ -6541,12 +6568,13 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                     }
                 }
             };
+            task_followup_ready.store(true, AtomicOrdering::Release);
             let _ = runtime_events.send(event).await;
         });
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
             household_binding: None,
-            completed_household_operation: None,
+            followup_ready,
             cancellation,
             stop: None,
             task,
@@ -6560,7 +6588,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         runtime_events: mpsc::Sender<RuntimeEvent>,
     ) -> io::Result<()> {
         self.reap_finished();
-        if !self.turns.is_empty() {
+        if self.has_blocking_interactive_work() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "interactive work is already active",
@@ -6597,6 +6625,8 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         let cancellation = CancellationToken::new();
         let task_stop = stop.clone();
         let task_cancellation = cancellation.clone();
+        let followup_ready = Arc::new(AtomicBool::new(false));
+        let task_followup_ready = followup_ready.clone();
         let fallback_service = self.service.clone();
         let fallback_http_service = self.interactive_service.clone();
         let fallback_ensure_session = self.ensure_session.clone();
@@ -6623,6 +6653,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 }),
             };
             if let Some(event) = preflight_event {
+                task_followup_ready.store(true, AtomicOrdering::Release);
                 let _ = runtime_events.send(event).await;
                 return;
             }
@@ -6684,12 +6715,13 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                     }
                 }
             };
+            task_followup_ready.store(true, AtomicOrdering::Release);
             let _ = runtime_events.send(event).await;
         });
         self.turns.push(OwnedInteractiveTurn {
             operation_id,
             household_binding: None,
-            completed_household_operation: None,
+            followup_ready,
             cancellation,
             stop: Some(stop),
             task,
@@ -6720,9 +6752,14 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
     }
 
     fn cancel_turn(&mut self, operation_id: u64) -> io::Result<()> {
+        // Profile action loading and its retry reuse one operation ID. Search
+        // newest-first so cancellation targets the retry after it is pushed.
+        // A ready sender tail can still be visible while its terminal event is
+        // backpressured; cancelling that token is a harmless successful no-op.
         let turn = self
             .turns
             .iter()
+            .rev()
             .find(|turn| turn.operation_id == operation_id)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "active turn is missing"))?;
         turn.cancellation.cancel();
