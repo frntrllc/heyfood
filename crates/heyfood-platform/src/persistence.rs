@@ -1895,6 +1895,38 @@ impl NativeAuthStore {
         client_transaction_id: String,
         session_store: &impl AuthorizationSessionStore,
     ) -> Result<AuthorizationReplacementJournal, PortError> {
+        self.begin_authorization_replacement_inner(client_transaction_id, None, session_store)
+    }
+
+    /// Begin an explicit authority replacement only when the account-bound
+    /// authorization still exactly matches a bundle loaded by the caller.
+    ///
+    /// The comparison and durable replacement marker are serialized under the
+    /// authorization lock, with the authoritative session loaded second. This
+    /// lets a caller retain a broader account-lifecycle lock across the whole
+    /// intent commit without journaling authority that changed after its
+    /// earlier account-bound read.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn begin_authorization_replacement_if_current(
+        &self,
+        client_transaction_id: String,
+        expected: &AuthCredentialBundle,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<AuthorizationReplacementJournal, PortError> {
+        self.begin_authorization_replacement_inner(
+            client_transaction_id,
+            Some(expected),
+            session_store,
+        )
+    }
+
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    fn begin_authorization_replacement_inner(
+        &self,
+        client_transaction_id: String,
+        expected: Option<&AuthCredentialBundle>,
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<AuthorizationReplacementJournal, PortError> {
         validate_transaction_id("client transaction", &client_transaction_id)?;
         let _lock = FileLock::acquire(&self.lock_path, true)?;
         self.ensure_reconciled_unlocked()?;
@@ -1910,6 +1942,16 @@ impl NativeAuthStore {
                 "authorization and active session belong to different accounts",
             ));
         }
+        let current = AuthCredentialBundle {
+            channel: current_auth.channel,
+            session: current_session,
+        };
+        if expected.is_some_and(|expected| expected != &current) {
+            return Err(PortError::new(
+                "authorization_version_conflict",
+                "account-bound authorization changed before replacement intent was committed",
+            ));
+        }
         let journal = AuthorizationReplacementJournal {
             phase: AuthorizationReplacementPhase::Preparing,
             client_transaction_id,
@@ -1918,10 +1960,7 @@ impl NativeAuthStore {
             provisional_access_token: None,
             recovery_token: None,
             bundle_digest: None,
-            previous: AuthCredentialBundle {
-                channel: current_auth.channel,
-                session: current_session,
-            },
+            previous: current,
             replacement: None,
         };
         journal.validate()?;

@@ -397,6 +397,44 @@ fn staged_reauthorization_keeps_old_active_then_replaces_both_stores_after_promo
 
 #[test]
 #[cfg(not(windows))]
+fn expected_current_reauthorization_rejects_a_changed_session_without_a_marker() {
+    let root = TempRoot::new("authorization-expected-current");
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let expected = auth_bundle();
+    auth_store.initialize(&expected).unwrap();
+    session_store.initialize(&expected.session).unwrap();
+
+    session_store
+        .replace_authorized_session(&credentials(2))
+        .unwrap();
+    let error = auth_store
+        .begin_authorization_replacement_if_current(
+            "client-transaction-stale-session".to_owned(),
+            &expected,
+            &session_store,
+        )
+        .unwrap_err();
+
+    assert_eq!(error.code, "authorization_version_conflict");
+    assert!(
+        auth_store
+            .pending_authorization_replacement()
+            .unwrap()
+            .is_none(),
+        "a stale account-bound read must not create a replacement journal"
+    );
+    assert!(!root.0.join("auth.reconciliation").exists());
+    let current = auth_store
+        .load_account_bound(&session_store)
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.channel, expected.channel);
+    assert_eq!(current.session, credentials(2));
+}
+
+#[test]
+#[cfg(not(windows))]
 fn partial_pending_session_write_replays_exact_prepared_journal() {
     struct FailingSessionStore;
     impl AuthorizationSessionStore for FailingSessionStore {
