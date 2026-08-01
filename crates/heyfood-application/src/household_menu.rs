@@ -68,6 +68,24 @@ pub fn render_household_menu(document: &Value) -> Option<String> {
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_default();
+    let section_count = sections
+        .iter()
+        .filter(|section| {
+            section
+                .get("items")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty())
+        })
+        .count();
+    let item_count = sections
+        .iter()
+        .filter_map(|section| section.get("items").and_then(Value::as_array))
+        .map(Vec::len)
+        .sum::<usize>();
+    let _ = writeln!(
+        output,
+        "{section_count} sections · {item_count} items · Page Up/Page Down to browse"
+    );
     for section in sections {
         let Some(items) = section.get("items").and_then(Value::as_array) else {
             continue;

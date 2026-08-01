@@ -251,7 +251,7 @@ fn wrapped_line_count(lines: &[Line<'_>], width: usize) -> usize {
 mod tests {
     use super::*;
     use crate::{Action, RuntimeEvent, dispatch};
-    use heyfood_application::{PortError, TurnFailure};
+    use heyfood_application::{PortError, RunTurnOutcome, TurnFailure};
     use heyfood_core::AgentEvent;
     use ratatui::{Terminal, backend::TestBackend};
 
@@ -372,6 +372,69 @@ mod tests {
         model
     }
 
+    fn long_full_menu_model(width: u16, height: u16) -> AppModel {
+        let tea = (1..=40)
+            .map(|index| {
+                serde_json::json!({
+                    "item_id": format!("tea-{index}"),
+                    "name": format!("Tea drink {index}"),
+                    "price_cents": 450,
+                    "safety": {
+                        "_self": {
+                            "level": "caution",
+                            "reason": "Verify added sweeteners."
+                        }
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut model = AppModel::default();
+        model.width = width;
+        model.height = height;
+        model.draft = "Can I see the full menu?".into();
+        model.cursor = model.draft.chars().count();
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "text": "Here is the complete menu.",
+                        "structured": {
+                            "type": "household_menu",
+                            "presentation": "full_menu",
+                            "restaurant_name": "Abby Jane Bakeshop",
+                            "is_stale": false,
+                            "freshness_hours": 1.0,
+                            "requested_max_age_seconds": 86400,
+                            "sections": [
+                                {
+                                    "name": "Bread",
+                                    "items": [
+                                        {"item_id": "bread-1", "name": "Big Country"},
+                                        {"item_id": "bread-2", "name": "Baguette"},
+                                        {"item_id": "bread-3", "name": "Sourdough"}
+                                    ]
+                                },
+                                {"name": "Tea", "items": tea}
+                            ]
+                        }
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFinished {
+                operation_id: 1,
+                outcome: RunTurnOutcome::Completed,
+            }),
+        );
+        model
+    }
+
     #[test]
     fn responsive_snapshots_keep_stream_and_composer_visible() {
         let model = streaming_model();
@@ -423,6 +486,29 @@ mod tests {
             }
             assert!(!rendered.contains("_self"));
             assert!(!rendered.contains('\u{1b}'));
+        }
+    }
+
+    #[test]
+    fn long_full_menu_opens_on_heading_and_completeness_not_the_drink_tail() {
+        for width in [40, 80, 120] {
+            let model = long_full_menu_model(width, 18);
+            let rendered = snapshot(&model, width, 18);
+            let semantic = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(
+                semantic.contains("Current menu at Abby Jane Bakeshop"),
+                "width {width} did not open at the menu heading: {rendered}"
+            );
+            assert!(
+                semantic.contains("2 sections · 43 items"),
+                "width {width} omitted completeness: {rendered}"
+            );
+            assert!(semantic.contains("Bread"));
+            assert!(semantic.contains("Page Up/Page Down to browse"));
+            assert!(
+                !semantic.contains("Tea drink 40"),
+                "width {width} still opened at the drink-heavy tail: {rendered}"
+            );
         }
     }
 
