@@ -223,6 +223,11 @@ make_release() {
           "{\"native_state_compatibility\":{\"binary_version\":\"$version\",\"maximum_native_state_version\":2,\"native_state_capabilities\":[\"household-account-slot-v1\",\"household-lifecycle-lock-v1\",\"household-migration-guard-v1\",\"household-teardown-journal-v1\"],\"schema_version\":1,\"schema_version\":1},\"schema_version\":2}" \
           >"$manifest_fixture"
         ;;
+      wrong-schema)
+        printf '%s' \
+          "{\"binary_version\":\"$version\",\"native_state_compatibility\":{\"binary_version\":\"$version\",\"maximum_native_state_version\":2,\"native_state_capabilities\":[\"household-account-slot-v1\",\"household-lifecycle-lock-v1\",\"household-migration-guard-v1\",\"household-teardown-journal-v1\"],\"schema_version\":1},\"schema_version\":1}" \
+          >"$manifest_fixture"
+        ;;
       invalid)
         printf '%s' '{"native_state_compatibility":' >"$manifest_fixture"
         ;;
@@ -245,7 +250,8 @@ if [[ "\${1:-}" == "--version" ]]; then
   printf 'heyfood %s\n' '$reported_version'
   exit 0
 fi
-if [[ "\${1:-}" == "agent" && "\${2:-}" == "describe" && "$mode" == "native" ]]; then
+if [[ "\$#" == "4" && "\${1:-}" == "agent" && "\${2:-}" == "describe" && \
+  "\${3:-}" == "--schema-version" && "\${4:-}" == "2" && "$mode" == "native" ]]; then
   cat '$manifest_fixture'
   printf '\n'
   exit 0
@@ -352,6 +358,7 @@ test_source_invariants() {
   assert_contains "$INSTALLER" 'SHA256SUMS'
   assert_contains "$INSTALLER" 'native-state.json'
   assert_contains "$INSTALLER" 'native-state-floor.v1.json'
+  assert_contains "$INSTALLER" 'agent describe --schema-version 2'
   assert_contains "$INSTALLER" "\"\$STAGED_VERIFIER\" verify-native-state"
   assert_contains "$INSTALLER" "mv -f -- \"\$STAGED_EXECUTABLE\" \"\$INSTALL_PATH\""
   assert_not_contains "$INSTALLER" 'grep -o '"'"'"native_state_compatibility"'"'"
@@ -571,8 +578,8 @@ test_version_mismatch_preserves_existing_binary() {
   assert_existing_binary_untouched
 }
 
-test_pre_d2_installer_rejects_recorded_floor_before_download() {
-  new_case pre-d2-floor
+test_pre_native_state_installer_rejects_recorded_floor_before_download() {
+  new_case pre-native-state-floor
   use_pre_native_state_installer
   make_release 0.6.3
   write_existing_binary
@@ -582,7 +589,7 @@ test_pre_d2_installer_rejects_recorded_floor_before_download() {
   fi
 
   [[ ! -e "$DOWNLOAD_LOG" ]] ||
-    fail "the pre-D2 installer downloaded before rejecting the floor"
+    fail "the pre-native-state installer downloaded before rejecting the floor"
   assert_contains "$STDERR_LOG" "predates the native-state compatibility floor"
   assert_existing_binary_untouched
 }
@@ -605,7 +612,7 @@ test_verified_native_state_install_and_compatible_rollback() {
   write_native_state_floor
   run_installer
   [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.3" ]] ||
-    fail "a compatible D2 rollback was rejected"
+    fail "a compatible native-state-aware rollback was rejected"
 }
 
 test_malformed_native_state_floor_rejects_before_download() {
@@ -625,13 +632,13 @@ test_malformed_native_state_floor_rejects_before_download() {
   assert_existing_binary_untouched
 }
 
-test_pre_d2_and_disagreeing_metadata_preserve_existing_binary() {
-  new_case pre-d2-release
+test_pre_native_state_and_disagreeing_metadata_preserve_existing_binary() {
+  new_case pre-native-state-release
   use_native_state_installer
   make_release 0.6.3 0.6.3 native exact 1 1
   write_existing_binary
   if run_installer; then
-    fail "installer accepted a pre-D2 release declaration"
+    fail "installer accepted a pre-native-state release declaration"
   fi
   assert_contains "$STDERR_LOG" "release declaration is incompatible"
   assert_existing_binary_untouched
@@ -649,7 +656,7 @@ test_pre_d2_and_disagreeing_metadata_preserve_existing_binary() {
 
 test_structurally_invalid_candidate_manifests_preserve_existing_binary() {
   local variant
-  for variant in nested textual duplicate-top duplicate-nested invalid oversized; do
+  for variant in nested textual duplicate-top duplicate-nested wrong-schema invalid oversized; do
     new_case "candidate-$variant"
     use_native_state_installer
     make_release 0.6.3 0.6.3 native "$variant"
@@ -751,10 +758,10 @@ test_failed_install_preserves_known_legacy_pipx_symlink
 test_checksum_failure_preserves_existing_binary
 test_archive_shape_failure_preserves_existing_binary
 test_version_mismatch_preserves_existing_binary
-test_pre_d2_installer_rejects_recorded_floor_before_download
+test_pre_native_state_installer_rejects_recorded_floor_before_download
 test_verified_native_state_install_and_compatible_rollback
 test_malformed_native_state_floor_rejects_before_download
-test_pre_d2_and_disagreeing_metadata_preserve_existing_binary
+test_pre_native_state_and_disagreeing_metadata_preserve_existing_binary
 test_structurally_invalid_candidate_manifests_preserve_existing_binary
 test_invalid_or_oversized_declarations_preserve_existing_binary
 test_missing_or_failing_verifier_preserves_existing_binary

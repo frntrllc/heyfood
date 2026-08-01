@@ -78,11 +78,15 @@ fixture is `fixtures/agent/manifest-v1-golden.json`. Self-description does not
 by itself claim MCP support; Agent Skill setup is a separately versioned,
 opt-in, receipt-bound surface.
 
-The D2 source boundary does not modify that closed v1 manifest. A future
-D2-activated release uses
+The v0.6.3 native-state boundary does not modify that closed v1 default. Bare
+`heyfood agent`, `heyfood agent describe`, `heyfood agent doctor`, and the MCP
+manifest tool continue to return v1. Their schemas are named `manifest` and
+`doctor` in installed discovery, preserving already-installed v0.6.2 Agent
+Skills.
+
+The explicit `--schema-version 2` discovery option uses
 `schemas/v2/heyfood-agent-manifest.schema.json` and
-`schemas/v2/heyfood-agent-doctor.schema.json` for current self-description;
-the v1 documents remain embedded as `manifest-v1` and `doctor-v1`. The v2
-manifest adds the exact top-level `native_state_compatibility` declaration.
-This source-ready contract does not change the currently supported public
-v0.6.2 asset or capability claim.
+`schemas/v2/heyfood-agent-doctor.schema.json`, named `manifest-v2` and
+`doctor-v2`. The v2 manifest adds the exact top-level
+`native_state_compatibility` declaration for the managed installer and release
+verifier; a consumer receives it only by requesting v2.

@@ -223,17 +223,35 @@ pub enum Command {
 #[derive(Clone, Debug, Subcommand)]
 pub enum AgentCommand {
     /// Describe the exact installed agent contract as deterministic JSON.
-    Describe,
+    Describe(AgentDiscoveryArgs),
     /// Print the embedded integration or safety guide.
     Guide(AgentGuideArgs),
     /// Print one embedded JSON Schema.
     Schema(AgentSchemaArgs),
     /// Run credential-free, network-free local integration diagnostics.
-    Doctor,
+    Doctor(AgentDiscoveryArgs),
     /// Plan or install the Agent Skill and read-only MCP registration.
     Setup(AgentSetupArgs),
     /// Remove only an exact receipt-bound skill and MCP registration.
     Uninstall(AgentUninstallArgs),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Args)]
+pub struct AgentDiscoveryArgs {
+    /// Explicit discovery schema; v1 remains the compatibility default.
+    #[arg(
+        long,
+        value_name = "1|2",
+        default_value_t = 1,
+        value_parser = clap::value_parser!(u16).range(1..=2)
+    )]
+    pub schema_version: u16,
+}
+
+impl Default for AgentDiscoveryArgs {
+    fn default() -> Self {
+        Self { schema_version: 1 }
+    }
 }
 
 #[derive(Clone, Debug, Subcommand)]

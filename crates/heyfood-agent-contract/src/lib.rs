@@ -9,15 +9,15 @@ use sha2::{Digest, Sha256};
 pub const GUIDE: &str = include_str!("../../../docs/AGENT_INTEGRATION.md");
 pub const SAFETY: &str = include_str!("../../../docs/AGENT_SAFETY.md");
 pub const MANIFEST_SCHEMA: &str =
-    include_str!("../../../schemas/v2/heyfood-agent-manifest.schema.json");
-pub const MANIFEST_V1_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-agent-manifest.schema.json");
+pub const MANIFEST_V2_SCHEMA: &str =
+    include_str!("../../../schemas/v2/heyfood-agent-manifest.schema.json");
 pub const SCHEMA_INDEX_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-agent-schema-index.schema.json");
 pub const DOCTOR_SCHEMA: &str =
-    include_str!("../../../schemas/v2/heyfood-agent-doctor.schema.json");
-pub const DOCTOR_V1_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-agent-doctor.schema.json");
+pub const DOCTOR_V2_SCHEMA: &str =
+    include_str!("../../../schemas/v2/heyfood-agent-doctor.schema.json");
 pub const GUIDE_SCHEMA: &str = include_str!("../../../schemas/v1/heyfood-agent-guide.schema.json");
 pub const SCHEMA_RESULT_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-agent-schema-result.schema.json");
@@ -31,14 +31,14 @@ pub const SETUP_PLAN_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-agent-setup-plan.schema.json");
 
 pub const MANIFEST_SCHEMA_ID: &str =
-    "https://hey.food/schemas/v2/heyfood-agent-manifest.schema.json";
-pub const MANIFEST_V1_SCHEMA_ID: &str =
     "https://hey.food/schemas/v1/heyfood-agent-manifest.schema.json";
+pub const MANIFEST_V2_SCHEMA_ID: &str =
+    "https://hey.food/schemas/v2/heyfood-agent-manifest.schema.json";
 pub const SCHEMA_INDEX_SCHEMA_ID: &str =
     "https://hey.food/schemas/v1/heyfood-agent-schema-index.schema.json";
-pub const DOCTOR_SCHEMA_ID: &str = "https://hey.food/schemas/v2/heyfood-agent-doctor.schema.json";
-pub const DOCTOR_V1_SCHEMA_ID: &str =
-    "https://hey.food/schemas/v1/heyfood-agent-doctor.schema.json";
+pub const DOCTOR_SCHEMA_ID: &str = "https://hey.food/schemas/v1/heyfood-agent-doctor.schema.json";
+pub const DOCTOR_V2_SCHEMA_ID: &str =
+    "https://hey.food/schemas/v2/heyfood-agent-doctor.schema.json";
 pub const GUIDE_SCHEMA_ID: &str = "https://hey.food/schemas/v1/heyfood-agent-guide.schema.json";
 pub const SCHEMA_RESULT_SCHEMA_ID: &str =
     "https://hey.food/schemas/v1/heyfood-agent-schema-result.schema.json";
@@ -56,10 +56,10 @@ pub const MAX_SCHEMA_BYTES: usize = 1024 * 1024;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EmbeddedSchema {
     Manifest,
-    ManifestV1,
+    ManifestV2,
     SchemaIndex,
     Doctor,
-    DoctorV1,
+    DoctorV2,
     Guide,
     SchemaResult,
     CliError,
@@ -73,10 +73,10 @@ impl EmbeddedSchema {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Manifest => "manifest",
-            Self::ManifestV1 => "manifest-v1",
+            Self::ManifestV2 => "manifest-v2",
             Self::SchemaIndex => "schema-index",
             Self::Doctor => "doctor",
-            Self::DoctorV1 => "doctor-v1",
+            Self::DoctorV2 => "doctor-v2",
             Self::Guide => "guide",
             Self::SchemaResult => "schema-result",
             Self::CliError => "error",
@@ -90,10 +90,10 @@ impl EmbeddedSchema {
     pub const fn id(self) -> &'static str {
         match self {
             Self::Manifest => MANIFEST_SCHEMA_ID,
-            Self::ManifestV1 => MANIFEST_V1_SCHEMA_ID,
+            Self::ManifestV2 => MANIFEST_V2_SCHEMA_ID,
             Self::SchemaIndex => SCHEMA_INDEX_SCHEMA_ID,
             Self::Doctor => DOCTOR_SCHEMA_ID,
-            Self::DoctorV1 => DOCTOR_V1_SCHEMA_ID,
+            Self::DoctorV2 => DOCTOR_V2_SCHEMA_ID,
             Self::Guide => GUIDE_SCHEMA_ID,
             Self::SchemaResult => SCHEMA_RESULT_SCHEMA_ID,
             Self::CliError => CLI_ERROR_SCHEMA_ID,
@@ -107,10 +107,10 @@ impl EmbeddedSchema {
     pub const fn document(self) -> &'static str {
         match self {
             Self::Manifest => MANIFEST_SCHEMA,
-            Self::ManifestV1 => MANIFEST_V1_SCHEMA,
+            Self::ManifestV2 => MANIFEST_V2_SCHEMA,
             Self::SchemaIndex => SCHEMA_INDEX_SCHEMA,
             Self::Doctor => DOCTOR_SCHEMA,
-            Self::DoctorV1 => DOCTOR_V1_SCHEMA,
+            Self::DoctorV2 => DOCTOR_V2_SCHEMA,
             Self::Guide => GUIDE_SCHEMA,
             Self::SchemaResult => SCHEMA_RESULT_SCHEMA,
             Self::CliError => CLI_ERROR_SCHEMA,
@@ -123,10 +123,10 @@ impl EmbeddedSchema {
 
 pub const PUBLIC_SCHEMAS: [EmbeddedSchema; 11] = [
     EmbeddedSchema::Manifest,
-    EmbeddedSchema::ManifestV1,
+    EmbeddedSchema::ManifestV2,
     EmbeddedSchema::SchemaIndex,
     EmbeddedSchema::Doctor,
-    EmbeddedSchema::DoctorV1,
+    EmbeddedSchema::DoctorV2,
     EmbeddedSchema::Guide,
     EmbeddedSchema::SchemaResult,
     EmbeddedSchema::CliError,
@@ -239,7 +239,7 @@ fn commands() -> Vec<CommandContract> {
             "Describe the exact installed agent contract.",
             "agent_safe",
             "none",
-            "heyfood_agent_manifest_v2",
+            "heyfood_agent_manifest_v1",
             "one_json_value",
             "local_read",
             false,
@@ -258,7 +258,7 @@ fn commands() -> Vec<CommandContract> {
             "Describe the exact installed agent contract.",
             "agent_safe",
             "none",
-            "heyfood_agent_manifest_v2",
+            "heyfood_agent_manifest_v1",
             "one_json_value",
             "local_read",
             false,
@@ -321,7 +321,7 @@ fn commands() -> Vec<CommandContract> {
             "Inspect the local integration without credentials or network.",
             "agent_safe",
             "none",
-            "agent_doctor_v2",
+            "agent_doctor_v1",
             "one_json_value",
             "local_read",
             false,
@@ -800,7 +800,7 @@ pub fn manifest() -> Value {
         .filter(|feature| !feature.is_empty())
         .collect::<Vec<_>>();
     let manifest = json!({
-        "schema_version": 2,
+        "schema_version": 1,
         "product": "heyfood",
         "binary_version": env!("CARGO_PKG_VERSION"),
         "build": {
@@ -824,17 +824,6 @@ pub fn manifest() -> Value {
             "one_shot_json": "active",
             "mcp_stdio": "active",
             "tui_automation": "unsupported"
-        },
-        "native_state_compatibility": {
-            "binary_version": env!("CARGO_PKG_VERSION"),
-            "maximum_native_state_version": 2,
-            "native_state_capabilities": [
-                "household-account-slot-v1",
-                "household-lifecycle-lock-v1",
-                "household-migration-guard-v1",
-                "household-teardown-journal-v1"
-            ],
-            "schema_version": 1
         },
         "limits": {
             "manifest_bytes": MAX_MANIFEST_BYTES,
@@ -862,6 +851,70 @@ pub fn manifest() -> Value {
         ],
         "commands": commands()
     });
+    debug_assert!(canonical_json(&manifest).len() <= MAX_MANIFEST_BYTES);
+    manifest
+}
+
+/// Return the explicit v2 discovery contract used by the v0.6.3 native-state
+/// release verifier. The default [`manifest`] remains the closed v1 contract
+/// consumed by already-installed v0.6.2 Agent Skills.
+#[must_use]
+pub fn manifest_v2() -> Value {
+    let mut manifest = manifest();
+    manifest["schema_version"] = Value::from(2);
+    manifest
+        .as_object_mut()
+        .expect("manifest is an object")
+        .insert(
+            "native_state_compatibility".to_owned(),
+            json!({
+                "binary_version": env!("CARGO_PKG_VERSION"),
+                "maximum_native_state_version": 2,
+                "native_state_capabilities": [
+                    "household-account-slot-v1",
+                    "household-lifecycle-lock-v1",
+                    "household-migration-guard-v1",
+                    "household-teardown-journal-v1"
+                ],
+                "schema_version": 1
+            }),
+        );
+
+    for command in manifest["commands"]
+        .as_array_mut()
+        .expect("manifest commands are an array")
+    {
+        match command["path"].as_str().expect("command path is a string") {
+            "agent describe" => {
+                command["purpose"] = Value::from(
+                    "Describe the exact installed agent contract using v1 by default or an explicitly requested v2.",
+                );
+                command["input_channel"] = Value::from("arguments");
+                command["output_family"] = Value::from("heyfood_agent_manifest_v1_or_v2");
+                command["output_schema_id"] = Value::Null;
+                command["output_schema_sha256"] = Value::Null;
+                command["examples"] = json!([
+                    "heyfood agent describe",
+                    "heyfood agent describe --schema-version 2"
+                ]);
+            }
+            "agent doctor" => {
+                command["purpose"] = Value::from(
+                    "Inspect the local integration using v1 by default or an explicitly requested v2.",
+                );
+                command["input_channel"] = Value::from("arguments");
+                command["output_family"] = Value::from("agent_doctor_v1_or_v2");
+                command["output_schema_id"] = Value::Null;
+                command["output_schema_sha256"] = Value::Null;
+                command["examples"] = json!([
+                    "heyfood agent doctor",
+                    "heyfood agent doctor --schema-version 2"
+                ]);
+            }
+            _ => {}
+        }
+    }
+
     debug_assert!(canonical_json(&manifest).len() <= MAX_MANIFEST_BYTES);
     manifest
 }
@@ -934,12 +987,21 @@ pub fn schema_index() -> Value {
 
 #[must_use]
 pub fn embedded_digests() -> Value {
+    embedded_digests_for(MANIFEST_SCHEMA, DOCTOR_SCHEMA)
+}
+
+#[must_use]
+pub fn embedded_digests_v2() -> Value {
+    embedded_digests_for(MANIFEST_V2_SCHEMA, DOCTOR_V2_SCHEMA)
+}
+
+fn embedded_digests_for(manifest_schema: &str, doctor_schema: &str) -> Value {
     json!({
         "guide_sha256": sha256_hex(GUIDE.as_bytes()),
         "safety_sha256": sha256_hex(SAFETY.as_bytes()),
-        "manifest_schema_sha256": sha256_hex(MANIFEST_SCHEMA.as_bytes()),
+        "manifest_schema_sha256": sha256_hex(manifest_schema.as_bytes()),
         "schema_index_schema_sha256": sha256_hex(SCHEMA_INDEX_SCHEMA.as_bytes()),
-        "doctor_schema_sha256": sha256_hex(DOCTOR_SCHEMA.as_bytes()),
+        "doctor_schema_sha256": sha256_hex(doctor_schema.as_bytes()),
         "guide_schema_sha256": sha256_hex(GUIDE_SCHEMA.as_bytes()),
         "schema_result_schema_sha256": sha256_hex(SCHEMA_RESULT_SCHEMA.as_bytes()),
         "cli_error_schema_sha256": sha256_hex(CLI_ERROR_SCHEMA.as_bytes()),
@@ -964,7 +1026,16 @@ fn doctor_check(id: &'static str, passed: bool) -> Value {
 
 #[must_use]
 pub fn doctor_document() -> Value {
-    let manifest = manifest();
+    doctor_document_for(manifest(), 1, embedded_digests())
+}
+
+/// Return diagnostics bound to the explicit v2 manifest and schemas.
+#[must_use]
+pub fn doctor_document_v2() -> Value {
+    doctor_document_for(manifest_v2(), 2, embedded_digests_v2())
+}
+
+fn doctor_document_for(manifest: Value, schema_version: u16, embedded: Value) -> Value {
     let canonical_manifest = canonical_json(&manifest);
     let manifest_round_trip = serde_json::from_str::<Value>(&canonical_manifest)
         .is_ok_and(|decoded| decoded == manifest)
@@ -1036,13 +1107,13 @@ pub fn doctor_document() -> Value {
     ];
     let ok = checks.iter().all(|check| check["status"] == "pass");
     json!({
-        "schema_version": 2,
+        "schema_version": schema_version,
         "ok": ok,
         "binary_version": env!("CARGO_PKG_VERSION"),
         "target": env!("HEYFOOD_BUILD_TARGET"),
         "manifest_schema_version": manifest["schema_version"],
         "manifest_sha256": sha256_hex(canonical_manifest.as_bytes()),
-        "embedded": embedded_digests(),
+        "embedded": embedded,
         "checks": checks,
         "network_accessed": false,
         "credentials_accessed": false,
@@ -1073,7 +1144,12 @@ mod tests {
 
     #[test]
     fn manifest_declares_exact_native_state_compatibility() {
-        let manifest = manifest();
+        let default_manifest = manifest();
+        assert_eq!(default_manifest["schema_version"], 1);
+        assert!(default_manifest.get("native_state_compatibility").is_none());
+
+        let manifest = manifest_v2();
+        assert_eq!(manifest["schema_version"], 2);
         assert_eq!(
             manifest["native_state_compatibility"],
             json!({
@@ -1094,8 +1170,10 @@ mod tests {
     fn embedded_documents_are_valid_and_bounded() {
         for schema in [
             EmbeddedSchema::Manifest,
+            EmbeddedSchema::ManifestV2,
             EmbeddedSchema::SchemaIndex,
             EmbeddedSchema::Doctor,
+            EmbeddedSchema::DoctorV2,
             EmbeddedSchema::Guide,
             EmbeddedSchema::SchemaResult,
             EmbeddedSchema::CliError,
@@ -1122,8 +1200,10 @@ mod tests {
 
         let cases = [
             (EmbeddedSchema::Manifest, manifest()),
+            (EmbeddedSchema::ManifestV2, manifest_v2()),
             (EmbeddedSchema::SchemaIndex, schema_index()),
             (EmbeddedSchema::Doctor, doctor_document()),
+            (EmbeddedSchema::DoctorV2, doctor_document_v2()),
             (EmbeddedSchema::Guide, guide_document()),
             (EmbeddedSchema::Guide, safety_document()),
             (EmbeddedSchema::SchemaResult, schema_index()),
@@ -1211,10 +1291,10 @@ mod tests {
             names,
             vec![
                 "manifest",
-                "manifest-v1",
+                "manifest-v2",
                 "schema-index",
                 "doctor",
-                "doctor-v1",
+                "doctor-v2",
                 "guide",
                 "schema-result",
                 "error",

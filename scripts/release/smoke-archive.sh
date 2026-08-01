@@ -167,13 +167,20 @@ test -s "$staging/completion.bash"
 
 "$binary" agent describe >"$staging/agent-manifest.json"
 jq -e \
-  '(.schema_version == 1 or .schema_version == 2)
+  '.schema_version == 1
    and .automation_surfaces.mcp_stdio == "active"
    and ([.commands[].path] | index("mcp serve")) != null
    and ([.capabilities[] | select(.id == "agent-mcp" and .status == "active")] | length) == 1' \
   "$staging/agent-manifest.json" >/dev/null
 if [[ "$native_state_release" == "true" ]]; then
   test "$("$verifier" --version)" = "heyfood-installer $version"
+  "$binary" agent describe --schema-version 2 \
+    >"$staging/agent-native-state-manifest.json"
+  jq -e --arg version "$version" \
+    '.schema_version == 2
+     and .native_state_compatibility.schema_version == 1
+     and .native_state_compatibility.binary_version == $version' \
+    "$staging/agent-native-state-manifest.json" >/dev/null
   declaration="$release_directory/heyfood-v$version-native-state.json"
   if [[ ! -f "$declaration" ]]; then
     declaration="$staging/heyfood-v$version-native-state.json"
@@ -184,7 +191,7 @@ if [[ "$native_state_release" == "true" ]]; then
     - \
     - \
     "$declaration" \
-    "$staging/agent-manifest.json"
+    "$staging/agent-native-state-manifest.json"
 fi
 "$binary" agent guide --format markdown >"$staging/agent-guide.md"
 grep -Fq 'heyfood mcp serve' "$staging/agent-guide.md"

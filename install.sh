@@ -336,7 +336,7 @@ inspect_native_state_floor
 readonly NATIVE_STATE_FLOOR_PATH NATIVE_ROOT_DIGEST NATIVE_STATE_FLOOR_PRESENT
 if [[ "$NATIVE_STATE_FLOOR_PRESENT" == "true" &&
   "$NATIVE_STATE_VERIFICATION_ACTIVE" != "true" ]]; then
-  fail "heyfood $VERSION predates the native-state compatibility floor; install a D2-capable release"
+  fail "heyfood $VERSION predates the native-state compatibility floor; install a native-state-compatible release"
 fi
 
 say "Downloading heyfood $VERSION for $TARGET."
@@ -399,7 +399,8 @@ if [[ "$NATIVE_STATE_VERIFICATION_ACTIVE" == "true" ]]; then
     fail "expected heyfood-installer $VERSION, received: $VERIFIER_VERSION_OUTPUT"
 
   CANDIDATE_MANIFEST_PATH="$TEMP_DIR/candidate-agent-manifest.json"
-  "$STAGED_EXECUTABLE" agent describe >"$CANDIDATE_MANIFEST_PATH" 2>/dev/null ||
+  "$STAGED_EXECUTABLE" agent describe --schema-version 2 \
+    >"$CANDIDATE_MANIFEST_PATH" 2>/dev/null ||
     fail "the downloaded heyfood executable did not expose native state metadata"
   readonly CANDIDATE_MANIFEST_PATH
   "$STAGED_VERIFIER" verify-native-state \

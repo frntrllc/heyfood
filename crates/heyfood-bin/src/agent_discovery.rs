@@ -7,7 +7,8 @@ use heyfood_agent_setup::{
     Host, SetupMode, SetupOperation, SetupOptions, SetupPlan, SetupScope, SetupTarget,
 };
 use heyfood_cli::{
-    AgentCommand, AgentSetupArgs, AgentSetupScope, AgentSetupTarget, AgentUninstallArgs,
+    AgentCommand, AgentDiscoveryArgs, AgentSetupArgs, AgentSetupScope, AgentSetupTarget,
+    AgentUninstallArgs,
 };
 use heyfood_core::terminal_safe_text;
 use serde_json::Value;
@@ -15,8 +16,11 @@ use serde_json::Value;
 /// Run one local agent-discovery command before any credential or network setup.
 #[must_use]
 pub fn run(command: Option<AgentCommand>, machine: bool) -> ExitCode {
-    match command.unwrap_or(AgentCommand::Describe) {
-        AgentCommand::Describe => write_json(&heyfood_agent_contract::manifest()),
+    match command.unwrap_or_else(|| AgentCommand::Describe(AgentDiscoveryArgs::default())) {
+        AgentCommand::Describe(arguments) if arguments.schema_version == 2 => {
+            write_json(&heyfood_agent_contract::manifest_v2());
+        }
+        AgentCommand::Describe(_) => write_json(&heyfood_agent_contract::manifest()),
         AgentCommand::Guide(arguments) => {
             if machine {
                 let document = if arguments.safety {
@@ -53,7 +57,10 @@ pub fn run(command: Option<AgentCommand>, machine: bool) -> ExitCode {
             };
             print!("{}", schema.document());
         }
-        AgentCommand::Doctor => write_json(&heyfood_agent_contract::doctor_document()),
+        AgentCommand::Doctor(arguments) if arguments.schema_version == 2 => {
+            write_json(&heyfood_agent_contract::doctor_document_v2());
+        }
+        AgentCommand::Doctor(_) => write_json(&heyfood_agent_contract::doctor_document()),
         AgentCommand::Setup(arguments) => return setup(arguments, machine),
         AgentCommand::Uninstall(arguments) => return uninstall(arguments, machine),
     }

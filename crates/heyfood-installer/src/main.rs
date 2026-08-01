@@ -126,6 +126,9 @@ fn verify(
     let Value::Object(manifest) = manifest else {
         return Err("candidate agent manifest must be a top-level object");
     };
+    if manifest.get("schema_version").and_then(Value::as_u64) != Some(2) {
+        return Err("candidate agent manifest is not schema version 2");
+    }
     let Some(candidate_declaration) = manifest.get("native_state_compatibility") else {
         return Err("candidate agent manifest has no top-level native state declaration");
     };

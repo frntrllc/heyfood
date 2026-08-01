@@ -28,21 +28,38 @@ fn describe_is_deterministic_ansi_free_and_offline() {
     let service = TcpListener::bind("127.0.0.1:0").unwrap();
     let first = agent(&["agent", "describe"], &service);
     let second = agent(&["--json", "agent", "describe"], &service);
+    let bare = agent(&["agent"], &service);
 
     assert!(first.status.success(), "{:?}", first.stderr);
     assert!(second.status.success(), "{:?}", second.stderr);
+    assert!(bare.status.success(), "{:?}", bare.stderr);
     assert!(first.stderr.is_empty());
     assert!(second.stderr.is_empty());
     assert_eq!(first.stdout, second.stdout);
+    assert_eq!(first.stdout, bare.stdout);
     assert!(!first.stdout.contains(&0x1b));
     let manifest: Value = serde_json::from_slice(&first.stdout).unwrap();
-    assert_eq!(manifest["schema_version"], 2);
+    assert_eq!(manifest["schema_version"], 1);
     assert_eq!(manifest["product"], "heyfood");
     assert_eq!(manifest["binary_version"], heyfood_core::VERSION);
     assert_eq!(
         manifest["automation_surfaces"]["tui_automation"],
         "unsupported"
     );
+    assert!(manifest.get("native_state_compatibility").is_none());
+    assert_eq!(manifest, heyfood_agent_contract::manifest());
+    assert_no_network(&service);
+}
+
+#[test]
+fn explicitly_versioned_describe_exposes_strict_native_state_metadata_offline() {
+    let service = TcpListener::bind("127.0.0.1:0").unwrap();
+    let output = agent(&["agent", "describe", "--schema-version", "2"], &service);
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert!(output.stderr.is_empty());
+    let manifest: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(manifest["schema_version"], 2);
     assert_eq!(
         manifest["native_state_compatibility"],
         serde_json::json!({
@@ -57,6 +74,7 @@ fn describe_is_deterministic_ansi_free_and_offline() {
             "schema_version": 1
         })
     );
+    assert_eq!(manifest, heyfood_agent_contract::manifest_v2());
     assert_no_network(&service);
 }
 
@@ -88,8 +106,8 @@ fn schemas_are_exact_embedded_bytes_without_network() {
     let cases = [
         ("manifest", heyfood_agent_contract::EmbeddedSchema::Manifest),
         (
-            "manifest-v1",
-            heyfood_agent_contract::EmbeddedSchema::ManifestV1,
+            "manifest-v2",
+            heyfood_agent_contract::EmbeddedSchema::ManifestV2,
         ),
         (
             "schema-index",
@@ -97,8 +115,8 @@ fn schemas_are_exact_embedded_bytes_without_network() {
         ),
         ("doctor", heyfood_agent_contract::EmbeddedSchema::Doctor),
         (
-            "doctor-v1",
-            heyfood_agent_contract::EmbeddedSchema::DoctorV1,
+            "doctor-v2",
+            heyfood_agent_contract::EmbeddedSchema::DoctorV2,
         ),
         ("guide", heyfood_agent_contract::EmbeddedSchema::Guide),
         (
@@ -166,7 +184,8 @@ fn doctor_is_local_bounded_and_credential_free() {
     assert!(output.stderr.is_empty());
     assert!(output.stdout.len() < 16 * 1024);
     let doctor: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(doctor["schema_version"], 2);
+    assert_eq!(doctor["schema_version"], 1);
+    assert_eq!(doctor["manifest_schema_version"], 1);
     assert_eq!(doctor["ok"], true);
     assert_eq!(doctor["network_accessed"], false);
     assert_eq!(doctor["credentials_accessed"], false);
@@ -180,5 +199,20 @@ fn doctor_is_local_bounded_and_credential_free() {
             .all(|check| check["status"] == "pass")
     );
     assert!(doctor.get("executable").is_none());
+    assert_no_network(&service);
+}
+
+#[test]
+fn explicitly_versioned_doctor_is_bound_to_the_v2_manifest_offline() {
+    let service = TcpListener::bind("127.0.0.1:0").unwrap();
+    let output = agent(&["agent", "doctor", "--schema-version", "2"], &service);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert!(output.stderr.is_empty());
+    let doctor: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(doctor["schema_version"], 2);
+    assert_eq!(doctor["manifest_schema_version"], 2);
+    assert_eq!(doctor["ok"], true);
+    assert_eq!(doctor["network_accessed"], false);
+    assert_eq!(doctor["credentials_accessed"], false);
     assert_no_network(&service);
 }
