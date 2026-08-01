@@ -2,7 +2,7 @@ use std::{collections::VecDeque, fmt::Write as _};
 
 use heyfood_application::{
     RunTurnOutcome, TurnFailure, TurnFailureKind, UNRENDERABLE_AGENT_RESULT_MESSAGE,
-    agent_result_text, render_household_menu,
+    agent_result_text, is_full_household_menu, render_household_menu,
 };
 use heyfood_core::{
     ActionConfirmationEnvelopeWire, AgentConfirmationCommandWire, AgentEvent,
@@ -498,6 +498,7 @@ pub struct AppModel {
     draft_before_voice: String,
     next_operation_id: u64,
     focus_latest_result_on_finish: bool,
+    pub(crate) focus_latest_result_start: bool,
 }
 
 impl Default for AppModel {
@@ -525,6 +526,7 @@ impl Default for AppModel {
             draft_before_voice: String::new(),
             next_operation_id: 1,
             focus_latest_result_on_finish: false,
+            focus_latest_result_start: false,
         }
     }
 }
@@ -730,16 +732,19 @@ pub fn dispatch(model: &mut AppModel, action: Action) -> Vec<Effect> {
         }
         Action::Exit => {}
         Action::ScrollUp(lines) => {
+            model.focus_latest_result_start = false;
             model.follow_tail = false;
             model.scroll_from_tail = model.scroll_from_tail.saturating_add(lines.max(1));
         }
         Action::ScrollDown(lines) => {
+            model.focus_latest_result_start = false;
             model.scroll_from_tail = model.scroll_from_tail.saturating_sub(lines.max(1));
             if model.scroll_from_tail == 0 {
                 follow_tail(model);
             }
         }
         Action::ScrollTop => {
+            model.focus_latest_result_start = false;
             model.follow_tail = false;
             model.scroll_from_tail = usize::MAX / 2;
         }
@@ -760,7 +765,6 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
     if model.draft.trim().is_empty() {
         return Vec::new();
     }
-    model.focus_latest_result_on_finish = false;
     if model.onboarding.is_some() {
         return submit_onboarding(model);
     }
@@ -773,6 +777,7 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
     if model.operation.is_active() {
         return Vec::new();
     }
+    model.focus_latest_result_on_finish = false;
     model.voice_phase = VoicePhase::Idle;
     model.draft_before_voice.clear();
     let prompt = std::mem::take(&mut model.draft);
@@ -2114,13 +2119,7 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             model.activity = Some("Choose an option".into());
         }
         AgentEvent::Result { document, .. } => {
-            let focus_full_menu = document.get("structured").is_some_and(|structured| {
-                structured.get("type").and_then(serde_json::Value::as_str) == Some("household_menu")
-                    && structured
-                        .get("presentation")
-                        .and_then(serde_json::Value::as_str)
-                        == Some("full_menu")
-            });
+            let focus_full_menu = is_full_household_menu(&document);
             let confirmation = ActionConfirmationEnvelopeWire::from_result_document(&document);
             let result = agent_result_text(&document).map(terminal_safe_text);
             let household_menu = render_household_menu(&document);
@@ -2502,7 +2501,10 @@ fn finish_stream(model: &mut AppModel, outcome: RunTurnOutcome) {
     model.activity = None;
     model.idle_exit_armed = false;
     if std::mem::take(&mut model.focus_latest_result_on_finish) {
-        focus_latest_response_start(model);
+        model.focus_latest_result_start = true;
+        model.follow_tail = false;
+        model.scroll_from_tail = 0;
+        model.unseen_lines = 0;
     } else {
         account_for_new_lines(model, old_lines);
     }
@@ -2548,29 +2550,6 @@ fn finish_failed_stream(model: &mut AppModel, failure: TurnFailure) {
     account_for_new_lines(model, old_lines);
 }
 
-fn focus_latest_response_start(model: &mut AppModel) {
-    let width = usize::from(model.width.max(1));
-    let response_lines = model
-        .scrollback
-        .entries()
-        .iter()
-        .rev()
-        .find(|entry| entry.speaker == Speaker::Assistant)
-        .map(|entry| {
-            entry
-                .text
-                .lines()
-                .map(|line| line.chars().count().max(1).div_ceil(width))
-                .sum::<usize>()
-                .saturating_add(2)
-        })
-        .unwrap_or(1);
-    let visible = usize::from(model.height.saturating_sub(6).max(1));
-    model.follow_tail = false;
-    model.scroll_from_tail = response_lines.saturating_sub(visible);
-    model.unseen_lines = 0;
-}
-
 fn account_for_new_lines(model: &mut AppModel, old_lines: usize) {
     if model.follow_tail {
         return;
@@ -2585,6 +2564,7 @@ fn account_for_new_lines(model: &mut AppModel, old_lines: usize) {
 }
 
 fn follow_tail(model: &mut AppModel) {
+    model.focus_latest_result_start = false;
     model.follow_tail = true;
     model.scroll_from_tail = 0;
     model.unseen_lines = 0;

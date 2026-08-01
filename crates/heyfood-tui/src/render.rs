@@ -93,6 +93,8 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
 
 fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     let mut lines = Vec::new();
+    let content_width = area.width.max(1) as usize;
+    let mut latest_assistant_start = None;
     if model.scrollback.entries().is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
@@ -103,6 +105,9 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     for entry in model.scrollback.entries() {
         if !lines.is_empty() {
             lines.push(Line::from(""));
+        }
+        if entry.speaker == Speaker::Assistant {
+            latest_assistant_start = Some(wrapped_line_count(&lines, content_width));
         }
         let (label, color) = match entry.speaker {
             Speaker::User => ("You", Color::Cyan),
@@ -138,11 +143,14 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         )));
     }
 
-    let content_width = area.width.max(1) as usize;
     let total = wrapped_line_count(&lines, content_width);
     let visible = area.height as usize;
     let maximum_scroll = total.saturating_sub(visible);
-    let scroll = if model.follow_tail {
+    let scroll = if model.focus_latest_result_start {
+        latest_assistant_start
+            .unwrap_or(maximum_scroll)
+            .min(maximum_scroll)
+    } else if model.follow_tail {
         maximum_scroll
     } else {
         maximum_scroll.saturating_sub(model.scroll_from_tail.min(maximum_scroll))
@@ -372,7 +380,7 @@ mod tests {
         model
     }
 
-    fn long_full_menu_model(width: u16, height: u16) -> AppModel {
+    fn long_full_menu_model(width: u16, height: u16, top_level: bool) -> AppModel {
         let tea = (1..=40)
             .map(|index| {
                 serde_json::json!({
@@ -388,6 +396,33 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
+        let structured = serde_json::json!({
+            "type": "household_menu",
+            "presentation": "full_menu",
+            "restaurant_name": "Abby Jane Bakeshop",
+            "is_stale": false,
+            "freshness_hours": 1.0,
+            "requested_max_age_seconds": 86400,
+            "sections": [
+                {
+                    "name": "Bread",
+                    "items": [
+                        {"item_id": "bread-1", "name": "Crème brûlée 東京 loaf"},
+                        {"item_id": "bread-2", "name": "Baguette"},
+                        {"item_id": "bread-3", "name": "Sourdough"}
+                    ]
+                },
+                {"name": "Tea", "items": tea}
+            ]
+        });
+        let document = if top_level {
+            structured
+        } else {
+            serde_json::json!({
+                "text": "Here is the complete menu.",
+                "structured": structured
+            })
+        };
         let mut model = AppModel::default();
         model.width = width;
         model.height = height;
@@ -399,31 +434,16 @@ mod tests {
             Action::Runtime(RuntimeEvent::TurnEvent {
                 operation_id: 1,
                 event: AgentEvent::Result {
-                    document: serde_json::json!({
-                        "text": "Here is the complete menu.",
-                        "structured": {
-                            "type": "household_menu",
-                            "presentation": "full_menu",
-                            "restaurant_name": "Abby Jane Bakeshop",
-                            "is_stale": false,
-                            "freshness_hours": 1.0,
-                            "requested_max_age_seconds": 86400,
-                            "sections": [
-                                {
-                                    "name": "Bread",
-                                    "items": [
-                                        {"item_id": "bread-1", "name": "Big Country"},
-                                        {"item_id": "bread-2", "name": "Baguette"},
-                                        {"item_id": "bread-3", "name": "Sourdough"}
-                                    ]
-                                },
-                                {"name": "Tea", "items": tea}
-                            ]
-                        }
-                    }),
+                    document,
                     conversation_id: None,
                 },
             }),
+        );
+        model.draft = "Crème brûlée 東京\nsecond line\nthird line".into();
+        model.cursor = model.draft.chars().count();
+        assert!(
+            dispatch(&mut model, Action::Submit).is_empty(),
+            "a draft must not dispatch while the result is finishing"
         );
         let _ = dispatch(
             &mut model,
@@ -491,24 +511,26 @@ mod tests {
 
     #[test]
     fn long_full_menu_opens_on_heading_and_completeness_not_the_drink_tail() {
-        for width in [40, 80, 120] {
-            let model = long_full_menu_model(width, 18);
-            let rendered = snapshot(&model, width, 18);
-            let semantic = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
-            assert!(
-                semantic.contains("Current menu at Abby Jane Bakeshop"),
-                "width {width} did not open at the menu heading: {rendered}"
-            );
-            assert!(
-                semantic.contains("2 sections · 43 items"),
-                "width {width} omitted completeness: {rendered}"
-            );
-            assert!(semantic.contains("Bread"));
-            assert!(semantic.contains("Page Up/Page Down to browse"));
-            assert!(
-                !semantic.contains("Tea drink 40"),
-                "width {width} still opened at the drink-heavy tail: {rendered}"
-            );
+        for top_level in [false, true] {
+            for width in [40, 80, 120] {
+                let model = long_full_menu_model(width, 18, top_level);
+                let rendered = snapshot(&model, width, 18);
+                let semantic = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+                assert!(
+                    semantic.contains("Current menu at Abby Jane Bakeshop"),
+                    "top_level={top_level}, width {width} did not open at the menu heading: {rendered}"
+                );
+                assert!(
+                    semantic.contains("2 sections · 43 items"),
+                    "top_level={top_level}, width {width} omitted completeness: {rendered}"
+                );
+                assert!(semantic.contains("Bread"));
+                assert!(semantic.contains("Page Up/Page Down to browse"));
+                assert!(
+                    !semantic.contains("Tea drink 40"),
+                    "top_level={top_level}, width {width} still opened at the drink-heavy tail: {rendered}"
+                );
+            }
         }
     }
 
