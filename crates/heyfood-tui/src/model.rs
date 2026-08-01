@@ -497,6 +497,7 @@ pub struct AppModel {
     voice_phase: VoicePhase,
     draft_before_voice: String,
     next_operation_id: u64,
+    focus_latest_result_on_finish: bool,
 }
 
 impl Default for AppModel {
@@ -523,6 +524,7 @@ impl Default for AppModel {
             voice_phase: VoicePhase::Idle,
             draft_before_voice: String::new(),
             next_operation_id: 1,
+            focus_latest_result_on_finish: false,
         }
     }
 }
@@ -758,6 +760,7 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
     if model.draft.trim().is_empty() {
         return Vec::new();
     }
+    model.focus_latest_result_on_finish = false;
     if model.onboarding.is_some() {
         return submit_onboarding(model);
     }
@@ -2111,6 +2114,13 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             model.activity = Some("Choose an option".into());
         }
         AgentEvent::Result { document, .. } => {
+            let focus_full_menu = document.get("structured").is_some_and(|structured| {
+                structured.get("type").and_then(serde_json::Value::as_str) == Some("household_menu")
+                    && structured
+                        .get("presentation")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("full_menu")
+            });
             let confirmation = ActionConfirmationEnvelopeWire::from_result_document(&document);
             let result = agent_result_text(&document).map(terminal_safe_text);
             let household_menu = render_household_menu(&document);
@@ -2161,6 +2171,7 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                 Ok(None) | Err(_) => model.pending_confirmation = None,
             }
             mark_finishing(model);
+            model.focus_latest_result_on_finish = focus_full_menu;
             model.activity = Some("Finishing…".into());
             model.idle_exit_armed = false;
         }
@@ -2490,10 +2501,15 @@ fn finish_stream(model: &mut AppModel, outcome: RunTurnOutcome) {
     model.operation = OperationState::Idle;
     model.activity = None;
     model.idle_exit_armed = false;
-    account_for_new_lines(model, old_lines);
+    if std::mem::take(&mut model.focus_latest_result_on_finish) {
+        focus_latest_response_start(model);
+    } else {
+        account_for_new_lines(model, old_lines);
+    }
 }
 
 fn finish_failed_stream(model: &mut AppModel, failure: TurnFailure) {
+    model.focus_latest_result_on_finish = false;
     model.pending_choice_labels.clear();
     let old_lines = model.scrollback.rendered_lines();
     model.scrollback.mutate_last_assistant(|entry| {
@@ -2530,6 +2546,29 @@ fn finish_failed_stream(model: &mut AppModel, failure: TurnFailure) {
     model.activity = None;
     model.idle_exit_armed = false;
     account_for_new_lines(model, old_lines);
+}
+
+fn focus_latest_response_start(model: &mut AppModel) {
+    let width = usize::from(model.width.max(1));
+    let response_lines = model
+        .scrollback
+        .entries()
+        .iter()
+        .rev()
+        .find(|entry| entry.speaker == Speaker::Assistant)
+        .map(|entry| {
+            entry
+                .text
+                .lines()
+                .map(|line| line.chars().count().max(1).div_ceil(width))
+                .sum::<usize>()
+                .saturating_add(2)
+        })
+        .unwrap_or(1);
+    let visible = usize::from(model.height.saturating_sub(6).max(1));
+    model.follow_tail = false;
+    model.scroll_from_tail = response_lines.saturating_sub(visible);
+    model.unseen_lines = 0;
 }
 
 fn account_for_new_lines(model: &mut AppModel, old_lines: usize) {
@@ -3434,6 +3473,7 @@ mod tests {
         let mut model = AppModel {
             draft: "Show me this week's menu".into(),
             cursor: 24,
+            height: 8,
             ..AppModel::default()
         };
         let _ = dispatch(&mut model, Action::Submit);
@@ -3475,6 +3515,13 @@ mod tests {
                 },
             }),
         );
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnFinished {
+                operation_id: 1,
+                outcome: RunTurnOutcome::Completed,
+            }),
+        );
 
         let entry = model.scrollback.entries().back().unwrap();
         assert!(entry.text.starts_with("Here are the current options.\n\n"));
@@ -3483,6 +3530,7 @@ mod tests {
             "Source: https://example.test/abby-jane",
             "Freshness: Menu updated 2 hours ago",
             "Captured: 2026-07-26T17:27:14Z",
+            "1 sections · 2 items · Page Up/Page Down to browse",
             "Bread",
             "• Baguette  $4.00  [avoid]",
             "• Big Country  $9.00  [caution]",
@@ -3491,6 +3539,8 @@ mod tests {
         }
         assert_eq!(entry.text.matches("• ").count(), 2);
         assert!(!entry.streaming);
+        assert!(!model.follow_tail);
+        assert!(model.scroll_from_tail > 0);
     }
 
     #[test]
