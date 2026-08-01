@@ -138,19 +138,18 @@ script="$script_directory/$(basename "${BASH_SOURCE[0]}")"
 verify_assets="$script_directory/verify-assets.sh"
 [[ -x "$verify_assets" ]] || fail "the release-set verifier is unavailable"
 
-if [[ "$expect_no_download" == true ]]; then
-  "$verify_assets" "$release_directory" "$version" --native-state \
-    >/dev/null 2>&1 ||
-    fail "the approved candidate release set did not verify"
-else
-  "$verify_assets" "$release_directory" "$version" --native-state
-fi
+"$verify_assets" \
+  "$release_directory" \
+  "$version" \
+  --native-state-manifest-bound \
+  "$approved_manifest_sha256" ||
+  fail "the approved candidate release set did not verify"
 [[ "$(sha256_file "$release_directory/SHA256SUMS")" == "$approved_manifest_sha256" ]] ||
   fail "the candidate release-set digest does not match the approved digest"
-for candidate_asset in "$release_directory"/*; do
+while IFS= read -r -d '' candidate_asset; do
   [[ -f "$candidate_asset" && ! -L "$candidate_asset" ]] ||
     fail "the candidate release set contains a non-regular asset"
-done
+done < <(find "$release_directory" -mindepth 1 -maxdepth 1 -print0)
 
 transport_bin=$(mktemp -d "${TMPDIR:-/tmp}/heyfood-candidate-transport.XXXXXX")
 cleanup() {

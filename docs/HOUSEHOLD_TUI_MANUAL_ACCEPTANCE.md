@@ -46,12 +46,17 @@ scripts/release/candidate-transport.sh \
   ./install.sh
 ```
 
-The fixture verifies the exact ten-file set and approved manifest digest, then
-serves only checksum-bound candidate assets at the installer's expected HTTPS
-release URLs. It does not change `install.sh`, contact a release endpoint,
-launch the TUI, automate a terminal, or record asset contents. `HOME`,
-`HEYFOOD_BIN_DIR`, and `HEYFOOD_STATE_DIR` still select the isolated profile
-for the journey.
+The fixture uses the network-free manifest-bound verifier: it requires the
+exact ten filenames, the approved `SHA256SUMS` digest, exactly nine unique
+manifest entries, and a matching digest for every asset. It does not
+regenerate the native-state declaration or invoke Cargo, rustup, or an
+external `curl`; declaration regeneration remains part of protected
+qualification and publication. After local verification, the fixture serves
+only checksum-bound candidate assets through its own installer transport at
+the expected HTTPS release URLs. It does not change `install.sh`, contact a
+release endpoint, launch the TUI, automate a terminal, or record asset
+contents. `HOME`, `HEYFOOD_BIN_DIR`, and `HEYFOOD_STATE_DIR` still select the
+isolated profile for the journey.
 
 The approved candidate version and an installer-request version are separate
 inputs. The ordinary form above requests the approved `0.6.3` candidate. For
@@ -72,10 +77,11 @@ scripts/release/candidate-transport.sh \
 
 The expected result is exit status 1 with exactly
 `heyfood installer: this installer supports heyfood 0.6.3; requested 0.6.2`
-on stderr and no stdout. In this mode the fixture verifies the approved
-candidate binding but refuses every `curl` invocation before serving bytes;
-it also fails if the installer accepts the request or emits any other result.
-The command does not launch or automate the TUI.
+on stderr and no stdout. In this mode the network-free verifier checks the
+approved candidate binding, and the fixture refuses every installer `curl`
+invocation before serving bytes. It also fails if the installer accepts the
+request or emits any other result. No release endpoint, Cargo/rustup network,
+or TUI is involved.
 
 ## Preconditions
 

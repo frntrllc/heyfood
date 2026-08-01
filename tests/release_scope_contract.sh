@@ -61,6 +61,7 @@ archive_smoke="$ROOT/scripts/release/smoke-archive.sh"
 agent_setup_smoke="$ROOT/scripts/release/agent-setup-smoke.sh"
 mcp_smoke="$ROOT/scripts/release/mcp-smoke.mjs"
 candidate_transport="$ROOT/scripts/release/candidate-transport.sh"
+asset_verifier="$ROOT/scripts/release/verify-assets.sh"
 
 [[ -x "$macos_signer" ]] ||
   fail "the macOS signing tool must be executable"
@@ -265,9 +266,99 @@ grep -Fq 'scripts/release/candidate-transport.sh' \
 grep -Fq -- '--expect-no-download 0.6.2' \
   "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" ||
   fail "Journey B must document the exact no-download v0.6.2 refusal mode"
+grep -Fq -- '--native-state-manifest-bound' "$candidate_transport" ||
+  fail "candidate transport must use network-free manifest-bound verification"
+grep -Fq 'native-state-declaration.sh' "$asset_verifier" ||
+  fail "protected full verification must retain declaration regeneration"
 
 candidate_manifest_sha256=$(shasum -a 256 \
   "$native_state_distribution/SHA256SUMS" | awk '{print $1}')
+prohibited_tool_bin="$CASE_DIR/prohibited-candidate-tools"
+prohibited_tool_markers="$CASE_DIR/prohibited-candidate-tool-markers"
+mkdir -p -- "$prohibited_tool_bin" "$prohibited_tool_markers"
+cat >"$prohibited_tool_bin/prohibited-tool" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${HEYFOOD_PROHIBITED_TOOL_MARKER_DIR:?}"
+tool=${0##*/}
+printf 'invoked\n' >"$HEYFOOD_PROHIBITED_TOOL_MARKER_DIR/$tool"
+printf 'prohibited candidate tool invoked: %s\n' "$tool" >&2
+exit 97
+EOF
+chmod 0755 "$prohibited_tool_bin/prohibited-tool"
+for prohibited_tool in cargo rustup curl; do
+  ln -s "$prohibited_tool_bin/prohibited-tool" \
+    "$prohibited_tool_bin/$prohibited_tool"
+done
+
+assert_candidate_tools_unused() {
+  local prohibited_tool
+  for prohibited_tool in cargo rustup curl; do
+    [[ ! -e "$prohibited_tool_markers/$prohibited_tool" ]] ||
+      fail "candidate verification invoked prohibited $prohibited_tool"
+  done
+}
+
+PATH="$prohibited_tool_bin:$PATH" \
+  HEYFOOD_PROHIBITED_TOOL_MARKER_DIR="$prohibited_tool_markers" \
+  "$asset_verifier" \
+  "$native_state_distribution" \
+  0.6.3 \
+  --native-state-manifest-bound \
+  "$candidate_manifest_sha256"
+assert_candidate_tools_unused
+
+duplicate_manifest_distribution="$CASE_DIR/duplicate-manifest-distribution"
+mkdir "$duplicate_manifest_distribution"
+cp -R "$native_state_distribution/." "$duplicate_manifest_distribution/"
+duplicate_manifest_entry=$(sed -n '1p' \
+  "$duplicate_manifest_distribution/SHA256SUMS")
+printf '%s\n' "$duplicate_manifest_entry" \
+  >>"$duplicate_manifest_distribution/SHA256SUMS"
+duplicate_manifest_sha256=$(shasum -a 256 \
+  "$duplicate_manifest_distribution/SHA256SUMS" | awk '{print $1}')
+if PATH="$prohibited_tool_bin:$PATH" \
+  HEYFOOD_PROHIBITED_TOOL_MARKER_DIR="$prohibited_tool_markers" \
+  "$asset_verifier" \
+  "$duplicate_manifest_distribution" \
+  0.6.3 \
+  --native-state-manifest-bound \
+  "$duplicate_manifest_sha256" >/dev/null 2>&1; then
+  fail "manifest-bound verification accepted a duplicate checksum entry"
+fi
+assert_candidate_tools_unused
+
+tampered_candidate_distribution="$CASE_DIR/tampered-candidate-distribution"
+mkdir "$tampered_candidate_distribution"
+cp -R "$native_state_distribution/." "$tampered_candidate_distribution/"
+printf 'tampered candidate bytes\n' \
+  >>"$tampered_candidate_distribution/heyfood-v0.6.3-aarch64-apple-darwin.tar.gz"
+if PATH="$prohibited_tool_bin:$PATH" \
+  HEYFOOD_PROHIBITED_TOOL_MARKER_DIR="$prohibited_tool_markers" \
+  "$asset_verifier" \
+  "$tampered_candidate_distribution" \
+  0.6.3 \
+  --native-state-manifest-bound \
+  "$candidate_manifest_sha256" >/dev/null 2>&1; then
+  fail "manifest-bound verification accepted changed candidate bytes"
+fi
+assert_candidate_tools_unused
+
+unexpected_candidate_distribution="$CASE_DIR/unexpected-candidate-distribution"
+mkdir "$unexpected_candidate_distribution"
+cp -R "$native_state_distribution/." "$unexpected_candidate_distribution/"
+printf 'unexpected\n' >"$unexpected_candidate_distribution/.unexpected.asset"
+if PATH="$prohibited_tool_bin:$PATH" \
+  HEYFOOD_PROHIBITED_TOOL_MARKER_DIR="$prohibited_tool_markers" \
+  "$asset_verifier" \
+  "$unexpected_candidate_distribution" \
+  0.6.3 \
+  --native-state-manifest-bound \
+  "$candidate_manifest_sha256" >/dev/null 2>&1; then
+  fail "manifest-bound verification accepted an eleventh release file"
+fi
+assert_candidate_tools_unused
+
 candidate_transport_output="$CASE_DIR/candidate-transport-output"
 candidate_transport_installer="$CASE_DIR/candidate-transport-installer.sh"
 cat >"$candidate_transport_installer" <<'EOF'
@@ -291,12 +382,15 @@ curl -qfsSL \
   "$prefix/heyfood-v$HEYFOOD_VERSION-x86_64-unknown-linux-gnu.tar.gz"
 EOF
 chmod 0755 "$candidate_transport_installer"
-HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT="$candidate_transport_output" \
+PATH="$prohibited_tool_bin:$PATH" \
+  HEYFOOD_PROHIBITED_TOOL_MARKER_DIR="$prohibited_tool_markers" \
+  HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT="$candidate_transport_output" \
   "$candidate_transport" \
   "$native_state_distribution" \
   0.6.3 \
   "$candidate_manifest_sha256" \
   "$candidate_transport_installer"
+assert_candidate_tools_unused
 cmp \
   "$native_state_distribution/SHA256SUMS" \
   "$candidate_transport_output/SHA256SUMS"
@@ -343,6 +437,8 @@ refusal_status=0
 HOME="$refusal_home" \
   HEYFOOD_BIN_DIR="$refusal_bin" \
   HEYFOOD_STATE_DIR="$refusal_state" \
+  PATH="$prohibited_tool_bin:$PATH" \
+  HEYFOOD_PROHIBITED_TOOL_MARKER_DIR="$prohibited_tool_markers" \
   "$candidate_transport" \
   --expect-no-download 0.6.2 \
   "$native_state_distribution" \
@@ -350,8 +446,11 @@ HOME="$refusal_home" \
   "$candidate_manifest_sha256" \
   "$ROOT/install.sh" >"$refusal_stdout" 2>"$refusal_stderr" ||
   refusal_status=$?
+assert_candidate_tools_unused
 [[ "$refusal_status" -eq 1 ]] ||
   fail "the candidate refusal fixture did not preserve installer exit status 1"
+[[ -z "$(find "$refusal_home" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
+  fail "the candidate refusal fixture mutated the isolated HOME"
 [[ ! -s "$refusal_stdout" ]] ||
   fail "the current installer wrote stdout before refusing requested v0.6.2"
 cmp "$expected_refusal" "$refusal_stderr" ||
@@ -380,7 +479,9 @@ curl -qfsSL \
   "https://github.com/frntrllc/heyfood/releases/download/v0.6.3/SHA256SUMS"
 EOF
 chmod 0755 "$prohibited_download_installer"
-if HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT="$prohibited_download_output" \
+if PATH="$prohibited_tool_bin:$PATH" \
+  HEYFOOD_PROHIBITED_TOOL_MARKER_DIR="$prohibited_tool_markers" \
+  HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT="$prohibited_download_output" \
   "$candidate_transport" \
   --expect-no-download 0.6.2 \
   "$native_state_distribution" \
@@ -395,6 +496,7 @@ grep -Fq \
   fail "expect-no-download mode did not fail closed on curl invocation"
 [[ ! -e "$prohibited_download_output" && ! -L "$prohibited_download_output" ]] ||
   fail "expect-no-download mode served candidate bytes"
+assert_candidate_tools_unused
 
 rejected_transport_output="$CASE_DIR/rejected-candidate-transport-output"
 if HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT="$rejected_transport_output" \
