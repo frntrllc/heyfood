@@ -103,13 +103,105 @@ fn json_completion_is_rejected_as_one_json_error() {
     assert_eq!(value["error"]["type"], "completion_json_unsupported");
 }
 
-#[cfg(all(not(feature = "native-credentials"), not(windows)))]
-fn create_private_directory(path: &std::path::Path) {
-    use std::os::unix::fs::DirBuilderExt as _;
+#[cfg(not(feature = "native-credentials"))]
+fn grant_state_snapshot(root: &std::path::Path) -> Option<[u8; 32]> {
+    use sha2::{Digest as _, Sha256};
 
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true).mode(0o700);
-    builder.create(path).unwrap();
+    if !root.exists() {
+        return None;
+    }
+
+    fn visit(base: &std::path::Path, path: &std::path::Path, digest: &mut sha2::Sha256) {
+        use sha2::Digest as _;
+
+        let metadata = std::fs::symlink_metadata(path).unwrap();
+        let relative = path.strip_prefix(base).unwrap().to_string_lossy();
+        digest.update(relative.len().to_be_bytes());
+        digest.update(relative.as_bytes());
+        let kind = if metadata.file_type().is_symlink() {
+            2_u8
+        } else if metadata.is_dir() {
+            1_u8
+        } else if metadata.is_file() {
+            0_u8
+        } else {
+            3_u8
+        };
+        digest.update([kind]);
+        digest.update(metadata.len().to_be_bytes());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            digest.update(metadata.permissions().mode().to_be_bytes());
+        }
+        #[cfg(not(unix))]
+        digest.update([u8::from(metadata.permissions().readonly())]);
+
+        if metadata.is_file() {
+            digest.update(std::fs::read(path).unwrap());
+        } else if metadata.is_dir() {
+            let mut children = std::fs::read_dir(path)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>();
+            children.sort();
+            for child in children {
+                visit(base, &child, digest);
+            }
+        }
+    }
+
+    let mut digest = Sha256::new();
+    visit(root, root, &mut digest);
+    Some(digest.finalize().into())
+}
+
+#[cfg(not(feature = "native-credentials"))]
+fn assert_portable_grant_command_is_preflight_only(root: &std::path::Path, command: &str) {
+    let before = grant_state_snapshot(root);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut invocation = Command::new(env!("CARGO_BIN_EXE_heyfood"));
+    invocation
+        .args([
+            "--json",
+            command,
+            "--device",
+            "--no-browser",
+            "--timeout",
+            "1",
+        ])
+        .env("HEYFOOD_STATE_DIR", root)
+        .env(
+            "HEYFOOD_API_URL",
+            format!("http://{}", listener.local_addr().unwrap()),
+        );
+    #[cfg(not(windows))]
+    invocation.env("HEYFOOD_CREDENTIAL_STORE", "file");
+    #[cfg(windows)]
+    invocation.env("HEYFOOD_CREDENTIAL_STORE", "native");
+    let output = invocation.output().unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let rendered: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        rendered["error"]["type"],
+        "household_native_credentials_required"
+    );
+    assert!(before == grant_state_snapshot(root), "grant state changed");
+    assert!(matches!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    ));
+}
+
+#[cfg(not(feature = "native-credentials"))]
+fn assert_both_portable_grant_commands_are_preflight_only(root: &std::path::Path) {
+    for command in ["login", "register"] {
+        assert_portable_grant_command_is_preflight_only(root, command);
+    }
 }
 
 #[cfg(all(not(feature = "native-credentials"), not(windows)))]
@@ -136,6 +228,14 @@ fn portable_authorization_bundle() -> heyfood_core::AuthCredentialBundle {
 }
 
 #[cfg(all(not(feature = "native-credentials"), not(windows)))]
+fn install_connected_authorization(root: &std::path::Path) {
+    let auth = heyfood_platform::NativeAuthStore::open(root).unwrap();
+    let session = heyfood_platform::FileCredentialStore::open(root).unwrap();
+    auth.initialize_account_bound(&portable_authorization_bundle(), &session)
+        .unwrap();
+}
+
+#[cfg(all(not(feature = "native-credentials"), not(windows)))]
 fn install_pending_authorization_replacement(root: &std::path::Path) {
     let auth = heyfood_platform::NativeAuthStore::open(root).unwrap();
     let session = heyfood_platform::FileCredentialStore::open(root).unwrap();
@@ -151,65 +251,63 @@ fn install_pending_authorization_replacement(root: &std::path::Path) {
         .unwrap();
 }
 
-#[cfg(all(not(feature = "native-credentials"), not(windows)))]
-fn assert_fresh_authorization_blocked_without_network(root: &std::path::Path, command: &str) {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_heyfood"))
-        .args(["--json", command, "--no-browser", "--timeout", "1"])
-        .env("HOME", root)
-        .env("XDG_CONFIG_HOME", root)
-        .env("HEYFOOD_STATE_DIR", root)
-        .env("HEYFOOD_CREDENTIAL_STORE", "file")
-        .env(
-            "HEYFOOD_API_URL",
-            format!("http://{}", listener.local_addr().unwrap()),
-        )
-        .output()
-        .unwrap();
+#[cfg(not(feature = "native-credentials"))]
+#[test]
+fn portable_grant_commands_touch_nothing_for_empty_state() {
+    let home = TempHome::new();
+    let absent_state = home.0.join("absent-state");
 
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stderr.is_empty());
-    let rendered: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(
-        rendered["error"]["type"],
-        "household_native_credentials_required"
-    );
-    assert!(matches!(
-        listener.accept().unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock
+    assert_both_portable_grant_commands_are_preflight_only(&absent_state);
+    assert!(!absent_state.exists());
+
+    // NativePaths rejects relative overrides. Receiving the credential-gate
+    // error proves the gate runs before even that local path validation.
+    let relative_state = std::path::PathBuf::from(format!(
+        "portable-relative-state-must-not-be-read-{}",
+        std::process::id()
     ));
+    assert!(!relative_state.exists());
+    assert_both_portable_grant_commands_are_preflight_only(&relative_state);
+    assert!(!relative_state.exists());
 }
 
-#[cfg(all(not(feature = "native-credentials"), not(windows)))]
+#[cfg(not(feature = "native-credentials"))]
 #[test]
-fn portable_fresh_login_and_registration_stop_before_provider_dispatch() {
-    for evidence in ["compatibility", "household-teardown", "accounts"] {
-        let root = TempHome::new();
-        let native_root = root.0.join("data");
-        create_private_directory(&native_root);
-        let evidence_path = native_root.join(evidence);
-        create_private_directory(&evidence_path);
-        if evidence == "household-teardown" {
-            use std::os::unix::fs::PermissionsExt as _;
-
-            let journal = evidence_path.join("teardown-pending.htj");
-            std::fs::write(&journal, b"pending").unwrap();
-            std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o600)).unwrap();
-        }
-
-        for command in ["login", "register"] {
-            assert_fresh_authorization_blocked_without_network(&root.0, command);
-        }
+fn portable_grant_commands_do_not_inspect_or_change_native_evidence() {
+    let home = TempHome::new();
+    let state = home.0.join("evidence-state");
+    for directory in [
+        state.join("data/compatibility"),
+        state.join("data/accounts/account-provenance"),
+        state.join("data/household-teardown"),
+    ] {
+        std::fs::create_dir_all(directory).unwrap();
     }
+    std::fs::write(
+        state.join("data/household-teardown/teardown-pending.htj"),
+        b"opaque-native-evidence",
+    )
+    .unwrap();
+
+    assert_both_portable_grant_commands_are_preflight_only(&state);
 }
 
 #[cfg(all(not(feature = "native-credentials"), not(windows)))]
 #[test]
-fn portable_login_checks_native_barrier_before_resuming_pending_replacement() {
-    let root = TempHome::new();
-    install_pending_authorization_replacement(&root.0);
-    create_private_directory(&root.0.join("data").join("compatibility"));
+fn portable_grant_commands_do_not_resume_a_pending_replacement() {
+    let home = TempHome::new();
+    let state = home.0.join("pending-state");
+    install_pending_authorization_replacement(&state);
 
-    assert_fresh_authorization_blocked_without_network(&root.0, "login");
+    assert_both_portable_grant_commands_are_preflight_only(&state);
+}
+
+#[cfg(all(not(feature = "native-credentials"), not(windows)))]
+#[test]
+fn portable_grant_commands_do_not_reauthorize_a_connected_account() {
+    let home = TempHome::new();
+    let state = home.0.join("connected-state");
+    install_connected_authorization(&state);
+
+    assert_both_portable_grant_commands_are_preflight_only(&state);
 }

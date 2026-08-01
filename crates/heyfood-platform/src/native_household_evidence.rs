@@ -24,9 +24,6 @@ const TEARDOWN_PREFIX: &str = "teardown-";
 const TEARDOWN_SUFFIX: &str = ".htj";
 const MAX_TEARDOWN_JOURNAL_BYTES: u64 = 16 * 1024;
 
-const COMPATIBILITY_DIRECTORY: &str = "compatibility";
-const ACCOUNTS_DIRECTORY: &str = "accounts";
-
 /// Exact account-bound evidence observed while the lifecycle lock is held.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClassifiedNativeHouseholdEvidenceV1 {
@@ -49,67 +46,6 @@ pub fn pre_floor_native_account_provenance_absent_v1(
         lower_hex(&vault.account_slot().account_digest())
     ));
     Ok(!path_exists_without_following(&teardown_path)?)
-}
-
-/// Prove that a disconnected credential store has no global native-household
-/// provenance that a fresh authorization could become entangled with.
-///
-/// This is deliberately path-only and nonmutating. In particular, it does not
-/// open a floor, vault, lifecycle lease, or journal store because each of
-/// those setup APIs may create or harden native state. An absent root is the
-/// released pre-native state. Once the immutable compatibility directory or
-/// the accounts directory exists, even while publication is in progress, a
-/// build capable of native credential recovery must reconcile it before a new
-/// account grant can be requested. A physical, empty teardown directory is a
-/// compatible remnant; any entry in it is a global recovery barrier.
-pub fn pre_native_global_provenance_absent_v1(
-    native_root: &std::path::Path,
-) -> Result<bool, PortError> {
-    let root_metadata = match std::fs::symlink_metadata(native_root) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
-        Err(_) => return Err(global_evidence_unavailable()),
-        Ok(metadata) => metadata,
-    };
-    validate_global_private_directory(&root_metadata, None)?;
-
-    #[cfg(unix)]
-    let expected_owner = {
-        use std::os::unix::fs::MetadataExt as _;
-        Some(root_metadata.uid())
-    };
-    #[cfg(not(unix))]
-    let expected_owner = None;
-
-    for name in [COMPATIBILITY_DIRECTORY, ACCOUNTS_DIRECTORY] {
-        match std::fs::symlink_metadata(native_root.join(name)) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return Err(global_evidence_unavailable()),
-            Ok(metadata) => {
-                validate_global_private_directory(&metadata, expected_owner)?;
-                return Ok(false);
-            }
-        }
-    }
-
-    let teardown_path = native_root.join(TEARDOWN_DIRECTORY);
-    let teardown_metadata = match std::fs::symlink_metadata(&teardown_path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            revalidate_global_root(native_root, &root_metadata)?;
-            return Ok(true);
-        }
-        Err(_) => return Err(global_evidence_unavailable()),
-        Ok(metadata) => metadata,
-    };
-    validate_global_private_directory(&teardown_metadata, expected_owner)?;
-    let mut entries =
-        std::fs::read_dir(&teardown_path).map_err(|_| global_evidence_unavailable())?;
-    let provenance_present = match entries.next() {
-        None => false,
-        Some(Ok(_)) => true,
-        Some(Err(_)) => return Err(global_evidence_unavailable()),
-    };
-    revalidate_global_root(native_root, &root_metadata)?;
-    Ok(!provenance_present)
 }
 
 /// Classify one authenticated account without performing migration, profile,
@@ -553,7 +489,7 @@ fn scan_global_teardown_journals_v1(
 
 fn validate_private_directory(
     metadata: &std::fs::Metadata,
-    _expected_owner: Option<u32>,
+    expected_owner: Option<u32>,
 ) -> Result<(), PortError> {
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(teardown_unavailable());
@@ -562,7 +498,7 @@ fn validate_private_directory(
     {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
-        if Some(metadata.uid()) != _expected_owner || metadata.permissions().mode() & 0o777 != 0o700
+        if Some(metadata.uid()) != expected_owner || metadata.permissions().mode() & 0o777 != 0o700
         {
             return Err(teardown_unavailable());
         }
@@ -572,7 +508,7 @@ fn validate_private_directory(
 
 fn validate_private_file(
     metadata: &std::fs::Metadata,
-    _expected_owner: Option<u32>,
+    expected_owner: Option<u32>,
 ) -> Result<(), PortError> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(teardown_unavailable());
@@ -581,67 +517,12 @@ fn validate_private_file(
     {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
-        if Some(metadata.uid()) != _expected_owner || metadata.permissions().mode() & 0o777 != 0o600
+        if Some(metadata.uid()) != expected_owner || metadata.permissions().mode() & 0o777 != 0o600
         {
             return Err(teardown_unavailable());
         }
     }
     Ok(())
-}
-
-fn validate_global_private_directory(
-    metadata: &std::fs::Metadata,
-    _expected_owner: Option<u32>,
-) -> Result<(), PortError> {
-    if metadata_redirects(metadata) || !metadata.is_dir() {
-        return Err(global_evidence_unavailable());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
-        if _expected_owner.is_some_and(|owner| metadata.uid() != owner)
-            || metadata.permissions().mode() & 0o777 != 0o700
-        {
-            return Err(global_evidence_unavailable());
-        }
-    }
-    Ok(())
-}
-
-fn revalidate_global_root(
-    native_root: &std::path::Path,
-    expected: &std::fs::Metadata,
-) -> Result<(), PortError> {
-    let observed =
-        std::fs::symlink_metadata(native_root).map_err(|_| global_evidence_unavailable())?;
-    validate_global_private_directory(&observed, None)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-
-        if observed.dev() != expected.dev() || observed.ino() != expected.ino() {
-            return Err(global_evidence_unavailable());
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = expected;
-    Ok(())
-}
-
-fn metadata_redirects(metadata: &std::fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-
-        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
-    }
-    #[cfg(not(windows))]
-    false
 }
 
 fn lower_hex(bytes: &[u8; 32]) -> String {
@@ -688,111 +569,4 @@ fn teardown_unavailable() -> PortError {
         "household_teardown_journal_invalid",
         "native household teardown evidence is invalid or unavailable",
     )
-}
-
-fn global_evidence_unavailable() -> PortError {
-    PortError::new(
-        "household_native_evidence",
-        "global native household evidence is unavailable",
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    use super::pre_native_global_provenance_absent_v1;
-
-    struct TemporaryDirectory(PathBuf);
-
-    impl TemporaryDirectory {
-        fn new(label: &str) -> Self {
-            let nonce = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("test clock follows Unix epoch")
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "heyfood-global-native-evidence-{label}-{}-{nonce}",
-                std::process::id()
-            ));
-            create_private_directory(&path);
-            Self(path)
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TemporaryDirectory {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn create_private_directory(path: &Path) {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt as _;
-
-            let mut builder = std::fs::DirBuilder::new();
-            builder.recursive(true).mode(0o700);
-            builder.create(path).unwrap();
-        }
-        #[cfg(not(unix))]
-        std::fs::create_dir_all(path).unwrap();
-    }
-
-    #[test]
-    fn absent_native_root_is_compatible_without_being_created() {
-        let parent = TemporaryDirectory::new("absent");
-        let native_root = parent.path().join("data");
-
-        assert!(pre_native_global_provenance_absent_v1(&native_root).unwrap());
-        assert!(!native_root.exists());
-    }
-
-    #[test]
-    fn floor_publication_or_accounts_directory_is_global_provenance() {
-        for evidence in ["compatibility", "accounts"] {
-            let parent = TemporaryDirectory::new(evidence);
-            let native_root = parent.path().join("data");
-            create_private_directory(&native_root);
-            create_private_directory(&native_root.join(evidence));
-
-            assert!(!pre_native_global_provenance_absent_v1(&native_root).unwrap());
-        }
-    }
-
-    #[test]
-    fn only_a_physical_empty_teardown_directory_is_compatible() {
-        let parent = TemporaryDirectory::new("teardown");
-        let native_root = parent.path().join("data");
-        let teardown = native_root.join("household-teardown");
-        create_private_directory(&teardown);
-
-        assert!(pre_native_global_provenance_absent_v1(&native_root).unwrap());
-
-        std::fs::write(teardown.join("teardown-pending.htj"), b"pending").unwrap();
-        assert!(!pre_native_global_provenance_absent_v1(&native_root).unwrap());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn redirected_or_permissive_evidence_fails_closed() {
-        use std::os::unix::fs::{PermissionsExt as _, symlink};
-
-        let parent = TemporaryDirectory::new("redirected");
-        let native_root = parent.path().join("data");
-        create_private_directory(&native_root);
-        symlink(parent.path(), native_root.join("compatibility")).unwrap();
-        assert!(pre_native_global_provenance_absent_v1(&native_root).is_err());
-
-        std::fs::remove_file(native_root.join("compatibility")).unwrap();
-        let accounts = native_root.join("accounts");
-        create_private_directory(&accounts);
-        std::fs::set_permissions(&accounts, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(pre_native_global_provenance_absent_v1(&native_root).is_err());
-    }
 }
