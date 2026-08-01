@@ -622,7 +622,10 @@ async fn run_installed_archive_core_release_matrix() {
             PtyAction::Wait("Ctrl+C Grocery cancellation completed".into()),
             PtyAction::Pause(Duration::from_millis(250)),
             PtyAction::Submit(STREAM_CANCEL_PROMPT.into()),
-            PtyAction::Wait("Streaming response in progress".into()),
+            // Partial model text is buffered until a terminal document can
+            // supply the complete household identity set. Cancel from the
+            // fixed activity copy while the response stream is still live.
+            PtyAction::Wait("Responding".into()),
             PtyAction::CtrlC,
             PtyAction::Wait("Turn cancelled after server acceptance".into()),
             PtyAction::Pause(Duration::from_millis(250)),
