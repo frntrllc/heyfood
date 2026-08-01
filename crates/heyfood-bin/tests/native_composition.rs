@@ -15,7 +15,7 @@ use heyfood_application::{
     AudioCapture, AudioCapturePort, BoxFuture, ClockPort, CredentialCommit, CredentialPort,
     EnsureSession, HouseholdCommit, HouseholdCommitOutcome, HouseholdErase, HouseholdEraseOutcome,
     HouseholdInitialize, HouseholdLoad, HouseholdRepositoryPort, HouseholdRepositoryResolutionV1,
-    HouseholdSession, PortError, ServicePort, resolve_household_commit_v1,
+    HouseholdSession, PortError, ServicePort, TurnFailureKind, resolve_household_commit_v1,
     resolve_household_initialize_v1,
 };
 use heyfood_bin::{InteractiveTurnDriver, QualifiedTurnDriver};
@@ -658,18 +658,22 @@ fn native_everyone_turn_stops_before_refresh_serialization_and_network_dispatch(
         .start_turn(77, prompt_canary.to_owned(), events)
         .unwrap();
     let event = receiver.blocking_recv().unwrap();
-    let message = match &event {
+    let failure = match &event {
         RuntimeEvent::TurnFailed {
             operation_id: 77,
-            message,
-        } => message,
+            failure,
+        } => failure,
         other => panic!("expected local household preflight failure, got {other:?}"),
     };
-    assert!(message.starts_with("household_hosted_context_not_authorized:"));
-    assert!(!message.contains(prompt_canary));
-    assert!(!message.contains("member-context-canary"));
-    assert!(!message.contains("expired-access-canary"));
-    assert!(!message.contains("expired-refresh-canary"));
+    assert_eq!(failure.kind, TurnFailureKind::Unavailable);
+    assert_eq!(
+        failure.diagnostic_code(),
+        "household_hosted_context_not_authorized"
+    );
+    assert!(!failure.diagnostic_code().contains(prompt_canary));
+    assert!(!failure.diagnostic_code().contains("member-context-canary"));
+    assert!(!failure.diagnostic_code().contains("expired-access-canary"));
+    assert!(!failure.diagnostic_code().contains("expired-refresh-canary"));
     driver
         .shutdown_and_join(std::time::Duration::from_secs(2))
         .unwrap();
@@ -731,18 +735,22 @@ fn native_member_turn_stops_before_refresh_serialization_and_network_dispatch() 
         .start_turn(79, prompt_canary.to_owned(), events)
         .unwrap();
     let event = receiver.blocking_recv().unwrap();
-    let message = match &event {
+    let failure = match &event {
         RuntimeEvent::TurnFailed {
             operation_id: 79,
-            message,
-        } => message,
+            failure,
+        } => failure,
         other => panic!("expected local household preflight failure, got {other:?}"),
     };
-    assert!(message.starts_with("household_hosted_context_not_authorized:"));
-    assert!(!message.contains(prompt_canary));
-    assert!(!message.contains("member-context-canary"));
-    assert!(!message.contains("expired-access-canary"));
-    assert!(!message.contains("expired-refresh-canary"));
+    assert_eq!(failure.kind, TurnFailureKind::Unavailable);
+    assert_eq!(
+        failure.diagnostic_code(),
+        "household_hosted_context_not_authorized"
+    );
+    assert!(!failure.diagnostic_code().contains(prompt_canary));
+    assert!(!failure.diagnostic_code().contains("member-context-canary"));
+    assert!(!failure.diagnostic_code().contains("expired-access-canary"));
+    assert!(!failure.diagnostic_code().contains("expired-refresh-canary"));
     driver
         .shutdown_and_join(std::time::Duration::from_secs(2))
         .unwrap();
