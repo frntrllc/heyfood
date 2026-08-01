@@ -130,6 +130,7 @@ async fn run(root: &Path, base_url: &str, args: &[&str]) -> std::process::Output
         .args(args)
         .env("HEYFOOD_STATE_DIR", root)
         .env("HEYFOOD_CREDENTIAL_STORE", "native")
+        .env("HEYFOOD_NATIVE_HOUSEHOLD_V1", "0")
         .env("HEYFOOD_API_URL", base_url)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
