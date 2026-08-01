@@ -3954,7 +3954,12 @@ fn dietary_context_for_identity(
     profile: &Value,
     owner_name: Option<&str>,
 ) -> Map<String, Value> {
-    const PROFILE_KEYS: &[&str] = &[
+    // Keep the complete canonical source projection in the outbound document.
+    // The deployed DietaryContext currently ignores the provenance fields it
+    // does not understand, but retaining them here prevents the native owner
+    // path from becoming a lossy serialization boundary when that contract is
+    // expanded.
+    const CANONICAL_PROFILE_KEYS: &[&str] = &[
         "preferences",
         "preference_strictness",
         "restrictions",
@@ -3965,16 +3970,54 @@ fn dietary_context_for_identity(
         "notes",
         "activity_level",
         "cuisine_preferences",
+        "health_condition_ids",
+        "custom_health_conditions",
+        "custom_diet_styles",
+        "custom_restrictions",
+        "custom_cuisines",
+        "diet_style_ids",
+        "allergy_ids",
+        "additional_restriction_ids",
+        "additional_medical_constraints",
+        "condition_severity_levels",
+        "medical_condition_id",
+        "selection_provenance_version",
     ];
     let mut context = Map::new();
     if let Some(profile) = profile.as_object() {
-        for key in PROFILE_KEYS {
+        for key in CANONICAL_PROFILE_KEYS {
             if let Some(value) = profile.get(*key).filter(|value| !value.is_null()) {
                 context.insert((*key).to_owned(), value.clone());
             }
         }
-        if let Some(value) = profile.get("medical_condition_id") {
-            context.insert("medical_condition".into(), value.clone());
+
+        // These projections are deliberately limited to fields accepted by
+        // the deployed backend. Unknown source fields remain above for a
+        // future lossless contract, while safety-significant custom values
+        // still reach today's prompt/evaluation paths.
+        project_string_arrays_if_representable(
+            &mut context,
+            profile,
+            "avoid_ingredients",
+            &["custom_restrictions"],
+            20,
+        );
+        project_additional_restrictions(&mut context, profile);
+        project_medical_context(&mut context, profile);
+        project_string_arrays_if_representable(
+            &mut context,
+            profile,
+            "cuisine_preferences",
+            &["custom_cuisines"],
+            20,
+        );
+        project_conservative_severity(&mut context, profile);
+
+        if let Some(primary) = profile_primary_medical_condition(profile) {
+            context.insert(
+                "medical_condition".into(),
+                Value::String(primary.to_owned()),
+            );
         }
     }
     context.insert("name".into(), Value::String(name.to_owned()));
@@ -3991,6 +4034,253 @@ fn dietary_context_for_identity(
         context.insert("date_of_birth".into(), Value::String(birth_date.to_owned()));
     }
     context
+}
+
+fn project_string_arrays_if_representable(
+    context: &mut Map<String, Value>,
+    profile: &Map<String, Value>,
+    target: &str,
+    sources: &[&str],
+    maximum: usize,
+) {
+    let (values, projected) = projected_string_array(profile, target, sources, None);
+    let target_was_present = profile.get(target).is_some_and(|value| !value.is_null());
+    // Do not partially project a safety field. The native owner path rejects
+    // an unrepresentable union before refresh; compatibility call sites keep
+    // their exact original normalized and source arrays instead of truncating.
+    if values.len() <= maximum && (target_was_present || projected) {
+        context.insert(target.to_owned(), Value::Array(values));
+    }
+}
+
+fn projected_string_array(
+    profile: &Map<String, Value>,
+    target: &str,
+    sources: &[&str],
+    excluded: Option<&str>,
+) -> (Vec<Value>, bool) {
+    let mut values = profile
+        .get(target)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut projected = false;
+    for source in sources {
+        projected |= append_unique_profile_strings(&mut values, profile, source, excluded);
+    }
+    (values, projected)
+}
+
+fn append_unique_profile_strings(
+    values: &mut Vec<Value>,
+    profile: &Map<String, Value>,
+    source: &str,
+    excluded: Option<&str>,
+) -> bool {
+    let mut projected = false;
+    let Some(source_values) = profile.get(source).and_then(Value::as_array) else {
+        return projected;
+    };
+    for value in source_values.iter().filter_map(Value::as_str) {
+        if Some(value) != excluded
+            && !values
+                .iter()
+                .any(|candidate| candidate.as_str() == Some(value))
+        {
+            values.push(Value::String(value.to_owned()));
+            projected = true;
+        }
+    }
+    projected
+}
+
+fn project_additional_restrictions(context: &mut Map<String, Value>, profile: &Map<String, Value>) {
+    const ACCEPTED_RESTRICTIONS: &[&str] = &[
+        "glutenFree",
+        "dairyFree",
+        "nutFree",
+        "peanutFree",
+        "treeNutFree",
+        "shellfishFree",
+        "fishFree",
+        "soyFree",
+        "eggFree",
+        "sesameFree",
+        "lactoseIntolerant",
+        "halal",
+        "kosher",
+    ];
+    let mut restrictions = profile
+        .get("restrictions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut handling = profile
+        .get("restriction_handling")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut projected = false;
+    if let Some(additional) = profile
+        .get("additional_restriction_ids")
+        .and_then(Value::as_array)
+    {
+        for value in additional.iter().filter_map(Value::as_str) {
+            if !ACCEPTED_RESTRICTIONS.contains(&value)
+                || restrictions
+                    .iter()
+                    .any(|candidate| candidate.as_str() == Some(value))
+            {
+                continue;
+            }
+            restrictions.push(Value::String(value.to_owned()));
+            handling.entry(value.to_owned()).or_insert_with(|| {
+                Value::String(default_hosted_restriction_handling(value).to_owned())
+            });
+            projected = true;
+        }
+    }
+    if profile
+        .get("restrictions")
+        .is_some_and(|value| !value.is_null())
+        || projected
+    {
+        context.insert("restrictions".into(), Value::Array(restrictions));
+    }
+    if profile
+        .get("restriction_handling")
+        .is_some_and(|value| !value.is_null())
+        || projected
+    {
+        context.insert("restriction_handling".into(), Value::Object(handling));
+    }
+}
+
+fn default_hosted_restriction_handling(restriction: &str) -> &'static str {
+    match restriction {
+        "nutFree" | "peanutFree" | "treeNutFree" | "shellfishFree" | "fishFree" | "eggFree"
+        | "sesameFree" => "strictAvoid",
+        "lactoseIntolerant" => "doseDependent",
+        "halal" | "kosher" => "verificationRequired",
+        _ => "ingredientsOnly",
+    }
+}
+
+fn project_medical_context(context: &mut Map<String, Value>, profile: &Map<String, Value>) {
+    let (medical, projected) = projected_medical_constraints(profile);
+    let target_was_present = profile
+        .get("medical_constraints")
+        .is_some_and(|value| !value.is_null());
+    if medical.len() <= 20 && (target_was_present || projected) {
+        context.insert("medical_constraints".into(), Value::Array(medical));
+    }
+}
+
+fn projected_medical_constraints(profile: &Map<String, Value>) -> (Vec<Value>, bool) {
+    let mut medical = profile
+        .get("medical_constraints")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let primary = profile_primary_medical_condition(profile);
+    // Only secondary condition identifiers belong in medical_constraints;
+    // the primary identifier is represented by medical_condition below.
+    let mut projected =
+        append_unique_profile_strings(&mut medical, profile, "health_condition_ids", primary);
+    projected |= append_unique_profile_strings(
+        &mut medical,
+        profile,
+        "additional_medical_constraints",
+        None,
+    );
+    projected |=
+        append_unique_profile_strings(&mut medical, profile, "custom_health_conditions", None);
+    (medical, projected)
+}
+
+fn profile_primary_medical_condition(profile: &Map<String, Value>) -> Option<&str> {
+    profile
+        .get("medical_condition_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.chars().count() <= 100)
+        .or_else(|| {
+            profile
+                .get("health_condition_ids")
+                .and_then(Value::as_array)
+                .and_then(|values| values.iter().filter_map(Value::as_str).next())
+                .filter(|value| !value.is_empty() && value.chars().count() <= 100)
+        })
+        .or_else(|| {
+            profile
+                .get("custom_health_conditions")
+                .and_then(Value::as_array)
+                .and_then(|values| values.iter().filter_map(Value::as_str).next())
+                .filter(|value| !value.is_empty() && value.chars().count() <= 100)
+        })
+}
+
+fn validate_native_owner_hosted_profile(profile: &Value) -> Result<(), PortError> {
+    let profile = profile.as_object().ok_or_else(|| {
+        PortError::new(
+            "household_hosted_context_invalid",
+            "the authorized native owner profile is malformed",
+        )
+    })?;
+
+    let avoid_count =
+        projected_string_array(profile, "avoid_ingredients", &["custom_restrictions"], None)
+            .0
+            .len();
+    if avoid_count > 20 {
+        return Err(hosted_context_unrepresentable(
+            "the owner avoid/restriction profile exceeds the deployed context bound",
+        ));
+    }
+
+    let cuisine_count =
+        projected_string_array(profile, "cuisine_preferences", &["custom_cuisines"], None)
+            .0
+            .len();
+    if cuisine_count > 20 {
+        return Err(hosted_context_unrepresentable(
+            "the owner cuisine profile exceeds the deployed context bound",
+        ));
+    }
+
+    let (medical, _) = projected_medical_constraints(profile);
+    if medical.len() > 20 {
+        return Err(hosted_context_unrepresentable(
+            "the owner medical profile exceeds the deployed context bound",
+        ));
+    }
+    Ok(())
+}
+
+fn hosted_context_unrepresentable(message: &'static str) -> PortError {
+    PortError::new("household_hosted_context_unrepresentable", message)
+}
+
+fn project_conservative_severity(context: &mut Map<String, Value>, profile: &Map<String, Value>) {
+    let scalar = profile
+        .get("severity_level")
+        .and_then(Value::as_u64)
+        .filter(|value| (1..=5).contains(value));
+    let per_condition = profile
+        .get("condition_severity_levels")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(Map::values)
+        .filter_map(Value::as_u64)
+        .filter(|value| (1..=5).contains(value))
+        .max();
+    if let Some(severity) = scalar.into_iter().chain(per_condition).max() {
+        context.insert("severity_level".into(), Value::from(severity));
+    } else {
+        // DietaryContext.severity_level is non-nullable. Omitting an absent
+        // canonical scalar lets the deployed backend apply its safe default;
+        // serializing JSON null would turn an otherwise valid turn into 422.
+        context.remove("severity_level");
+    }
 }
 
 fn ensure_oura(provider: heyfood_cli::HealthProviderArgument) -> Result<(), OneShotError> {
@@ -6652,12 +6942,20 @@ async fn prepare_hosted_interactive_operation(
                 )),
             ));
         }
-        Some(
-            household
+        Some({
+            let authorized = household
                 .acquire_authorized_owner_hosted_context(cancellation.child_token())
                 .await
-                .map_err(interactive_preparation_error_from_port)?,
-        )
+                .map_err(interactive_preparation_error_from_port)?;
+            // Validate that the exact canonical profile fits the deployed
+            // request schema before provider/session refresh can perform
+            // any network operation. A safety projection must never be
+            // silently truncated to make it fit a transport bound.
+            native_owner_turn_context(authorized.snapshot()).map_err(|error| {
+                InteractivePreparationError::Failed(TurnFailure::from_port_error(&error))
+            })?;
+            authorized
+        })
     } else {
         None
     };
@@ -6789,6 +7087,7 @@ fn native_owner_turn_context(
             "the authorized native context did not resolve to exactly Me",
         ));
     }
+    validate_native_owner_hosted_profile(&snapshot.subjects[0].effective_profile)?;
     let dietary = Value::Object(dietary_context_for_identity(
         "_self",
         "Me",

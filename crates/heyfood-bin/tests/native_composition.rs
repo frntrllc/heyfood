@@ -523,27 +523,45 @@ fn selectable_everyone_native_household() -> HouseholdStateV1 {
     state
 }
 
-fn owner_context_household(
+fn owner_context_source_profile() -> Value {
+    json!({
+        "preferences": ["vegan"],
+        "preference_strictness": {"vegan": "moderate"},
+        "restrictions": ["peanutFree"],
+        "restriction_handling": {"peanutFree": "strictAvoid"},
+        "avoid_ingredients": ["avoid-ingredient-canary"],
+        "medical_constraints": ["medical-constraint-canary"],
+        "severity_level": 5,
+        "notes": "notes-canary",
+        "activity_level": "light",
+        "cuisine_preferences": ["cuisine-preference-canary"],
+        "health_condition_ids": [
+            "health-condition-primary-canary",
+            "health-condition-secondary-canary"
+        ],
+        "custom_health_conditions": ["custom-health-condition-canary"],
+        "custom_diet_styles": ["custom-diet-style-canary"],
+        "custom_restrictions": ["custom-restriction-canary"],
+        "custom_cuisines": ["custom-cuisine-canary"],
+        "diet_style_ids": ["diet-style-id-canary"],
+        "allergy_ids": ["allergy-id-canary"],
+        "additional_restriction_ids": ["sesameFree"],
+        "additional_medical_constraints": ["additional-medical-constraint-canary"],
+        "condition_severity_levels": {
+            "condition-severity-low-canary": 2,
+            "condition-severity-high-canary": 5
+        },
+        "medical_condition_id": "medical-condition-id-canary",
+        "selection_provenance_version": 22
+    })
+}
+
+fn owner_context_household_with_document(
     profile_state: HouseholdProfileStateV1,
-    canary: &str,
+    document: HouseholdProfileDocumentV1,
 ) -> HouseholdStateV1 {
     let mut state = incomplete_native_household();
     state.owner.profile_state = profile_state;
-    let document = HouseholdProfileDocumentV1::native(HouseholdDeclaredProfileV1 {
-        diet_style_ids: vec!["vegan".into()],
-        custom_diet_styles: Vec::new(),
-        allergy_ids: Vec::new(),
-        custom_restrictions: Vec::new(),
-        health_condition_ids: Vec::new(),
-        custom_health_conditions: Vec::new(),
-        avoid_ingredients: vec![canary.to_owned()],
-        activity_level: None,
-        cuisine_preferences: Vec::new(),
-        custom_cuisines: Vec::new(),
-        severity_level: None,
-        notes: Some(format!("native owner context {canary}")),
-    })
-    .unwrap();
     let profile = HouseholdProfileRecordV1 {
         subject: HouseholdSubjectId::self_(),
         profile_revision: ProfileRevision::new(1).unwrap(),
@@ -587,6 +605,48 @@ fn owner_context_household(
     state.profiles.push(profile);
     state.validate().unwrap();
     state
+}
+
+fn owner_context_household(profile_state: HouseholdProfileStateV1) -> HouseholdStateV1 {
+    let profile = owner_context_source_profile();
+    let document = HouseholdProfileDocumentV1::legacy_projection(
+        &serde_json::to_vec(&profile).expect("canonical owner context profile"),
+    )
+    .unwrap();
+    owner_context_household_with_document(profile_state, document)
+}
+
+fn owner_context_without_condition_severity() -> HouseholdStateV1 {
+    let document = HouseholdProfileDocumentV1::native(HouseholdDeclaredProfileV1 {
+        diet_style_ids: vec!["vegan".into()],
+        custom_diet_styles: Vec::new(),
+        allergy_ids: Vec::new(),
+        custom_restrictions: Vec::new(),
+        health_condition_ids: Vec::new(),
+        custom_health_conditions: Vec::new(),
+        avoid_ingredients: vec!["null-severity-request-canary".into()],
+        activity_level: None,
+        cuisine_preferences: Vec::new(),
+        custom_cuisines: Vec::new(),
+        severity_level: None,
+        notes: None,
+    })
+    .unwrap();
+    owner_context_household_with_document(HouseholdProfileStateV1::LocalOnly, document)
+}
+
+fn owner_context_at_avoid_projection_bound(avoid_count: usize) -> HouseholdStateV1 {
+    let profile = json!({
+        "avoid_ingredients": (0..avoid_count)
+            .map(|index| format!("bounded-avoid-{index}"))
+            .collect::<Vec<_>>(),
+        "custom_restrictions": ["bounded-custom-restriction"]
+    });
+    let document = HouseholdProfileDocumentV1::legacy_projection(
+        &serde_json::to_vec(&profile).expect("bounded owner context profile"),
+    )
+    .unwrap();
+    owner_context_household_with_document(HouseholdProfileStateV1::LocalOnly, document)
 }
 
 fn fixture_credentials() -> SessionCredentials {
@@ -1048,38 +1108,99 @@ fn external_scope_change_after_first_voice_preflight_opens_no_provider_microphon
 
 #[test]
 fn restarted_native_owner_turns_bind_exact_local_profile_and_self_meal_context() {
-    for (profile_state, canary) in [
-        (
-            HouseholdProfileStateV1::LocalOnly,
-            "local-only-owner-context-canary",
-        ),
-        (
-            HouseholdProfileStateV1::PendingSync,
-            "pending-sync-owner-context-canary",
-        ),
-        (
-            HouseholdProfileStateV1::Synced,
-            "synced-owner-context-canary",
-        ),
+    for profile_state in [
+        HouseholdProfileStateV1::LocalOnly,
+        HouseholdProfileStateV1::PendingSync,
+        HouseholdProfileStateV1::Synced,
     ] {
         let repository = Arc::new(MemoryHouseholdRepository::with_state(
-            owner_context_household(profile_state, canary),
+            owner_context_household(profile_state),
         ));
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
-        let expected_canary = canary.to_owned();
+        let source_profile = owner_context_source_profile();
         let server = thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
             let request = read_sync_request(&mut socket);
             assert!(request.starts_with("POST /v1/agent/converse "));
             let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1)
                 .expect("turn request body");
+            let context = body["dietary_context"]
+                .as_object()
+                .expect("dietary context object");
+            let source = source_profile
+                .as_object()
+                .expect("canonical source profile object");
+            let canonical_keys = [
+                "preferences",
+                "preference_strictness",
+                "restrictions",
+                "restriction_handling",
+                "avoid_ingredients",
+                "medical_constraints",
+                "severity_level",
+                "notes",
+                "activity_level",
+                "cuisine_preferences",
+                "health_condition_ids",
+                "custom_health_conditions",
+                "custom_diet_styles",
+                "custom_restrictions",
+                "custom_cuisines",
+                "diet_style_ids",
+                "allergy_ids",
+                "additional_restriction_ids",
+                "additional_medical_constraints",
+                "condition_severity_levels",
+                "medical_condition_id",
+                "selection_provenance_version",
+            ];
+            assert_eq!(source.len(), canonical_keys.len());
+            for key in canonical_keys {
+                assert!(context.contains_key(key), "missing canonical key {key}");
+                if !matches!(
+                    key,
+                    "restrictions"
+                        | "restriction_handling"
+                        | "avoid_ingredients"
+                        | "medical_constraints"
+                        | "cuisine_preferences"
+                ) {
+                    assert_eq!(
+                        context.get(key),
+                        source.get(key),
+                        "changed source key {key}"
+                    );
+                }
+            }
+
             assert_eq!(
-                body["dietary_context"]["avoid_ingredients"][0],
-                expected_canary
+                context["avoid_ingredients"],
+                json!(["avoid-ingredient-canary", "custom-restriction-canary"])
             );
-            assert_eq!(body["dietary_context"]["name"], "Me");
-            assert_eq!(body["dietary_context"]["relationship"], "self");
+            assert_eq!(context["restrictions"], json!(["peanutFree", "sesameFree"]));
+            assert_eq!(
+                context["restriction_handling"],
+                json!({"peanutFree": "strictAvoid", "sesameFree": "strictAvoid"})
+            );
+            assert_eq!(
+                context["medical_constraints"],
+                json!([
+                    "medical-constraint-canary",
+                    "health-condition-primary-canary",
+                    "health-condition-secondary-canary",
+                    "additional-medical-constraint-canary",
+                    "custom-health-condition-canary"
+                ])
+            );
+            assert_eq!(
+                context["cuisine_preferences"],
+                json!(["cuisine-preference-canary", "custom-cuisine-canary"])
+            );
+            assert_eq!(context["medical_condition"], "medical-condition-id-canary");
+            assert_eq!(context["name"], "Me");
+            assert_eq!(context["relationship"], "self");
+            assert!(!context.contains_key("owner_name"));
             assert_eq!(body["meal_context"]["active_member_id"], "_self");
             assert_eq!(body["meal_context"]["active_member_name"], "Me");
             assert_eq!(body["meal_context"]["is_cook_mode"], false);
@@ -1117,6 +1238,152 @@ fn restarted_native_owner_turns_bind_exact_local_profile_and_self_meal_context()
             .unwrap();
         server.join().unwrap();
     }
+}
+
+#[test]
+fn restarted_native_owner_turn_omits_null_severity_from_deployed_context() {
+    let repository = Arc::new(MemoryHouseholdRepository::with_state(
+        owner_context_without_condition_severity(),
+    ));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let request = read_sync_request(&mut socket);
+        assert!(request.starts_with("POST /v1/agent/converse "));
+        let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1)
+            .expect("turn request body");
+        let context = body["dietary_context"]
+            .as_object()
+            .expect("dietary context object");
+        assert!(!context.contains_key("severity_level"));
+        assert_eq!(
+            context["avoid_ingredients"],
+            json!(["null-severity-request-canary"])
+        );
+        respond_sync_sse(&mut socket);
+    });
+
+    let mut restarted = native_driver(repository, address);
+    let (events, mut receiver) = mpsc::channel(8);
+    restarted
+        .start_turn(92, "Do not serialize null severity".into(), events)
+        .unwrap();
+    loop {
+        match receiver.blocking_recv().unwrap() {
+            RuntimeEvent::TurnFinished {
+                operation_id: 92,
+                outcome: heyfood_application::RunTurnOutcome::Completed,
+            } => break,
+            RuntimeEvent::TurnEvent {
+                operation_id: 92, ..
+            } => {}
+            RuntimeEvent::TurnFailed {
+                operation_id: 92,
+                failure,
+            } => panic!(
+                "unexpected native owner turn failure: {}",
+                failure.diagnostic_code()
+            ),
+            other => panic!("unexpected native owner turn event: {other:?}"),
+        }
+    }
+    restarted
+        .shutdown_and_join(std::time::Duration::from_secs(2))
+        .unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn native_owner_safety_projection_accepts_the_exact_deployed_bound() {
+    let repository = Arc::new(MemoryHouseholdRepository::with_state(
+        owner_context_at_avoid_projection_bound(19),
+    ));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let request = read_sync_request(&mut socket);
+        let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1)
+            .expect("turn request body");
+        let context = body["dietary_context"]
+            .as_object()
+            .expect("dietary context object");
+        assert_eq!(context["avoid_ingredients"].as_array().unwrap().len(), 20);
+        assert_eq!(
+            context["avoid_ingredients"][19],
+            "bounded-custom-restriction"
+        );
+        assert_eq!(
+            context["custom_restrictions"],
+            json!(["bounded-custom-restriction"])
+        );
+        respond_sync_sse(&mut socket);
+    });
+
+    let mut driver = native_driver(repository, address);
+    let (events, mut receiver) = mpsc::channel(8);
+    driver
+        .start_turn(93, "Use the exact projection bound".into(), events)
+        .unwrap();
+    loop {
+        match receiver.blocking_recv().unwrap() {
+            RuntimeEvent::TurnFinished {
+                operation_id: 93,
+                outcome: heyfood_application::RunTurnOutcome::Completed,
+            } => break,
+            RuntimeEvent::TurnEvent {
+                operation_id: 93, ..
+            } => {}
+            RuntimeEvent::TurnFailed {
+                operation_id: 93,
+                failure,
+            } => panic!(
+                "unexpected exact-bound failure: {}",
+                failure.diagnostic_code()
+            ),
+            other => panic!("unexpected exact-bound event: {other:?}"),
+        }
+    }
+    driver
+        .shutdown_and_join(std::time::Duration::from_secs(2))
+        .unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn native_owner_safety_projection_overflow_fails_before_network() {
+    let repository = Arc::new(MemoryHouseholdRepository::with_state(
+        owner_context_at_avoid_projection_bound(20),
+    ));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let provider = Arc::new(ProbeSessionProvider::default());
+    let mut driver = native_driver(repository, address).with_session_provider(provider.clone());
+    let (events, mut receiver) = mpsc::channel(4);
+    driver
+        .start_turn(94, "Refuse an overflowing projection".into(), events)
+        .unwrap();
+    let failure = match receiver.blocking_recv().unwrap() {
+        RuntimeEvent::TurnFailed {
+            operation_id: 94,
+            failure,
+        } => failure,
+        other => panic!("expected projection overflow, got {other:?}"),
+    };
+    assert_eq!(
+        failure.diagnostic_code(),
+        "household_hosted_context_unrepresentable"
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    driver
+        .shutdown_and_join(std::time::Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
 }
 
 #[test]
