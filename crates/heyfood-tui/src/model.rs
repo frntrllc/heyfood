@@ -499,6 +499,7 @@ pub struct AppModel {
     next_operation_id: u64,
     focus_latest_result_on_finish: bool,
     pub(crate) focus_latest_result_start: bool,
+    pub(crate) latest_result_start_offset: usize,
 }
 
 impl Default for AppModel {
@@ -527,6 +528,7 @@ impl Default for AppModel {
             next_operation_id: 1,
             focus_latest_result_on_finish: false,
             focus_latest_result_start: false,
+            latest_result_start_offset: 0,
         }
     }
 }
@@ -732,19 +734,30 @@ pub fn dispatch(model: &mut AppModel, action: Action) -> Vec<Effect> {
         }
         Action::Exit => {}
         Action::ScrollUp(lines) => {
-            model.focus_latest_result_start = false;
-            model.follow_tail = false;
-            model.scroll_from_tail = model.scroll_from_tail.saturating_add(lines.max(1));
+            if model.focus_latest_result_start {
+                model.latest_result_start_offset = model
+                    .latest_result_start_offset
+                    .saturating_sub(lines.max(1));
+            } else {
+                model.follow_tail = false;
+                model.scroll_from_tail = model.scroll_from_tail.saturating_add(lines.max(1));
+            }
         }
         Action::ScrollDown(lines) => {
-            model.focus_latest_result_start = false;
-            model.scroll_from_tail = model.scroll_from_tail.saturating_sub(lines.max(1));
-            if model.scroll_from_tail == 0 {
-                follow_tail(model);
+            if model.focus_latest_result_start {
+                model.latest_result_start_offset = model
+                    .latest_result_start_offset
+                    .saturating_add(lines.max(1));
+            } else {
+                model.scroll_from_tail = model.scroll_from_tail.saturating_sub(lines.max(1));
+                if model.scroll_from_tail == 0 {
+                    follow_tail(model);
+                }
             }
         }
         Action::ScrollTop => {
             model.focus_latest_result_start = false;
+            model.latest_result_start_offset = 0;
             model.follow_tail = false;
             model.scroll_from_tail = usize::MAX / 2;
         }
@@ -2502,6 +2515,7 @@ fn finish_stream(model: &mut AppModel, outcome: RunTurnOutcome) {
     model.idle_exit_armed = false;
     if std::mem::take(&mut model.focus_latest_result_on_finish) {
         model.focus_latest_result_start = true;
+        model.latest_result_start_offset = 0;
         model.follow_tail = false;
         model.scroll_from_tail = 0;
         model.unseen_lines = 0;
@@ -2565,6 +2579,7 @@ fn account_for_new_lines(model: &mut AppModel, old_lines: usize) {
 
 fn follow_tail(model: &mut AppModel) {
     model.focus_latest_result_start = false;
+    model.latest_result_start_offset = 0;
     model.follow_tail = true;
     model.scroll_from_tail = 0;
     model.unseen_lines = 0;
@@ -3520,7 +3535,8 @@ mod tests {
         assert_eq!(entry.text.matches("• ").count(), 2);
         assert!(!entry.streaming);
         assert!(!model.follow_tail);
-        assert!(model.scroll_from_tail > 0);
+        assert!(model.focus_latest_result_start);
+        assert_eq!(model.latest_result_start_offset, 0);
     }
 
     #[test]

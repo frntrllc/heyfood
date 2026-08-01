@@ -149,6 +149,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     let scroll = if model.focus_latest_result_start {
         latest_assistant_start
             .unwrap_or(maximum_scroll)
+            .saturating_add(model.latest_result_start_offset)
             .min(maximum_scroll)
     } else if model.follow_tail {
         maximum_scroll
@@ -513,7 +514,7 @@ mod tests {
     fn long_full_menu_opens_on_heading_and_completeness_not_the_drink_tail() {
         for top_level in [false, true] {
             for width in [40, 80, 120] {
-                let model = long_full_menu_model(width, 18, top_level);
+                let mut model = long_full_menu_model(width, 18, top_level);
                 let rendered = snapshot(&model, width, 18);
                 let semantic = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
                 assert!(
@@ -530,6 +531,27 @@ mod tests {
                     !semantic.contains("Tea drink 40"),
                     "top_level={top_level}, width {width} still opened at the drink-heavy tail: {rendered}"
                 );
+
+                let _ = dispatch(&mut model, Action::ScrollDown(8));
+                let first_page = snapshot(&model, width, 18);
+                assert_ne!(first_page, rendered);
+                assert!(
+                    !first_page.contains("Tea drink 40"),
+                    "top_level={top_level}, width {width} jumped to the tail on first Page Down: {first_page}"
+                );
+                let _ = dispatch(&mut model, Action::ScrollDown(8));
+                let second_page = snapshot(&model, width, 18);
+                assert_ne!(second_page, first_page);
+                assert!(
+                    !second_page.contains("Tea drink 40"),
+                    "top_level={top_level}, width {width} jumped to the tail on repeated Page Down: {second_page}"
+                );
+                let _ = dispatch(&mut model, Action::ScrollUp(8));
+                assert_eq!(snapshot(&model, width, 18), first_page);
+                let _ = dispatch(&mut model, Action::ScrollUp(8));
+                assert_eq!(snapshot(&model, width, 18), rendered);
+                let _ = dispatch(&mut model, Action::FollowTail);
+                assert!(snapshot(&model, width, 18).contains("Tea drink 40"));
             }
         }
     }
