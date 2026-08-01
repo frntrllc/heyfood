@@ -1,5 +1,10 @@
 # Household-aware Grocery
 
+**Local surface only.** Grocery has no tools and no authorization scopes on the
+remote hosted surface. If your tool list has no `heyfood_*` tools, none of this
+applies — tell the user Grocery requires the local hey.food client rather than
+attempting an equivalent with remote tools.
+
 ## Reads
 
 Use `heyfood_get_grocery_list` when available. Preserve:
