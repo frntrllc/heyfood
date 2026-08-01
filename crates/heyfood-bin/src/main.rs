@@ -30,7 +30,7 @@ use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
 use heyfood_core::AuthCredentialBundle;
 #[cfg(feature = "native-credentials")]
 use heyfood_core::CommitId;
-#[cfg(any(feature = "native-credentials", test))]
+#[cfg(any(feature = "native-credentials", all(test, not(windows))))]
 use heyfood_core::SessionCredentials;
 use heyfood_core::{
     BrowserUrl, HouseholdProfileStateV1, NetworkPolicy, OperationId, ProfileStatus,

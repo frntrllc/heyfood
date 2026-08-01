@@ -337,7 +337,7 @@ fn ensure_floor_directory(directory: &Path, native_root: &Path) -> Result<(), Po
 
 #[cfg(unix)]
 fn create_new_floor_directory(directory: &Path, native_root: &Path) -> std::io::Result<()> {
-    use cap_std::fs::{DirBuilderExt as _, MetadataExt as _};
+    use cap_std::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _};
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
     if directory.parent() != Some(native_root)
@@ -375,19 +375,31 @@ fn create_new_floor_directory(directory: &Path, native_root: &Path) -> std::io::
         ));
     }
 
-    parent.set_symlink_permissions(
-        FLOOR_DIRECTORY,
-        cap_std::fs::Permissions::from_std(fs::Permissions::from_mode(0o700)),
-    )?;
     let opened = parent.open_dir_nofollow(FLOOR_DIRECTORY)?;
     let opened_metadata = opened.dir_metadata()?;
+    if created.dev() != opened_metadata.dev() || created.ino() != opened_metadata.ino() {
+        return Err(std::io::Error::other(
+            "native state floor directory identity changed",
+        ));
+    }
+
+    // rustix rejects chmodat(AT_SYMLINK_NOFOLLOW) on Linux because the
+    // fchmodat syscall has no flags argument. Apply the exact mode relative to
+    // the already no-follow-opened, identity-verified directory instead.
+    opened.set_permissions(
+        Path::new("."),
+        cap_std::fs::Permissions::from_std(fs::Permissions::from_mode(0o700)),
+    )?;
+    let finalized_metadata = opened.dir_metadata()?;
     let path_metadata = fs::symlink_metadata(directory)?;
     if path_metadata.file_type().is_symlink()
         || !path_metadata.is_dir()
-        || created.dev() != opened_metadata.dev()
-        || created.ino() != opened_metadata.ino()
+        || created.dev() != finalized_metadata.dev()
+        || created.ino() != finalized_metadata.ino()
         || created.dev() != path_metadata.dev()
         || created.ino() != path_metadata.ino()
+        || finalized_metadata.permissions().mode() & 0o777 != 0o700
+        || path_metadata.permissions().mode() & 0o777 != 0o700
     {
         return Err(std::io::Error::other(
             "native state floor directory identity changed",
