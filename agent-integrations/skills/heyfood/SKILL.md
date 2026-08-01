@@ -68,8 +68,15 @@ prompts, or parse terminal rendering as data.
 3. Authorization is per-tool and server-enforced. A refusal is authoritative —
    never retry it through another tool or surface.
 
-For workflow selection on either surface, read
-[references/workflow-selection.md](references/workflow-selection.md).
+**Resolve the restaurant before assessing a menu.** Most assessment tools key on
+`restaurant_id`, which a user's words do not give you. When resolution is
+ambiguous, ask rather than guessing — two branches of a chain can carry
+different menus.
+
+For restaurant, menu, and recipe workflows on either surface, read
+[references/workflow-selection.md](references/workflow-selection.md). It states
+which tool answers which shape of question, and what must be carried through
+from a result unchanged.
 
 ## Handle authentication
 
