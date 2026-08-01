@@ -292,7 +292,7 @@ impl HouseholdTeardownJournalV1 {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
     fn account_hex(&self) -> String {
         self.account_digest.to_lower_hex()
     }
@@ -2774,7 +2774,7 @@ fn cancelled() -> PortError {
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};

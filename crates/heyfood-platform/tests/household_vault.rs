@@ -1,3 +1,5 @@
+#![cfg(any(target_os = "macos", target_os = "linux"))]
+
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 

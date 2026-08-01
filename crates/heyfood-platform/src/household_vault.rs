@@ -584,7 +584,7 @@ impl HouseholdLifecycleLease {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
     pub(crate) fn observe_lock_release(
         &mut self,
         label: &'static str,
@@ -704,7 +704,7 @@ impl HouseholdVaultLease {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
     pub(crate) fn observe_lock_release_order(
         &mut self,
         events: Arc<std::sync::Mutex<Vec<&'static str>>>,
@@ -835,7 +835,7 @@ impl<S> AcquiredNarrowerVaultLease<S> {
             .expect("active narrower/vault transaction retains its source lease")
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
     pub(crate) fn source_lease_mut(&mut self) -> &mut S {
         self.source_lease
             .as_mut()
@@ -3798,7 +3798,7 @@ impl LockedFile {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
     fn observe_drop(
         &mut self,
         label: &'static str,
@@ -4352,7 +4352,7 @@ fn vault_crypto_error() -> PortError {
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::*;
     use crate::credential_broker::{

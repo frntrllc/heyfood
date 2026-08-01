@@ -360,6 +360,28 @@ async fn clean_flag_zero_preserves_legacy_without_creating_native_root() {
     );
 }
 
+#[cfg(all(windows, feature = "native-credentials"))]
+#[tokio::test]
+async fn windows_enabled_household_fails_closed_without_creating_native_state() {
+    let root = TempRoot::new("windows-native-root-unavailable");
+    let paths = NativePaths::under(root.0.join("state"));
+
+    let error = compose_native_household_v1(
+        &paths,
+        account(),
+        NativeHouseholdRolloutV1::Enabled,
+        CancellationToken::new(),
+    )
+    .await
+    .expect_err("Windows native household storage is intentionally unavailable");
+
+    assert_eq!(error.code, "household_secure_store_unavailable");
+    assert!(
+        !paths.data_dir().exists(),
+        "failed composition must not create floor, key, or vault state"
+    );
+}
+
 #[cfg(not(feature = "native-credentials"))]
 #[tokio::test]
 async fn flag_one_without_native_credentials_fails_before_any_native_write() {

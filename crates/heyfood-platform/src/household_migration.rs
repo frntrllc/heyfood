@@ -808,7 +808,7 @@ const fn completion_mode(completion: NativeHouseholdCompletionModeV1) -> NativeH
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::*;
     use std::path::PathBuf;

@@ -855,7 +855,7 @@ fn cancelled() -> PortError {
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use std::path::Path;
     use std::sync::Arc;

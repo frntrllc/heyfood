@@ -1,26 +1,46 @@
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::path::PathBuf;
+#[cfg(any(
+    not(feature = "native-credentials"),
+    target_os = "macos",
+    target_os = "linux"
+))]
 use std::time::Duration;
 
 use heyfood_core::{AccountId, CanonicalTimestampV1, canonicalize_json_value_v1};
-#[cfg(feature = "native-credentials")]
+#[cfg(all(
+    feature = "native-credentials",
+    any(target_os = "macos", target_os = "linux")
+))]
 use heyfood_platform::HouseholdKeyBroker;
+#[cfg(any(
+    not(feature = "native-credentials"),
+    target_os = "macos",
+    target_os = "linux"
+))]
+use heyfood_platform::NativePaths;
 #[cfg(not(feature = "native-credentials"))]
 use heyfood_platform::open_production_household_secure_store;
 use heyfood_platform::{
     HouseholdAccountSlotV1, HouseholdBrokerOperationV1, HouseholdKeyBundle, HouseholdKeyMaterial,
-    HouseholdKeyStore, HouseholdKeyringLocatorsV1, HouseholdMigrationGuardDocument,
-    HouseholdMigrationGuardStateV1, HouseholdMigrationGuardStore,
+    HouseholdKeyringLocatorsV1, HouseholdMigrationGuardDocument, HouseholdMigrationGuardStateV1,
     HouseholdMigrationInitializationPhaseV1, HouseholdMigrationRepairFailureCategoryV1,
-    HouseholdMigrationSourceIdentityV1, HouseholdVault, HouseholdVaultLeaseModeV1,
-    InMemoryHouseholdSecureStore, KeyBundleRevision, KeyId, KeyStoreExpectation,
-    LegacyPythonKeyringLocatorV1, MAX_BROKER_DOCUMENT_BYTES, MigrationGuardExpectation,
-    NativePaths, NativeRootPlatformV1,
+    HouseholdMigrationSourceIdentityV1, KeyBundleRevision, KeyId, LegacyPythonKeyringLocatorV1,
+    MAX_BROKER_DOCUMENT_BYTES, NativeRootPlatformV1,
 };
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use heyfood_platform::{
+    HouseholdKeyStore, HouseholdMigrationGuardStore, HouseholdVault, HouseholdVaultLeaseModeV1,
+    InMemoryHouseholdSecureStore, KeyStoreExpectation, MigrationGuardExpectation,
+};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 struct TempRoot(PathBuf);
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl TempRoot {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
@@ -40,6 +60,7 @@ impl TempRoot {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl Drop for TempRoot {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
@@ -320,6 +341,7 @@ fn migration_guard_is_typed_canonical_and_rejects_incomplete_or_noncanonical_doc
     );
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn in_memory_key_and_guard_stores_are_account_bound_cancellable_and_cas_only() {
     let root = TempRoot::new();
@@ -494,6 +516,7 @@ async fn in_memory_key_and_guard_stores_are_account_bound_cancellable_and_cas_on
     assert_eq!(error.code, "household_operation_cancelled");
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn aborting_guard_blocks_key_remint_before_and_after_exact_key_abort() {
     let root = TempRoot::new();
@@ -646,6 +669,7 @@ async fn aborting_guard_blocks_key_remint_before_and_after_exact_key_abort() {
 }
 
 #[cfg(feature = "native-credentials")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn production_broker_rejects_an_account_slot_bound_to_another_native_root_before_spawn() {
     let root = TempRoot::new();

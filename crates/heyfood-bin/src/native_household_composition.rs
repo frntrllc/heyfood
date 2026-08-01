@@ -106,6 +106,13 @@ pub async fn compose_native_household_v1(
     if !root_present && !rollout.is_enabled() {
         return Ok(legacy_ready());
     }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    if root_present || rollout.is_enabled() {
+        return Err(PortError::new(
+            "household_secure_store_unavailable",
+            "native household root identity is unavailable on this platform",
+        ));
+    }
     if !root_present {
         require_native_credentials_feature()?;
     }

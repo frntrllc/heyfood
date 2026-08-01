@@ -1199,7 +1199,7 @@ impl fmt::Debug for InMemoryHouseholdSecureStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 impl InMemoryHouseholdSecureStore {
     pub(crate) fn inject_next_guard_cas_uncertain_after_commit(&self) {
         self.guard_cas_uncertain_after_commit
@@ -5089,31 +5089,39 @@ mod native {
     #[cfg(test)]
     mod tests {
         use std::io::{Read, Write};
-        use std::path::PathBuf;
+        use std::path::{Path, PathBuf};
         use std::process::{Command as BlockingCommand, Stdio};
-        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+        use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         use heyfood_core::AccountId;
         use sysinfo::{Pid, ProcessesToUpdate, System};
         use tokio::process::Command;
         use tokio_util::sync::CancellationToken;
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         use uuid::Uuid;
         use zeroize::Zeroizing;
 
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         use crate::household_vault::HouseholdVault;
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         use crate::python_import::LegacyPythonConfigKindV1;
 
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         use super::{
             HouseholdBrokerOperationV1, LegacyPythonBrokerRequestWire,
-            LegacyPythonBrokerResponseWire, LegacyPythonBrokerStatusWire,
-            LegacyPythonCredentialStatusWire, LegacyPythonHouseholdPayloadWire,
-            LegacyPythonTargetWire, MAX_BROKER_DOCUMENT_BYTES,
-            classify_legacy_python_credential_bytes, classify_legacy_python_keyring_bytes,
-            decode_lower_hex_32, require_legacy_payload_absent, run_bounded_child,
-            run_bounded_child_blocking, run_household_bounded_child,
+            LegacyPythonBrokerResponseWire, LegacyPythonHouseholdPayloadWire,
+            LegacyPythonTargetWire, decode_lower_hex_32, require_legacy_payload_absent,
             validate_legacy_python_response,
         };
+        use super::{
+            LegacyPythonBrokerStatusWire, LegacyPythonCredentialStatusWire,
+            MAX_BROKER_DOCUMENT_BYTES, classify_legacy_python_credential_bytes,
+            classify_legacy_python_keyring_bytes, run_bounded_child, run_bounded_child_blocking,
+            run_household_bounded_child,
+        };
 
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         fn legacy_wire_fixture() -> (
             PathBuf,
             HouseholdVault,
@@ -5282,6 +5290,7 @@ mod native {
             );
         }
 
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         #[test]
         fn legacy_broker_wires_reject_action_locator_account_and_payload_swaps() {
             let (root, vault, target, request) = legacy_wire_fixture();
@@ -5455,6 +5464,23 @@ mod native {
             command.spawn().expect("spawn blocking fixture")
         }
 
+        fn wait_for_fixture_pid(path: &Path) -> Pid {
+            let started = Instant::now();
+            loop {
+                if let Some(pid) = std::fs::read_to_string(path)
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u32>().ok())
+                {
+                    return Pid::from_u32(pid);
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(10),
+                    "fixture did not publish its PID"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
         fn assert_process_exited(pid: Pid) {
             let mut system = System::new();
             for _ in 0..100 {
@@ -5494,6 +5520,7 @@ mod native {
                 std::process::id()
             ));
             let child = blocking_fixture("stall", Some(&pid_path));
+            let pid = wait_for_fixture_pid(&pid_path);
             let error = run_bounded_child_blocking(
                 child,
                 vec![b'i'; MAX_BROKER_DOCUMENT_BYTES],
@@ -5503,12 +5530,7 @@ mod native {
             .unwrap_err();
             assert_eq!(error.code, "credential_broker_timeout");
             assert!(error.outcome_uncertain);
-            let pid = std::fs::read_to_string(&pid_path)
-                .expect("fixture published PID")
-                .trim()
-                .parse::<u32>()
-                .expect("fixture PID");
-            assert_process_exited(Pid::from_u32(pid));
+            assert_process_exited(pid);
             let _ = std::fs::remove_file(pid_path);
         }
 
@@ -5534,18 +5556,14 @@ mod native {
                 .stderr(Stdio::null())
                 .kill_on_drop(true);
             let child = child.spawn().expect("spawn prompt fixture");
+            let pid = wait_for_fixture_pid(&pid_path);
             let error = run_bounded_child(child, Vec::new(), Duration::from_millis(250), true)
                 .await
                 .expect_err("prompting broker must time out");
             assert_eq!(error.code, "credential_broker_timeout");
             assert!(error.outcome_uncertain);
 
-            let pid = std::fs::read_to_string(&pid_path)
-                .expect("fixture published PID")
-                .trim()
-                .parse::<u32>()
-                .expect("fixture PID");
-            assert_process_exited(Pid::from_u32(pid));
+            assert_process_exited(pid);
             let _ = std::fs::remove_file(&pid_path);
         }
 
@@ -5573,6 +5591,7 @@ mod native {
                 .stderr(Stdio::null())
                 .kill_on_drop(true);
             let child = child.spawn().expect("spawn prompt fixture");
+            let pid = wait_for_fixture_pid(&pid_path);
             let cancellation = CancellationToken::new();
             let trigger = cancellation.clone();
             let cancel_task = tokio::spawn(async move {
@@ -5592,12 +5611,7 @@ mod native {
             cancel_task.await.expect("cancel task");
             assert_eq!(error.code, "household_broker_cancelled");
             assert!(error.outcome_uncertain);
-            let pid = std::fs::read_to_string(&pid_path)
-                .expect("fixture published PID")
-                .trim()
-                .parse::<u32>()
-                .expect("fixture PID");
-            assert_process_exited(Pid::from_u32(pid));
+            assert_process_exited(pid);
             let _ = std::fs::remove_file(&pid_path);
         }
     }

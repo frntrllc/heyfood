@@ -80,7 +80,7 @@ const D2_KEYRING_PROFILE_OUTBOX: &str = "household.profile_outbox";
 const D2_KEYRING_EVIDENCE_CONTRACT: &str = "heyfood.household.legacy-keyring-evidence.v1";
 const D2_DESTINATION_FRAGMENT_CONTRACT: &str =
     "heyfood.household.migration-destination-fragment.v1";
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 const UNIX_FILE_ID_DOMAIN: &[u8] = b"heyfood.log.unix-file-id.v1";
 #[cfg(any(windows, test))]
 const WINDOWS_FILE_ID_DOMAIN: &[u8] = b"heyfood.log.windows-file-id.v1";
@@ -918,7 +918,7 @@ static LEGACY_SOURCE_LOCK_ACQUISITION_OBSERVERS: std::sync::OnceLock<
     std::sync::Mutex<BTreeMap<PathBuf, LegacySourceLockAcquisitionObserver>>,
 > = std::sync::OnceLock::new();
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 fn register_legacy_source_lock_acquisition_observer(
     path: PathBuf,
     label: &'static str,
@@ -949,7 +949,7 @@ fn take_legacy_source_lock_acquisition_observer(
         .remove(path)
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 fn unregister_legacy_source_lock_acquisition_observer(path: &Path) {
     let _ = LEGACY_SOURCE_LOCK_ACQUISITION_OBSERVERS
         .get_or_init(|| std::sync::Mutex::new(BTreeMap::new()))
@@ -973,7 +973,7 @@ impl LegacySourceFileLock {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
     fn observe_drop(
         &mut self,
         label: &'static str,
@@ -1077,7 +1077,7 @@ impl LegacyPythonSourceVaultLeaseV1 {
 
     // Unit-only mutation lets migration tests seed guarded state without
     // exposing replaceable composite authority in production builds.
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
     pub(crate) fn vault_lease_mut(&mut self) -> &mut HouseholdVaultLease {
         self.transaction
             .as_mut()
@@ -5660,7 +5660,7 @@ fn checked_file_identity(
     Ok(None)
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn unix_file_identity_digest(device: u64, inode: u64) -> Sha256Digest {
     let mut preimage = Vec::with_capacity(UNIX_FILE_ID_DOMAIN.len() + 17);
     preimage.extend_from_slice(UNIX_FILE_ID_DOMAIN);
@@ -6261,7 +6261,7 @@ fn valid_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod fingerprint_golden_tests {
     use super::*;
 
