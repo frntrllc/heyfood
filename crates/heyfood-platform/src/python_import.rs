@@ -43,9 +43,10 @@ use crate::NativePaths;
 use crate::credential_broker::{
     HouseholdBrokerOperationV1, HouseholdMigrationGuardDocument, HouseholdMigrationGuardStateV1,
     HouseholdMigrationInitializationPhaseV1, HouseholdMigrationPresentSourceKindV1,
-    HouseholdMigrationSourceIdentityV1, LEGACY_PYTHON_KEYRING_SERVICE,
-    LegacyPythonKeyringLocatorV1,
+    HouseholdMigrationSourceIdentityV1,
 };
+#[cfg(unix)]
+use crate::credential_broker::{LEGACY_PYTHON_KEYRING_SERVICE, LegacyPythonKeyringLocatorV1};
 use crate::household_vault::{
     AcquiredNarrowerVaultLease, HouseholdAccountSlotV1, HouseholdLifecycleLease, HouseholdVault,
     HouseholdVaultLease, HouseholdVaultLeaseModeV1,
@@ -3658,6 +3659,7 @@ fn path_locator_digest(path: &Path) -> Result<CanonicalDigestV1, PortError> {
 }
 
 fn keyring_locator_digest(path: &Path) -> Result<CanonicalDigestV1, PortError> {
+    #[cfg(unix)]
     #[derive(Serialize)]
     struct Locator<'a> {
         service: &'a str,

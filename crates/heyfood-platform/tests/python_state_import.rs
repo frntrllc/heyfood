@@ -8,8 +8,9 @@ use heyfood_core::{
     AccountId, AppliedCommitOutcomeV1, AppliedCommitRecordV1, CanonicalDigestV1,
     CanonicalTimestampV1, CommitId, DisplayName, HouseholdProfileStateV1, HouseholdRevision,
     HouseholdScope, HouseholdSubjectId, LegacyPythonSnapshotProvenanceV1, LegacySourceIdentityV1,
+    MigrationDispositionKindV1,
 };
-use heyfood_core::{MigrationDispositionKindV1, PythonFieldAction, PythonImportOutcome};
+use heyfood_core::{PythonFieldAction, PythonImportOutcome};
 #[cfg(unix)]
 use heyfood_platform::{
     HouseholdAccountSlotV1, HouseholdMigrationGuardDocument, HouseholdMigrationSourceIdentityV1,

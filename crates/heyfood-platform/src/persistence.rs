@@ -17,8 +17,9 @@ use heyfood_application::{
 use heyfood_core::{
     AccountId, AuthCredentialBundle, ChannelCredentials, ClientConfig, CommitId, ConfigRevision,
     CredentialVersion, NetworkPolicy, OperationId, SensitiveString, ServiceUrl, SessionCredentials,
-    decode_lower_hex_32, domain_hash_v1, encode_lower_hex,
 };
+#[cfg(any(not(windows), feature = "native-credentials"))]
+use heyfood_core::{decode_lower_hex_32, domain_hash_v1, encode_lower_hex};
 #[cfg(windows)]
 use heyfood_windows_file::AtomicOwnerOnlyFile;
 
@@ -48,12 +49,14 @@ const MAX_CONVERSATION_POINTER_BYTES: usize = 4 * 1_024;
 const MAX_LOCAL_RECORD_KIND_BYTES: usize = 64;
 const MAX_LOCAL_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_LOCAL_RECORDS: usize = 1_024;
+#[cfg(any(not(windows), feature = "native-credentials"))]
 const LEGACY_ACCOUNT_LOGOUT_MARKER: &[u8] = b"account_logout_pending\n";
+#[cfg(any(not(windows), feature = "native-credentials"))]
 const ACCOUNT_LOGOUT_MARKER_V2_PREFIX: &str = "account_logout_pending_v2:";
-#[cfg(any(feature = "native-credentials", test))]
+#[cfg(any(feature = "native-credentials", all(test, not(windows))))]
 const ACCOUNT_LOGOUT_MARKER_V3_PREFIX: &str = "account_logout_pending_v3:";
 
-#[cfg(any(feature = "native-credentials", test))]
+#[cfg(any(feature = "native-credentials", all(test, not(windows))))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct NativeLogoutBindingV1 {
     pub account_digest: [u8; 32],
@@ -61,6 +64,7 @@ pub(crate) struct NativeLogoutBindingV1 {
     pub device_id_digest: [u8; 32],
 }
 
+#[cfg(any(not(windows), feature = "native-credentials"))]
 fn account_logout_digest(account: &AccountId) -> Result<[u8; 32], PortError> {
     domain_hash_v1(
         "heyfood.household.account-digest.v1",
@@ -75,7 +79,7 @@ fn account_logout_digest(account: &AccountId) -> Result<[u8; 32], PortError> {
     })
 }
 
-#[cfg(any(feature = "native-credentials", test))]
+#[cfg(any(feature = "native-credentials", all(test, not(windows))))]
 pub(crate) fn native_logout_client_id_digest_v1(client_id: &str) -> Result<[u8; 32], PortError> {
     domain_hash_v1(
         "heyfood.household-teardown.auth-client-id.v1",
@@ -90,7 +94,7 @@ pub(crate) fn native_logout_client_id_digest_v1(client_id: &str) -> Result<[u8; 
     })
 }
 
-#[cfg(any(feature = "native-credentials", test))]
+#[cfg(any(feature = "native-credentials", all(test, not(windows))))]
 pub(crate) fn native_logout_device_id_digest_v1(device_id: &str) -> Result<[u8; 32], PortError> {
     domain_hash_v1(
         "heyfood.household-teardown.auth-device-id.v1",
@@ -105,6 +109,7 @@ pub(crate) fn native_logout_device_id_digest_v1(device_id: &str) -> Result<[u8; 
     })
 }
 
+#[cfg(any(not(windows), feature = "native-credentials"))]
 fn encode_account_logout_marker(account: &AccountId) -> Result<Vec<u8>, PortError> {
     let digest = account_logout_digest(account)?;
     Ok(format!(
@@ -114,6 +119,7 @@ fn encode_account_logout_marker(account: &AccountId) -> Result<Vec<u8>, PortErro
     .into_bytes())
 }
 
+#[cfg(any(not(windows), feature = "native-credentials"))]
 fn parse_account_logout_marker(bytes: &[u8]) -> Result<Option<[u8; 32]>, PortError> {
     let Ok(marker) = std::str::from_utf8(bytes) else {
         return Ok(None);
@@ -132,7 +138,7 @@ fn parse_account_logout_marker(bytes: &[u8]) -> Result<Option<[u8; 32]>, PortErr
     })
 }
 
-#[cfg(any(feature = "native-credentials", test))]
+#[cfg(any(feature = "native-credentials", all(test, not(windows))))]
 fn encode_native_logout_marker(binding: NativeLogoutBindingV1) -> Vec<u8> {
     format!(
         "{ACCOUNT_LOGOUT_MARKER_V3_PREFIX}{}:{}:{}\n",
@@ -143,7 +149,7 @@ fn encode_native_logout_marker(binding: NativeLogoutBindingV1) -> Vec<u8> {
     .into_bytes()
 }
 
-#[cfg(any(feature = "native-credentials", test))]
+#[cfg(any(feature = "native-credentials", all(test, not(windows))))]
 fn parse_native_logout_marker(bytes: &[u8]) -> Result<Option<NativeLogoutBindingV1>, PortError> {
     let Ok(marker) = std::str::from_utf8(bytes) else {
         return Ok(None);
@@ -1025,6 +1031,7 @@ pub struct NativeAuthRefreshGuard<'a> {
 /// lifecycle retain this guard from their final exact account comparison
 /// through the durable local intent commit. The fixed native ordering is
 /// lifecycle, then this authorization fence, then the session-store lock.
+#[cfg(any(not(windows), feature = "native-credentials"))]
 pub struct NativeAuthIntentGuard<'a> {
     store: &'a NativeAuthStore,
     _lock: FileLock,
@@ -1143,6 +1150,7 @@ pub trait AuthorizationSessionStore {
     /// refresh, but only for the exact account digest stored before dispatch.
     /// Implementations must reject staged account replacement and unknown
     /// reconciliation marker shapes.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
     fn delete_authorized_session_for_native_teardown(
         &self,
         expected_account_digest: [u8; 32],
@@ -1577,7 +1585,7 @@ impl NativeAuthStore {
     /// first credential deletion, so a split-store crash remains resumable
     /// without granting authority to erase a same-account replacement client
     /// or device.
-    #[cfg(any(feature = "native-credentials", test))]
+    #[cfg(any(feature = "native-credentials", all(test, not(windows))))]
     pub(crate) fn finish_native_teardown_for_binding(
         &self,
         expected: NativeLogoutBindingV1,
@@ -3115,6 +3123,7 @@ impl AuthorizationSessionStore for FileCredentialStore {
         clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
+    #[cfg(any(not(windows), feature = "native-credentials"))]
     fn delete_authorized_session_for_native_teardown(
         &self,
         expected_account_digest: [u8; 32],
@@ -3589,6 +3598,7 @@ impl AuthorizationSessionStore for WindowsCredentialStore {
         clear_any_reconciliation_marker(&self.reconciliation_path)
     }
 
+    #[cfg(any(not(windows), feature = "native-credentials"))]
     fn delete_authorized_session_for_native_teardown(
         &self,
         expected_account_digest: [u8; 32],

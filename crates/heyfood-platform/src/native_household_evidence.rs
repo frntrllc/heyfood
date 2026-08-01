@@ -503,6 +503,8 @@ fn validate_private_directory(
             return Err(teardown_unavailable());
         }
     }
+    #[cfg(not(unix))]
+    let _ = expected_owner;
     Ok(())
 }
 
@@ -522,6 +524,8 @@ fn validate_private_file(
             return Err(teardown_unavailable());
         }
     }
+    #[cfg(not(unix))]
+    let _ = expected_owner;
     Ok(())
 }
 

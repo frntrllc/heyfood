@@ -1542,6 +1542,8 @@ impl HouseholdTeardownVaultTargetV1 {
         })?;
         #[cfg(unix)]
         self.validate_owner_only_metadata(&metadata, false)?;
+        #[cfg(not(unix))]
+        let _ = metadata;
         let started = Instant::now();
         loop {
             self.check_cancelled(cancellation)?;
@@ -4107,7 +4109,7 @@ fn sync_teardown_directory(path: &Path) -> std::io::Result<()> {
     File::open(path).and_then(|directory| directory.sync_all())
 }
 
-#[cfg(not(unix))]
+#[cfg(all(feature = "native-credentials", not(unix)))]
 fn sync_teardown_directory(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }

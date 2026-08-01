@@ -77,14 +77,16 @@ pub use native_state_floor::{
 };
 #[cfg(all(not(windows), feature = "native-credentials"))]
 pub use persistence::KeyringCredentialStore;
+#[cfg(any(not(windows), feature = "native-credentials"))]
+pub use persistence::NativeAuthIntentGuard;
 #[cfg(all(windows, feature = "qualification-credentials"))]
 pub use persistence::WindowsCredentialQualificationCleanup;
 #[cfg(all(windows, feature = "native-credentials"))]
 pub use persistence::WindowsCredentialStore;
 pub use persistence::{
     AtomicFile, AuthorizationReplacementJournal, AuthorizationReplacementPhase,
-    AuthorizationSessionStore, FileCredentialStore, NativeAuthIntentGuard, NativeAuthRefreshGuard,
-    NativeAuthStore, NativeConfigStore, OwnerOnlyPath, SensitiveExportWriter,
+    AuthorizationSessionStore, FileCredentialStore, NativeAuthRefreshGuard, NativeAuthStore,
+    NativeConfigStore, OwnerOnlyPath, SensitiveExportWriter,
 };
 pub use python_import::{
     LegacyLocationRestartV1, LegacyPythonConfigKindV1, LegacyPythonConfigRootV1,

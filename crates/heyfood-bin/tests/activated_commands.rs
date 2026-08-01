@@ -7,6 +7,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(feature = "native-credentials")]
 use heyfood_application::CredentialPort;
 use heyfood_core::{
     AccountId, AuthCredentialBundle, ChannelCredentials, CredentialVersion, SensitiveString,
@@ -17,6 +18,7 @@ use heyfood_platform::AuthorizationSessionStore;
 use heyfood_platform::{FileCredentialStore, NativeAuthStore, PythonStateImporter};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::{Value, json};
+#[cfg(feature = "native-credentials")]
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -449,10 +451,12 @@ async fn respond_status(
     socket.write_all(body).await.unwrap();
 }
 
+#[cfg(feature = "native-credentials")]
 fn old_scope() -> &'static str {
     "account:link account:delete knowledge:read menu:read recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe health:read integrations:manage"
 }
 
+#[cfg(feature = "native-credentials")]
 fn assert_legacy_health_authority(scope: &str) {
     let scopes = scope.split_whitespace().collect::<BTreeSet<_>>();
     assert!(scopes.contains("health:read"));
@@ -940,6 +944,7 @@ async fn public_binary_fails_closed_before_route_dispatch_for_scope_deferral_cap
     server.await.unwrap();
 }
 
+#[cfg(feature = "native-credentials")]
 #[tokio::test]
 async fn public_login_preserves_old_credentials_until_complete_then_replaces_both_stores() {
     let root = TempRoot::new("login-success");
@@ -1121,6 +1126,7 @@ async fn public_login_preserves_old_credentials_until_complete_then_replaces_bot
     assert!(!root.0.join("auth.reconciliation").exists());
 }
 
+#[cfg(feature = "native-credentials")]
 #[tokio::test]
 async fn rejected_login_leaves_both_existing_credentials_byte_for_byte_authoritative() {
     let root = TempRoot::new("login-rejected");
@@ -1690,6 +1696,7 @@ async fn restarted_logout_adopts_uncertain_session_refresh_without_network_teard
     assert!(!root.0.join("credentials.reconciliation").exists());
 }
 
+#[cfg(feature = "native-credentials")]
 #[tokio::test]
 async fn lost_prepare_response_then_expiry_recovers_old_authority_without_second_issuance() {
     let root = TempRoot::new("login-prepare-loss-expiry");

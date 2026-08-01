@@ -7,7 +7,9 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
-use std::fs::{self, File};
+use std::fs;
+#[cfg(any(feature = "native-credentials", unix))]
+use std::fs::File;
 #[cfg(feature = "native-credentials")]
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -29,6 +31,8 @@ use sha2::{Digest as _, Sha256};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+#[cfg(all(feature = "native-credentials", unix))]
+use crate::LegacyPythonKeyringLocatorV1;
 #[cfg(feature = "native-credentials")]
 use crate::household_vault::HouseholdTeardownVaultTargetV1;
 #[cfg(feature = "native-credentials")]
@@ -48,8 +52,7 @@ use crate::{
     HouseholdMigrationGuardStateV1, HouseholdMigrationGuardStore, HouseholdVault,
     HouseholdVaultLease, HouseholdVaultLoad, LegacyPythonConfigKindV1,
     LegacyPythonCredentialProbeResultV1, LegacyPythonCredentialScrubResultV1,
-    LegacyPythonHouseholdMigrationV1, LegacyPythonKeyringLocatorV1, MigrationGuardExpectation,
-    NativeAuthStore, NativePaths,
+    LegacyPythonHouseholdMigrationV1, MigrationGuardExpectation, NativeAuthStore, NativePaths,
 };
 #[cfg(feature = "native-credentials")]
 use zeroize::Zeroizing;
