@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::household_repository::{
     HouseholdCommit, HouseholdCommitOutcome, HouseholdErase, HouseholdEraseOutcome,
-    HouseholdInitialize, HouseholdLoad,
+    HouseholdInitialize, HouseholdLoad, HouseholdReadLeaseV1,
 };
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -216,6 +216,16 @@ pub trait HouseholdRepositoryPort: Send + Sync {
         account: &'a AccountId,
         cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<Option<HouseholdLoad>, PortError>>;
+
+    /// Load one committed generation while retaining the adapter's
+    /// cross-process lifecycle and vault locks. Hosted consumers keep the
+    /// returned lease alive through credential preparation and first network
+    /// dispatch so another process cannot change the active scope in between.
+    fn acquire_read_lease<'a>(
+        &'a self,
+        account: &'a AccountId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<HouseholdReadLeaseV1, PortError>>;
 
     fn initialize<'a>(
         &'a self,

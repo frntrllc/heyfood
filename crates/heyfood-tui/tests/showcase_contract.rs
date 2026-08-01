@@ -566,6 +566,74 @@ fn rollback_panel_is_read_only_and_chrome_is_bounded() {
 }
 
 #[test]
+fn restarted_member_and_everyone_scopes_are_local_management_not_hosted_ready() {
+    let roster = || {
+        vec![
+            owner(),
+            member(
+                "550e8400-e29b-41d4-a716-446655440000",
+                "Maya",
+                HouseholdProfileStateV1::LocalOnly,
+            ),
+        ]
+    };
+    for scope in [
+        HouseholdScope::Subject(HouseholdSubjectId::member(
+            MemberId::parse_preserved("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+        )),
+        HouseholdScope::Everyone,
+    ] {
+        let mut model = AppModel::default();
+        bootstrap(
+            &mut model,
+            HouseholdPresentationModeV1::NativeEnabled,
+            roster(),
+            scope,
+        );
+        assert!(model.household_management_ready());
+        assert!(model.household_hosted_guidance_unavailable());
+
+        assert!(submit_text(&mut model, "What should we eat?").is_empty());
+        let notice = &model.scrollback.entries().back().unwrap().text;
+        assert!(notice.contains("saved locally"));
+        assert!(notice.contains("Hosted guidance"));
+        assert!(notice.contains("/for me"));
+
+        let mut management = AppModel::default();
+        bootstrap(
+            &mut management,
+            HouseholdPresentationModeV1::NativeEnabled,
+            roster(),
+            HouseholdScope::Everyone,
+        );
+        let panel = submit_text(&mut management, "/household");
+        assert!(matches!(
+            panel.as_slice(),
+            [Effect::LoadHouseholdManagementV1 {
+                purpose: HouseholdManagementLoadPurposeV1::Panel,
+                ..
+            }]
+        ));
+
+        let mut switching = AppModel::default();
+        bootstrap(
+            &mut switching,
+            HouseholdPresentationModeV1::NativeEnabled,
+            roster(),
+            HouseholdScope::Everyone,
+        );
+        let select = submit_text(&mut switching, "/for me");
+        assert!(matches!(
+            select.as_slice(),
+            [Effect::LoadHouseholdManagementV1 {
+                purpose: HouseholdManagementLoadPurposeV1::SelectScope,
+                ..
+            }]
+        ));
+    }
+}
+
+#[test]
 fn household_sensitive_debug_carriers_redact_unique_canaries() {
     let canary = "D3-DEBUG-CANARY-X9";
     let entry = SemanticEntry {

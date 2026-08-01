@@ -19,8 +19,8 @@ use std::{
 
 use heyfood_agent_runtime::{HttpService, MAX_JSON_RESPONSE_BYTES, OwnerSyncTransportResultV1};
 use heyfood_application::{
-    AudioCapturePort, AuthoritativeConsentStateV1, BoxFuture, CapabilitySnapshot,
-    ConfirmGroceryMutation, CreateMemberWithDeclaredProfileV1, CreateMenuWatch,
+    AudioCapturePort, AuthoritativeConsentStateV1, AuthorizedOwnerHostedContextV1, BoxFuture,
+    CapabilitySnapshot, ConfirmGroceryMutation, CreateMemberWithDeclaredProfileV1, CreateMenuWatch,
     CreateMenuWatchRequest, DeployedGroceryMutationRequest, DiscoverCapabilities, EnsureSession,
     EnsureSessionError, EnsureSessionOutcome, ExportGroceryList, GroceryExport, HouseholdLoad,
     HouseholdSession, ListMenuWatches, NativeMemberAgeEvidenceV1, OptionalCapabilityStatus,
@@ -4130,6 +4130,11 @@ struct PreparedInteractiveOperation {
     authorization_scope: Arc<str>,
 }
 
+struct PreparedHostedInteractiveOperation {
+    operation: PreparedInteractiveOperation,
+    owner_context: Option<AuthorizedOwnerHostedContextV1>,
+}
+
 /// Production driver for the retained terminal surface.
 ///
 /// The terminal loop stays synchronous and owns stdout. Every authenticated
@@ -4354,18 +4359,23 @@ impl InteractiveTurnDriver {
                 let _ = runtime_events.send(terminal_event).await;
                 return;
             }
-            let prepared = prepare_interactive_operation(
+            let prepared = prepare_hosted_interactive_operation(
                 session_provider,
                 fallback_service,
                 fallback_http_service,
                 fallback_ensure_session,
                 fallback_authorization_scope,
                 session.clone(),
+                household_session.as_ref(),
                 task_cancellation.child_token(),
             )
             .await;
             let outcome = match prepared {
                 Ok(prepared) => {
+                    let PreparedHostedInteractiveOperation {
+                        operation: prepared,
+                        owner_context,
+                    } = prepared;
                     run_interactive_turn(
                         operation_id,
                         prompt,
@@ -4376,7 +4386,7 @@ impl InteractiveTurnDriver {
                         continuity,
                         prepared.http_service,
                         local_state,
-                        household_session,
+                        owner_context,
                         task_cancellation,
                         runtime_events.clone(),
                     )
@@ -6326,18 +6336,23 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 let _ = runtime_events.send(event).await;
                 return;
             }
-            let prepared = prepare_interactive_operation(
+            let prepared = prepare_hosted_interactive_operation(
                 session_provider,
                 fallback_service,
                 fallback_http_service,
                 fallback_ensure_session,
                 fallback_authorization_scope,
                 session.clone(),
+                household_session.as_ref(),
                 task_cancellation.child_token(),
             )
             .await;
             let event = match prepared {
                 Ok(prepared) => {
+                    let PreparedHostedInteractiveOperation {
+                        operation: prepared,
+                        owner_context,
+                    } = prepared;
                     let availability =
                         interactive_voice_availability(true, &prepared.authorization_scope);
                     let _ = runtime_events
@@ -6351,33 +6366,16 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                     } else {
                         match prepared.http_service {
                             Some(service) => {
-                                let snapshot = session.lock().await.clone();
-                                match preflight_native_hosted_scope(
-                                    &snapshot,
-                                    household_session.as_ref(),
-                                    &task_cancellation,
+                                run_interactive_voice(
+                                    operation_id,
+                                    audio_capture,
+                                    service,
+                                    task_stop,
+                                    task_cancellation,
+                                    runtime_events.clone(),
+                                    owner_context,
                                 )
                                 .await
-                                {
-                                    Ok(NativeHostedScopePreflightV1::Allowed) => {
-                                        run_interactive_voice(
-                                            operation_id,
-                                            audio_capture,
-                                            service,
-                                            task_stop,
-                                            task_cancellation,
-                                            runtime_events.clone(),
-                                        )
-                                        .await
-                                    }
-                                    Ok(NativeHostedScopePreflightV1::Cancelled) => {
-                                        RuntimeEvent::VoiceCancelled { operation_id }
-                                    }
-                                    Err(error) => RuntimeEvent::VoiceFailed {
-                                        operation_id,
-                                        message: format!("{}: {}", error.code, error.message),
-                                    },
-                                }
                             }
                             None => RuntimeEvent::VoiceFailed {
                                 operation_id,
@@ -6500,6 +6498,7 @@ async fn run_interactive_voice(
     stop: CancellationToken,
     cancellation: CancellationToken,
     runtime_events: mpsc::Sender<RuntimeEvent>,
+    owner_context: Option<AuthorizedOwnerHostedContextV1>,
 ) -> RuntimeEvent {
     let capture = audio_capture.capture(stop, cancellation.child_token());
     tokio::pin!(capture);
@@ -6567,6 +6566,9 @@ async fn run_interactive_voice(
             cancellation.child_token(),
         )
         .await;
+    // The exact native generation stays locked until capture serialization
+    // and the transcription response complete.
+    drop(owner_context);
     match transcription {
         Ok(_) if cancellation.is_cancelled() => RuntimeEvent::VoiceCancelled { operation_id },
         Ok(transcription) => RuntimeEvent::VoiceTranscriptReady {
@@ -6596,6 +6598,16 @@ enum InteractivePreparationError {
     Failed(TurnFailure),
 }
 
+fn interactive_preparation_error_from_port(error: PortError) -> InteractivePreparationError {
+    if error.code == "household_hosted_context_cancelled"
+        || error.code == "household_load_cancelled"
+    {
+        InteractivePreparationError::CancelledBeforeDispatch
+    } else {
+        InteractivePreparationError::Failed(TurnFailure::from_port_error(&error))
+    }
+}
+
 fn interactive_preparation_failure_message(failure: TurnFailure) -> String {
     match failure.kind {
         TurnFailureKind::AuthenticationRequired => {
@@ -6614,6 +6626,57 @@ fn interactive_preparation_failure_message(failure: TurnFailure) -> String {
             "hey.food could not prepare this operation. Check your connection, then try again.".into()
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prepare_hosted_interactive_operation(
+    provider: Option<Arc<dyn InteractiveSessionProvider>>,
+    fallback_service: Arc<dyn ServicePort>,
+    fallback_http_service: Option<Arc<HttpService>>,
+    fallback_ensure_session: Arc<EnsureSession>,
+    fallback_authorization_scope: Arc<str>,
+    session: Arc<Mutex<SessionSnapshot>>,
+    household_session: Option<&HouseholdSession>,
+    cancellation: CancellationToken,
+) -> Result<PreparedHostedInteractiveOperation, InteractivePreparationError> {
+    if cancellation.is_cancelled() {
+        return Err(InteractivePreparationError::CancelledBeforeDispatch);
+    }
+    let owner_context = if let Some(household) = household_session {
+        let snapshot = session.lock().await.clone();
+        if &snapshot.credentials.account_id != household.account() {
+            return Err(InteractivePreparationError::Failed(
+                TurnFailure::from_port_error(&PortError::new(
+                    "household_account_mismatch",
+                    "Native household context is bound to another account.",
+                )),
+            ));
+        }
+        Some(
+            household
+                .acquire_authorized_owner_hosted_context(cancellation.child_token())
+                .await
+                .map_err(interactive_preparation_error_from_port)?,
+        )
+    } else {
+        None
+    };
+    // `owner_context` retains the native lifecycle/vault lock while the
+    // provider performs channel/session credential preparation.
+    let operation = prepare_interactive_operation(
+        provider,
+        fallback_service,
+        fallback_http_service,
+        fallback_ensure_session,
+        fallback_authorization_scope,
+        session,
+        cancellation,
+    )
+    .await?;
+    Ok(PreparedHostedInteractiveOperation {
+        operation,
+        owner_context,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6714,6 +6777,37 @@ async fn preflight_native_hosted_scope(
     Ok(NativeHostedScopePreflightV1::Allowed)
 }
 
+fn native_owner_turn_context(
+    snapshot: &heyfood_application::HouseholdContextSnapshotV1,
+) -> Result<TurnContext, PortError> {
+    if snapshot.scope != HouseholdScope::Subject(HouseholdSubjectId::Self_)
+        || snapshot.subjects.len() != 1
+        || snapshot.subjects[0].subject != HouseholdSubjectId::Self_
+    {
+        return Err(PortError::new(
+            "household_hosted_context_invalid",
+            "the authorized native context did not resolve to exactly Me",
+        ));
+    }
+    let dietary = Value::Object(dietary_context_for_identity(
+        "_self",
+        "Me",
+        "self",
+        None,
+        &snapshot.subjects[0].effective_profile,
+        None,
+    ));
+    Ok(TurnContext {
+        dietary: Some(dietary),
+        meal: Some(json!({
+            "active_member_id": "_self",
+            "active_member_name": "Me",
+            "is_cook_mode": false
+        })),
+        ..TurnContext::default()
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_interactive_turn(
     operation_id: u64,
@@ -6725,20 +6819,11 @@ async fn run_interactive_turn(
     continuity: Arc<Mutex<InteractiveContinuity>>,
     context_service: Option<Arc<HttpService>>,
     local_state: Option<Arc<ImportedPythonState>>,
-    household_session: Option<HouseholdSession>,
+    owner_context: Option<AuthorizedOwnerHostedContextV1>,
     cancellation: CancellationToken,
     runtime_events: mpsc::Sender<RuntimeEvent>,
 ) -> Result<RunTurnOutcome, TurnFailure> {
     let snapshot = session.lock().await.clone();
-    match preflight_native_hosted_scope(&snapshot, household_session.as_ref(), &cancellation)
-        .await
-        .map_err(|error| TurnFailure::from_port_error(&error))?
-    {
-        NativeHostedScopePreflightV1::Allowed => {}
-        NativeHostedScopePreflightV1::Cancelled => {
-            return Ok(RunTurnOutcome::CancelledBeforeServerAcceptance);
-        }
-    }
     let credentials = match ensure_session
         .execute(snapshot.clone(), cancellation.child_token())
         .await
@@ -6759,20 +6844,24 @@ async fn run_interactive_turn(
     if cancellation.is_cancelled() {
         return Ok(RunTurnOutcome::CancelledBeforeServerAcceptance);
     }
-    let mut context = match (context_service, local_state) {
-        (Some(service), Some(state)) => {
-            let selector = continuity.lock().await.household_scope.clone();
-            build_household_turn_context(
-                &service,
-                &credentials,
-                &state,
-                selector.as_deref(),
-                cancellation.child_token(),
-            )
-            .await
-            .map_err(|error| turn_failure_from_one_shot_error(&error))?
-        }
-        _ => TurnContext::default(),
+    let mut context = match owner_context.as_ref() {
+        Some(owner_context) => native_owner_turn_context(owner_context.snapshot())
+            .map_err(|error| TurnFailure::from_port_error(&error))?,
+        None => match (context_service, local_state) {
+            (Some(service), Some(state)) => {
+                let selector = continuity.lock().await.household_scope.clone();
+                build_household_turn_context(
+                    &service,
+                    &credentials,
+                    &state,
+                    selector.as_deref(),
+                    cancellation.child_token(),
+                )
+                .await
+                .map_err(|error| turn_failure_from_one_shot_error(&error))?
+            }
+            _ => TurnContext::default(),
+        },
     };
     context.confirmation = confirmation;
     let request = TurnRequest {
@@ -6789,6 +6878,10 @@ async fn run_interactive_turn(
             cancellation.child_token(),
         )
         .await;
+    // The request has either been rejected before acceptance or accepted with
+    // the exact revision-bound owner context. Later scope changes apply only
+    // to subsequent turns.
+    drop(owner_context);
     let mut accepted = match accepted {
         Ok(accepted) => accepted,
         Err(error) if error.code == "converse_cancelled_before_dispatch" => {
@@ -8874,6 +8967,7 @@ mod tests {
             stop,
             CancellationToken::new(),
             events,
+            None,
         )
         .await;
         assert!(matches!(

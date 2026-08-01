@@ -1337,7 +1337,8 @@ impl fmt::Debug for HouseholdGenerationStateV1 {
 enum HouseholdTurnGateV1 {
     Legacy,
     Loading,
-    Ready,
+    HostedReady,
+    LocalOnlyHostedUnavailable,
     ReconciliationRequired,
     CounterExhausted,
 }
@@ -1483,9 +1484,27 @@ impl AppModel {
 
     #[must_use]
     pub fn household_management_ready(&self) -> bool {
-        matches!(self.household_turn_gate, HouseholdTurnGateV1::Ready)
-            && self.household_generation.is_some()
+        matches!(
+            self.household_turn_gate,
+            HouseholdTurnGateV1::HostedReady | HouseholdTurnGateV1::LocalOnlyHostedUnavailable
+        ) && self.household_generation.is_some()
             && self.household_snapshot.is_some()
+    }
+
+    #[must_use]
+    pub fn household_hosted_guidance_unavailable(&self) -> bool {
+        matches!(
+            self.household_turn_gate,
+            HouseholdTurnGateV1::LocalOnlyHostedUnavailable
+        )
+    }
+}
+
+fn household_turn_gate_for_scope(scope: &HouseholdScope) -> HouseholdTurnGateV1 {
+    if matches!(scope, HouseholdScope::Subject(HouseholdSubjectId::Self_)) {
+        HouseholdTurnGateV1::HostedReady
+    } else {
+        HouseholdTurnGateV1::LocalOnlyHostedUnavailable
     }
 }
 
@@ -3876,7 +3895,7 @@ fn handle_household_management_loaded(
     };
     model.pending_household_load = None;
     model.household_snapshot = Some(snapshot.clone());
-    model.household_turn_gate = HouseholdTurnGateV1::Ready;
+    model.household_turn_gate = household_turn_gate_for_scope(&snapshot.active_scope);
     let active_label = household_scope_label(&snapshot, &snapshot.active_scope)
         .expect("validated household scope has a presentation label");
     model.household_chrome_label = Some(active_label);
@@ -4452,7 +4471,7 @@ fn handle_household_context_applied(
     }
     model.household_snapshot = Some(snapshot);
     model.household_chrome_label = Some(bounded_active_label.clone());
-    model.household_turn_gate = HouseholdTurnGateV1::Ready;
+    model.household_turn_gate = household_turn_gate_for_scope(&active_scope);
     model.pending_household_mutation = None;
     model.onboarding = None;
     model.operation = OperationState::Idle;
@@ -5107,12 +5126,25 @@ fn household_turn_is_authorized(model: &mut AppModel) -> bool {
         );
         return false;
     }
-    if !matches!(model.household_turn_gate, HouseholdTurnGateV1::Ready) {
-        push_notice(
-            model,
-            "Household context is not ready. No turn was dispatched.",
-        );
-        return false;
+    match model.household_turn_gate {
+        HouseholdTurnGateV1::HostedReady => {}
+        HouseholdTurnGateV1::LocalOnlyHostedUnavailable => {
+            push_notice(
+                model,
+                "This household scope is saved locally. Hosted guidance for members and Everyone is not yet enabled. Run /for me to return to the existing owner experience.",
+            );
+            return false;
+        }
+        HouseholdTurnGateV1::Legacy
+        | HouseholdTurnGateV1::Loading
+        | HouseholdTurnGateV1::ReconciliationRequired
+        | HouseholdTurnGateV1::CounterExhausted => {
+            push_notice(
+                model,
+                "Household context is not ready. No turn was dispatched.",
+            );
+            return false;
+        }
     }
     let Some(snapshot) = model.household_snapshot.as_ref() else {
         push_notice(

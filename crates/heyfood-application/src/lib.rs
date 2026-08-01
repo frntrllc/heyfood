@@ -48,9 +48,10 @@ pub use household_profile_policy::{
     validate_d2_profile_policy_v1,
 };
 pub use household_repository::{
-    CreateMemberWithDeclaredProfileV1, CreatedMemberWithDeclaredProfileV1, HouseholdCommit,
-    HouseholdCommitOutcome, HouseholdErase, HouseholdEraseOutcome, HouseholdInitialize,
-    HouseholdLoad, HouseholdOpenOutcomeV1, HouseholdRepositoryResolutionV1, HouseholdSession,
+    AuthorizedOwnerHostedContextV1, CreateMemberWithDeclaredProfileV1,
+    CreatedMemberWithDeclaredProfileV1, HouseholdCommit, HouseholdCommitOutcome, HouseholdErase,
+    HouseholdEraseOutcome, HouseholdInitialize, HouseholdLoad, HouseholdOpenOutcomeV1,
+    HouseholdReadLeaseV1, HouseholdRepositoryResolutionV1, HouseholdSession,
     NativeMemberAgeEvidenceV1, OpenHouseholdV1, OwnerSyncTransitionEventV1,
     SaveMemberDeclaredProfileV1, SaveOwnerProfileAndSyncIntentV1, SavedMemberDeclaredProfileV1,
     SavedOwnerProfileAndSyncIntentV1, SelectedHouseholdScopeV1, SelectedHouseholdTargetV1,

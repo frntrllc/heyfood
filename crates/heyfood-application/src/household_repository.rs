@@ -66,6 +66,65 @@ impl fmt::Debug for HouseholdLoad {
     }
 }
 
+/// One authenticated household generation retained under the repository's
+/// cross-process read lock. The opaque guard is deliberately unavailable to
+/// consumers; keeping this value alive is the only authority to perform a
+/// hosted operation against the accompanying state.
+pub struct HouseholdReadLeaseV1 {
+    load: HouseholdLoad,
+    _retained_lock: Box<dyn Send + 'static>,
+}
+
+impl HouseholdReadLeaseV1 {
+    #[must_use]
+    pub fn new(load: HouseholdLoad, retained_lock: Box<dyn Send + 'static>) -> Self {
+        Self {
+            load,
+            _retained_lock: retained_lock,
+        }
+    }
+
+    #[must_use]
+    pub const fn load(&self) -> &HouseholdLoad {
+        &self.load
+    }
+}
+
+impl fmt::Debug for HouseholdReadLeaseV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HouseholdReadLeaseV1")
+            .field("revision", &self.load.state.revision)
+            .field("state_digest", &self.load.state_digest)
+            .field("retained_lock", &"[RETAINED]")
+            .finish()
+    }
+}
+
+/// Exact owner context plus the retained repository generation that
+/// authorized it. Dropping this value releases the cross-process lock.
+pub struct AuthorizedOwnerHostedContextV1 {
+    snapshot: HouseholdContextSnapshotV1,
+    _read_lease: HouseholdReadLeaseV1,
+}
+
+impl AuthorizedOwnerHostedContextV1 {
+    #[must_use]
+    pub const fn snapshot(&self) -> &HouseholdContextSnapshotV1 {
+        &self.snapshot
+    }
+}
+
+impl fmt::Debug for AuthorizedOwnerHostedContextV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthorizedOwnerHostedContextV1")
+            .field("household_revision", &self.snapshot.household_revision)
+            .field("subject_count", &self.snapshot.subjects.len())
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct HouseholdInitialize {
     pub account: AccountId,
@@ -1186,6 +1245,53 @@ impl HouseholdSession {
                 "household_not_initialized",
                 "native household state is not initialized",
             )
+        })
+    }
+
+    /// Acquire the exact live owner context while retaining the repository's
+    /// cross-process read lock. Callers must keep the returned value alive
+    /// through every credential refresh and first hosted dispatch.
+    pub async fn acquire_authorized_owner_hosted_context(
+        &self,
+        cancellation: CancellationToken,
+    ) -> Result<AuthorizedOwnerHostedContextV1, PortError> {
+        check_cancelled(&cancellation, "household_hosted_context_cancelled")?;
+        let read_lease = self
+            .repository
+            .acquire_read_lease(&self.account, cancellation)
+            .await?;
+        let load = read_lease.load();
+        if load.state.account_binding != self.account {
+            return Err(repository_error(
+                "household_account_mismatch",
+                "household repository returned another account",
+            ));
+        }
+        if !matches!(
+            load.state.active_scope,
+            HouseholdScope::Subject(HouseholdSubjectId::Self_)
+        ) {
+            return Err(repository_error(
+                "household_hosted_context_not_authorized",
+                "Hosted guidance for household members is not enabled yet. Run /for me to continue with the owner profile.",
+            ));
+        }
+        let prepared = PreparedHouseholdTargetV1::from_active_scope(&load.state)
+            .map_err(context_port_error)?;
+        let snapshot =
+            resolve_personalized_context_v1(&load.state, &prepared).map_err(context_port_error)?;
+        if snapshot.scope != HouseholdScope::Subject(HouseholdSubjectId::Self_)
+            || snapshot.subjects.len() != 1
+            || snapshot.subjects[0].subject != HouseholdSubjectId::Self_
+        {
+            return Err(repository_error(
+                "household_hosted_context_invalid",
+                "the authorized owner context did not resolve to exactly Me",
+            ));
+        }
+        Ok(AuthorizedOwnerHostedContextV1 {
+            snapshot,
+            _read_lease: read_lease,
         })
     }
 

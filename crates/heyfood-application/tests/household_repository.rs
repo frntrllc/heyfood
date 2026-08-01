@@ -11,13 +11,14 @@ use heyfood_application::{
     HouseholdCommitOutcome, HouseholdContextErrorV1, HouseholdErase, HouseholdEraseOutcome,
     HouseholdInitialize, HouseholdLoad, HouseholdMutationAuthorityPort,
     HouseholdMutationAuthorityV1, HouseholdMutationPurposeV1, HouseholdProfileEligibilityV1,
-    HouseholdProfileIneligibilityV1, HouseholdProfileOperationV1, HouseholdRepositoryPort,
-    HouseholdRepositoryResolutionV1, HouseholdSession, NativeMemberAgeEvidenceV1,
-    OwnerProfileRetryEligibilityV1, OwnerSyncIntentHandleV1, OwnerSyncTransitionEventV1, PortError,
-    PreparedHouseholdTargetV1, SaveMemberDeclaredProfileV1, SaveOwnerProfileAndSyncIntentV1,
-    SelectedHouseholdTargetV1, SelfOnlyHouseholdInitializationV1, TransitionOwnerSyncIntentV1,
-    household_profile_eligibility_v1, owner_profile_action_eligibility_v1,
-    resolve_household_commit_v1, resolve_household_initialize_v1, resolve_personalized_context_v1,
+    HouseholdProfileIneligibilityV1, HouseholdProfileOperationV1, HouseholdReadLeaseV1,
+    HouseholdRepositoryPort, HouseholdRepositoryResolutionV1, HouseholdSession,
+    NativeMemberAgeEvidenceV1, OwnerProfileRetryEligibilityV1, OwnerSyncIntentHandleV1,
+    OwnerSyncTransitionEventV1, PortError, PreparedHouseholdTargetV1, SaveMemberDeclaredProfileV1,
+    SaveOwnerProfileAndSyncIntentV1, SelectedHouseholdTargetV1, SelfOnlyHouseholdInitializationV1,
+    TransitionOwnerSyncIntentV1, household_profile_eligibility_v1,
+    owner_profile_action_eligibility_v1, resolve_household_commit_v1,
+    resolve_household_initialize_v1, resolve_personalized_context_v1,
 };
 use heyfood_core::{
     AccountId, AgeEvidenceSourceV1, AgeEvidenceV1, AppliedCommitOutcomeV1, AppliedCommitRecordV1,
@@ -276,6 +277,20 @@ impl HouseholdRepositoryPort for MemoryHouseholdRepository {
         })
     }
 
+    fn acquire_read_lease<'a>(
+        &'a self,
+        account: &'a AccountId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<HouseholdReadLeaseV1, PortError>> {
+        Box::pin(async move {
+            let load = self
+                .load(account, cancellation)
+                .await?
+                .ok_or_else(|| PortError::new("household_not_initialized", "missing state"))?;
+            Ok(HouseholdReadLeaseV1::new(load, Box::new(())))
+        })
+    }
+
     fn initialize<'a>(
         &'a self,
         command: HouseholdInitialize,
@@ -496,6 +511,20 @@ impl HouseholdRepositoryPort for CommitThenUncertainRepository {
                 ));
             }
             state.map(HouseholdLoad::from_state).transpose()
+        })
+    }
+
+    fn acquire_read_lease<'a>(
+        &'a self,
+        account: &'a AccountId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<HouseholdReadLeaseV1, PortError>> {
+        Box::pin(async move {
+            let load = self
+                .load(account, cancellation)
+                .await?
+                .ok_or_else(|| PortError::new("household_not_initialized", "missing state"))?;
+            Ok(HouseholdReadLeaseV1::new(load, Box::new(())))
         })
     }
 
@@ -992,6 +1021,75 @@ fn owner_sync_state() -> (HouseholdStateV1, HouseholdOutboxId) {
     });
     state.validate().unwrap();
     (state, outbox_id)
+}
+
+#[tokio::test]
+async fn authorized_owner_hosted_context_uses_exact_live_profile_for_all_ready_states() {
+    let mut local_only = empty_state("account-a", CommitId::new());
+    local_only.owner.profile_state = HouseholdProfileStateV1::LocalOnly;
+    local_only.profiles.push(HouseholdProfileRecordV1 {
+        subject: HouseholdSubjectId::self_(),
+        profile_revision: ProfileRevision::new(1).unwrap(),
+        document: native_profile_document(),
+    });
+    local_only.validate().unwrap();
+
+    let (pending, _) = owner_sync_state();
+    let mut synced = pending.clone();
+    synced.owner.profile_state = HouseholdProfileStateV1::Synced;
+    synced.outbox.clear();
+    synced.validate().unwrap();
+
+    for (state, expected_canary) in [
+        (local_only, "canary private ingredient"),
+        (pending, "peanut"),
+        (synced, "peanut"),
+    ] {
+        let repository = Arc::new(MemoryHouseholdRepository::with_state(state));
+        let session = test_session(account("account-a"), repository);
+        let authorized = session
+            .acquire_authorized_owner_hosted_context(CancellationToken::new())
+            .await
+            .unwrap();
+        let snapshot = authorized.snapshot();
+        assert_eq!(
+            snapshot.scope,
+            HouseholdScope::Subject(HouseholdSubjectId::self_())
+        );
+        assert_eq!(snapshot.subjects.len(), 1);
+        assert_eq!(snapshot.subjects[0].subject, HouseholdSubjectId::self_());
+        assert!(
+            snapshot.subjects[0]
+                .effective_profile
+                .to_string()
+                .contains(expected_canary)
+        );
+    }
+}
+
+#[tokio::test]
+async fn authorized_owner_hosted_context_rejects_saved_member_and_everyone_scopes() {
+    let mut state = state_with_profiles(
+        MinorStatusV1::Adult,
+        HouseholdProfileStateV1::LocalOnly,
+        true,
+    );
+    for scope in [
+        HouseholdScope::Subject(HouseholdSubjectId::member(
+            state.members[0].member_id.clone(),
+        )),
+        HouseholdScope::Everyone,
+    ] {
+        state.active_scope = scope;
+        state.validate().unwrap();
+        let repository = Arc::new(MemoryHouseholdRepository::with_state(state.clone()));
+        let session = test_session(account("account-a"), repository);
+        let error = session
+            .acquire_authorized_owner_hosted_context(CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "household_hosted_context_not_authorized");
+    }
 }
 
 fn initial_owner_sync_intent(

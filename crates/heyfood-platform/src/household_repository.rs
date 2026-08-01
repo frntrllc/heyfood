@@ -9,9 +9,9 @@ use std::{fmt, sync::Arc};
 
 use heyfood_application::{
     BoxFuture, HouseholdCommit, HouseholdCommitOutcome, HouseholdErase, HouseholdEraseOutcome,
-    HouseholdInitialize, HouseholdLoad, HouseholdMutationAuthorityPort, HouseholdRepositoryPort,
-    HouseholdRepositoryResolutionV1, HouseholdSession, NativeHouseholdModeV1, PortError,
-    resolve_household_commit_v1, resolve_household_initialize_v1,
+    HouseholdInitialize, HouseholdLoad, HouseholdMutationAuthorityPort, HouseholdReadLeaseV1,
+    HouseholdRepositoryPort, HouseholdRepositoryResolutionV1, HouseholdSession,
+    NativeHouseholdModeV1, PortError, resolve_household_commit_v1, resolve_household_initialize_v1,
 };
 use heyfood_core::{
     AccountId, AppliedCommitOutcomeV1, CommitId, HouseholdStateV1, LegacySourceIdentityV1,
@@ -1031,6 +1031,26 @@ impl HouseholdRepositoryPort for NativeHouseholdRepository {
                 .load_committed_under_lease(&mut vault_lease, &guard, &key, cancellation)
                 .await?;
             Ok(Some(loaded))
+        })
+    }
+
+    fn acquire_read_lease<'a>(
+        &'a self,
+        account: &'a AccountId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<HouseholdReadLeaseV1, PortError>> {
+        Box::pin(async move {
+            self.require_account(account)?;
+            let mut vault_lease = self
+                .acquire_vault_lease(HouseholdVaultLeaseModeV1::RequireExisting, &cancellation)
+                .await?;
+            let (guard, key) = self
+                .reread_guard_and_key(&vault_lease, &cancellation)
+                .await?;
+            let load = self
+                .load_committed_under_lease(&mut vault_lease, &guard, &key, cancellation)
+                .await?;
+            Ok(HouseholdReadLeaseV1::new(load, Box::new(vault_lease)))
         })
     }
 

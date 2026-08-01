@@ -206,17 +206,26 @@ pub fn render(frame: &mut Frame<'_>, model: &AppModel) {
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
-    let status = match model.operation {
-        OperationState::Idle => "ready",
-        OperationState::Running(_) => "working",
-        OperationState::Cancelling(_) => "stopping",
-        OperationState::Finishing(_) => "finishing",
-        OperationState::Exiting(_) => "closing",
+    let mode = responsive_mode(area.width);
+    let status = match (
+        model.operation,
+        model.household_hosted_guidance_unavailable(),
+    ) {
+        (OperationState::Idle, true) => match mode {
+            ResponsiveMode::Compact => "hosted-off",
+            ResponsiveMode::Standard => "local-only",
+            ResponsiveMode::Wide => "local-only · hosted unavailable",
+        },
+        (OperationState::Idle, false) => "ready",
+        (OperationState::Running(_), _) => "working",
+        (OperationState::Cancelling(_), _) => "stopping",
+        (OperationState::Finishing(_), _) => "finishing",
+        (OperationState::Exiting(_), _) => "closing",
     };
     let scope = household_chrome_copy(model, area.width)
         .map(|scope| format!(" · {scope}"))
         .unwrap_or_default();
-    let line = match responsive_mode(area.width) {
+    let line = match mode {
         ResponsiveMode::Compact => Line::from(vec![
             Span::styled(" hey.food", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
@@ -247,7 +256,11 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     if model.scrollback.entries().is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Ask a question when you’re ready.",
+            if model.household_hosted_guidance_unavailable() {
+                "This household target is saved locally. Hosted guidance for members and Everyone is unavailable; use /for me for owner guidance."
+            } else {
+                "Ask a question when you’re ready."
+            },
             Style::default().fg(Color::DarkGray),
         )));
     }
@@ -315,7 +328,11 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     frame.render_widget(block, area);
 
     let hint = if model.draft.is_empty() {
-        "Ask about food, a meal, a restaurant, or a recipe…"
+        if model.household_hosted_guidance_unavailable() {
+            "Local household target; use /for me for hosted guidance…"
+        } else {
+            "Ask about food, a meal, a restaurant, or a recipe…"
+        }
     } else {
         &model.draft
     };
@@ -403,7 +420,10 @@ mod tests {
     use super::*;
     use crate::{Action, RuntimeEvent, dispatch};
     use heyfood_application::{PortError, TurnFailure};
-    use heyfood_core::AgentEvent;
+    use heyfood_core::{
+        AgentEvent, HouseholdLifecycleV1, HouseholdProfileStateV1, HouseholdRevision,
+        HouseholdScope, HouseholdSubjectId, MemberId, ProfileRevision, RelationshipV1,
+    };
     use ratatui::{Terminal, backend::TestBackend};
 
     fn snapshot(model: &AppModel, width: u16, height: u16) -> String {
@@ -523,6 +543,66 @@ mod tests {
         model
     }
 
+    fn restarted_local_only_scope_model(scope: HouseholdScope) -> AppModel {
+        let mut model = AppModel::default();
+        let generation = crate::HouseholdModeGenerationV1::new(1).unwrap();
+        let digest = crate::HouseholdAccountBindingDigestV1::from_bytes([7; 32]);
+        let bootstrap = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::HouseholdGenerationReadyV1 {
+                session_mode_generation: generation,
+                mode: crate::HouseholdPresentationModeV1::NativeEnabled,
+                account_binding_digest: digest,
+            }),
+        );
+        let [
+            crate::Effect::LoadHouseholdManagementV1 {
+                operation_id,
+                reducer_correlation,
+                ..
+            },
+        ] = bootstrap.as_slice()
+        else {
+            panic!("expected native bootstrap load")
+        };
+        let owner = HouseholdMemberPresentationV1::new(
+            HouseholdSubjectId::self_(),
+            "Me",
+            RelationshipV1::Self_,
+            HouseholdLifecycleV1::Active,
+            HouseholdProfileStateV1::LocalOnly,
+            Some(ProfileRevision::new(1).unwrap()),
+        )
+        .unwrap();
+        let member = HouseholdMemberPresentationV1::new(
+            HouseholdSubjectId::member(
+                MemberId::parse_preserved("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+            ),
+            "Maya",
+            RelationshipV1::Child,
+            HouseholdLifecycleV1::Active,
+            HouseholdProfileStateV1::LocalOnly,
+            Some(ProfileRevision::new(1).unwrap()),
+        )
+        .unwrap();
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::HouseholdManagementLoadedV1 {
+                operation_id: *operation_id,
+                session_mode_generation: generation,
+                reducer_correlation: *reducer_correlation,
+                purpose: crate::HouseholdManagementLoadPurposeV1::Bootstrap,
+                account_binding_digest: digest,
+                household_revision: HouseholdRevision::new(1).unwrap(),
+                active_scope: scope,
+                members: vec![owner, member],
+            }),
+        );
+        assert!(model.household_management_ready());
+        assert!(model.household_hosted_guidance_unavailable());
+        model
+    }
+
     #[test]
     fn reviewed_native_profile_copy_is_exact() {
         let version = heyfood_core::ConsentVersionV1::new(3).unwrap();
@@ -601,6 +681,35 @@ mod tests {
         assert_eq!(responsive_mode(40), ResponsiveMode::Compact);
         assert_eq!(responsive_mode(80), ResponsiveMode::Standard);
         assert_eq!(responsive_mode(120), ResponsiveMode::Wide);
+    }
+
+    #[test]
+    fn restarted_member_and_everyone_views_never_present_as_hosted_ready() {
+        let member = HouseholdScope::Subject(HouseholdSubjectId::member(
+            MemberId::parse_preserved("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+        ));
+        for scope in [member, HouseholdScope::Everyone] {
+            for width in [40, 80, 120] {
+                let model = restarted_local_only_scope_model(scope.clone());
+                let rendered = snapshot(&model, width, 18);
+                let semantic = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+                let expected_status = match responsive_mode(width) {
+                    ResponsiveMode::Compact => "hosted-off",
+                    ResponsiveMode::Standard => "local-only",
+                    ResponsiveMode::Wide => "local-only · hosted unavailable",
+                };
+                assert!(
+                    semantic.contains(expected_status),
+                    "width {width} omitted {expected_status:?}: {rendered}"
+                );
+                assert!(semantic.contains("household target is saved locally"));
+                assert!(semantic.contains("Hosted guidance"));
+                assert!(semantic.contains("unavailable"));
+                assert!(semantic.contains("use /for me"));
+                assert!(semantic.contains("Local household target"));
+                assert!(!semantic.contains("Ask a question when you’re ready"));
+            }
+        }
     }
 
     #[test]

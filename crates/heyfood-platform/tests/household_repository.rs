@@ -688,6 +688,47 @@ async fn initialize_load_commit_and_exact_replay_are_live_and_copy_on_write() {
 }
 
 #[tokio::test]
+async fn retained_read_lease_blocks_cross_process_style_scope_commits_until_dispatch_releases_it() {
+    let prepared = prepare_repository("retained-read-lease").await;
+    let repository = repository(&prepared, NativeHouseholdModeV1::NativeEnabled);
+    repository
+        .initialize(prepared.command.clone(), CancellationToken::new())
+        .await
+        .expect("initialize");
+
+    let read_lease = repository
+        .acquire_read_lease(&prepared.account, CancellationToken::new())
+        .await
+        .expect("retained read lease");
+    let command = next_commit(
+        &read_lease.load().state,
+        &prepared.account,
+        read_lease.load().state.revision,
+        fixed_uuid("56565656-5656-4656-8656-565656565656"),
+        timestamp(1),
+    );
+    let competing_repository = repository.clone();
+    let competing = tokio::spawn(async move {
+        competing_repository
+            .commit(command, CancellationToken::new())
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+    assert!(
+        !competing.is_finished(),
+        "a competing scope commit crossed the retained hosted read lease"
+    );
+
+    drop(read_lease);
+    let committed = tokio::time::timeout(std::time::Duration::from_secs(2), competing)
+        .await
+        .expect("competing commit resumed after lease release")
+        .expect("competing task")
+        .expect("competing commit");
+    assert_eq!(committed.outcome, AppliedCommitOutcomeV1::Committed);
+}
+
+#[tokio::test]
 async fn encrypted_member_profile_and_selected_scope_survive_repository_reconstruction() {
     let prepared = prepare_repository("member-scope-restart").await;
     repository(&prepared, NativeHouseholdModeV1::NativeEnabled)

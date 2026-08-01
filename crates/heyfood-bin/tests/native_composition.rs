@@ -3,32 +3,36 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{
-    Arc, Mutex as StdMutex,
+    Arc, Barrier, Mutex as StdMutex,
     atomic::{AtomicUsize, Ordering},
     mpsc as std_mpsc,
 };
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use heyfood_agent_runtime::HttpService;
+use heyfood_agent_runtime::{CliAuthContext, HttpService};
 use heyfood_application::{
     AudioCapture, AudioCapturePort, BoxFuture, ClockPort, CredentialCommit, CredentialPort,
     EnsureSession, HouseholdCommit, HouseholdCommitOutcome, HouseholdErase, HouseholdEraseOutcome,
-    HouseholdInitialize, HouseholdLoad, HouseholdRepositoryPort, HouseholdRepositoryResolutionV1,
-    HouseholdSession, PortError, ServicePort, TurnFailureKind, resolve_household_commit_v1,
-    resolve_household_initialize_v1,
+    HouseholdInitialize, HouseholdLoad, HouseholdReadLeaseV1, HouseholdRepositoryPort,
+    HouseholdRepositoryResolutionV1, HouseholdSession, PortError, ServicePort, TurnFailureKind,
+    resolve_household_commit_v1, resolve_household_initialize_v1,
 };
-use heyfood_bin::{InteractiveTurnDriver, QualifiedTurnDriver};
+use heyfood_bin::{
+    InteractiveSessionPreparation, InteractiveSessionProvider, InteractiveTurnDriver, OneShotError,
+    QualifiedTurnDriver,
+};
 use heyfood_core::{
     AccountId, CanonicalDateV1, CanonicalDigestV1, CanonicalTimestampV1, CommitId,
     CredentialVersion, DisplayName, HOUSEHOLD_STATE_SCHEMA_VERSION, HouseholdDeclaredProfileV1,
-    HouseholdLifecycleV1, HouseholdMemberV1, HouseholdOwnerV1, HouseholdProfileDocumentV1,
-    HouseholdProfileOutboxEntryV1, HouseholdProfileRecordV1, HouseholdProfileStateV1,
-    HouseholdRevision, HouseholdScope, HouseholdStateV1, HouseholdSubjectId,
-    ImportedCompatibilityStateV1, LegacySourceIdentityV1, MemberId, MigrationDispositionManifestV1,
-    MigrationProvenanceV1, MinorStatusV1, NetworkPolicy, OnboardingProfileInput,
-    OwnerSyncIntentPhaseV1, ProfileRevision, RelationshipSourceV1, RelationshipV1, SensitiveString,
-    ServiceUrl, SessionCredentials, SessionSnapshot,
+    HouseholdLifecycleV1, HouseholdMemberV1, HouseholdOutboxId, HouseholdOutboxRecordV1,
+    HouseholdOwnerV1, HouseholdProfileDocumentV1, HouseholdProfileOutboxEntryV1,
+    HouseholdProfileRecordV1, HouseholdProfileStateV1, HouseholdRevision, HouseholdScope,
+    HouseholdStateV1, HouseholdSubjectId, ImportedCompatibilityStateV1, LegacySourceIdentityV1,
+    MemberId, MigrationDispositionManifestV1, MigrationProvenanceV1, MinorStatusV1, NetworkPolicy,
+    OnboardingProfileInput, OutboxRevision, OwnerSyncIntentPhaseV1, OwnerSyncIntentV1,
+    ProfileRevision, RelationshipSourceV1, RelationshipV1, SensitiveString, ServiceUrl,
+    SessionCredentials, SessionSnapshot, canonical_sha256_v1,
 };
 #[cfg(windows)]
 use heyfood_platform::NativeAuthStore;
@@ -150,6 +154,7 @@ struct MemoryHouseholdRepository {
     load_calls: AtomicUsize,
     commit_calls: AtomicUsize,
     fail_commit_at: AtomicUsize,
+    read_lease_barrier: StdMutex<Option<Arc<Barrier>>>,
 }
 
 impl MemoryHouseholdRepository {
@@ -159,6 +164,7 @@ impl MemoryHouseholdRepository {
             load_calls: AtomicUsize::new(0),
             commit_calls: AtomicUsize::new(0),
             fail_commit_at: AtomicUsize::new(0),
+            read_lease_barrier: StdMutex::new(None),
         }
     }
 
@@ -172,6 +178,10 @@ impl MemoryHouseholdRepository {
 
     fn mutate_state(&self, update: impl FnOnce(&mut HouseholdStateV1)) {
         update(self.state.lock().unwrap().as_mut().unwrap());
+    }
+
+    fn pause_next_read_lease_at_barrier(&self, barrier: Arc<Barrier>) {
+        *self.read_lease_barrier.lock().unwrap() = Some(barrier);
     }
 }
 
@@ -200,6 +210,25 @@ impl HouseholdRepositoryPort for MemoryHouseholdRepository {
                 ));
             }
             state.map(HouseholdLoad::from_state).transpose()
+        })
+    }
+
+    fn acquire_read_lease<'a>(
+        &'a self,
+        account: &'a AccountId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<HouseholdReadLeaseV1, PortError>> {
+        Box::pin(async move {
+            let barrier = self.read_lease_barrier.lock().unwrap().take();
+            if let Some(barrier) = barrier {
+                barrier.wait();
+                barrier.wait();
+            }
+            let load = self
+                .load(account, cancellation)
+                .await?
+                .ok_or_else(|| PortError::new("household_not_initialized", "missing state"))?;
+            Ok(HouseholdReadLeaseV1::new(load, Box::new(())))
         })
     }
 
@@ -330,6 +359,26 @@ struct FixedClock;
 impl ClockPort for FixedClock {
     fn unix_timestamp(&self) -> i64 {
         0
+    }
+}
+
+#[derive(Default)]
+struct ProbeSessionProvider {
+    calls: AtomicUsize,
+}
+
+impl InteractiveSessionProvider for ProbeSessionProvider {
+    fn prepare(
+        &self,
+        _cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<InteractiveSessionPreparation, OneShotError>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {
+            Err(OneShotError::new(
+                "unexpected_session_provider",
+                "scope authorization must finish before session preparation",
+            ))
+        })
     }
 }
 
@@ -474,6 +523,72 @@ fn selectable_everyone_native_household() -> HouseholdStateV1 {
     state
 }
 
+fn owner_context_household(
+    profile_state: HouseholdProfileStateV1,
+    canary: &str,
+) -> HouseholdStateV1 {
+    let mut state = incomplete_native_household();
+    state.owner.profile_state = profile_state;
+    let document = HouseholdProfileDocumentV1::native(HouseholdDeclaredProfileV1 {
+        diet_style_ids: vec!["vegan".into()],
+        custom_diet_styles: Vec::new(),
+        allergy_ids: Vec::new(),
+        custom_restrictions: Vec::new(),
+        health_condition_ids: Vec::new(),
+        custom_health_conditions: Vec::new(),
+        avoid_ingredients: vec![canary.to_owned()],
+        activity_level: None,
+        cuisine_preferences: Vec::new(),
+        custom_cuisines: Vec::new(),
+        severity_level: None,
+        notes: Some(format!("native owner context {canary}")),
+    })
+    .unwrap();
+    let profile = HouseholdProfileRecordV1 {
+        subject: HouseholdSubjectId::self_(),
+        profile_revision: ProfileRevision::new(1).unwrap(),
+        document,
+    };
+    if profile_state == HouseholdProfileStateV1::PendingSync {
+        let effective = profile.document.effective_profile().unwrap().unwrap();
+        let intent_id = CommitId::new().as_uuid();
+        let intent = OwnerSyncIntentV1 {
+            schema_version: 1,
+            intent_id,
+            intent_revision: 1,
+            phase: OwnerSyncIntentPhaseV1::NeedsConsentCheck,
+            subject: HouseholdSubjectId::self_(),
+            local_household_revision: state.revision.get(),
+            local_profile_revision: profile.profile_revision.get(),
+            local_profile_digest: canonical_sha256_v1(&effective).unwrap(),
+            remote_request_id: intent_id,
+            consent_version: None,
+            remote_base: None,
+            expected_remote_version: None,
+            request_method: None,
+            request_path: None,
+            request_body: None,
+            request_body_digest: None,
+            attempt_count: 0,
+            last_definite_error: None,
+            created_at: state.updated_at.clone(),
+            updated_at: state.updated_at.clone(),
+        };
+        state.outbox.push(HouseholdOutboxRecordV1 {
+            outbox_id: HouseholdOutboxId::owner_sync(intent_id).unwrap(),
+            outbox_revision: OutboxRevision::new(1).unwrap(),
+            entry: HouseholdProfileOutboxEntryV1::OwnerSync {
+                version: 1,
+                target: HouseholdSubjectId::self_(),
+                intent,
+            },
+        });
+    }
+    state.profiles.push(profile);
+    state.validate().unwrap();
+    state
+}
+
 fn fixture_credentials() -> SessionCredentials {
     credentials_for(native_account())
 }
@@ -515,7 +630,16 @@ fn native_driver_with_credentials(
     let service_url =
         ServiceUrl::parse(&format!("http://{address}"), NetworkPolicy::DEVELOPMENT).unwrap();
     let service = Arc::new(
-        HttpService::new(service_url, NetworkPolicy::DEVELOPMENT, Default::default()).unwrap(),
+        HttpService::new(service_url, NetworkPolicy::DEVELOPMENT, Default::default())
+            .unwrap()
+            .with_cli_auth(
+                CliAuthContext::new(
+                    "native-composition-device",
+                    SensitiveString::new("native-channel-access"),
+                    None,
+                )
+                .unwrap(),
+            ),
     );
     let service_port: Arc<dyn ServicePort> = service.clone();
     let ensure_session = Arc::new(EnsureSession::new(
@@ -616,6 +740,16 @@ fn respond_sync(stream: &mut std::net::TcpStream, status: &str, body: Value) {
         )
         .unwrap();
     stream.write_all(&body).unwrap();
+}
+
+fn respond_sync_sse(stream: &mut std::net::TcpStream) {
+    use std::io::Write as _;
+
+    stream
+        .write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\nevent: result\ndata: {\"message\":\"done\"}\n\n",
+        )
+        .unwrap();
 }
 
 fn owner_intent(state: &HouseholdStateV1) -> &heyfood_core::OwnerSyncIntentV1 {
@@ -792,6 +926,197 @@ fn native_member_voice_stops_before_microphone_and_network_dispatch() {
         listener.accept().unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
     ));
+}
+
+#[test]
+fn external_scope_change_after_first_text_preflight_touches_no_provider_refresh_or_network() {
+    for next_scope in ["member", "everyone"] {
+        let repository = Arc::new(MemoryHouseholdRepository::with_state(
+            selectable_everyone_native_household(),
+        ));
+        let barrier = Arc::new(Barrier::new(2));
+        repository.pause_next_read_lease_at_barrier(barrier.clone());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let provider = Arc::new(ProbeSessionProvider::default());
+        let mut driver = native_driver_with_credentials(
+            repository.clone(),
+            listener.local_addr().unwrap(),
+            expired_fixture_credentials(),
+        )
+        .with_session_provider(provider.clone());
+        let (events, mut receiver) = mpsc::channel(4);
+        driver
+            .start_turn(81, "serializer-content-canary".into(), events)
+            .unwrap();
+
+        barrier.wait();
+        repository.mutate_state(|state| {
+            state.revision = state.revision.checked_next().unwrap();
+            state.active_scope = if next_scope == "member" {
+                HouseholdScope::Subject(HouseholdSubjectId::member(
+                    state.members[0].member_id.clone(),
+                ))
+            } else {
+                HouseholdScope::Everyone
+            };
+            state.validate().unwrap();
+        });
+        barrier.wait();
+
+        let failure = match receiver.blocking_recv().unwrap() {
+            RuntimeEvent::TurnFailed {
+                operation_id: 81,
+                failure,
+            } => failure,
+            other => panic!("expected live scope refusal, got {other:?}"),
+        };
+        assert_eq!(
+            failure.diagnostic_code(),
+            "household_hosted_context_not_authorized"
+        );
+        assert!(
+            !failure
+                .diagnostic_code()
+                .contains("serializer-content-canary")
+        );
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        driver
+            .shutdown_and_join(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+}
+
+#[test]
+fn external_scope_change_after_first_voice_preflight_opens_no_provider_microphone_or_network() {
+    for next_scope in ["member", "everyone"] {
+        let repository = Arc::new(MemoryHouseholdRepository::with_state(
+            selectable_everyone_native_household(),
+        ));
+        let barrier = Arc::new(Barrier::new(2));
+        repository.pause_next_read_lease_at_barrier(barrier.clone());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let provider = Arc::new(ProbeSessionProvider::default());
+        let capture = Arc::new(ProbeAudioCapture::default());
+        let mut driver = native_driver_with_credentials(
+            repository.clone(),
+            listener.local_addr().unwrap(),
+            expired_fixture_credentials(),
+        )
+        .with_session_provider(provider.clone())
+        .with_audio_capture(capture.clone());
+        let (events, mut receiver) = mpsc::channel(4);
+        driver.start_voice(82, events).unwrap();
+
+        barrier.wait();
+        repository.mutate_state(|state| {
+            state.revision = state.revision.checked_next().unwrap();
+            state.active_scope = if next_scope == "member" {
+                HouseholdScope::Subject(HouseholdSubjectId::member(
+                    state.members[0].member_id.clone(),
+                ))
+            } else {
+                HouseholdScope::Everyone
+            };
+            state.validate().unwrap();
+        });
+        barrier.wait();
+
+        assert!(matches!(
+            receiver.blocking_recv().unwrap(),
+            RuntimeEvent::VoiceFailed {
+                operation_id: 82,
+                message
+            } if message.contains("could not prepare this operation")
+        ));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(capture.calls.load(Ordering::SeqCst), 0);
+        driver
+            .shutdown_and_join(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+}
+
+#[test]
+fn restarted_native_owner_turns_bind_exact_local_profile_and_self_meal_context() {
+    for (profile_state, canary) in [
+        (
+            HouseholdProfileStateV1::LocalOnly,
+            "local-only-owner-context-canary",
+        ),
+        (
+            HouseholdProfileStateV1::PendingSync,
+            "pending-sync-owner-context-canary",
+        ),
+        (
+            HouseholdProfileStateV1::Synced,
+            "synced-owner-context-canary",
+        ),
+    ] {
+        let repository = Arc::new(MemoryHouseholdRepository::with_state(
+            owner_context_household(profile_state, canary),
+        ));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected_canary = canary.to_owned();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let request = read_sync_request(&mut socket);
+            assert!(request.starts_with("POST /v1/agent/converse "));
+            let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1)
+                .expect("turn request body");
+            assert_eq!(
+                body["dietary_context"]["avoid_ingredients"][0],
+                expected_canary
+            );
+            assert_eq!(body["dietary_context"]["name"], "Me");
+            assert_eq!(body["dietary_context"]["relationship"], "self");
+            assert_eq!(body["meal_context"]["active_member_id"], "_self");
+            assert_eq!(body["meal_context"]["active_member_name"], "Me");
+            assert_eq!(body["meal_context"]["is_cook_mode"], false);
+            respond_sync_sse(&mut socket);
+        });
+
+        // A fresh driver for every persisted readiness row models a process
+        // restart; no imported Python snapshot is composed.
+        let mut restarted = native_driver(repository, address);
+        let (events, mut receiver) = mpsc::channel(8);
+        restarted
+            .start_turn(91, "Use my exact profile".into(), events)
+            .unwrap();
+        loop {
+            match receiver.blocking_recv().unwrap() {
+                RuntimeEvent::TurnFinished {
+                    operation_id: 91,
+                    outcome: heyfood_application::RunTurnOutcome::Completed,
+                } => break,
+                RuntimeEvent::TurnEvent {
+                    operation_id: 91, ..
+                } => {}
+                RuntimeEvent::TurnFailed {
+                    operation_id: 91,
+                    failure,
+                } => panic!(
+                    "unexpected native owner turn failure: {}",
+                    failure.diagnostic_code()
+                ),
+                other => panic!("unexpected native owner turn event: {other:?}"),
+            }
+        }
+        restarted
+            .shutdown_and_join(std::time::Duration::from_secs(2))
+            .unwrap();
+        server.join().unwrap();
+    }
 }
 
 #[test]
