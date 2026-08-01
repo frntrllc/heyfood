@@ -24,11 +24,13 @@ completion    print shell completion syntax
 
 ```bash
 heyfood agent describe
+heyfood agent describe --schema-version 2
 heyfood agent guide --format markdown
 heyfood agent guide --format markdown --safety
 heyfood agent schema --list
 heyfood agent schema manifest
 heyfood agent doctor
+heyfood agent doctor --schema-version 2
 heyfood agent setup --target codex|claude|all --scope user|project \
   [--project-root /absolute/path] [--dry-run|--apply] \
   [--plan-sha256 REVIEWED_SHA256] [--replace]
@@ -40,6 +42,10 @@ heyfood agent uninstall --target codex|claude|all --scope user|project \
 These commands do not read credentials, contact hello.food, mutate product
 state, or start the TUI. Schema lookup accepts only a public name or exact
 identifier from `--list`; unknown names return a typed runtime error.
+
+Discovery schema v1 is the default retained for installed-skill compatibility.
+Schema v2 must be requested explicitly and adds native-state compatibility
+metadata used by the v0.6.3 installer and release verifier.
 
 `agent setup` and `agent uninstall` are separate opt-in user configuration
 operations. They default to dry-run, require `--apply` to change state,
@@ -210,8 +216,12 @@ the same TUI process.
 /grocery             open the capability-gated active Grocery list
 /watch               open recurring Menu Watch subscriptions
 /profile             read consent and synchronized dietary profile state
-/household           show account-bound local household context
-/for MEMBER|everyone change household scope and reset conversation continuity
+/household           show account-bound encrypted local household context
+/household add       add one local member and complete declared profile
+/onboard --for MEMBER
+                     onboard one eligible existing local member
+/for me|MEMBER|everyone
+                     persist household scope and reset conversation continuity
 /location            show account-bound local location context
 /status              check service, profile, optional scopes, and voice readiness
 /voice               start/stop native capture in a qualified native-audio artifact
@@ -221,19 +231,25 @@ the same TUI process.
 /exit                leave the TUI
 ```
 
-The panels are read-only and cancellable. `/voice`, Ctrl+Space, and F8 use the
-same bounded capture/transcription/review state machine when the artifact
+Read panels are cancellable. `/household add` and `/onboard --for …` are the
+human-attached-TUI exceptions: they commit one complete version-1 declared
+member profile to the local encrypted repository only after explicit review.
+`/for me`, `/for <member>`, and `/for everyone` persist local scope across
+restart. Member/Everyone hosted guidance and evaluation remain deferred and
+fail before credentials, microphone, or HTTP. `/voice`, Ctrl+Space, and F8 use
+the same bounded capture/transcription/review state machine when the artifact
 contains native audio support; unavailable artifacts and insufficient scopes
-fail before microphone access. Dietary onboarding, interactive Grocery
-confirmation, and the bounded installed-artifact core matrix remain active
-release work. Item-level Menu Watch diff detail, real-hardware voice
-qualification, full parity, and the complete twelve-stage showcase are
+fail before microphone access. Item-level Menu Watch diff detail, real-hardware
+voice qualification, full parity, hosted household sync/learned graph/health,
+cross-device household state, and the complete twelve-stage showcase are
 post-`v0.6.3` conformance work, not release gates.
 
 ## Unavailable compatibility topology
 
 Health integrations, profile editing, restaurant search, recommendation, menu,
-recipe, household management, voice device configuration, diagnostics, and
-account management are not active Rust commands. Some names remain hidden
-for migration topology only. Health returns `capability_deferred`; unfinished
-compatibility topology returns `command_not_available`.
+recipe, top-level one-shot household management, voice device configuration,
+diagnostics, and account management are not active Rust process commands. The
+local household lifecycle is available only in the attached TUI described
+above. Some names remain hidden for migration topology only. Health returns
+`capability_deferred`; unfinished compatibility topology returns
+`command_not_available`.

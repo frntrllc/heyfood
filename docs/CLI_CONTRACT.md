@@ -8,6 +8,10 @@ invocation opens the same native TUI as `heyfood chat`.
 Human rendering may improve between compatible releases; machine-facing changes
 follow the compatibility policy below.
 
+The supported `v0.6.3` contract includes local native household roster
+management and complete declared-profile onboarding for members. Persistent Me/member/Everyone scope selection
+is stored in an account-bound encrypted repository.
+
 ## Availability boundary
 
 The following commands perform native product work:
@@ -17,7 +21,7 @@ The following commands perform native product work:
 | `agent` | Describes the exact installed executable, prints its embedded integration/safety guides and public schemas, and runs bounded local diagnostics without credentials or network access. |
 | `register` | Explicitly starts create-account device authorization, exchanges the approved grant, validates the response contract, and persists the complete native session. |
 | `login` | Connects an existing account on a fresh machine; on a connected machine, explicitly signs in again and atomically replaces the native grant with the canonical supported scope set. Refresh is never used to change authority. |
-| `logout` | Resolves and revokes the current channel link, revokes the current device, revokes the app session last, and then clears the exact account-bound local credential pair. Remote failures never prevent local teardown. |
+| `logout` | Resolves and revokes the current channel link, revokes the current device, revokes the app session last, and then clears the exact account-bound local credential pair plus the encrypted household key and vault artifacts. Remote failures never prevent resumable local teardown. |
 | `chat` | Opens the authenticated interactive Rust TUI, including local native-household management when the account-bound encrypted repository is enabled. |
 | `onboard` | Opens the Rust TUI directly in guided owner dietary-profile onboarding. Member onboarding is available only inside the attached TUI. |
 | `ask` | Runs one hosted-agent turn. |
@@ -33,6 +37,12 @@ ANSI-free and deterministic for an exact build. `agent schema --list` is the
 authoritative allowlist: internal approval/commit schemas are deliberately not
 exposed. `agent doctor` reports only bounded build/contract facts and never
 prints a user-specific executable or configuration path.
+
+Bare `agent`, `agent describe`, and `agent doctor` retain their closed schema-v1
+outputs for compatibility with Agent Skills installed by v0.6.2. The explicit
+`agent describe --schema-version 2` and `agent doctor --schema-version 2`
+forms expose the v0.6.3 native-state-aware contracts. Unsupported schema
+versions fail during argument parsing before credentials or network access.
 
 Health integrations are deferred from the supported `v0.6.3` contract.
 `health` is hidden from root help and generated shell completion, `/health` is
@@ -55,13 +65,13 @@ otherwise ineligible targets fail closed.
 
 Member profiles and member/Everyone scope are local to this device. They create
 no member profile-sync consent, remote member profile, or non-owner outbox
-entry. A member or Everyone conversational/evaluation turn, including voice,
+entry. A member or Everyone hosted guidance/evaluation turn, including voice,
 fails locally with `household_hosted_context_not_authorized` before credential
 refresh, microphone capture, profile serialization, or HTTP. `/for me` returns
 to the existing owner-hosted experience. “Dietary graph” support in this slice
 means only the complete declared local profile; learned preferences, history,
-goals, health/fitness data, hosted member evaluation, cross-device roster sync,
-and remote member erasure remain unavailable.
+goals, health/fitness data, hosted member guidance/evaluation, cross-device
+roster sync, and remote member erasure remain deferred.
 
 Legacy compatibility and rollback/repair modes remain read-only and never
 advertise an enabled add action. Household mutations are not exposed through
@@ -112,17 +122,21 @@ blocks use if the final two-store replacement cannot complete. The replacement
 may add Grocery or Menu Watch authority while removing scopes for deferred
 capabilities such as Health.
 
-`logout` is an explicit, idempotent authorization teardown. It performs no
-automatic mutation retries. A channel-link lookup uses channel authority;
+`logout` is an explicit, idempotent authorization and account-local household
+teardown. It performs no automatic mutation retries. A channel-link lookup
+uses channel authority;
 link, device, and session revocation use the current app session, with session
 revocation last. HTTP 404 is success-equivalent for these identity-bound
 deletes. Local account-bound credentials are cleared even if remote cleanup
-fails or is canceled. The two local stores are committed under a durable
-`account_logout_pending` marker so interruption can be resumed without
-deleting a concurrently replaced account. Human success is `Logged out.`; a
-partial remote outcome is stated explicitly. JSON includes `remote_complete`,
-per-step attempted/ok/uncertainty fields, and
-`local_credentials_cleared`, but never tokens or raw server errors.
+fails or is canceled. The two authorization stores are committed under a
+durable `account_logout_pending` marker so interruption can be resumed without
+deleting a concurrently replaced account. The native teardown journal also
+removes the exact account household key and encrypted vault artifacts while
+preserving unrelated non-credential data. Human success is `Logged out.`; a
+partial remote or local outcome is stated explicitly. JSON includes
+`remote_complete`, per-step attempted/ok/uncertainty fields, and
+`local_credentials_cleared`, but never tokens, household content, or raw server
+errors.
 
 Grocery reads include `grocery show` (compatibility alias `list`) and
 `grocery exclusions`.

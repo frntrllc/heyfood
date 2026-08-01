@@ -243,24 +243,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Linux native credential build dependencies
         run: sudo apt-get update && sudo apt-get install --yes libdbus-1-dev pkg-config
-      - name: Build and package the host executable as the four-archive fixture set
+      - name: Build and package the complete native-state fixture set
         shell: bash
         run: |
           set -euo pipefail
           version=$(cargo metadata --locked --no-deps --format-version 1 |
             jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
-          cargo build --release --locked --package heyfood-bin
+          cargo build --release --locked \
+            --package heyfood-bin \
+            --package heyfood-installer
           binary=target/release/heyfood
+          verifier=target/release/heyfood-installer
           for target in \
             aarch64-apple-darwin \
             aarch64-unknown-linux-gnu \
             x86_64-apple-darwin \
             x86_64-unknown-linux-gnu; do
             scripts/release/package.sh "$binary" "$version" "$target" dist
+            scripts/release/package-installer.sh \
+              "$verifier" "$version" "$target" dist
           done
-          scripts/release/checksums.sh dist "$version"
-          scripts/release/verify-assets.sh dist "$version"
-          scripts/release/smoke.sh dist "$version" x86_64-unknown-linux-gnu
+          scripts/release/checksums.sh dist "$version" --native-state
+          scripts/release/verify-assets.sh dist "$version" --native-state
+          scripts/release/smoke.sh \
+            dist "$version" x86_64-unknown-linux-gnu --native-state
       - name: Prove deterministic archive bytes
         shell: bash
         run: |
@@ -269,9 +275,17 @@ jobs:
             jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
           scripts/release/package.sh \
             target/release/heyfood "$version" x86_64-unknown-linux-gnu dist-repeat
+          scripts/release/package-installer.sh \
+            target/release/heyfood-installer \
+            "$version" \
+            x86_64-unknown-linux-gnu \
+            dist-repeat
           cmp \
             "dist/heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz" \
             "dist-repeat/heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz"
+          cmp \
+            "dist/heyfood-installer-v$version-x86_64-unknown-linux-gnu.tar.gz" \
+            "dist-repeat/heyfood-installer-v$version-x86_64-unknown-linux-gnu.tar.gz"
 
   protected-candidate-preflight:
     name: Protected candidate signing preflight
@@ -282,14 +296,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Require a new release version for D2 qualification
+      - name: Require the activated native-state release boundary
         shell: bash
         run: |
           set -euo pipefail
           version=$(cargo metadata --locked --no-deps --format-version 1 |
             jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
           if [[ "$version" == "0.6.2" ]]; then
-            echo "v0.6.2 is immutable and has no D2 verifier/declaration assets; choose a reviewed next release version before protected qualification." >&2
+            echo "v0.6.2 is immutable and has no native-state verifier or declaration assets; choose a reviewed native-state-capable release before protected qualification." >&2
             exit 1
           fi
           grep -Fqx "readonly SUPPORTED_VERSION=\"$version\"" install.sh
@@ -528,7 +542,7 @@ jobs:
           retention-days: 14
 
   protected-candidate-release-set:
-    name: Verify protected D2 release set
+    name: Verify protected native-state release set
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.qualify_signed_candidate }}
     needs: protected-release-candidate
     runs-on: ubuntu-22.04
@@ -571,14 +585,16 @@ jobs:
             candidate-release "$version" --native-state
           scripts/release/verify-assets.sh \
             candidate-release "$version" --native-state
-      - name: Attest the protected complete release set
+          test "$(find candidate-release -maxdepth 1 -type f | wc -l | tr -d '[:space:]')" -eq 10
+          test "$(wc -l <candidate-release/SHA256SUMS | tr -d '[:space:]')" -eq 9
+      - name: Attest every protected release asset
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
             candidate-release/*.tar.gz
             candidate-release/*.json
             candidate-release/SHA256SUMS
-      - name: Upload the protected D2 release set
+      - name: Upload the protected native-state release set
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: protected-candidate-release-set

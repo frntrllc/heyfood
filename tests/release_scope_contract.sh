@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016 # Contract checks intentionally match literal workflow source.
 
 set -euo pipefail
 
@@ -163,6 +164,15 @@ grep -Fq "if [[ -z \"\${HEYFOOD_QUALIFICATION_KEYCHAIN:-}\" ]]; then" "$protecte
 grep -Fq "if: \${{ always() && hashFiles('candidate-dist/**', 'candidate-evidence/**') != '' }}" \
   "$protected_slice" ||
   fail "protected upload must run only when candidate output exists"
+[[ "$(grep -Fc 'packaging/macos/sign-and-notarize.sh' "$protected_slice")" -eq 2 ]] ||
+  fail "protected qualification must sign and notarize both macOS executables"
+for subject in \
+  'candidate-release/*.tar.gz' \
+  'candidate-release/*.json' \
+  'candidate-release/SHA256SUMS'; do
+  grep -Fq "$subject" "$protected_slice" ||
+    fail "protected qualification must attest $subject"
+done
 
 grep -Fq 'os: [ubuntu-22.04, macos-15, windows-2025]' "$CANDIDATE_WORKFLOW" ||
   fail "ordinary Windows CI must remain enabled"
@@ -187,12 +197,18 @@ done
 "$ROOT/scripts/release/checksums.sh" "$distribution" 0.6.2
 "$ROOT/scripts/release/verify-assets.sh" "$distribution" 0.6.2
 [[ "$(wc -l <"$distribution/SHA256SUMS" | tr -d '[:space:]')" -eq 4 ]] ||
-  fail "the immutable v0.6.2 release manifest must remain the exact four-archive set"
+  fail "the immutable v0.6.2 manifest must bind exactly four product archives"
 [[ ! -e "$distribution/heyfood-v0.6.2-native-state.json" ]] ||
   fail "release tooling must not invent a declaration for immutable v0.6.2"
+if find "$distribution" -maxdepth 1 -type f \
+  -name 'heyfood-installer-v0.6.2-*.tar.gz' | grep -q .; then
+  fail "release tooling must not invent verifier archives for immutable v0.6.2"
+fi
+[[ "$(find "$distribution" -maxdepth 1 -type f | wc -l | tr -d '[:space:]')" -eq 5 ]] ||
+  fail "immutable v0.6.2 must remain four product archives plus SHA256SUMS"
 
-d2_distribution="$CASE_DIR/d2-distribution"
-mkdir "$d2_distribution"
+native_state_distribution="$CASE_DIR/native-state-distribution"
+mkdir "$native_state_distribution"
 for target in \
   aarch64-apple-darwin \
   aarch64-unknown-linux-gnu \
@@ -202,19 +218,23 @@ for target in \
     "$ROOT/install.sh" \
     0.6.3 \
     "$target" \
-    "$d2_distribution"
+    "$native_state_distribution"
   "$ROOT/scripts/release/package-installer.sh" \
     "$ROOT/install.sh" \
     0.6.3 \
     "$target" \
-    "$d2_distribution"
+    "$native_state_distribution"
 done
-"$ROOT/scripts/release/checksums.sh" "$d2_distribution" 0.6.3 --native-state
-"$ROOT/scripts/release/verify-assets.sh" "$d2_distribution" 0.6.3 --native-state
-[[ "$(wc -l <"$d2_distribution/SHA256SUMS" | tr -d '[:space:]')" -eq 9 ]] ||
-  fail "a D2 release manifest must bind four product archives, four verifier archives, and one declaration"
-[[ -f "$d2_distribution/heyfood-v0.6.3-native-state.json" ]] ||
-  fail "a D2 release must contain the canonical native-state declaration"
+"$ROOT/scripts/release/checksums.sh" \
+  "$native_state_distribution" 0.6.3 --native-state
+"$ROOT/scripts/release/verify-assets.sh" \
+  "$native_state_distribution" 0.6.3 --native-state
+[[ "$(wc -l <"$native_state_distribution/SHA256SUMS" | tr -d '[:space:]')" -eq 9 ]] ||
+  fail "v0.6.3 must bind four product archives, four verifier archives, and one declaration"
+[[ -f "$native_state_distribution/heyfood-v0.6.3-native-state.json" ]] ||
+  fail "v0.6.3 must contain the canonical native-state declaration"
+[[ "$(find "$native_state_distribution" -maxdepth 1 -type f | wc -l | tr -d '[:space:]')" -eq 10 ]] ||
+  fail "v0.6.3 must contain exactly ten public files including SHA256SUMS"
 
 windows_asset="$distribution/heyfood-v0.6.2-x86_64-pc-windows-msvc.zip"
 touch "$windows_asset"
@@ -233,6 +253,36 @@ grep -Fq "target/\$TARGET/release/heyfood-installer" "$RELEASE_WORKFLOW" ||
   fail "the release workflow must sign and smoke the target verifier bytes"
 grep -Fq 'dist/*.json' "$RELEASE_WORKFLOW" ||
   fail "the release workflow must attest the native-state declaration"
+grep -Fq 'dist/SHA256SUMS' "$RELEASE_WORKFLOW" ||
+  fail "the release workflow must attest the checksum manifest"
+grep -Fq 'dist/heyfood-v${{ needs.validate.outputs.version }}-${{ matrix.target }}.tar.gz' \
+  "$RELEASE_WORKFLOW" ||
+  fail "the release workflow must upload each product archive explicitly"
+grep -Fq 'dist/heyfood-installer-v${{ needs.validate.outputs.version }}-${{ matrix.target }}.tar.gz' \
+  "$RELEASE_WORKFLOW" ||
+  fail "the release workflow must upload each verifier archive explicitly"
+[[ "$(grep -Fc 'packaging/macos/sign-and-notarize.sh' "$RELEASE_WORKFLOW")" -eq 2 ]] ||
+  fail "the release workflow must sign and notarize both macOS executables"
+grep -Fq 'scripts/release/smoke-archive.sh dist "$VERSION" "$TARGET"' \
+  "$RELEASE_WORKFLOW" ||
+  fail "the release workflow must smoke each final product/verifier pair"
+grep -Fq 'test "${#assets[@]}" -eq 10' "$PUBLIC_SMOKE_WORKFLOW" ||
+  fail "public smoke must require all ten v0.6.3 assets"
+grep -Fq 'gh attestation verify "$asset"' "$PUBLIC_SMOKE_WORKFLOW" ||
+  fail "public smoke must verify the attestation for every downloaded asset"
+grep -Fq 'scripts/release/smoke.sh' "$PUBLIC_SMOKE_WORKFLOW" ||
+  fail "public smoke must execute the product and verifier archive pair"
+
+ordinary_distribution_slice="$CASE_DIR/ordinary-distribution-ci.yml"
+sed -n '/^  native-release-contract:/,/^  protected-candidate-preflight:/p' \
+  "$CANDIDATE_WORKFLOW" >"$ordinary_distribution_slice"
+grep -Fq -- '--package heyfood-installer' "$ordinary_distribution_slice" ||
+  fail "ordinary distribution CI must build the standalone verifier"
+grep -Fq 'scripts/release/package-installer.sh' "$ordinary_distribution_slice" ||
+  fail "ordinary distribution CI must package verifier fixtures"
+grep -Fq 'scripts/release/verify-assets.sh dist "$version" --native-state' \
+  "$ordinary_distribution_slice" ||
+  fail "ordinary distribution CI must verify the complete native-state fixture set"
 
 grep -Fq "Windows distribution remains deferred" "$ROOT/README.md" ||
   fail "README must state the Windows release boundary"
@@ -249,12 +299,41 @@ jq -e '
   ] and
   .distribution.windows_distribution == "deferred_to_future_release" and
   .distribution.ordinary_windows_ci_required == true and
+  .distribution.release_assets == {
+    "product_archives": 4,
+    "verifier_archives": 4,
+    "native_state_declarations": 1,
+    "checksum_manifests": 1,
+    "checksum_entries": 9,
+    "total_public_files": 10
+  } and
+  .distribution.immutable_v0_6_2 == {
+    "product_archives": 4,
+    "verifier_archives": 0,
+    "native_state_declarations": 0,
+    "checksum_manifests": 1
+  } and
   .explicit_non_gates == [
     "native_voice",
     "menu_watch_diff",
     "health_integrations"
+  ] and
+  .deferred_household_capabilities == [
+    "hosted_member_guidance_and_evaluation",
+    "member_profile_sync",
+    "learned_dietary_graph",
+    "member_health_and_fitness_data",
+    "cross_device_household_state",
+    "remote_member_erasure"
+  ] and
+  .manual_release_gates == [
+    "clean_v0_6_3_install",
+    "v0_6_2_to_v0_6_3_upgrade",
+    "pre_native_state_downgrade_floor_refusal",
+    "authorization_rollover_preserves_household_binding",
+    "logout_removes_account_vault_and_preserves_global_floor"
   ]
 ' "$ROOT/tests/showcase/core-release-matrix.v1.json" >/dev/null ||
   fail "the core matrix must preserve the bounded distribution and non-gates"
 
-printf 'release scope contract: four v0.6.3 archives; Windows CI retained\n'
+printf 'release scope contract: complete v0.6.3 native-state set; Windows CI retained\n'

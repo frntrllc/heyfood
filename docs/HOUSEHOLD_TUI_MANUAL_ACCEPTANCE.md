@@ -1,55 +1,150 @@
 # Native household TUI manual acceptance
 
-This is the required human-attached-terminal acceptance pass for the native
-household lifecycle. Do not automate these steps, capture the terminal, or
-record household labels, stable IDs, profile answers, account identifiers, or
-credentials.
+This is the required human-attached-terminal acceptance pass for the v0.6.3
+native household lifecycle and managed-install boundary. Do not automate the
+TUI through a PTY, capture the terminal, take screenshots, or record household
+labels, stable IDs, profile answers, account identifiers, paths, credentials,
+tokens, vault bytes, or authorization responses.
 
 ## Preconditions
 
-- Use a disposable test account in an attached terminal.
-- Use the exact candidate executable intended for qualification.
-- Enable the reviewed native-household rollout for that candidate.
-- Confirm no repair, teardown, or post-logout recovery is pending.
-- Record only `PASS`, `FAIL`, or a content-free failure category for each row.
+- Use isolated local OS profiles and disposable hello.food test accounts.
+- Use the exact protected v0.6.3 candidate product/verifier pair, declaration,
+  and `SHA256SUMS` intended for publication. Record only the candidate version
+  and approved digest.
+- Before publication, route installer downloads through the reviewed
+  content-free qualification transport fixture. The fixture may substitute
+  transport only; it must serve the exact candidate bytes and must not edit the
+  installer or automate the TUI.
+- Retain the immutable public v0.6.2 installer and host product archive for the
+  upgrade and downgrade-floor journeys; do not alter that release.
+- On macOS, use the signed and notarized candidate. On Linux, use the exact
+  attested candidate. Confirm the target's public-set attestation before any
+  TUI journey.
+- Enable the reviewed native-household rollout for the candidate.
+- Arrange one eligible existing-member fixture for `/onboard --for`; the
+  fixture must contain no production identity or dietary data.
+- Arrange a content-free test control that can expire/rotate the disposable
+  account's application session without disclosing authorization material.
+- Confirm no repair, teardown, or post-logout recovery is pending at the start
+  of each isolated journey.
+- For each evidence row, record only `PASS`, `FAIL`, or its allowed content-free
+  failure category. Never attach terminal output.
 
-## Journey
+## Journey A — clean v0.6.3 install and household lifecycle
 
-1. Launch the TUI and complete owner onboarding if the disposable account
-   requires it.
-2. Run `/household`. Confirm the panel shows the owner and the same current
-   context as the TUI chrome.
+1. From an empty isolated installation and state root, run the reviewed v0.6.3
+   installer. Confirm it verifies the checksum-bound product archive,
+   target-matched standalone verifier, and canonical declaration before the
+   executable appears. Confirm `heyfood --version` reports `0.6.3`.
+2. Launch the TUI, connect the disposable account, and complete owner
+   onboarding if requested. Run `/household`; confirm the owner and current
+   context agree with the TUI chrome.
 3. Run `/household add`. Complete relationship, display label, age band, and
    all eight version-1 dietary-profile steps. Review and save.
-4. Confirm one success is shown only after the member and declared profile are
-   committed, the new member is selected, and panel/chrome agree.
+4. Confirm exactly one success appears only after the member and complete
+   declared profile commit, the new member becomes selected, and panel/chrome
+   agree. Confirm no profile-sync or remote-member consent is requested.
 5. Exit normally, relaunch the exact executable for the same account, and run
-   `/household`. Confirm the selected member context survived restart.
+   `/household`. Confirm roster, completed member profile state, and selected
+   member scope survived restart.
 6. Submit an ordinary turn while the member is selected. Confirm it fails
-   locally with the hosted-context limitation and does not prompt for consent
-   or begin microphone capture.
-7. Run `/for everyone`. Confirm panel and chrome show `Everyone`, then confirm
-   an ordinary turn fails with the same local hosted-context limitation.
-8. Run `/for me`. Confirm panel and chrome return to the owner context and an
+   locally with the hosted-context limitation and does not refresh credentials,
+   prompt for consent, begin microphone capture, serialize a profile, or make a
+   hosted request.
+7. Run `/for everyone`. Confirm panel and chrome show `Everyone`, restart the
+   TUI, and confirm that scope persists. Submit an ordinary turn and confirm the
+   same pre-credential, pre-network failure.
+8. Run `/for me`. Confirm panel and chrome return to owner context and an
    ordinary owner turn follows the existing hosted flow.
-9. Start `/household add` again, enter only non-sensitive synthetic draft
-   values, then cancel before save. Run `/household` and confirm no additional
-   member was created.
-10. Exit normally and confirm the terminal presentation is restored.
+9. Run `/onboard --for` the eligible existing-member fixture, complete the same
+   eight steps, and confirm exactly that existing member is updated without
+   creating another roster entry.
+10. Start `/household add` again with synthetic draft values, cancel before
+    save, and confirm `/household` shows no additional member.
+11. Exit normally and confirm alternate screen, cursor, input mode, and terminal
+    presentation are restored.
+
+## Journey B — v0.6.2 to v0.6.3 upgrade and downgrade floor
+
+1. In a new isolated profile, install the immutable public v0.6.2 product and
+   connect a disposable account. Launch and exit normally so its supported
+   local account state exists.
+2. Upgrade with the reviewed v0.6.3 installer. Confirm the old executable
+   remains available until the v0.6.3 product, verifier, declaration, checksum,
+   and candidate manifest pass verification; then confirm one atomic
+   replacement and `heyfood --version` reports `0.6.3`.
+3. Launch v0.6.3 and allow native household initialization/migration to finish.
+   Confirm `/household` shows the account-bound owner exactly once and no
+   repair or imported-snapshot fallback is reported. Add and save one synthetic
+   member, restart, and confirm its local declared profile and selected scope
+   persist.
+4. After the native-state compatibility floor exists, invoke the immutable
+   v0.6.2 managed installer. Confirm it refuses the downgrade before release
+   download or executable replacement, leaves v0.6.3 installed, and leaves the
+   encrypted household state usable by v0.6.3.
+
+## Journey C — authorization rollover without household rebinding
+
+1. In a qualified v0.6.3 profile with a committed synthetic member, select
+   `/for me`. Use the content-free test control to expire the application
+   session while leaving its authorized refresh path valid.
+2. Submit one owner operation. Confirm authority refresh/rollover completes,
+   the operation is not replayed blindly, the authenticated account binding is
+   unchanged, and `/household` still shows the same local roster and scope.
+3. Complete an explicit `heyfood login` authorization replacement for the same
+   disposable account. Relaunch and confirm the household repository remains
+   bound to that account and its committed scope persists.
+4. Select the member, expire authority again, and submit an ordinary turn.
+   Confirm the household preflight rejects hosted member guidance before any
+   refresh or network work.
+
+## Journey D — logout vault teardown
+
+1. With the synthetic household present, run `heyfood logout`. If the test
+   harness injects an interruption, resume the documented logout recovery and
+   confirm it completes the original teardown rather than creating a second
+   account or household operation.
+2. Confirm hosted cleanup is reported truthfully and local cleanup completes
+   even if a controlled remote step is unavailable. Do not record remote
+   response content.
+3. Using only content-free presence checks, confirm authorization credentials,
+   the exact account household key, encrypted vault generations, migration
+   guard and other account-bound artifacts, and the completed teardown journal
+   are absent. Confirm the global native-state compatibility floor and an
+   unrelated non-credential preference or approved legacy non-credential
+   fixture remain.
+4. Launch `heyfood`. Confirm account connection is required and no prior owner,
+   member, profile, or selected scope can be rendered before a new login.
 
 ## Content-free result record
 
-| Row | Result | Allowed failure category |
+| Evidence row | Result | Allowed failure category |
 | --- | --- | --- |
+| Clean installer verifies product/verifier/declaration |  | `clean_install_verification_failed` |
 | Owner panel/chrome agreement |  | `presentation_mismatch` |
-| Atomic add and profile save |  | `local_commit_failed` |
+| Atomic member and profile save |  | `local_commit_failed` |
 | Selected member after save |  | `context_apply_failed` |
-| Restart continuity |  | `restart_continuity_failed` |
+| Member scope restart continuity |  | `member_restart_continuity_failed` |
 | Member hosted-turn preflight |  | `member_preflight_failed` |
-| Everyone selection/preflight |  | `everyone_preflight_failed` |
-| Return to owner context |  | `owner_context_failed` |
+| Everyone selection and restart continuity |  | `everyone_continuity_failed` |
+| Everyone hosted-turn preflight |  | `everyone_preflight_failed` |
+| Return to owner-hosted context |  | `owner_context_failed` |
+| Existing-member onboarding |  | `existing_member_onboarding_failed` |
 | Pre-save cancellation |  | `cancellation_failed` |
 | Terminal restoration |  | `terminal_restoration_failed` |
+| v0.6.2 to v0.6.3 atomic upgrade |  | `upgrade_failed` |
+| Native initialization preserves account binding |  | `migration_binding_failed` |
+| Downgrade floor refuses v0.6.2 before replacement |  | `downgrade_floor_failed` |
+| Expired-authority rollover preserves household |  | `authorization_rollover_failed` |
+| Same-account login replacement preserves household |  | `authorization_replacement_failed` |
+| Member preflight precedes expired-authority refresh |  | `member_refresh_order_failed` |
+| Logout resumes and completes |  | `logout_resume_failed` |
+| Account key, vault, credentials, and journal absent |  | `vault_teardown_failed` |
+| Global native-state downgrade floor retained |  | `downgrade_floor_removed` |
+| Unrelated non-credential state retained |  | `teardown_scope_failed` |
+| Post-logout launch exposes no prior household |  | `post_logout_isolation_failed` |
 
-The candidate is not release-ready until every row is `PASS`. A failure report
-must contain only the category above and the candidate version/digest.
+The candidate is not release-ready until every row is `PASS`. A failure record
+contains only the allowed category, candidate version, and approved digest. It
+contains no terminal transcript or household content.

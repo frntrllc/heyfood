@@ -1,8 +1,10 @@
 # Native household local state
 
-The native hey.food TUI keeps its household roster, selected scope, and
+The v0.6.3 native hey.food TUI keeps its household roster, selected scope, and
 declared dietary profiles in the account-bound encrypted household repository.
-It does not use the imported Python snapshot after native activation.
+Local roster management, member onboarding, and persistent scope selection are
+part of the supported v0.6.3 TUI contract. The TUI does not use the imported
+Python snapshot after native activation.
 
 ## Supported human workflow
 
@@ -31,15 +33,17 @@ Non-owner profiles stay on this device. Adding or onboarding a member does not
 grant profile-sync consent, create a remote member profile, or infer permission
 from account ownership or relationship.
 
-When a member or `Everyone` is selected, conversational and evaluation input
-fails locally with `household_hosted_context_not_authorized`. The preflight
-runs before session refresh, microphone capture, profile serialization, and
-HTTP dispatch. `/for me` restores the existing owner-hosted experience.
+When a member or `Everyone` is selected, hosted guidance, conversational, and
+evaluation input fails locally with `household_hosted_context_not_authorized`.
+The preflight runs before session refresh, microphone capture, profile
+serialization, and HTTP dispatch. `/for me` restores the existing owner-hosted
+experience.
 
 For this slice, a member “dietary graph” means only their complete declared
 version-1 local profile. It does not include hosted evaluation, learned
 preferences, history, goals, health or fitness data, cross-device roster sync,
-or remote erasure.
+remote member profile sync, or remote erasure. Those capabilities remain
+deferred behind a separate hosted privacy and consent contract.
 
 Household lifecycle mutation is human-TUI-only. It is absent from agent
 manifests, one-shot machine JSON, MCP tools, redirected stdin, and command-line
@@ -81,6 +85,21 @@ noncredential legacy files, removes the account household key and encrypted
 artifacts, and clears local authentication state. Partial or uncertain cleanup
 is reported explicitly and remains resumable.
 
+## Release and managed-install boundary
+
+v0.6.3 is the first activated native-state release. Its exact public set is
+four product archives, four matching standalone-verifier archives, one
+canonical native-state declaration, and `SHA256SUMS`. Both macOS product and
+verifier executables are signed and notarized before packaging; all ten assets
+are attested and verified after public download.
+
+The immutable v0.6.2 release remains four product archives plus its checksum
+manifest and gains no verifier or declaration. A managed v0.6.2-to-v0.6.3
+upgrade must preserve the prior executable until the v0.6.3 product,
+standalone verifier, declaration, checksum, and native-state floor all verify.
+After the floor exists, a managed pre-native-state downgrade must fail before
+download or executable replacement.
+
 ## Diagnostic handling
 
 Household names, stable IDs, age evidence, profile answers, selectors, account
@@ -89,6 +108,7 @@ logs, errors, panic diagnostics owned by this feature, and machine-readable
 history. The bounded text shown inside the user's attached TUI is the explicit
 presentation exception.
 
-Release qualification uses the content-free
+Release qualification uses the content-free clean-install, upgrade,
+downgrade-floor, authorization-rollover, lifecycle, and logout-teardown
 [native household TUI manual acceptance](HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md)
 checklist. Household lifecycle is not driven through an automated PTY.

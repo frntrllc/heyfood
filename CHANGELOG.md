@@ -6,6 +6,21 @@ authentication contracts are stabilized.
 
 ## 0.6.3 - 2026-07-30
 
+- Add the terminal-native household lifecycle: `/household add` atomically
+  creates a local member and complete version-1 declared dietary profile,
+  `/onboard --for …` completes an eligible existing member, and `/for me`,
+  `/for <member>`, and `/for everyone` persist the selected scope across
+  restart in the account-bound encrypted repository.
+- Keep non-owner data local and fail member/Everyone hosted guidance and
+  evaluation before credential refresh, microphone capture, or HTTP. Hosted
+  member sync, learned dietary graph, health/fitness data, and cross-device
+  household state remain deferred behind a separate privacy and consent
+  contract.
+- Activate the native-state release boundary with exactly four product
+  archives, four standalone-verifier archives, one canonical declaration, and
+  `SHA256SUMS`. Both macOS executables are Developer ID signed and notarized;
+  every public asset is attested and the complete downloaded set is verified
+  and smoke-qualified.
 - Replace backend stage and tool identifiers with calm, human progress copy,
   while unknown identifiers fall back to neutral language.
 - Render restaurant recommendations and full menus as structured terminal
@@ -58,19 +73,19 @@ authentication contracts are stabilized.
 - Keeps every agent mutation, arbitrary shell/file/raw-API access, TUI
   automation, Health, default-build native voice, and Windows distribution
   outside the supported release contract.
-- Qualifies the exact source and all four public macOS/Linux archives through
+- Qualifies the exact source and all four public macOS/Linux product archives through
   ordinary CI, protected signing/notarization, attestations, installed-artifact
   tests, independent Rust and plan review, and public download smoke.
 
 ## 0.5.0 - 2026-07-25
 
-- Defines the recovery-release distribution as exactly four archives: macOS
+- Defines the recovery-release distribution as exactly four product archives: macOS
   Apple Silicon, macOS Intel, Linux ARM64, and Linux x64. Windows distribution
   is deferred to `v0.5.1`; ordinary Windows compile, test, Clippy, credential,
   and deterministic packaging qualification remains active in CI.
 - Requires protected tag builds to Developer ID-sign, harden, and notarize both
   macOS executables before packaging. Public artifact smoke re-verifies the
-  macOS trust result and all four archive attestations.
+  macOS trust result and all four product-archive attestations.
 - Replaces the unsupported `v0.4.0` and `v0.4.1` incident artifacts with the
   fully qualified Rust CLI and interactive TUI recovery release.
 - Preserves terminal stream content when a terminal SSE document omits final

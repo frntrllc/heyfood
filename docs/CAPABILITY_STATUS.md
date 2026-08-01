@@ -14,12 +14,13 @@ specific `capability_deferred`.
 | Native v0.6.0 | Previous supported release | Superseded by v0.6.1, which adds supported account-bound logout. |
 | Native v0.6.1 | Previous supported release | Added account-bound logout but rejected local teardown after normal app-session rotation. Superseded by v0.6.2. |
 | Native v0.6.2 | Previous supported release | Fixed current-device logout after normal app-session rotation. Superseded by v0.6.3. |
-| Native v0.6.3 | Current supported release | Adds terminal-native progress and restaurant/menu presentation, typed slow-turn recovery without replay, and preflight refresh plus crash-safe local teardown for `heyfood logout`. |
+| Native v0.6.3 | Current supported release | Adds terminal-native progress and restaurant/menu presentation, typed slow-turn recovery without replay, preflight refresh plus crash-safe local teardown for `heyfood logout`, and the encrypted local household lifecycle described below. |
 | Hosted installer | Supported | Installs the checksum-verified native `v0.6.3` archive for macOS or Linux. |
 | Source | Available | Public for inspection and contributor evaluation under Apache 2.0. |
 | Windows x86-64 | Deferred | Windows distribution requires a separately qualified future release. Ordinary Windows compile, test, Clippy, Credential Manager, and deterministic packaging qualification remains active in CI, but no Windows credential or asset participates in the public release path. |
-| macOS v0.6.3 archives | Supported | Both architectures are Developer ID signed with hardened runtime, Apple notarized, attested, and installed-artifact qualified. |
-| Linux v0.6.3 archives | Supported | Both architectures are checksum verified, attested, and installed-artifact qualified. |
+| v0.6.3 release asset set | Supported | Exactly four product archives, four matching standalone-verifier archives, one canonical native-state declaration, and `SHA256SUMS`; every asset is attested and verified again after public download. |
+| macOS v0.6.3 archives | Supported | The product and verifier executables for both architectures are Developer ID signed with hardened runtime, Apple notarized, attested, and installed-artifact qualified. |
+| Linux v0.6.3 archives | Supported | The product and verifier archives for both architectures are checksum verified, attested, and installed-artifact qualified. |
 | Current native release | v0.6.3 | Supported on the four macOS/Linux targets listed above. |
 
 ## Product capabilities
@@ -37,9 +38,9 @@ specific `capability_deferred`.
 | Grocery | `heyfood grocery` plus TUI confirmation cards | Read/export; direct preparation and confirm/cancel require exact controlling-terminal review phrases | Supported v0.6.3 command with human-only mutations |
 | Oura health integrations | Not advertised; retained command spelling fails closed with `capability_deferred` | Future provider-neutral integration work | Deferred from the supported `v0.6.3` contract; no implementation or canary release gate |
 | Apple Health | No CLI command or TUI panel | Mobile/backend work remains outside this release | Deferred from the supported `v0.6.3` contract |
-| Native household roster and declared profiles | TUI `/household`, `/household add`, and `/onboard --for …` in `NativeEnabled` mode | No member profile sync in this slice | Current source: human TUI can add/onboard active members atomically; complete version-1 declared profiles remain encrypted and local to this device |
-| Household context switching | TUI `/for me`, `/for <member>`, and `/for everyone`; committed scope survives restart | Owner-hosted context remains available | Current source: Me/member/Everyone selection is persistent; member/Everyone hosted turns fail locally before credentials or HTTP pending a separate privacy/consent contract |
-| Member dietary graph | Complete declared version-1 local profile only | Hosted evaluation, learned history/preferences, goals, health/fitness, cross-device sync, and remote erasure are absent | Partially supported locally with explicit limitations |
+| Native household roster and declared profiles | TUI `/household`, `/household add`, and `/onboard --for …` in `NativeEnabled` mode | Hosted member profile sync is deferred | Supported in v0.6.3: the human TUI adds or onboards active members atomically; complete version-1 declared profiles remain encrypted and local to this device |
+| Household context switching | TUI `/for me`, `/for <member>`, and `/for everyone`; committed scope survives restart | Owner-hosted context remains available | Supported locally in v0.6.3: Me/member/Everyone selection is persistent; member/Everyone hosted guidance and evaluation fail locally before credentials or HTTP pending a separate privacy/consent contract |
+| Member dietary graph | Complete declared version-1 local profile only | Hosted guidance/evaluation, learned history/preferences, goals, health/fitness, cross-device sync, and remote erasure are deferred | Partially supported locally in v0.6.3 with explicit limitations |
 | Restaurants and recipes | Via `ask` and `item` | Resolution, menu evidence, and recipe tools | Hosted through current commands |
 | Menu Watch | `heyfood watch` plus `/watch` TUI panel | List plus human-terminal-only create (`CREATE`) and remove (`REMOVE`); scheduled execution is deployed; latest account-owned change summary, source, freshness, and provenance render in the TUI | Current source management and summary view; item-level diff detail remains follow-on |
 | Interactive TUI | Launches authenticated chat and functional read/action panels | Healthy slow work emits heartbeats; stage/tool identifiers remain outside response content | Supported and installed-artifact qualified in v0.6.3; human output uses structured guidance, never serializes unsupported protocol JSON, and renews native authorization before each authenticated operation. |
