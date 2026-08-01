@@ -241,6 +241,9 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify release helper executable modes
+        shell: bash
+        run: test -x scripts/release/native-state-declaration.sh
       - name: Install Linux native credential build dependencies
         run: sudo apt-get update && sudo apt-get install --yes libdbus-1-dev pkg-config
       - name: Build and package the complete native-state fixture set
@@ -300,6 +303,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test -x scripts/release/native-state-declaration.sh
           version=$(cargo metadata --locked --no-deps --format-version 1 |
             jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
           if [[ "$version" == "0.6.2" ]]; then
