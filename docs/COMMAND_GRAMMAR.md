@@ -235,8 +235,9 @@ Read panels are cancellable. `/household add` and `/onboard --for …` are the
 human-attached-TUI exceptions: they commit one complete version-1 declared
 member profile to the local encrypted repository only after explicit review.
 `/for me`, `/for <member>`, and `/for everyone` persist local scope across
-restart. Member/Everyone hosted guidance and evaluation remain deferred and
-fail before credentials, microphone, or HTTP. `/voice`, Ctrl+Space, and F8 use
+restart. Ordinary hosted turns evaluate the selected member or Everyone from
+an exact leased projection of the local declared profiles without creating
+remote member profiles or sync consent. `/voice`, Ctrl+Space, and F8 use
 the same bounded capture/transcription/review state machine when the artifact
 contains native audio support; unavailable artifacts and insufficient scopes
 fail before microphone access. Item-level Menu Watch diff detail, real-hardware

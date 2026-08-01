@@ -230,9 +230,11 @@ and commits the new local member and profile atomically. `/onboard --for <member
 completes an eligible existing member. `/for me`, `/for <member>`,
 and `/for everyone` persist the selected scope in the account-bound encrypted
 repository and reload it after restart. Non-owner profiles remain on this
-device. Member/Everyone hosted guidance and evaluation fail locally before
-credential or network work; hosted member sync, learned graph, health/fitness
-data, remote erasure, and cross-device household state remain deferred.
+device as persisted state. Member/Everyone hosted guidance evaluates an exact
+revision-bound declared-profile projection sent as transient request context;
+it creates no remote member profile, sync consent, or non-owner outbox entry.
+Hosted member sync, learned graph, health/fitness data, remote erasure, and
+cross-device household state remain deferred.
 
 Health integrations are explicitly deferred from the supported `v0.6.3`
 contract: `health` is absent from root help and shell

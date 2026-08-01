@@ -311,6 +311,7 @@ async fn python_fixture_drives_persistence_refresh_rustls_sse_run_turn_and_ratat
                     dietary: Some(fixture["request"]["body"]["dietary_context"].clone()),
                     device: Some(fixture["request"]["body"]["device_context"].clone()),
                     meal: Some(fixture["request"]["body"]["meal_context"].clone()),
+                    household_scope: None,
                     latitude: fixture["request"]["body"]["lat"].as_f64(),
                     longitude: fixture["request"]["body"]["lng"].as_f64(),
                     confirmation: None,

@@ -9,6 +9,10 @@ use std::fmt::Write as _;
 use heyfood_core::terminal_safe_text;
 use serde_json::Value;
 
+/// A privacy-safe refusal used when a household menu contains protocol values
+/// this client cannot map to reviewed human copy.
+pub const UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE: &str = "hey.food returned household guidance this version can’t display safely. Update heyfood, or ask about a specific item.";
+
 /// Render the structured household menu carried by an agent result.
 ///
 /// Returns `None` for every other result type. The caller remains responsible
@@ -16,6 +20,9 @@ use serde_json::Value;
 #[must_use]
 pub fn render_household_menu(document: &Value) -> Option<String> {
     let structured = household_menu_document(document)?;
+    if !household_menu_is_presentable(structured) {
+        return Some(UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE.to_owned());
+    }
     if structured.get("presentation").and_then(Value::as_str) != Some("full_menu") {
         return Some(render_household_recommendations(structured));
     }
@@ -95,7 +102,7 @@ pub fn render_household_menu(document: &Value) -> Option<String> {
             .unwrap_or("Menu");
         let _ = writeln!(output, "\n{}", inline_text(section_name));
         for item in items {
-            append_item(&mut output, item);
+            append_item(&mut output, structured, item);
         }
     }
 
@@ -479,7 +486,7 @@ fn append_provenance(
     }
 }
 
-fn append_item(output: &mut String, item: &Value) {
+fn append_item(output: &mut String, structured: &Value, item: &Value) {
     let name = item
         .get("name")
         .and_then(Value::as_str)
@@ -511,11 +518,16 @@ fn append_item(output: &mut String, item: &Value) {
     {
         let _ = writeln!(output, "  {}", inline_text(description));
     }
-    append_member_safety(output, item, safety.as_deref());
+    append_member_safety(output, structured, item, safety.as_deref());
     append_allergen_detail(output, item);
 }
 
-fn append_member_safety(output: &mut String, item: &Value, composite: Option<&str>) {
+fn append_member_safety(
+    output: &mut String,
+    structured: &Value,
+    item: &Value,
+    composite: Option<&str>,
+) {
     let Some(safety) = item.get("safety").and_then(Value::as_object) else {
         append_missing_reason_warning(output, composite);
         return;
@@ -523,11 +535,10 @@ fn append_member_safety(output: &mut String, item: &Value, composite: Option<&st
 
     let mut entries: Vec<_> = safety.iter().collect();
     entries.sort_by(|(left_id, left), (right_id, right)| {
-        let left_label = left.get("label").and_then(Value::as_str).unwrap_or(left_id);
-        let right_label = right
-            .get("label")
-            .and_then(Value::as_str)
-            .unwrap_or(right_id);
+        let left_label =
+            household_member_label(structured, left_id, left).unwrap_or("Household member");
+        let right_label =
+            household_member_label(structured, right_id, right).unwrap_or("Household member");
         inline_text(left_label).cmp(&inline_text(right_label))
     });
 
@@ -544,18 +555,9 @@ fn append_member_safety(output: &mut String, item: &Value, composite: Option<&st
             .filter(|value| !value.trim().is_empty());
         let chips = string_array(member.get("chips"));
         let conflicts = string_array(member.get("conflicts"));
-        let label = member
-            .get("label")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
+        let label = household_member_label(structured, member_id, member)
             .map(inline_text)
-            .unwrap_or_else(|| {
-                if member_id.trim().is_empty() {
-                    "Household member".into()
-                } else {
-                    inline_text(member_id)
-                }
-            });
+            .unwrap_or_else(|| "Household member".into());
         let restrictive = matches!(level.as_str(), "caution" | "avoid" | "unable to evaluate");
         if restrictive {
             restrictive_members += 1;
@@ -673,8 +675,121 @@ fn safety_label(value: &str) -> String {
         "caution" | "risky" | "risk" => "caution".into(),
         "avoid" => "avoid".into(),
         "unable" | "unknown" | "unable_to_evaluate" => "unable to evaluate".into(),
-        other => inline_text(other).replace('_', " "),
+        _ => "unable to evaluate".into(),
     }
+}
+
+fn household_menu_is_presentable(structured: &Value) -> bool {
+    let summaries = structured
+        .get("member_summaries")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    if summaries.iter().any(|summary| {
+        let Some(member_id) = summary.get("member_id").and_then(Value::as_str) else {
+            return false;
+        };
+        member_id != "_self"
+            && summary
+                .get("label")
+                .and_then(Value::as_str)
+                .is_none_or(|label| label.trim().is_empty())
+    }) {
+        return false;
+    }
+
+    let sections = structured
+        .get("sections")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for item in sections
+        .iter()
+        .filter_map(|section| section.get("items").and_then(Value::as_array))
+        .flatten()
+    {
+        if item.get("composite_level").is_some_and(|value| {
+            value
+                .as_str()
+                .is_none_or(|status| !known_safety_status(status))
+        }) {
+            return false;
+        }
+        if let Some(safety) = item.get("safety").and_then(Value::as_object) {
+            for (member_id, member) in safety {
+                if member.get("level").is_some_and(|value| {
+                    value
+                        .as_str()
+                        .is_none_or(|status| !known_safety_status(status))
+                }) || (member_id != "_self"
+                    && household_member_label(structured, member_id, member).is_none())
+                {
+                    return false;
+                }
+            }
+        }
+    }
+
+    structured
+        .get("agent_picks")
+        .and_then(Value::as_object)
+        .is_none_or(|picks| {
+            picks.keys().all(|member_id| {
+                member_id == "_self"
+                    || summaries.iter().any(|summary| {
+                        summary.get("member_id").and_then(Value::as_str) == Some(member_id)
+                            && summary
+                                .get("label")
+                                .and_then(Value::as_str)
+                                .is_some_and(|label| !label.trim().is_empty())
+                    })
+            })
+        })
+}
+
+fn household_member_label<'a>(
+    structured: &'a Value,
+    member_id: &str,
+    member: &'a Value,
+) -> Option<&'a str> {
+    if member_id == "_self" {
+        return member
+            .get("label")
+            .and_then(Value::as_str)
+            .filter(|label| !label.trim().is_empty())
+            .or(Some("you"));
+    }
+    member
+        .get("label")
+        .and_then(Value::as_str)
+        .filter(|label| !label.trim().is_empty())
+        .or_else(|| {
+            structured
+                .get("member_summaries")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find(|summary| summary.get("member_id").and_then(Value::as_str) == Some(member_id))
+                .and_then(|summary| summary.get("label").and_then(Value::as_str))
+                .filter(|label| !label.trim().is_empty())
+        })
+}
+
+fn known_safety_status(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "safe"
+            | "safer"
+            | "generally_safe"
+            | "generally_safer"
+            | "caution"
+            | "risky"
+            | "risk"
+            | "avoid"
+            | "unable"
+            | "unknown"
+            | "unable_to_evaluate"
+    )
 }
 
 fn menu_source_label(value: &str) -> Option<&'static str> {
@@ -1229,6 +1344,60 @@ mod tests {
         assert!(!rendered.contains("\nSource: forged"));
         assert!(!rendered.contains("\nFreshness: forged"));
         assert!(!rendered.contains("\n• forged"));
+    }
+
+    #[test]
+    fn missing_member_labels_fail_closed_without_rendering_identifiers() {
+        let member_id = "3f1c9c2e-2f5a-4a5b-8f1e-9d2b7c6a4e01";
+        let context_hash = "54aa3228a67d4e262d383d0cfba6be4f4c0c94f21f5d095f3127d00928586bcb";
+        let rendered = render_household_menu(&json!({
+            "structured": {
+                "type": "household_menu",
+                "presentation": "full_menu",
+                "context_hash": context_hash,
+                "sections": [{
+                    "name": "Dinner",
+                    "items": [{
+                        "name": "Soup",
+                        "composite_level": "avoid",
+                        "safety": {
+                            (member_id): {
+                                "level": "avoid",
+                                "reason": "Contains a restricted ingredient."
+                            }
+                        }
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(rendered, UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE);
+        assert!(!rendered.contains(member_id));
+        assert!(!rendered.contains(context_hash));
+    }
+
+    #[test]
+    fn unknown_safety_enums_fail_closed_without_protocol_copy() {
+        let rendered = render_household_menu(&json!({
+            "structured": {
+                "type": "household_menu",
+                "presentation": "full_menu",
+                "sections": [{
+                    "name": "Dinner",
+                    "items": [{
+                        "name": "Soup",
+                        "composite_level": "future_status",
+                        "safety": {}
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(rendered, UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE);
+        assert!(!rendered.contains("future_status"));
+        assert!(!rendered.contains("Soup"));
     }
 
     #[test]

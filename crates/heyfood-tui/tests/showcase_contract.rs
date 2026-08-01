@@ -295,15 +295,9 @@ fn native_add_reuses_the_full_profile_flow_and_waits_for_context_apply() {
             .iter()
             .all(|entry| !entry.text.contains(old_subject_result))
     );
-    assert!(
-        model
-            .scrollback
-            .entries()
-            .back()
-            .unwrap()
-            .text
-            .contains("Hosted guidance for this household scope is not yet enabled")
-    );
+    let applied = &model.scrollback.entries().back().unwrap().text;
+    assert!(applied.contains(&format!("For: {secret_label}")));
+    assert!(!applied.contains("Hosted guidance"));
 }
 
 #[test]
@@ -566,7 +560,7 @@ fn rollback_panel_is_read_only_and_chrome_is_bounded() {
 }
 
 #[test]
-fn restarted_member_and_everyone_scopes_are_local_management_not_hosted_ready() {
+fn restarted_member_and_everyone_scopes_are_hosted_ready() {
     let roster = || {
         vec![
             owner(),
@@ -591,13 +585,11 @@ fn restarted_member_and_everyone_scopes_are_local_management_not_hosted_ready() 
             scope,
         );
         assert!(model.household_management_ready());
-        assert!(model.household_hosted_guidance_unavailable());
 
-        assert!(submit_text(&mut model, "What should we eat?").is_empty());
-        let notice = &model.scrollback.entries().back().unwrap().text;
-        assert!(notice.contains("saved locally"));
-        assert!(notice.contains("Hosted guidance"));
-        assert!(notice.contains("/for me"));
+        assert!(matches!(
+            submit_text(&mut model, "What should we eat?").as_slice(),
+            [Effect::SubmitTurn { prompt, .. }] if prompt == "What should we eat?"
+        ));
 
         let mut management = AppModel::default();
         bootstrap(

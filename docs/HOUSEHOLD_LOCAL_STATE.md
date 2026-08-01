@@ -29,21 +29,25 @@ the native TUI.
 
 ## Privacy boundary
 
-Non-owner profiles stay on this device. Adding or onboarding a member does not
-grant profile-sync consent, create a remote member profile, or infer permission
-from account ownership or relationship.
+Non-owner profiles are persisted only on this device. Adding or onboarding a
+member does not grant profile-sync consent, create a remote member profile, or
+infer permission from account ownership or relationship.
 
-When a member or `Everyone` is selected, hosted guidance, conversational, and
-evaluation input fails locally with `household_hosted_context_not_authorized`.
-The preflight runs before session refresh, microphone capture, profile
-serialization, and HTTP dispatch. `/for me` restores the existing owner-hosted
-experience.
+When a member or `Everyone` is selected, ordinary hosted guidance and
+evaluation acquire the exact live encrypted snapshot under a revision-bound
+read lease. The selected declared-profile projection is sent as transient
+request context: one profile for a member, or the owner plus every eligible
+active member for `Everyone`. The client intentionally omits the top-level
+server-synced `household_scope` so request-first local profiles remain the
+authority. `/for me` restores the owner context. Invalid, archived, incomplete,
+conflicted, stale, or cancelled contexts fail before HTTP dispatch.
 
 For this slice, a member “dietary graph” means only their complete declared
-version-1 local profile. It does not include hosted evaluation, learned
-preferences, history, goals, health or fitness data, cross-device roster sync,
-remote member profile sync, or remote erasure. Those capabilities remain
-deferred behind a separate hosted privacy and consent contract.
+version-1 local profile and evaluation derived from that declared context. It
+does not include learned preferences, history, goals, health or fitness data,
+cross-device roster sync, remote member profile sync, or remote erasure. Those
+capabilities remain deferred behind a separate hosted privacy and consent
+contract.
 
 Household lifecycle mutation is human-TUI-only. It is absent from agent
 manifests, one-shot machine JSON, MCP tools, redirected stdin, and command-line

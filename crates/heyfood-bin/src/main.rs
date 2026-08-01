@@ -4187,7 +4187,8 @@ mod tests {
         let review = String::from_utf8(review).unwrap();
         assert!(review.contains("Mutation: log meal memory"));
         assert!(review.contains("Meal: oatmeal"));
-        assert!(review.contains("Household target: \"Me\" [scope=_self]"));
+        assert!(review.contains("Household target: \"Me\""));
+        assert!(!review.contains("scope=_self"));
         assert!(!review.contains('\u{1b}'));
 
         let mut rejected_input = Cursor::new(b"yes\n");

@@ -9,7 +9,7 @@ pub use heyfood_application::{
 };
 use heyfood_application::{
     RunTurnOutcome, TurnFailure, TurnFailureKind, UNRENDERABLE_AGENT_RESULT_MESSAGE,
-    agent_result_text, is_full_household_menu, render_household_menu,
+    agent_result_text, is_full_household_menu, render_household_evaluation, render_household_menu,
 };
 use heyfood_core::{
     ActionConfirmationEnvelopeWire, AgentConfirmationCommandWire, AgentEvent,
@@ -1338,7 +1338,6 @@ enum HouseholdTurnGateV1 {
     Legacy,
     Loading,
     HostedReady,
-    LocalOnlyHostedUnavailable,
     ReconciliationRequired,
     CounterExhausted,
 }
@@ -1490,28 +1489,14 @@ impl AppModel {
 
     #[must_use]
     pub fn household_management_ready(&self) -> bool {
-        matches!(
-            self.household_turn_gate,
-            HouseholdTurnGateV1::HostedReady | HouseholdTurnGateV1::LocalOnlyHostedUnavailable
-        ) && self.household_generation.is_some()
+        matches!(self.household_turn_gate, HouseholdTurnGateV1::HostedReady)
+            && self.household_generation.is_some()
             && self.household_snapshot.is_some()
-    }
-
-    #[must_use]
-    pub fn household_hosted_guidance_unavailable(&self) -> bool {
-        matches!(
-            self.household_turn_gate,
-            HouseholdTurnGateV1::LocalOnlyHostedUnavailable
-        )
     }
 }
 
-fn household_turn_gate_for_scope(scope: &HouseholdScope) -> HouseholdTurnGateV1 {
-    if matches!(scope, HouseholdScope::Subject(HouseholdSubjectId::Self_)) {
-        HouseholdTurnGateV1::HostedReady
-    } else {
-        HouseholdTurnGateV1::LocalOnlyHostedUnavailable
-    }
+fn household_turn_gate_for_scope(_scope: &HouseholdScope) -> HouseholdTurnGateV1 {
+    HouseholdTurnGateV1::HostedReady
 }
 
 fn household_subject_kind(subject: &HouseholdSubjectId) -> &'static str {
@@ -4498,7 +4483,7 @@ fn handle_household_context_applied(
     model.operation = OperationState::Idle;
     model.activity = None;
     clear_subject_bound_transients(model);
-    let mut copy = match pending.kind {
+    let copy = match pending.kind {
         HouseholdMutationKindV1::CreateMember => format!(
             "Added {bounded_active_label}. Their declared dietary profile is saved on this device. For: {bounded_active_label}"
         ),
@@ -4515,14 +4500,6 @@ fn handle_household_context_applied(
             format!("Household target changed. For: {bounded_active_label}")
         }
     };
-    if !matches!(
-        active_scope,
-        HouseholdScope::Subject(HouseholdSubjectId::Self_)
-    ) {
-        copy.push_str(
-            "\n\nThis roster, profile, and scope are saved locally. Hosted guidance for this household scope is not yet enabled. Run /for me to return to the existing owner experience.",
-        );
-    }
     model.scrollback.push(SemanticEntry {
         speaker: Speaker::Assistant,
         text: copy,
@@ -5168,13 +5145,6 @@ fn household_turn_is_authorized(model: &mut AppModel) -> bool {
     }
     match model.household_turn_gate {
         HouseholdTurnGateV1::HostedReady => {}
-        HouseholdTurnGateV1::LocalOnlyHostedUnavailable => {
-            push_notice(
-                model,
-                "This household scope is saved locally. Hosted guidance for members and Everyone is not yet enabled. Run /for me to return to the existing owner experience.",
-            );
-            return false;
-        }
         HouseholdTurnGateV1::Legacy
         | HouseholdTurnGateV1::Loading
         | HouseholdTurnGateV1::ReconciliationRequired
@@ -5186,23 +5156,13 @@ fn household_turn_is_authorized(model: &mut AppModel) -> bool {
             return false;
         }
     }
-    let Some(snapshot) = model.household_snapshot.as_ref() else {
+    let Some(_snapshot) = model.household_snapshot.as_ref() else {
         push_notice(
             model,
             "Household context is not ready. No turn was dispatched.",
         );
         return false;
     };
-    if !matches!(
-        snapshot.active_scope,
-        HouseholdScope::Subject(HouseholdSubjectId::Self_)
-    ) {
-        push_notice(
-            model,
-            "This household scope is saved locally. Hosted guidance for members and Everyone is not yet enabled. Run /for me to return to the existing owner experience.",
-        );
-        return false;
-    }
     true
 }
 
@@ -5957,6 +5917,7 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
             let focus_full_menu = is_full_household_menu(&document);
             let confirmation = ActionConfirmationEnvelopeWire::from_result_document(&document);
             let result = agent_result_text(&document).map(terminal_safe_text);
+            let household_evaluation = render_household_evaluation(&document);
             let household_menu = render_household_menu(&document);
             let choice_labels = std::mem::take(&mut model.pending_choice_labels);
             model.scrollback.mutate_last_assistant(|entry| {
@@ -5971,7 +5932,23 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                         );
                     }
                     Ok(None) => {
-                        if let Some(menu) = household_menu {
+                        if let Err(error) = household_evaluation.as_ref() {
+                            entry.text = error.to_string();
+                        } else if let Some(evaluation) = household_evaluation
+                            .as_ref()
+                            .ok()
+                            .and_then(|evaluation| evaluation.as_ref())
+                        {
+                            let mut rendered = result
+                                .filter(|value| !value.is_empty())
+                                .unwrap_or_else(|| entry.text.clone());
+                            if !rendered.is_empty() {
+                                rendered.push_str("\n\n");
+                            }
+                            rendered.push_str(evaluation);
+                            entry.text = rendered;
+                            append_choice_labels(&mut entry.text, &choice_labels);
+                        } else if let Some(menu) = household_menu {
                             let mut rendered = result
                                 .filter(|value| !value.is_empty())
                                 .unwrap_or_else(|| entry.text.clone());
@@ -6054,10 +6031,11 @@ fn render_action_confirmation(envelope: &ActionConfirmationEnvelopeWire) -> Stri
                 .map(terminal_safe_text)
                 .unwrap_or_else(|| "item".into());
             let intended_for = item.get("intended_for").and_then(serde_json::Value::as_str);
-            let intended = intended_for
-                .map(terminal_safe_text)
-                .map(|member| format!(" for {member}"))
-                .unwrap_or_default();
+            let intended = match intended_for {
+                Some("_self") => " for you".to_owned(),
+                Some(_) => " for a household member".to_owned(),
+                None => String::new(),
+            };
             let quantity = item.get("quantity").and_then(|value| {
                 value
                     .as_str()
@@ -6232,7 +6210,7 @@ fn render_confirmation_safety(
         .and_then(|safety| safety.get("status"))
         .and_then(serde_json::Value::as_str)
     {
-        let status = terminal_safe_text(status).replace('_', " ");
+        let status = human_safety_status(status);
         let _ = writeln!(output, "   ingredient screening: {status}");
     }
     let flags = nested_safety
@@ -6245,15 +6223,18 @@ fn render_confirmation_safety(
     if let Some(flags) = flags {
         for flag in flags {
             let member_id = flag.get("member_id").and_then(serde_json::Value::as_str);
-            let member = member_id
-                .map(terminal_safe_text)
-                .unwrap_or_else(|| "member".into());
+            let member = flag
+                .get("label")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| required_text(value, 80).ok())
+                .map(|value| terminal_safe_text(&value))
+                .or_else(|| (member_id == Some("_self")).then(|| "You".to_owned()))
+                .unwrap_or_else(|| "Household member".into());
             let status = flag
                 .get("status")
                 .and_then(serde_json::Value::as_str)
-                .map(terminal_safe_text)
-                .map(|value| value.replace('_', " "))
-                .unwrap_or_else(|| "unable to evaluate".into());
+                .map(human_safety_status)
+                .unwrap_or("unable to evaluate");
             let intended = member_id
                 .filter(|member| Some(*member) == intended_for)
                 .map_or("", |_| " · intended");
@@ -6282,6 +6263,16 @@ fn render_confirmation_safety(
         .and_then(serde_json::Value::as_str)
     {
         let _ = writeln!(output, "   {}", terminal_safe_text(label_hint));
+    }
+}
+
+fn human_safety_status(status: &str) -> &'static str {
+    match status {
+        "generally_safer" => "generally safer",
+        "risky" => "risky",
+        "avoid" => "avoid",
+        "unable_to_evaluate" => "unable to evaluate",
+        _ => "unable to evaluate",
     }
 }
 
@@ -7570,6 +7561,99 @@ mod tests {
     }
 
     #[test]
+    fn terminal_result_renders_named_household_evaluation_without_protocol_metadata() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/contracts/household-backend/v1/fixtures/household_evaluation/founding_scenario_maya_menu.json"
+        )))
+        .unwrap();
+        let mut model = AppModel {
+            draft: "What can everyone eat?".into(),
+            cursor: 22,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "text": "Here is the household result.",
+                        "structured_content": fixture["result"].clone()
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+
+        let entry = model.scrollback.entries().back().unwrap();
+        for expected in [
+            "Here is the household result.",
+            "Household evaluation at Bistro One",
+            "Household result: Avoid",
+            "Jordan: Generally safer",
+            "Maya: Avoid",
+        ] {
+            assert!(entry.text.contains(expected), "{}", entry.text);
+        }
+        for forbidden in [
+            "3f1c9c2e-2f5a-4a5b-8f1e-9d2b7c6a4e01",
+            "54aa3228a67d4e262d383d0cfba6be4f4c0c94f21f5d095f3127d00928586bcb",
+            "stub-model-1",
+            "dietary-rules-1",
+            "member_annotations",
+            "context_hash",
+            "{\"",
+        ] {
+            assert!(!entry.text.contains(forbidden), "{}", entry.text);
+        }
+        assert!(!entry.streaming);
+    }
+
+    #[test]
+    fn malformed_household_evaluation_replaces_prose_with_the_safe_refusal() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/contracts/household-backend/v1/fixtures/household_evaluation/founding_scenario_maya_menu.json"
+        )))
+        .unwrap();
+        let mut result = fixture["result"].clone();
+        result["items"][0]["member_annotations"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("label");
+        let mut model = AppModel {
+            draft: "What can everyone eat?".into(),
+            cursor: 22,
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut model, Action::Submit);
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Result {
+                    document: serde_json::json!({
+                        "text": "This unreviewed prose must not survive.",
+                        "structured_content": result
+                    }),
+                    conversation_id: None,
+                },
+            }),
+        );
+
+        let entry = model.scrollback.entries().back().unwrap();
+        assert_eq!(
+            entry.text,
+            heyfood_application::UNPRESENTABLE_HOUSEHOLD_EVALUATION_MESSAGE
+        );
+        assert!(!entry.text.contains("unreviewed"));
+        assert!(!entry.text.contains("3f1c9c2e"));
+        assert!(!entry.streaming);
+    }
+
+    #[test]
     fn terminal_result_renders_ranked_restaurant_picks_and_a_next_step() {
         let mut model = AppModel {
             draft: "What can I eat there?".into(),
@@ -7746,7 +7830,8 @@ mod tests {
         assert!(card.contains("1. onion · 1"));
         assert!(card.contains("source: manual"));
         assert!(card.contains("ingredient screening: risky"));
-        assert!(card.contains("maya-uuid: risky"));
+        assert!(card.contains("Household member: risky"));
+        assert!(!card.contains("maya-uuid"));
         assert!(card.contains("Onion is high-FODMAP."));
         assert!(card.contains("try: scallion greens"));
         assert!(card.contains("Screened at ingredient level — verify the product label."));
@@ -7772,6 +7857,32 @@ mod tests {
                     && command.confirmation_id.as_uuid().to_string()
                         == "00000000-0000-0000-0000-000000000001"
         ));
+    }
+
+    #[test]
+    fn confirmation_safety_fails_closed_without_rendering_ids_or_unknown_enums() {
+        let item = serde_json::json!({
+            "intended_for": "550e8400-e29b-41d4-a716-446655440000",
+            "safety": {
+                "status": "future_protocol_status",
+                "member_flags": [{
+                    "member_id": "550e8400-e29b-41d4-a716-446655440000",
+                    "status": "future_protocol_status",
+                    "reason": "Verify ingredients."
+                }]
+            }
+        });
+        let mut rendered = String::new();
+        render_confirmation_safety(
+            &mut rendered,
+            &item,
+            item.get("intended_for").and_then(serde_json::Value::as_str),
+        );
+        assert!(rendered.contains("unable to evaluate"));
+        assert!(rendered.contains("Household member"));
+        assert!(rendered.contains("intended"));
+        assert!(!rendered.contains("future_protocol_status"));
+        assert!(!rendered.contains("550e8400-e29b-41d4-a716-446655440000"));
     }
 
     #[test]
@@ -7958,10 +8069,11 @@ mod tests {
         }))
         .unwrap();
         let card = render_action_confirmation(&envelope);
-        assert!(card.contains("1. tomato for maya · 2 each"));
+        assert!(card.contains("1. tomato for a household member · 2 each"));
         assert!(card.contains("source: menu"));
-        assert!(card.contains("maya: avoid · intended"));
+        assert!(card.contains("Household member: avoid · intended"));
         assert!(card.contains("Member-specific conflict"));
+        assert!(!card.contains("maya"));
     }
 
     #[test]

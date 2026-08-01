@@ -1,0 +1,124 @@
+{
+  "scenario": "founding_household_menu_evaluation",
+  "description": "Owner + Maya (IBS / low-FODMAP). An onion/garlic dish is AVOID for the household because it is avoid for Maya, and the annotation says so; a plain rice dish stays generally safer for everyone.",
+  "household_scope_argument": null,
+  "result": {
+    "restaurant_id": "rest-1",
+    "restaurant_name": "Bistro One",
+    "items": [
+      {
+        "item_name": "Garlic Noodles",
+        "matched_name": "Garlic Noodles",
+        "status": "avoid",
+        "confidence": 0.93,
+        "summary": "Garlic and onion are high-FODMAP.",
+        "conflicts": [],
+        "allergen_flags": [],
+        "member_annotations": [
+          {
+            "member_id": "_self",
+            "label": "Jordan",
+            "disposition": "flag",
+            "status": "generally_safer",
+            "confidence": 0.95,
+            "summary": "No concerns.",
+            "conflicts": [],
+            "allergen": null,
+            "reason": null,
+            "model_version": "stub-model-1",
+            "rules_version": "dietary-rules-1",
+            "context_hash": "54aa3228a67d4e262d383d0cfba6be4f4c0c94f21f5d095f3127d00928586bcb",
+            "context_hash_version": 1,
+            "member_profile_version": 1
+          },
+          {
+            "member_id": "3f1c9c2e-2f5a-4a5b-8f1e-9d2b7c6a4e01",
+            "label": "Maya",
+            "disposition": "flag",
+            "status": "avoid",
+            "confidence": 0.93,
+            "summary": "Garlic and onion are high-FODMAP.",
+            "conflicts": [],
+            "allergen": null,
+            "reason": null,
+            "model_version": "stub-model-1",
+            "rules_version": "dietary-rules-1",
+            "context_hash": "54aa3228a67d4e262d383d0cfba6be4f4c0c94f21f5d095f3127d00928586bcb",
+            "context_hash_version": 1,
+            "member_profile_version": 7
+          }
+        ]
+      },
+      {
+        "item_name": "Steamed Jasmine Rice",
+        "matched_name": "Steamed Jasmine Rice",
+        "status": "generally_safer",
+        "confidence": 0.95,
+        "summary": "No concerns.",
+        "conflicts": [],
+        "allergen_flags": [],
+        "member_annotations": [
+          {
+            "member_id": "_self",
+            "label": "Jordan",
+            "disposition": "flag",
+            "status": "generally_safer",
+            "confidence": 0.95,
+            "summary": "No concerns.",
+            "conflicts": [],
+            "allergen": null,
+            "reason": null,
+            "model_version": "stub-model-1",
+            "rules_version": "dietary-rules-1",
+            "context_hash": "54aa3228a67d4e262d383d0cfba6be4f4c0c94f21f5d095f3127d00928586bcb",
+            "context_hash_version": 1,
+            "member_profile_version": 1
+          },
+          {
+            "member_id": "3f1c9c2e-2f5a-4a5b-8f1e-9d2b7c6a4e01",
+            "label": "Maya",
+            "disposition": "flag",
+            "status": "generally_safer",
+            "confidence": 0.97,
+            "summary": "Plain rice is low-FODMAP.",
+            "conflicts": [],
+            "allergen": null,
+            "reason": null,
+            "model_version": "stub-model-1",
+            "rules_version": "dietary-rules-1",
+            "context_hash": "54aa3228a67d4e262d383d0cfba6be4f4c0c94f21f5d095f3127d00928586bcb",
+            "context_hash_version": 1,
+            "member_profile_version": 7
+          }
+        ]
+      }
+    ],
+    "generally_safer": [
+      "Steamed Jasmine Rice"
+    ],
+    "risky": [],
+    "avoid": [
+      "Garlic Noodles"
+    ],
+    "unmatched": [],
+    "household": {
+      "effective_scope": "everyone",
+      "members": [
+        {
+          "member_id": "_self",
+          "profile_version": 1,
+          "profile_source": "persisted"
+        },
+        {
+          "member_id": "3f1c9c2e-2f5a-4a5b-8f1e-9d2b7c6a4e01",
+          "profile_version": 7,
+          "profile_source": "persisted"
+        }
+      ],
+      "member_count": 2,
+      "consent_state": "not_applicable",
+      "context_hash": "54aa3228a67d4e262d383d0cfba6be4f4c0c94f21f5d095f3127d00928586bcb",
+      "context_hash_version": 1
+    }
+  }
+}

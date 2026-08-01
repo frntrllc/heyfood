@@ -40,7 +40,7 @@ assert_contains "$ROOT/CHANGELOG.md" "/household add"
 assert_contains "$ROOT/README.md" "local encrypted household roster"
 assert_contains "$ROOT/README.md" "four native product archives and four"
 assert_contains "$ROOT/README.md" \
-  "Member/Everyone hosted guidance and evaluation fail locally"
+  "Member/Everyone hosted guidance evaluates an exact"
 assert_contains "$ROOT/README.md" \
   "installer and binary do not enforce the later native-state floor"
 assert_contains "$ROOT/docs/CAPABILITY_STATUS.md" \
@@ -120,7 +120,8 @@ jq -e '
     "checksum_entries": 9,
     "total_public_files": 10
   } and
-  (.deferred_household_capabilities | index("hosted_member_guidance_and_evaluation")) != null and
+  (.deferred_household_capabilities | index("member_profile_sync")) != null and
+  (.deferred_household_capabilities | index("hosted_member_guidance_and_evaluation")) == null and
   (.deferred_household_capabilities | index("cross_device_household_state")) != null
 ' "$ROOT/tests/showcase/core-release-matrix.v1.json" >/dev/null ||
   fail "the installed-artifact matrix must bind the v$version native-state release boundary"

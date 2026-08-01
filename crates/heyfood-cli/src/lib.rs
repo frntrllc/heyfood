@@ -10,7 +10,7 @@ use std::time::Duration;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use heyfood_application::{
     GroceryDisplayList, GroceryExclusions, LogoutOutcome, MenuWatchList, MenuWatchSnapshot,
-    UNRENDERABLE_AGENT_RESULT_MESSAGE, render_household_menu,
+    UNRENDERABLE_AGENT_RESULT_MESSAGE, render_household_evaluation, render_household_menu,
 };
 use heyfood_core::{
     GroceryDecisionWire, GroceryItemStateWire, GroceryMutationProposalWire, GrocerySafetyStatus,
@@ -1372,6 +1372,10 @@ pub fn render_agent_result(document: &Value, mode: OutputMode) -> String {
     if mode == OutputMode::Json {
         return render_json(document).expect("agent result is serializable JSON");
     }
+    let household_evaluation = match render_household_evaluation(document) {
+        Ok(evaluation) => evaluation,
+        Err(error) => return format!("{error}\n"),
+    };
     let mut output = String::new();
     if let Some(message) = ["message", "text", "response"]
         .into_iter()
@@ -1379,7 +1383,12 @@ pub fn render_agent_result(document: &Value, mode: OutputMode) -> String {
     {
         let _ = writeln!(output, "{}", terminal_safe_text(message));
     }
-    if let Some(menu) = render_household_menu(document) {
+    if let Some(evaluation) = household_evaluation {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&evaluation);
+    } else if let Some(menu) = render_household_menu(document) {
         if !output.is_empty() {
             output.push('\n');
         }
@@ -1827,6 +1836,76 @@ mod registration_tests {
         let machine_output = render_agent_result(&document, OutputMode::Json);
         let decoded: Value = serde_json::from_str(&machine_output).unwrap();
         assert_eq!(decoded, document);
+    }
+
+    #[test]
+    fn agent_household_evaluation_has_human_privacy_and_complete_json_parity() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/contracts/household-backend/v1/fixtures/household_evaluation/founding_scenario_maya_menu.json"
+        )))
+        .unwrap();
+        let document = json!({
+            "text": "Here is the household result.",
+            "structured_content": fixture["result"].clone()
+        });
+
+        let human = render_agent_result(&document, OutputMode::HumanPlain);
+        for expected in [
+            "Here is the household result.",
+            "Household evaluation at Bistro One",
+            "Jordan: Generally safer",
+            "Maya: Avoid",
+        ] {
+            assert!(human.contains(expected), "{human}");
+        }
+        for forbidden in [
+            "3f1c9c2e-2f5a-4a5b-8f1e-9d2b7c6a4e01",
+            "54aa3228a67d4e262d383d0cfba6be4f4c0c94f21f5d095f3127d00928586bcb",
+            "stub-model-1",
+            "dietary-rules-1",
+            "member_annotations",
+            "context_hash",
+            "{\"",
+        ] {
+            assert!(!human.contains(forbidden), "{human}");
+        }
+
+        let machine = render_agent_result(&document, OutputMode::Json);
+        assert_eq!(serde_json::from_str::<Value>(&machine).unwrap(), document);
+        assert_eq!(
+            serde_json::from_str::<Value>(&machine).unwrap()["structured_content"]["items"][0]["member_annotations"],
+            fixture["result"]["items"][0]["member_annotations"]
+        );
+    }
+
+    #[test]
+    fn malformed_household_evaluation_hides_unreviewed_prose_but_json_stays_lossless() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/contracts/household-backend/v1/fixtures/household_evaluation/founding_scenario_maya_menu.json"
+        )))
+        .unwrap();
+        let mut result = fixture["result"].clone();
+        result["items"][0]["member_annotations"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("label");
+        let document = json!({
+            "text": "This unreviewed prose must not survive.",
+            "structured_content": result
+        });
+
+        let human = render_agent_result(&document, OutputMode::HumanPlain);
+        assert_eq!(
+            human.trim_end(),
+            heyfood_application::UNPRESENTABLE_HOUSEHOLD_EVALUATION_MESSAGE
+        );
+        assert!(!human.contains("unreviewed"));
+        assert!(!human.contains("3f1c9c2e"));
+
+        let machine = render_agent_result(&document, OutputMode::Json);
+        assert_eq!(serde_json::from_str::<Value>(&machine).unwrap(), document);
     }
 
     #[test]

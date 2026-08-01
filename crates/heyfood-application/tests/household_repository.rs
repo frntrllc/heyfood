@@ -1092,6 +1092,51 @@ async fn authorized_owner_hosted_context_rejects_saved_member_and_everyone_scope
     }
 }
 
+#[tokio::test]
+async fn authorized_hosted_context_retains_the_exact_member_and_everyone_scope() {
+    let mut state = state_with_profiles(
+        MinorStatusV1::Adult,
+        HouseholdProfileStateV1::LocalOnly,
+        true,
+    );
+    let member_subject = HouseholdSubjectId::member(state.members[0].member_id.clone());
+
+    for (scope, expected_subjects) in [
+        (HouseholdScope::Subject(member_subject.clone()), 1_usize),
+        (HouseholdScope::Everyone, 2_usize),
+    ] {
+        state.active_scope = scope.clone();
+        state.validate().unwrap();
+        let repository = Arc::new(MemoryHouseholdRepository::with_state(state.clone()));
+        let session = test_session(account("account-a"), repository);
+
+        let authorized = session
+            .acquire_authorized_hosted_context(CancellationToken::new())
+            .await
+            .unwrap();
+        let snapshot = authorized.snapshot();
+        assert_eq!(snapshot.scope, scope);
+        assert_eq!(snapshot.household_revision, state.revision);
+        assert_eq!(snapshot.subjects.len(), expected_subjects);
+        if expected_subjects == 1 {
+            assert_eq!(snapshot.subjects[0].subject, member_subject);
+        } else {
+            assert!(
+                snapshot
+                    .subjects
+                    .iter()
+                    .any(|subject| subject.subject == HouseholdSubjectId::self_())
+            );
+            assert!(
+                snapshot
+                    .subjects
+                    .iter()
+                    .any(|subject| subject.subject == member_subject)
+            );
+        }
+    }
+}
+
 fn initial_owner_sync_intent(
     profile: &HouseholdProfileRecordV1,
     local_household_revision: u64,

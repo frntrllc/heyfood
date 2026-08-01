@@ -51,7 +51,8 @@
         "atomic member creation with complete version-1 declared profile",
         "eligible existing-member onboarding through the same questionnaire",
         "Me, member, and Everyone scope persists across restart",
-        "member and Everyone hosted guidance fails before credentials, microphone, or HTTP",
+        "member and Everyone hosted guidance uses the exact selected declared-profile snapshot",
+        "member and Everyone rendering names people without exposing stable IDs or protocol metadata",
         "active list read",
         "member screening, substitutions, and provenance render",
         "proposal review and edit",
@@ -87,7 +88,6 @@
     "health_integrations"
   ],
   "deferred_household_capabilities": [
-    "hosted_member_guidance_and_evaluation",
     "member_profile_sync",
     "learned_dietary_graph",
     "member_health_and_fitness_data",

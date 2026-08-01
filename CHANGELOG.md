@@ -11,11 +11,12 @@ authentication contracts are stabilized.
   `/onboard --for …` completes an eligible existing member, and `/for me`,
   `/for <member>`, and `/for everyone` persist the selected scope across
   restart in the account-bound encrypted repository.
-- Keep non-owner data local and fail member/Everyone hosted guidance and
-  evaluation before credential refresh, microphone capture, or HTTP. Hosted
-  member sync, learned dietary graph, health/fitness data, and cross-device
-  household state remain deferred behind a separate privacy and consent
-  contract.
+- Evaluate ordinary hosted turns for the selected owner, member, or Everyone
+  context from the exact encrypted local declared-profile snapshot. Non-owner
+  profiles are sent only as transient request context: this does not create a
+  remote member profile, sync consent, or non-owner outbox entry. Hosted member
+  sync, learned dietary graph, health/fitness data, and cross-device household
+  state remain deferred behind a separate privacy and consent contract.
 - Activate the native-state release boundary with exactly four product
   archives, four standalone-verifier archives, one canonical declaration, and
   `SHA256SUMS`. Both macOS executables are Developer ID signed and notarized;

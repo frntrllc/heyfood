@@ -207,20 +207,12 @@ pub fn render(frame: &mut Frame<'_>, model: &AppModel) {
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     let mode = responsive_mode(area.width);
-    let status = match (
-        model.operation,
-        model.household_hosted_guidance_unavailable(),
-    ) {
-        (OperationState::Idle, true) => match mode {
-            ResponsiveMode::Compact => "hosted-off",
-            ResponsiveMode::Standard => "local-only",
-            ResponsiveMode::Wide => "local-only · hosted unavailable",
-        },
-        (OperationState::Idle, false) => "ready",
-        (OperationState::Running(_), _) => "working",
-        (OperationState::Cancelling(_), _) => "stopping",
-        (OperationState::Finishing(_), _) => "finishing",
-        (OperationState::Exiting(_), _) => "closing",
+    let status = match model.operation {
+        OperationState::Idle => "ready",
+        OperationState::Running(_) => "working",
+        OperationState::Cancelling(_) => "stopping",
+        OperationState::Finishing(_) => "finishing",
+        OperationState::Exiting(_) => "closing",
     };
     let scope = household_chrome_copy(model, area.width)
         .map(|scope| format!(" · {scope}"))
@@ -258,11 +250,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     if model.scrollback.entries().is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            if model.household_hosted_guidance_unavailable() {
-                "This household target is saved locally. Hosted guidance for members and Everyone is unavailable; use /for me for owner guidance."
-            } else {
-                "Ask a question when you’re ready."
-            },
+            "Ask a question when you’re ready.",
             Style::default().fg(Color::DarkGray),
         )));
     }
@@ -337,11 +325,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     frame.render_widget(block, area);
 
     let hint = if model.draft.is_empty() {
-        if model.household_hosted_guidance_unavailable() {
-            "Local household target; use /for me for hosted guidance…"
-        } else {
-            "Ask about food, a meal, a restaurant, or a recipe…"
-        }
+        "Ask about food, a meal, a restaurant, or a recipe…"
     } else {
         &model.draft
     };
@@ -608,7 +592,6 @@ mod tests {
             }),
         );
         assert!(model.household_management_ready());
-        assert!(model.household_hosted_guidance_unavailable());
         model
     }
 
@@ -768,7 +751,7 @@ mod tests {
     }
 
     #[test]
-    fn restarted_member_and_everyone_views_never_present_as_hosted_ready() {
+    fn restarted_member_and_everyone_views_present_as_hosted_ready() {
         let member = HouseholdScope::Subject(HouseholdSubjectId::member(
             MemberId::parse_preserved("550e8400-e29b-41d4-a716-446655440000").unwrap(),
         ));
@@ -777,21 +760,13 @@ mod tests {
                 let model = restarted_local_only_scope_model(scope.clone());
                 let rendered = snapshot(&model, width, 18);
                 let semantic = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
-                let expected_status = match responsive_mode(width) {
-                    ResponsiveMode::Compact => "hosted-off",
-                    ResponsiveMode::Standard => "local-only",
-                    ResponsiveMode::Wide => "local-only · hosted unavailable",
-                };
                 assert!(
-                    semantic.contains(expected_status),
-                    "width {width} omitted {expected_status:?}: {rendered}"
+                    semantic.contains("ready"),
+                    "width {width} omitted the ready state: {rendered}"
                 );
-                assert!(semantic.contains("household target is saved locally"));
-                assert!(semantic.contains("Hosted guidance"));
-                assert!(semantic.contains("unavailable"));
-                assert!(semantic.contains("use /for me"));
-                assert!(semantic.contains("Local household target"));
-                assert!(!semantic.contains("Ask a question when you’re ready"));
+                assert!(semantic.contains("Ask a question when you’re ready"));
+                assert!(semantic.contains("Ask about food"));
+                assert!(!semantic.contains("hosted unavailable"));
             }
         }
     }

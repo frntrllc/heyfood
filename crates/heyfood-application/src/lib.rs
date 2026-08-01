@@ -7,6 +7,7 @@ pub mod ensure_session;
 pub mod grocery;
 pub mod health;
 pub mod household_context;
+pub mod household_evaluation;
 pub mod household_menu;
 pub mod household_profile_policy;
 pub mod household_repository;
@@ -39,6 +40,11 @@ pub use household_context::{
     HouseholdContextErrorV1, HouseholdContextSnapshotV1, HouseholdSubjectContextV1,
     PreparedHouseholdTargetV1, resolve_personalized_context_v1, validate_scope_eligibility_v1,
 };
+pub use household_evaluation::{
+    HouseholdEvaluationPresentationError, UNPRESENTABLE_HOUSEHOLD_EVALUATION_MESSAGE,
+    household_evaluation_document, render_household_evaluation,
+    render_household_evaluation_at_width,
+};
 pub use household_menu::{household_menu_document, is_full_household_menu, render_household_menu};
 pub use household_profile_policy::{
     AuthoritativeConsentStateV1, HouseholdProfileEligibilityV1, HouseholdProfileIneligibilityV1,
@@ -48,7 +54,7 @@ pub use household_profile_policy::{
     validate_d2_profile_policy_v1,
 };
 pub use household_repository::{
-    AuthorizedOwnerHostedContextV1, CreateMemberWithDeclaredProfileV1,
+    AuthorizedHostedContextV1, AuthorizedOwnerHostedContextV1, CreateMemberWithDeclaredProfileV1,
     CreatedMemberWithDeclaredProfileV1, HouseholdCommit, HouseholdCommitOutcome, HouseholdErase,
     HouseholdEraseOutcome, HouseholdInitialize, HouseholdLoad, HouseholdOpenOutcomeV1,
     HouseholdReadLeaseV1, HouseholdRepositoryResolutionV1, HouseholdSession,

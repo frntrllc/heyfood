@@ -939,11 +939,9 @@ async fn prepared_log_omitted_for_dispatches_the_reviewed_member() {
     };
     let preview = importer.preview_state().unwrap();
     let prepared = prepare_log_command(arguments, &[], preview).unwrap();
-    assert!(
-        prepared
-            .review_document()
-            .contains("\"Sarah\" [member-id-utf8-hex=6d656d6265722d7361726168]")
-    );
+    let review = prepared.review_document();
+    assert!(review.contains("Household target: \"Sarah\""));
+    assert!(!review.contains("member-id-utf8-hex"));
     let verified = importer
         .verify_after_review(prepared.source_preview())
         .unwrap();
@@ -1017,7 +1015,9 @@ async fn prepared_log_explicit_self_overrides_saved_member() {
     };
     let (_root, importer) = prepared_log_importer("explicit-self", &state);
     let prepared = prepare_log_command(arguments, &[], importer.preview_state().unwrap()).unwrap();
-    assert!(prepared.review_document().contains("\"Me\" [scope=_self]"));
+    let review = prepared.review_document();
+    assert!(review.contains("Household target: \"Me\""));
+    assert!(!review.contains("scope=_self"));
     let verified = importer
         .verify_after_review(prepared.source_preview())
         .unwrap();
@@ -1044,7 +1044,7 @@ async fn prepared_log_explicit_self_overrides_saved_member() {
 }
 
 #[tokio::test]
-async fn prepared_log_everyone_preserves_reviewed_cook_mode() {
+async fn prepared_log_everyone_preserves_one_reviewed_owner_attribution() {
     let state = imported_state([
         ("first_name", json!("Justin")),
         (
@@ -1078,8 +1078,9 @@ async fn prepared_log_everyone_preserves_reviewed_cook_mode() {
         let (mut socket, _) = listener.accept().await.unwrap();
         let request = read_request(&mut socket).await;
         let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-        assert_eq!(body["meal_context"]["is_cook_mode"], true);
-        assert!(body["meal_context"].get("active_member_id").is_none());
+        assert_eq!(body["meal_context"]["active_member_id"], "_self");
+        assert_eq!(body["meal_context"]["active_member_name"], "Justin");
+        assert_eq!(body["meal_context"]["is_cook_mode"], false);
         assert_eq!(
             body["dietary_context"]["members"].as_array().unwrap().len(),
             2
@@ -1096,11 +1097,11 @@ async fn prepared_log_everyone_preserves_reviewed_cook_mode() {
     };
     let (_root, importer) = prepared_log_importer("everyone", &state);
     let prepared = prepare_log_command(arguments, &[], importer.preview_state().unwrap()).unwrap();
-    assert!(
-        prepared
-            .review_document()
-            .contains("\"Everyone\" [scope=__everyone__]")
-    );
+    let review = prepared.review_document();
+    assert!(review.contains("Household target: \"Everyone\""));
+    assert!(review.contains("Meal write: one meal for owner \"Justin\""));
+    assert!(!review.contains("scope=__everyone__"));
+    assert!(!review.contains("member-sarah"));
     let verified = importer
         .verify_after_review(prepared.source_preview())
         .unwrap();

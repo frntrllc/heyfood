@@ -1904,7 +1904,7 @@ async fn public_log_omitted_for_reviews_and_dispatches_the_same_member() {
             &pty_xdg,
             &pty_url,
             &["--json", "log", "oatmeal"],
-            Some("\"Sarah\" [member-id-utf8-hex=6d656d6265722d7361726168]"),
+            Some("Household target: \"Sarah\""),
             Some(b"LOG"),
             None,
             true,
@@ -1913,7 +1913,8 @@ async fn public_log_omitted_for_reviews_and_dispatches_the_same_member() {
     .await
     .unwrap();
     let output = String::from_utf8_lossy(&output);
-    assert!(output.contains("\"Sarah\" [member-id-utf8-hex=6d656d6265722d7361726168]"));
+    assert!(output.contains("Household target: \"Sarah\""));
+    assert!(!output.contains("member-id-utf8-hex"));
     assert!(output.contains("\"message\":\"Logged.\""));
     server.await.unwrap();
 }
@@ -1935,7 +1936,7 @@ async fn declined_public_log_dispatches_no_network_request() {
             &pty_xdg,
             &pty_url,
             &["--json", "log", "oatmeal"],
-            Some("\"Sarah\" [member-id-utf8-hex=6d656d6265722d7361726168]"),
+            Some("Household target: \"Sarah\""),
             Some(b"NO"),
             None,
             false,
@@ -1996,7 +1997,7 @@ async fn public_log_no_source_reviews_self_without_writing_a_synthetic_snapshot(
             &xdg_root,
             &pty_url,
             &["--json", "log", "oatmeal"],
-            Some("\"Me\" [scope=_self]"),
+            Some("Household target: \"Me\""),
             Some(b"LOG"),
             None,
             true,
@@ -2005,7 +2006,8 @@ async fn public_log_no_source_reviews_self_without_writing_a_synthetic_snapshot(
     .await
     .unwrap();
     let output = String::from_utf8_lossy(&output);
-    assert!(output.contains("\"Me\" [scope=_self]"));
+    assert!(output.contains("Household target: \"Me\""));
+    assert!(!output.contains("scope=_self"));
     assert!(output.contains("\"message\":\"Logged.\""));
     assert!(!root.0.join("python-state-import.v1.json").exists());
     server.await.unwrap();
@@ -2097,7 +2099,7 @@ async fn public_log_protected_source_denies_inferred_targets_but_explicit_self_i
             &pty_xdg,
             &pty_url,
             &["--json", "log", "--for", "self", "oatmeal"],
-            Some("\"Me\" [scope=_self]"),
+            Some("Household target: \"Me\""),
             Some(b"LOG"),
             None,
             true,
@@ -2174,7 +2176,7 @@ async fn public_log_eof_and_post_review_source_drift_dispatch_nothing() {
             &eof_xdg,
             &eof_url,
             &["--json", "log", "oatmeal"],
-            Some("\"Sarah\" [member-id-utf8-hex=6d656d6265722d7361726168]"),
+            Some("Household target: \"Sarah\""),
             None,
             None,
             false,
@@ -2226,7 +2228,7 @@ async fn public_log_eof_and_post_review_source_drift_dispatch_nothing() {
             &drift_xdg,
             &drift_url,
             &["--json", "log", "oatmeal"],
-            Some("\"Sarah\" [member-id-utf8-hex=6d656d6265722d7361726168]"),
+            Some("Household target: \"Sarah\""),
             Some(b"LOG"),
             Some((&drift_source, &replacement)),
             false,

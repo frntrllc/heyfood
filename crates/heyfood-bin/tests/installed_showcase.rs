@@ -43,6 +43,14 @@ const UNCERTAIN_PROMPT: &str = "Consume this mutation-like turn and close before
 const FAILURE_PROMPT: &str = "Return a typed synthetic failure to the installed TUI.";
 const WIDTH_PROMPT: &str = "Render a width-qualified installed response.";
 const WIDTH_RESPONSE: &str = "Width-qualified installed response complete.";
+const HOUSEHOLD_JSON_PROMPT: &str =
+    "Return the synthetic household contract for installed JSON qualification.";
+const HOUSEHOLD_HUMAN_PROMPT: &str =
+    "Render the synthetic household contract for installed human qualification.";
+const SELECTED_MEMBER_JSON_PROMPT: &str =
+    "Return the selected-member household menu envelope for installed JSON qualification.";
+const SELECTED_MEMBER_HUMAN_PROMPT: &str =
+    "Render the selected-member household menu envelope for installed human qualification.";
 const FIRST_RUN_ACCOUNT_CHOICE_COPY: &str =
     "Welcome to heyfood. Sign in or create a hello.food account in your browser to continue.";
 const FIXTURE_HEADER_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -630,6 +638,148 @@ async fn run_installed_archive_core_release_matrix() {
     .await;
     assert_no_legacy_python_state(&user.0);
 
+    // This is a non-interactive, read-only CLI contract canary. Household
+    // lifecycle mutation and interactive TUI household journeys remain human
+    // attached-terminal gates and are never automated here.
+    let household_json = run_installed_cli(
+        &installed_binary,
+        &user.0,
+        &base_url,
+        &["--json", "ask", HOUSEHOLD_JSON_PROMPT],
+        credential_backend,
+    )
+    .await;
+    assert!(
+        household_json.status.success(),
+        "installed household JSON canary failed: status={:?}, stderr={}",
+        household_json.status,
+        String::from_utf8_lossy(&household_json.stderr)
+    );
+    let household_json_stdout = household_json.stdout;
+    let household_json_text =
+        std::str::from_utf8(&household_json_stdout).expect("household JSON stdout is UTF-8");
+    assert_eq!(household_json_text.lines().count(), 1);
+    assert_eq!(
+        serde_json::from_str::<Value>(household_json_text).expect("decode household JSON output"),
+        household_contract_document(),
+        "installed JSON output must preserve every household annotation field"
+    );
+
+    let household_human = run_installed_cli(
+        &installed_binary,
+        &user.0,
+        &base_url,
+        &["--no-color", "ask", HOUSEHOLD_HUMAN_PROMPT],
+        credential_backend,
+    )
+    .await;
+    assert!(
+        household_human.status.success(),
+        "installed household human canary failed: status={:?}, stderr={}",
+        household_human.status,
+        String::from_utf8_lossy(&household_human.stderr)
+    );
+    let household_human_stdout = household_human.stdout;
+    let household_human_text =
+        std::str::from_utf8(&household_human_stdout).expect("household human stdout is UTF-8");
+    for expected in [
+        "Here is the synthetic household result.",
+        "Household evaluation at Bistro One",
+        "Jordan: Generally safer",
+        "Maya: Avoid",
+    ] {
+        assert!(
+            household_human_text.contains(expected),
+            "installed household human output omitted {expected:?}: {household_human_text}"
+        );
+    }
+    for forbidden in [
+        "3f1c9c2e-2f5a-4a5b-8f1e-9d2b7c6a4e01",
+        "54aa3228a67d4e262d383d0cfba6be4f4c0c94f21f5d095f3127d00928586bcb",
+        "stub-model-1",
+        "dietary-rules-1",
+        "member_annotations",
+        "context_hash",
+        "{\"",
+        "\u{1b}",
+    ] {
+        assert!(
+            !household_human_text.contains(forbidden),
+            "installed household human output leaked {forbidden:?}: {household_human_text}"
+        );
+    }
+
+    // The deployed conversational path emits the legacy `household_menu`
+    // envelope. Qualify that exact presentation boundary too, including the
+    // selected member identity fixed by the paired backend release change.
+    let selected_member_json = run_installed_cli(
+        &installed_binary,
+        &user.0,
+        &base_url,
+        &["--json", "ask", SELECTED_MEMBER_JSON_PROMPT],
+        credential_backend,
+    )
+    .await;
+    assert!(
+        selected_member_json.status.success(),
+        "installed selected-member JSON canary failed: status={:?}, stderr={}",
+        selected_member_json.status,
+        String::from_utf8_lossy(&selected_member_json.stderr)
+    );
+    let selected_member_json_stdout = selected_member_json.stdout;
+    let selected_member_json_text = std::str::from_utf8(&selected_member_json_stdout)
+        .expect("selected-member JSON stdout is UTF-8");
+    assert_eq!(selected_member_json_text.lines().count(), 1);
+    assert_eq!(
+        serde_json::from_str::<Value>(selected_member_json_text)
+            .expect("decode selected-member JSON output"),
+        selected_member_menu_document(),
+        "installed JSON output must preserve the selected-member household menu envelope"
+    );
+
+    let selected_member_human = run_installed_cli(
+        &installed_binary,
+        &user.0,
+        &base_url,
+        &["--no-color", "ask", SELECTED_MEMBER_HUMAN_PROMPT],
+        credential_backend,
+    )
+    .await;
+    assert!(
+        selected_member_human.status.success(),
+        "installed selected-member human canary failed: status={:?}, stderr={}",
+        selected_member_human.status,
+        String::from_utf8_lossy(&selected_member_human.stderr)
+    );
+    let selected_member_human_stdout = selected_member_human.stdout;
+    let selected_member_human_text = std::str::from_utf8(&selected_member_human_stdout)
+        .expect("selected-member human stdout is UTF-8");
+    for expected in [
+        "Here is Maya's evaluated menu.",
+        "Top picks at Bistro One",
+        "For Maya",
+        "1. Rice Bowl  $14.00  [generally safer] · Top pick",
+    ] {
+        assert!(
+            selected_member_human_text.contains(expected),
+            "installed selected-member output omitted {expected:?}: {selected_member_human_text}"
+        );
+    }
+    for forbidden in [
+        "9d9bd8d8-1111-2222-3333-444455556666",
+        "member_id",
+        "item_id",
+        "agent_picks",
+        "{\"",
+        "\u{1b}",
+    ] {
+        assert!(
+            !selected_member_human_text.contains(forbidden),
+            "installed selected-member output leaked {forbidden:?}: {selected_member_human_text}"
+        );
+    }
+    assert_no_legacy_python_state(&user.0);
+
     let width_40 = run_installed_pty(
         &installed_binary,
         &user.0,
@@ -804,6 +954,7 @@ async fn run_installed_archive_core_release_matrix() {
             "legacy_python_state_absent_for_entire_run": true,
             "python_household_seeded": false,
             "household_lifecycle_pty_exercised": false,
+            "household_contract_cli_exercised": true,
             "credentials_absent_after_run": !external_credential_cleanup,
             "pty": true,
             "columns": [40, 80, 120],
@@ -821,6 +972,7 @@ async fn run_installed_archive_core_release_matrix() {
         },
         "coverage_boundary": {
             "installed_pty": "non_household_only",
+            "installed_household_cli": "noninteractive_read_only_synthetic_contract",
             "owner_grocery": "self_scope_only",
             "household_lifecycle": "manual_attached_terminal_required"
         },
@@ -875,6 +1027,33 @@ async fn run_installed_archive_core_release_matrix() {
                 "remaining": [
                     "manual_attached_terminal_household_lifecycle"
                 ]
+            },
+            {
+                "id": "household-contract-cli",
+                "status": "passed",
+                "assertions": [
+                    "packaged_executable_used",
+                    "noninteractive_read_only_canary",
+                    "complete_json_household_annotations_preserved",
+                    "human_member_labels_and_worst_case_result_rendered",
+                    "human_output_omits_ids_hashes_producer_metadata_and_raw_json",
+                    "household_tui_lifecycle_not_automated"
+                ],
+                "json_stdout_sha256": sha256_bytes(&household_json_stdout),
+                "human_stdout_sha256": sha256_bytes(&household_human_stdout)
+            },
+            {
+                "id": "selected-member-household-menu-cli",
+                "status": "passed",
+                "assertions": [
+                    "packaged_executable_used",
+                    "deployed_conversation_envelope_shape",
+                    "selected_member_identity_preserved_in_json",
+                    "selected_member_label_rendered_without_stable_id",
+                    "household_tui_lifecycle_not_automated"
+                ],
+                "json_stdout_sha256": sha256_bytes(&selected_member_json_stdout),
+                "human_stdout_sha256": sha256_bytes(&selected_member_human_stdout)
             },
             {
                 "id": "failure-safety",
@@ -1591,6 +1770,63 @@ fn grocery_list_document(version: u64) -> Value {
     })
 }
 
+fn household_contract_document() -> Value {
+    let fixture: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/contracts/household-backend/v1/fixtures/household_evaluation/founding_scenario_maya_menu.json"
+    )))
+    .expect("decode frozen household contract fixture");
+    json!({
+        "message": "Here is the synthetic household result.",
+        "conversation_id": "showcase-household-conversation",
+        "structured_content": fixture["result"].clone()
+    })
+}
+
+fn selected_member_menu_document() -> Value {
+    json!({
+        "message": "Here is Maya's evaluated menu.",
+        "conversation_id": "showcase-selected-member-conversation",
+        "structured": {
+            "type": "household_menu",
+            "restaurant_name": "Bistro One",
+            "menu_freshness": "Menu updated 1 hour ago",
+            "captured_at": "2026-08-01T12:00:00Z",
+            "source_lineage": "restaurant_owned",
+            "is_stale": false,
+            "member_summaries": [{
+                "member_id": "9d9bd8d8-1111-2222-3333-444455556666",
+                "label": "Maya",
+                "date_of_birth": "2014-06-01"
+            }],
+            "sections": [{
+                "name": "Lunch",
+                "items": [{
+                    "item_id": "rice-bowl",
+                    "name": "Rice Bowl",
+                    "price_cents": 1400,
+                    "safety": {
+                        "9d9bd8d8-1111-2222-3333-444455556666": {
+                            "member_id": "9d9bd8d8-1111-2222-3333-444455556666",
+                            "label": "Maya",
+                            "level": "safe",
+                            "reason": "No declared dietary conflicts were identified."
+                        }
+                    }
+                }]
+            }],
+            "agent_picks": {
+                "9d9bd8d8-1111-2222-3333-444455556666": [{
+                    "item_id": "rice-bowl",
+                    "member_id": "9d9bd8d8-1111-2222-3333-444455556666",
+                    "reason": "No declared dietary conflicts were identified.",
+                    "tag": "Top pick"
+                }]
+            }
+        }
+    })
+}
+
 async fn respond_to_conversation(socket: &mut TcpStream, body: &Value, state: &mut FixtureState) {
     if let Some(prompt) = body.get("query").and_then(Value::as_str) {
         *state.prompt_counts.entry(prompt.to_owned()).or_default() += 1;
@@ -1598,6 +1834,12 @@ async fn respond_to_conversation(socket: &mut TcpStream, body: &Value, state: &m
             TEST_PROMPT => respond_sse_message(socket, TEST_RESPONSE).await,
             RETURNING_PROMPT => respond_sse_message(socket, RETURNING_RESPONSE).await,
             WIDTH_PROMPT => respond_sse_message(socket, WIDTH_RESPONSE).await,
+            HOUSEHOLD_JSON_PROMPT | HOUSEHOLD_HUMAN_PROMPT => {
+                respond_sse_document(socket, household_contract_document()).await;
+            }
+            SELECTED_MEMBER_JSON_PROMPT | SELECTED_MEMBER_HUMAN_PROMPT => {
+                respond_sse_document(socket, selected_member_menu_document()).await;
+            }
             GROCERY_CANCEL_PROMPT => {
                 respond_confirmation(
                     socket,
@@ -1902,6 +2144,69 @@ async fn respond_status(socket: &mut TcpStream, status: &str, content_type: &str
     socket.shutdown().await.expect("close fixture response");
 }
 
+async fn run_installed_cli(
+    installed_binary: &Path,
+    user_root: &Path,
+    base_url: &str,
+    arguments: &[&str],
+    credential_backend: ShowcaseCredentialBackend,
+) -> std::process::Output {
+    let installed_binary = installed_binary.to_owned();
+    let user_root = user_root.to_owned();
+    let base_url = base_url.to_owned();
+    let arguments = arguments
+        .iter()
+        .map(|argument| (*argument).to_owned())
+        .collect::<Vec<_>>();
+    tokio::task::spawn_blocking(move || {
+        let mut command = Command::new(installed_binary);
+        command.args(arguments);
+        for name in [
+            "HEYFOOD_API_KEY",
+            "HEYFOOD_API_URL",
+            "HEYFOOD_CREDENTIAL_STORE",
+            "HEYFOOD_STATE_DIR",
+            "BROWSER",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "ALL_PROXY",
+            "NO_COLOR",
+        ] {
+            command.env_remove(name);
+        }
+        command
+            .env("HEYFOOD_API_URL", base_url)
+            .env("HEYFOOD_API_KEY", "showcase-api-key")
+            .env("BROWSER", "true")
+            .env("HEYFOOD_STATE_DIR", &user_root)
+            .env(
+                "HEYFOOD_CREDENTIAL_STORE",
+                match credential_backend {
+                    ShowcaseCredentialBackend::IsolatedFile => "file",
+                    ShowcaseCredentialBackend::Native => "native",
+                },
+            )
+            .env("XDG_CONFIG_HOME", &user_root)
+            .env("XDG_DATA_HOME", user_root.join("data"))
+            .env("XDG_CACHE_HOME", user_root.join("cache"))
+            .env("NO_PROXY", "127.0.0.1,localhost")
+            .env("NO_COLOR", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if credential_backend == ShowcaseCredentialBackend::IsolatedFile {
+            command
+                .env("HOME", &user_root)
+                .env("USERPROFILE", &user_root)
+                .env("APPDATA", user_root.join("appdata"))
+                .env("LOCALAPPDATA", user_root.join("local-appdata"));
+        }
+        command.output().expect("run installed one-shot CLI canary")
+    })
+    .await
+    .expect("join installed one-shot CLI canary")
+}
+
 async fn run_installed_pty(
     installed_binary: &Path,
     user_root: &Path,
@@ -2134,6 +2439,10 @@ fn assert_fixture_summary(summary: &FixtureSummary) {
         UNCERTAIN_PROMPT,
         FAILURE_PROMPT,
         WIDTH_PROMPT,
+        HOUSEHOLD_JSON_PROMPT,
+        HOUSEHOLD_HUMAN_PROMPT,
+        SELECTED_MEMBER_JSON_PROMPT,
+        SELECTED_MEMBER_HUMAN_PROMPT,
     ] {
         assert_eq!(
             summary.prompt_counts.get(prompt),
@@ -2143,8 +2452,8 @@ fn assert_fixture_summary(summary: &FixtureSummary) {
     }
     assert_eq!(
         summary.prompt_counts.len(),
-        10,
-        "fixture must observe only the bounded non-household smoke turns"
+        14,
+        "fixture must observe only the bounded installed smoke turns"
     );
 }
 

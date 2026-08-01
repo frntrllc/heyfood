@@ -19,7 +19,7 @@ use std::{
 
 use heyfood_agent_runtime::{HttpService, MAX_JSON_RESPONSE_BYTES, OwnerSyncTransportResultV1};
 use heyfood_application::{
-    AudioCapturePort, AuthoritativeConsentStateV1, AuthorizedOwnerHostedContextV1, BoxFuture,
+    AudioCapturePort, AuthoritativeConsentStateV1, AuthorizedHostedContextV1, BoxFuture,
     CapabilitySnapshot, ConfirmGroceryMutation, CreateMemberWithDeclaredProfileV1, CreateMenuWatch,
     CreateMenuWatchRequest, DeployedGroceryMutationRequest, DiscoverCapabilities, EnsureSession,
     EnsureSessionError, EnsureSessionOutcome, ExportGroceryList, GroceryExport, HouseholdLoad,
@@ -1834,14 +1834,24 @@ impl PreparedLogCommand<ReviewReady> {
 
     #[must_use]
     pub fn review_document(&self) -> String {
+        let attribution = if self.target.mode == LogTargetMode::Everyone {
+            let owner_label = self
+                .household_snapshot
+                .active_member("_self")
+                .map(|owner| ascii_json_string(&owner.name))
+                .unwrap_or_else(|| "\"Me\"".to_owned());
+            format!("\nMeal write: one meal for owner {owner_label}")
+        } else {
+            String::new()
+        };
         format!(
-            "Mutation: log meal memory\nMeal: {}\nMeal type: {}\nHousehold target: {} [{}]",
+            "Mutation: log meal memory\nMeal: {}\nMeal type: {}\nHousehold target: {}{}",
             terminal_safe_text(&self.meal),
             self.meal_type
                 .map(MealType::as_str)
                 .unwrap_or("unspecified"),
             self.target.display.escaped_label,
-            self.target.display.stable_id_token,
+            attribution,
         )
     }
 
@@ -3150,20 +3160,7 @@ fn resolve_log_target(
         ));
     }
     if is_everyone_alias(selector) {
-        if household
-            .active_members()
-            .any(|member| member.id != "_self")
-        {
-            return Ok(resolved_log_target(
-                LogTargetMode::Everyone,
-                "__everyone__",
-                "Everyone",
-            ));
-        }
-        return Err(OneShotError::new(
-            "household_target_unknown",
-            "Everyone requires at least one active non-self Household member",
-        ));
+        return resolve_everyone_log_target(household);
     }
     if let Some(member) = household.member(selector) {
         if member.archived {
@@ -3210,11 +3207,7 @@ fn resolve_exact_frozen_scope(
             "_self",
             "Me",
         )),
-        "__everyone__" => Ok(resolved_log_target(
-            LogTargetMode::Everyone,
-            "__everyone__",
-            "Everyone",
-        )),
+        "__everyone__" => resolve_everyone_log_target(household),
         identifier => {
             let member = household.active_member(identifier).ok_or_else(|| {
                 OneShotError::new(
@@ -3229,6 +3222,31 @@ fn resolve_exact_frozen_scope(
             ))
         }
     }
+}
+
+fn resolve_everyone_log_target(
+    household: &FrozenHouseholdSnapshot,
+) -> Result<ResolvedLogTarget, OneShotError> {
+    if household.active_member("_self").is_none() {
+        return Err(OneShotError::new(
+            "household_owner_missing",
+            "Everyone meal attribution requires an active Household owner",
+        ));
+    }
+    if !household
+        .active_members()
+        .any(|member| member.id != "_self")
+    {
+        return Err(OneShotError::new(
+            "household_target_unknown",
+            "Everyone requires at least one active non-self Household member",
+        ));
+    }
+    Ok(resolved_log_target(
+        LogTargetMode::Everyone,
+        "__everyone__",
+        "Everyone",
+    ))
 }
 
 fn validate_selector(value: &str) -> Result<&str, OneShotError> {
@@ -3413,7 +3431,17 @@ async fn build_household_turn_context_for_resolved_target(
         })
     });
     let meal = if target.mode == LogTargetMode::Everyone {
-        json!({"is_cook_mode": true})
+        let owner = owner.ok_or_else(|| {
+            OneShotError::new(
+                "household_owner_missing",
+                "Everyone meal attribution requires an active Household owner",
+            )
+        })?;
+        json!({
+            "active_member_id": "_self",
+            "active_member_name": owner.name,
+            "is_cook_mode": false
+        })
     } else {
         json!({
             "active_member_id": target.raw_id,
@@ -3446,12 +3474,16 @@ fn validate_frozen_target_context(
         })?;
     match target.mode {
         LogTargetMode::Everyone => {
-            if meal.get("is_cook_mode").and_then(Value::as_bool) != Some(true)
-                || meal.contains_key("active_member_id")
+            let owner_label = household
+                .active_member("_self")
+                .map(|owner| owner.name.as_str());
+            if meal.get("active_member_id").and_then(Value::as_str) != Some("_self")
+                || meal.get("active_member_name").and_then(Value::as_str) != owner_label
+                || meal.get("is_cook_mode").and_then(Value::as_bool) != Some(false)
             {
                 return Err(OneShotError::new(
                     "prepared_log_context_invalid",
-                    "prepared Everyone target did not preserve cook mode",
+                    "prepared Everyone target did not preserve one owner-attributed meal",
                 ));
             }
         }
@@ -3828,7 +3860,11 @@ async fn build_household_turn_context(
         })
     });
     let meal = if selected == "__everyone__" {
-        json!({"is_cook_mode": true})
+        json!({
+            "active_member_id": "_self",
+            "active_member_name": member_name(owner)?,
+            "is_cook_mode": false
+        })
     } else {
         json!({
             "active_member_id": selected,
@@ -4219,11 +4255,11 @@ fn profile_primary_medical_condition(profile: &Map<String, Value>) -> Option<&st
         })
 }
 
-fn validate_native_owner_hosted_profile(profile: &Value) -> Result<(), PortError> {
+fn validate_native_hosted_profile(profile: &Value) -> Result<(), PortError> {
     let profile = profile.as_object().ok_or_else(|| {
         PortError::new(
             "household_hosted_context_invalid",
-            "the authorized native owner profile is malformed",
+            "an authorized native household profile is malformed",
         )
     })?;
 
@@ -4233,7 +4269,7 @@ fn validate_native_owner_hosted_profile(profile: &Value) -> Result<(), PortError
             .len();
     if avoid_count > 20 {
         return Err(hosted_context_unrepresentable(
-            "the owner avoid/restriction profile exceeds the deployed context bound",
+            "a household avoid/restriction profile exceeds the deployed context bound",
         ));
     }
 
@@ -4243,14 +4279,14 @@ fn validate_native_owner_hosted_profile(profile: &Value) -> Result<(), PortError
             .len();
     if cuisine_count > 20 {
         return Err(hosted_context_unrepresentable(
-            "the owner cuisine profile exceeds the deployed context bound",
+            "a household cuisine profile exceeds the deployed context bound",
         ));
     }
 
     let (medical, _) = projected_medical_constraints(profile);
     if medical.len() > 20 {
         return Err(hosted_context_unrepresentable(
-            "the owner medical profile exceeds the deployed context bound",
+            "a household medical profile exceeds the deployed context bound",
         ));
     }
     Ok(())
@@ -4422,7 +4458,7 @@ struct PreparedInteractiveOperation {
 
 struct PreparedHostedInteractiveOperation {
     operation: PreparedInteractiveOperation,
-    owner_context: Option<AuthorizedOwnerHostedContextV1>,
+    hosted_context: Option<AuthorizedHostedContextV1>,
 }
 
 /// Production driver for the retained terminal surface.
@@ -4673,7 +4709,7 @@ impl InteractiveTurnDriver {
                 Ok(prepared) => {
                     let PreparedHostedInteractiveOperation {
                         operation: prepared,
-                        owner_context,
+                        hosted_context,
                     } = prepared;
                     run_interactive_turn(
                         operation_id,
@@ -4685,7 +4721,7 @@ impl InteractiveTurnDriver {
                         continuity,
                         prepared.http_service,
                         local_state,
-                        owner_context,
+                        hosted_context,
                         task_cancellation,
                         runtime_events.clone(),
                     )
@@ -6672,7 +6708,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 Ok(prepared) => {
                     let PreparedHostedInteractiveOperation {
                         operation: prepared,
-                        owner_context,
+                        hosted_context,
                     } = prepared;
                     let availability =
                         interactive_voice_availability(true, &prepared.authorization_scope);
@@ -6694,7 +6730,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                                     task_stop,
                                     task_cancellation,
                                     runtime_events.clone(),
-                                    owner_context,
+                                    hosted_context,
                                 )
                                 .await
                             }
@@ -6825,7 +6861,7 @@ async fn run_interactive_voice(
     stop: CancellationToken,
     cancellation: CancellationToken,
     runtime_events: mpsc::Sender<RuntimeEvent>,
-    owner_context: Option<AuthorizedOwnerHostedContextV1>,
+    hosted_context: Option<AuthorizedHostedContextV1>,
 ) -> RuntimeEvent {
     let capture = audio_capture.capture(stop, cancellation.child_token());
     tokio::pin!(capture);
@@ -6895,7 +6931,7 @@ async fn run_interactive_voice(
         .await;
     // The exact native generation stays locked until capture serialization
     // and the transcription response complete.
-    drop(owner_context);
+    drop(hosted_context);
     match transcription {
         Ok(_) if cancellation.is_cancelled() => RuntimeEvent::VoiceCancelled { operation_id },
         Ok(transcription) => RuntimeEvent::VoiceTranscriptReady {
@@ -6969,7 +7005,7 @@ async fn prepare_hosted_interactive_operation(
     if cancellation.is_cancelled() {
         return Err(InteractivePreparationError::CancelledBeforeDispatch);
     }
-    let owner_context = if let Some(household) = household_session {
+    let hosted_context = if let Some(household) = household_session {
         let snapshot = session.lock().await.clone();
         if &snapshot.credentials.account_id != household.account() {
             return Err(InteractivePreparationError::Failed(
@@ -6981,14 +7017,14 @@ async fn prepare_hosted_interactive_operation(
         }
         Some({
             let authorized = household
-                .acquire_authorized_owner_hosted_context(cancellation.child_token())
+                .acquire_authorized_hosted_context(cancellation.child_token())
                 .await
                 .map_err(interactive_preparation_error_from_port)?;
             // Validate that the exact canonical profile fits the deployed
             // request schema before provider/session refresh can perform
             // any network operation. A safety projection must never be
             // silently truncated to make it fit a transport bound.
-            native_owner_turn_context(authorized.snapshot()).map_err(|error| {
+            native_household_turn_context(&authorized).map_err(|error| {
                 InteractivePreparationError::Failed(TurnFailure::from_port_error(&error))
             })?;
             authorized
@@ -6996,7 +7032,7 @@ async fn prepare_hosted_interactive_operation(
     } else {
         None
     };
-    // `owner_context` retains the native lifecycle/vault lock while the
+    // `hosted_context` retains the native lifecycle/vault lock while the
     // provider performs channel/session credential preparation.
     let operation = prepare_interactive_operation(
         provider,
@@ -7010,7 +7046,7 @@ async fn prepare_hosted_interactive_operation(
     .await?;
     Ok(PreparedHostedInteractiveOperation {
         operation,
-        owner_context,
+        hosted_context,
     })
 }
 
@@ -7088,8 +7124,8 @@ async fn preflight_native_hosted_scope(
             "Native household context is bound to another account.",
         ));
     }
-    let load = match household.load_required(cancellation.child_token()).await {
-        Ok(load) => load,
+    match household.load_required(cancellation.child_token()).await {
+        Ok(_) => {}
         Err(error) if cancellation.is_cancelled() || error.code == "household_load_cancelled" => {
             return Ok(NativeHostedScopePreflightV1::Cancelled);
         }
@@ -7099,49 +7135,164 @@ async fn preflight_native_hosted_scope(
                 "Native household context could not be loaded.",
             ));
         }
-    };
-    if !matches!(
-        &load.state.active_scope,
-        HouseholdScope::Subject(HouseholdSubjectId::Self_)
-    ) {
-        return Err(PortError::new(
-            "household_hosted_context_not_authorized",
-            "Hosted guidance for household members is not enabled yet. Run /for me to continue with the owner profile.",
-        ));
     }
     Ok(NativeHostedScopePreflightV1::Allowed)
 }
 
-fn native_owner_turn_context(
-    snapshot: &heyfood_application::HouseholdContextSnapshotV1,
+fn native_household_turn_context(
+    authorized: &AuthorizedHostedContextV1,
 ) -> Result<TurnContext, PortError> {
-    if snapshot.scope != HouseholdScope::Subject(HouseholdSubjectId::Self_)
-        || snapshot.subjects.len() != 1
-        || snapshot.subjects[0].subject != HouseholdSubjectId::Self_
-    {
+    let snapshot = authorized.snapshot();
+    let state = &authorized.load().state;
+    if snapshot.household_revision != state.revision || snapshot.scope != state.active_scope {
         return Err(PortError::new(
             "household_hosted_context_invalid",
-            "the authorized native context did not resolve to exactly Me",
+            "the authorized native context is detached from its retained Household generation",
         ));
     }
-    validate_native_owner_hosted_profile(&snapshot.subjects[0].effective_profile)?;
-    let dietary = Value::Object(dietary_context_for_identity(
-        "_self",
-        "Me",
-        "self",
-        None,
-        &snapshot.subjects[0].effective_profile,
-        None,
-    ));
+    // `_self` is intentionally presented as "Me" on the deployed wire. The
+    // retained owner record remains the authority for state validation, while
+    // this stable label preserves single-member compatibility and avoids
+    // exposing a private account name as protocol identity.
+    let owner_label = "Me";
+    let household_wide = matches!(&snapshot.scope, HouseholdScope::Everyone);
+    let mut seen = BTreeSet::new();
+    let mut members = Vec::with_capacity(snapshot.subjects.len());
+    for subject in &snapshot.subjects {
+        validate_native_hosted_profile(&subject.effective_profile)?;
+        let (identifier, label, relationship, birth_month) = match &subject.subject {
+            HouseholdSubjectId::Self_ => ("_self", owner_label, "self", None),
+            HouseholdSubjectId::Member(member_id) => {
+                let member = state
+                    .members
+                    .iter()
+                    .find(|member| {
+                        &member.member_id == member_id
+                            && member.lifecycle == HouseholdLifecycleV1::Active
+                    })
+                    .ok_or_else(|| {
+                        PortError::new(
+                            "household_hosted_context_invalid",
+                            "the authorized native context contains an unknown or archived member",
+                        )
+                    })?;
+                (
+                    member.member_id.as_str(),
+                    member.display_name.as_str(),
+                    relationship_wire_name(member.relationship),
+                    member
+                        .age_evidence
+                        .as_ref()
+                        .and_then(|evidence| evidence.date_of_birth.as_ref())
+                        .map(|date| &date.as_str()[..7]),
+                )
+            }
+        };
+        if !seen.insert(identifier.to_owned()) {
+            return Err(PortError::new(
+                "household_hosted_context_invalid",
+                "the authorized native context contains duplicate Household subjects",
+            ));
+        }
+        let mut context = dietary_context_for_identity(
+            identifier,
+            label,
+            relationship,
+            birth_month,
+            &subject.effective_profile,
+            (identifier != "_self").then_some(owner_label),
+        );
+        if household_wide {
+            context.insert("member_id".into(), Value::String(identifier.to_owned()));
+            context.insert("label".into(), Value::String(label.to_owned()));
+        }
+        members.push(Value::Object(context));
+    }
+
+    let (dietary, meal) = match &snapshot.scope {
+        HouseholdScope::Subject(subject) => {
+            if snapshot.subjects.len() != 1 || &snapshot.subjects[0].subject != subject {
+                return Err(PortError::new(
+                    "household_hosted_context_invalid",
+                    "the authorized native subject context is not singular and exact",
+                ));
+            }
+            let only = members.into_iter().next().ok_or_else(|| {
+                PortError::new(
+                    "household_hosted_context_invalid",
+                    "the authorized native subject context is empty",
+                )
+            })?;
+            let (identifier, label) = match subject {
+                HouseholdSubjectId::Self_ => ("_self", owner_label),
+                HouseholdSubjectId::Member(member_id) => {
+                    let member = state
+                        .members
+                        .iter()
+                        .find(|member| {
+                            &member.member_id == member_id
+                                && member.lifecycle == HouseholdLifecycleV1::Active
+                        })
+                        .ok_or_else(|| {
+                            PortError::new(
+                                "household_hosted_context_invalid",
+                                "the selected native Household member is unavailable",
+                            )
+                        })?;
+                    (member.member_id.as_str(), member.display_name.as_str())
+                }
+            };
+            (
+                only,
+                json!({
+                    "active_member_id": identifier,
+                    "active_member_name": label,
+                    "is_cook_mode": false
+                }),
+            )
+        }
+        HouseholdScope::Everyone => {
+            if members.len() < 2 {
+                return Err(PortError::new(
+                    "household_hosted_context_invalid",
+                    "the authorized Everyone context requires two eligible subjects",
+                ));
+            }
+            (
+                json!({"mode": "household", "members": members}),
+                json!({
+                    "active_member_id": "_self",
+                    "active_member_name": owner_label,
+                    "is_cook_mode": false
+                }),
+            )
+        }
+    };
     Ok(TurnContext {
         dietary: Some(dietary),
-        meal: Some(json!({
-            "active_member_id": "_self",
-            "active_member_name": "Me",
-            "is_cook_mode": false
-        })),
+        meal: Some(meal),
+        // Native household profiles are local-first. Sending top-level
+        // household_scope would cause the deployed server to discard this
+        // exact frozen dietary context and resolve server-shared profiles
+        // instead. The explicit persisted /for selection remains represented
+        // by the exact dietary projection plus active_member_id.
+        household_scope: None,
         ..TurnContext::default()
     })
+}
+
+fn relationship_wire_name(relationship: RelationshipV1) -> &'static str {
+    match relationship {
+        RelationshipV1::Self_ => "self",
+        RelationshipV1::Spouse => "spouse",
+        RelationshipV1::Partner => "partner",
+        RelationshipV1::Parent => "parent",
+        RelationshipV1::Child => "child",
+        RelationshipV1::Sibling => "sibling",
+        RelationshipV1::Grandparent => "grandparent",
+        RelationshipV1::Friend => "friend",
+        RelationshipV1::Other => "other",
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7155,7 +7306,7 @@ async fn run_interactive_turn(
     continuity: Arc<Mutex<InteractiveContinuity>>,
     context_service: Option<Arc<HttpService>>,
     local_state: Option<Arc<ImportedPythonState>>,
-    owner_context: Option<AuthorizedOwnerHostedContextV1>,
+    hosted_context: Option<AuthorizedHostedContextV1>,
     cancellation: CancellationToken,
     runtime_events: mpsc::Sender<RuntimeEvent>,
 ) -> Result<RunTurnOutcome, TurnFailure> {
@@ -7180,8 +7331,8 @@ async fn run_interactive_turn(
     if cancellation.is_cancelled() {
         return Ok(RunTurnOutcome::CancelledBeforeServerAcceptance);
     }
-    let mut context = match owner_context.as_ref() {
-        Some(owner_context) => native_owner_turn_context(owner_context.snapshot())
+    let mut context = match hosted_context.as_ref() {
+        Some(hosted_context) => native_household_turn_context(hosted_context)
             .map_err(|error| TurnFailure::from_port_error(&error))?,
         None => match (context_service, local_state) {
             (Some(service), Some(state)) => {
@@ -7217,7 +7368,7 @@ async fn run_interactive_turn(
     // The request has either been rejected before acceptance or accepted with
     // the exact revision-bound owner context. Later scope changes apply only
     // to subsequent turns.
-    drop(owner_context);
+    drop(hosted_context);
     let mut accepted = match accepted {
         Ok(accepted) => accepted,
         Err(error) if error.code == "converse_cancelled_before_dispatch" => {
@@ -8464,11 +8615,9 @@ mod tests {
         let (_root, preview) = safe_log_preview("saved-sarah", sarah_household("member-sarah"));
         let prepared =
             prepare_log_command(log_arguments(None, &["oatmeal"]), &[], preview).unwrap();
-        assert!(
-            prepared.review_document().contains(
-                "Household target: \"Sarah\" [member-id-utf8-hex=6d656d6265722d7361726168]"
-            )
-        );
+        let review = prepared.review_document();
+        assert!(review.contains("Household target: \"Sarah\""));
+        assert!(!review.contains("member-id-utf8-hex"));
         assert_eq!(prepared.target.raw_id, "member-sarah");
     }
 
@@ -8477,11 +8626,9 @@ mod tests {
         let (_root, preview) = no_source_log_preview("no-source-self");
         let prepared =
             prepare_log_command(log_arguments(None, &["oatmeal"]), &[], preview).unwrap();
-        assert!(
-            prepared
-                .review_document()
-                .contains("Household target: \"Me\" [scope=_self]")
-        );
+        let review = prepared.review_document();
+        assert!(review.contains("Household target: \"Me\""));
+        assert!(!review.contains("scope=_self"));
     }
 
     #[test]
@@ -8500,11 +8647,9 @@ mod tests {
         let (_root, preview) = protected_log_preview("protected-self");
         let prepared =
             prepare_log_command(log_arguments(Some("self"), &["oatmeal"]), &[], preview).unwrap();
-        assert!(
-            prepared
-                .review_document()
-                .contains("Household target: \"Me\" [scope=_self]")
-        );
+        let review = prepared.review_document();
+        assert!(review.contains("Household target: \"Me\""));
+        assert!(!review.contains("scope=_self"));
     }
 
     #[test]
@@ -8518,7 +8663,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_log_review_uses_reversible_ascii_label_and_hex_member_id() {
+    fn prepared_log_review_uses_reversible_ascii_label_without_member_id() {
         let (_root, preview) = safe_log_preview(
             "ascii-review",
             json!({
@@ -8532,8 +8677,25 @@ mod tests {
             prepare_log_command(log_arguments(None, &["oatmeal"]), &[], preview).unwrap();
         let review = prepared.review_document();
         assert!(review.contains("\"S\\u00E1ra \\\"Q\\\"\""));
-        assert!(review.contains("member-id-utf8-hex=6dc3a96d626572"));
+        assert!(!review.contains("member-id-utf8-hex"));
+        assert!(!review.contains("6dc3a96d626572"));
         assert!(review.is_ascii());
+    }
+
+    #[test]
+    fn prepared_log_everyone_review_promises_one_owner_meal_without_id_tokens() {
+        let (_root, preview) = safe_log_preview(
+            "everyone-owner-attribution",
+            sarah_household("__everyone__"),
+        );
+        let prepared =
+            prepare_log_command(log_arguments(None, &["oatmeal"]), &[], preview).unwrap();
+        let review = prepared.review_document();
+        assert!(review.contains("Household target: \"Everyone\""));
+        assert!(review.contains("Meal write: one meal for owner \"Justin\""));
+        for hidden in ["member-id-utf8-hex", "scope=__everyone__", "member-sarah"] {
+            assert!(!review.contains(hidden));
+        }
     }
 
     #[test]

@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "contract_family": "hellofood-household-evaluation",
+  "contract_version": 1,
+  "status": "reviewed_contract_deployment_pending_external_qualification",
+  "source_repository": "https://github.com/frntrllc/hellofood",
+  "reviewed_source_commit": "a1c4455fbc8a52e4073d6921dfd9a73b7f95537e",
+  "reviewed_source_tree": "9739da513d001d7db3363c454a7f66ab286b0d6c",
+  "byte_identity_also_verified_at_commit": "d9b6f48540e3a77a26b0e019637240088de8922c",
+  "merge_ancestry": [
+    {
+      "pull_request": 173,
+      "merge_commit": "5cc3862e42bc4d66d28b001c991b12444eae8448",
+      "relationship": "introduced_founding_household_evaluation_contract"
+    },
+    {
+      "pull_request": 171,
+      "merge_commit": "d9b6f48540e3a77a26b0e019637240088de8922c",
+      "parent_commit": "5cc3862e42bc4d66d28b001c991b12444eae8448",
+      "relationship": "direct_child_and_first_merged_lineage_containing_both_files"
+    }
+  ],
+  "hash_algorithm": "sha256",
+  "files": {
+    "household-evaluation-contract.json": {
+      "source_path": "backend/docs/schemas/v1/household-evaluation-contract.json",
+      "target_path": "fixtures/contracts/household-backend/v1/household-evaluation-contract.json",
+      "sha256": "295e57714894845d55ee6cc95684235db76c64454c0a620cf3c6118d7a84ccdf",
+      "freeze_kind": "exact_copy"
+    },
+    "fixtures/household_evaluation/founding_scenario_maya_menu.json": {
+      "source_path": "backend/docs/schemas/v1/fixtures/household_evaluation/founding_scenario_maya_menu.json",
+      "target_path": "fixtures/contracts/household-backend/v1/fixtures/household_evaluation/founding_scenario_maya_menu.json",
+      "sha256": "f1056049ce6d4e3d99fc8ec4006a1c91bbb3583caae874559697f69f1ae588a0",
+      "freeze_kind": "exact_copy"
+    }
+  },
+  "aggregate": {
+    "algorithm": "sha256",
+    "file_count": 2,
+    "canonicalization": "Sort paths relative to this v1 directory by UTF-8 bytes; for each imported file append <path>, one TAB byte, the lowercase SHA-256 hex digest, and one LF byte; SHA-256 the resulting UTF-8 byte sequence including the final LF.",
+    "digest": "2a469fbe8d14de09a8c41e4b984ef90eef59c62f1575e3987ff28823ca41ad83"
+  },
+  "deployment_evidence": {
+    "status": "pending_external_qualification",
+    "render_deploy_id": null,
+    "live_commit": null,
+    "note": "The reviewed contract records that no deployment evidence exists yet. Render deployment identity and live SHA must be supplied by the release team's external backend qualification; this manifest does not infer or fabricate them."
+  },
+  "rust_boundary": {
+    "provider_secrets_imported": false,
+    "provider_specific_types_imported": false,
+    "runtime_module": "crates/heyfood-core/src/household_evaluation.rs"
+  }
+}

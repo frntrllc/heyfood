@@ -101,29 +101,43 @@ impl fmt::Debug for HouseholdReadLeaseV1 {
     }
 }
 
-/// Exact owner context plus the retained repository generation that
+/// Exact active household context plus the retained repository generation that
 /// authorized it. Dropping this value releases the cross-process lock.
-pub struct AuthorizedOwnerHostedContextV1 {
+pub struct AuthorizedHostedContextV1 {
     snapshot: HouseholdContextSnapshotV1,
     _read_lease: HouseholdReadLeaseV1,
 }
 
-impl AuthorizedOwnerHostedContextV1 {
+impl AuthorizedHostedContextV1 {
     #[must_use]
     pub const fn snapshot(&self) -> &HouseholdContextSnapshotV1 {
         &self.snapshot
     }
+
+    /// The exact repository generation retained by this authorization. This is
+    /// intentionally a borrowed view: callers cannot outlive or detach it from
+    /// the cross-process read lease.
+    #[must_use]
+    pub const fn load(&self) -> &HouseholdLoad {
+        self._read_lease.load()
+    }
 }
 
-impl fmt::Debug for AuthorizedOwnerHostedContextV1 {
+impl fmt::Debug for AuthorizedHostedContextV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("AuthorizedOwnerHostedContextV1")
+            .debug_struct("AuthorizedHostedContextV1")
             .field("household_revision", &self.snapshot.household_revision)
+            .field("scope_kind", &scope_kind(&self.snapshot.scope))
             .field("subject_count", &self.snapshot.subjects.len())
             .finish_non_exhaustive()
     }
 }
+
+/// Compatibility name for callers that deliberately require the owner-only
+/// wrapper below. New household-aware callers should use
+/// [`AuthorizedHostedContextV1`].
+pub type AuthorizedOwnerHostedContextV1 = AuthorizedHostedContextV1;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct HouseholdInitialize {
@@ -1248,13 +1262,13 @@ impl HouseholdSession {
         })
     }
 
-    /// Acquire the exact live owner context while retaining the repository's
+    /// Acquire the exact live active context while retaining the repository's
     /// cross-process read lock. Callers must keep the returned value alive
     /// through every credential refresh and first hosted dispatch.
-    pub async fn acquire_authorized_owner_hosted_context(
+    pub async fn acquire_authorized_hosted_context(
         &self,
         cancellation: CancellationToken,
-    ) -> Result<AuthorizedOwnerHostedContextV1, PortError> {
+    ) -> Result<AuthorizedHostedContextV1, PortError> {
         check_cancelled(&cancellation, "household_hosted_context_cancelled")?;
         let read_lease = self
             .repository
@@ -1267,32 +1281,44 @@ impl HouseholdSession {
                 "household repository returned another account",
             ));
         }
-        if !matches!(
-            load.state.active_scope,
-            HouseholdScope::Subject(HouseholdSubjectId::Self_)
-        ) {
-            return Err(repository_error(
-                "household_hosted_context_not_authorized",
-                "Hosted guidance for household members is not enabled yet. Run /for me to continue with the owner profile.",
-            ));
-        }
         let prepared = PreparedHouseholdTargetV1::from_active_scope(&load.state)
             .map_err(context_port_error)?;
         let snapshot =
             resolve_personalized_context_v1(&load.state, &prepared).map_err(context_port_error)?;
+        if snapshot.household_revision != load.state.revision
+            || snapshot.scope != prepared.scope
+            || snapshot.subjects.is_empty()
+        {
+            return Err(repository_error(
+                "household_hosted_context_invalid",
+                "the authorized household context did not match the retained generation",
+            ));
+        }
+        Ok(AuthorizedHostedContextV1 {
+            snapshot,
+            _read_lease: read_lease,
+        })
+    }
+
+    /// Acquire the exact live owner context while retaining the repository's
+    /// cross-process read lock. This compatibility wrapper intentionally
+    /// rejects member and everyone scopes.
+    pub async fn acquire_authorized_owner_hosted_context(
+        &self,
+        cancellation: CancellationToken,
+    ) -> Result<AuthorizedOwnerHostedContextV1, PortError> {
+        let authorized = self.acquire_authorized_hosted_context(cancellation).await?;
+        let snapshot = authorized.snapshot();
         if snapshot.scope != HouseholdScope::Subject(HouseholdSubjectId::Self_)
             || snapshot.subjects.len() != 1
             || snapshot.subjects[0].subject != HouseholdSubjectId::Self_
         {
             return Err(repository_error(
-                "household_hosted_context_invalid",
-                "the authorized owner context did not resolve to exactly Me",
+                "household_hosted_context_not_authorized",
+                "This owner-only operation requires the Me scope. Run /for me and try that operation again.",
             ));
         }
-        Ok(AuthorizedOwnerHostedContextV1 {
-            snapshot,
-            _read_lease: read_lease,
-        })
+        Ok(authorized)
     }
 
     pub async fn open_or_initialize_self_only(

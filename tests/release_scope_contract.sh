@@ -627,6 +627,18 @@ grep -Fq 'scripts/release/package-installer.sh' "$ordinary_distribution_slice" |
 grep -Fq 'scripts/release/verify-assets.sh dist "$version" --native-state' \
   "$ordinary_distribution_slice" ||
   fail "ordinary distribution CI must verify the complete native-state fixture set"
+grep -Fq 'installed_archive_core_release_matrix -- --ignored --exact' \
+  "$CANDIDATE_WORKFLOW" ||
+  fail "installed release qualification must execute the exact archive-driven matrix"
+grep -Fq '"id": "household-contract-cli"' \
+  "$ROOT/crates/heyfood-bin/tests/installed_showcase.rs" ||
+  fail "installed release evidence must include the read-only household contract canary"
+grep -Fq '"id": "selected-member-household-menu-cli"' \
+  "$ROOT/crates/heyfood-bin/tests/installed_showcase.rs" ||
+  fail "installed release evidence must cover the deployed selected-member agent envelope"
+grep -Fq '"household_tui_lifecycle_not_automated"' \
+  "$ROOT/crates/heyfood-bin/tests/installed_showcase.rs" ||
+  fail "installed automation must preserve the manual household TUI boundary"
 
 grep -Fq "Windows distribution remains deferred" "$ROOT/README.md" ||
   fail "README must state the Windows release boundary"
@@ -663,7 +675,6 @@ jq -e '
     "health_integrations"
   ] and
   .deferred_household_capabilities == [
-    "hosted_member_guidance_and_evaluation",
     "member_profile_sync",
     "learned_dietary_graph",
     "member_health_and_fitness_data",

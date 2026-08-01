@@ -10,6 +10,7 @@ pub mod grocery;
 pub mod health;
 pub mod household_canonical;
 pub mod household_effect;
+pub mod household_evaluation;
 pub mod household_state;
 pub mod menu_watch;
 pub mod migration;
@@ -55,6 +56,16 @@ pub use household_effect::{
     ExpectedHouseholdStateV1, HOUSEHOLD_EFFECT_FINGERPRINT_CONTRACT,
     HouseholdEffectFingerprintInputV1, HouseholdEffectFingerprintV1, HouseholdEffectV1,
     effect_fingerprint_v1,
+};
+pub use household_evaluation::{
+    AnnotationDisposition, EvaluateMenuItem, EvaluateMenuResponse, EvaluationConfidence,
+    EvaluationConsentState, EvaluationContextHash, EvaluationContextHashVersion,
+    EvaluationMemberId, EvaluationProfileSource, EvaluationProfileVersion, EvaluationScope,
+    HOUSEHOLD_EVALUATION_AGGREGATE_SHA256, HOUSEHOLD_EVALUATION_CONTRACT_SHA256,
+    HOUSEHOLD_EVALUATION_CONTRACT_VERSION, HOUSEHOLD_EVALUATION_FIXTURE_SHA256,
+    HOUSEHOLD_EVALUATION_SOURCE_COMMIT, HOUSEHOLD_EVALUATION_SOURCE_TREE, HouseholdContext,
+    HouseholdEvaluationError, HouseholdMemberRef, HumanLabel, MealAttribution, MemberAnnotation,
+    SafetyStatus,
 };
 pub use household_state::{
     AgeBandV1, AgeEvidenceSourceV1, AgeEvidenceV1, AppliedCommitOutcomeV1, AppliedCommitRecordV1,

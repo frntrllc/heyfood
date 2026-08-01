@@ -63,15 +63,20 @@ profile can complete the same questionnaire. Duplicate names require an
 explicit stable-ID-bound choice; archived, unknown, incomplete, conflicted, or
 otherwise ineligible targets fail closed.
 
-Member profiles and member/Everyone scope are local to this device. They create
-no member profile-sync consent, remote member profile, or non-owner outbox
-entry. A member or Everyone hosted guidance/evaluation turn, including voice,
-fails locally with `household_hosted_context_not_authorized` before credential
-refresh, microphone capture, profile serialization, or HTTP. `/for me` returns
-to the existing owner-hosted experience. “Dietary graph” support in this slice
-means only the complete declared local profile; learned preferences, history,
-goals, health/fitness data, hosted member guidance/evaluation, cross-device
-roster sync, and remote member erasure remain deferred.
+Member profiles and member/Everyone scope remain encrypted and local to this
+device. They create no member profile-sync consent, remote member profile, or
+non-owner outbox entry. For an ordinary hosted turn, the client acquires an
+exact revision-bound read lease and sends only the selected declared-profile
+projection as transient request context. Member scope evaluates that member;
+Everyone scope evaluates the owner and every eligible active member. The
+client does not set the top-level server-synced `household_scope` for this
+request-first path, so an unsynced local member is never misresolved as a
+remote member ID. `/for me` returns to the owner context.
+
+“Dietary graph” support in this slice means only the complete declared local
+profile used for these turns. Learned preferences, history, goals,
+health/fitness data, cross-device roster sync, remote member profile sync, and
+remote member erasure remain deferred.
 
 Legacy compatibility and rollback/repair modes remain read-only and never
 advertise an enabled add action. Household mutations are not exposed through

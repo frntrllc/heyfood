@@ -178,8 +178,14 @@ or TUI is involved.
    disposable account. Relaunch and confirm the household repository remains
    bound to that account and its committed scope persists.
 4. Select the member, expire authority again, and submit an ordinary turn.
-   Confirm the household preflight rejects hosted member guidance before any
-   refresh or network work.
+   Confirm authority refresh remains bound to the same account and the result
+   reflects that member's declared restrictions. Confirm human output uses the
+   display label and contains no stable member ID, context hash, model/rules
+   version, tool name, or raw protocol JSON.
+5. Select `Everyone` and submit the same food/menu question. Confirm the
+   household headline is the worst-member result, each member has a named
+   explanation, `unable_to_evaluate` is not promoted to `avoid`, and changing
+   back to `/for me` resets conversation continuity before the next turn.
 
 ## Journey D — logout vault teardown
 
@@ -211,9 +217,9 @@ or TUI is involved.
 | Atomic member and profile save |  | `local_commit_failed` |
 | Selected member after save |  | `context_apply_failed` |
 | Member scope restart continuity |  | `member_restart_continuity_failed` |
-| Member hosted-turn preflight |  | `member_preflight_failed` |
+| Member hosted evaluation and privacy-safe rendering |  | `member_evaluation_failed` |
 | Everyone selection and restart continuity |  | `everyone_continuity_failed` |
-| Everyone hosted-turn preflight |  | `everyone_preflight_failed` |
+| Everyone worst-member evaluation and attribution |  | `everyone_evaluation_failed` |
 | Return to owner-hosted context |  | `owner_context_failed` |
 | Existing-member onboarding |  | `existing_member_onboarding_failed` |
 | Pre-save cancellation |  | `cancellation_failed` |
@@ -223,7 +229,7 @@ or TUI is involved.
 | Current v0.6.3 installer refuses requested v0.6.2 before download |  | `managed_v062_request_refusal_failed` |
 | Expired-authority rollover preserves household |  | `authorization_rollover_failed` |
 | Same-account login replacement preserves household |  | `authorization_replacement_failed` |
-| Member preflight precedes expired-authority refresh |  | `member_refresh_order_failed` |
+| Member authority rollover preserves exact household context |  | `member_rollover_context_failed` |
 | Logout resumes and completes |  | `logout_resume_failed` |
 | Account key, vault, credentials, and journal absent |  | `vault_teardown_failed` |
 | Global native-state downgrade floor retained |  | `downgrade_floor_removed` |
