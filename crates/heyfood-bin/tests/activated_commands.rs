@@ -1633,8 +1633,9 @@ async fn restarted_logout_adopts_uncertain_channel_refresh_without_network_teard
 
     assert!(
         output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
     );
     let document: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(document["ok"], true);
@@ -1676,8 +1677,9 @@ async fn restarted_logout_adopts_uncertain_session_refresh_without_network_teard
 
     assert!(
         output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
     );
     let document: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(document["ok"], true);

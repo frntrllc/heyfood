@@ -1,23 +1,37 @@
-use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+#[cfg(not(windows))]
 use std::sync::Arc;
+#[cfg(not(windows))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use heyfood_application::NativeHouseholdModeV1;
+#[cfg(not(windows))]
 use heyfood_application::{
-    BoxFuture, HouseholdInitialize, HouseholdRepositoryResolutionV1, NativeHouseholdModeV1,
-    PortError, resolve_household_initialize_v1,
+    BoxFuture, HouseholdInitialize, HouseholdRepositoryResolutionV1, PortError,
+    resolve_household_initialize_v1,
 };
 use heyfood_bin::native_household_composition::{
     NativeHouseholdCompositionV1, compose_native_household_v1,
+};
+#[cfg(not(windows))]
+use heyfood_bin::native_household_composition::{
     compose_verified_native_household_v1, compose_verified_native_household_with_migration_v1,
 };
+use heyfood_core::{AccountId, NativeHouseholdRolloutV1};
+#[cfg(not(windows))]
 use heyfood_core::{
-    AccountId, CanonicalDigestV1, CanonicalTimestampV1, CommitId, DisplayName,
-    HOUSEHOLD_STATE_SCHEMA_VERSION, HouseholdEffectV1, HouseholdOwnerV1, HouseholdProfileStateV1,
-    HouseholdRevision, HouseholdScope, HouseholdStateV1, HouseholdSubjectId,
-    ImportedCompatibilityStateV1, LegacySourceIdentityV1, MigrationDispositionManifestV1,
-    MigrationProvenanceV1, NativeHouseholdRolloutV1, RelationshipV1, canonical_sha256_v1,
+    CanonicalDigestV1, CanonicalTimestampV1, CommitId, DisplayName, HOUSEHOLD_STATE_SCHEMA_VERSION,
+    HouseholdEffectV1, HouseholdOwnerV1, HouseholdProfileStateV1, HouseholdRevision,
+    HouseholdScope, HouseholdStateV1, HouseholdSubjectId, ImportedCompatibilityStateV1,
+    LegacySourceIdentityV1, MigrationDispositionManifestV1, MigrationProvenanceV1, RelationshipV1,
+    canonical_sha256_v1,
 };
+use heyfood_platform::NativePaths;
+#[cfg(not(windows))]
 use heyfood_platform::{
     HouseholdKeyBundle, HouseholdKeyMaterial, HouseholdKeyStore, HouseholdMigrationGuardDocument,
     HouseholdMigrationGuardStore, HouseholdMigrationSourceIdentityV1, HouseholdSecureStore,
@@ -25,7 +39,7 @@ use heyfood_platform::{
     KeyBundleRevision, KeyId, KeyStoreExpectation, LegacyPythonConfigKindV1,
     LegacyPythonConfigRootV1, LegacyPythonHouseholdMigrationV1,
     LegacyPythonHouseholdSourceBrokerV1, LegacyPythonKeyringProbeOutcomeV1,
-    MigrationGuardExpectation, NativePaths,
+    MigrationGuardExpectation,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -52,11 +66,13 @@ impl Drop for TempRoot {
     }
 }
 
+#[cfg(not(windows))]
 #[derive(Default)]
 struct RejectingSourceBroker {
     calls: AtomicUsize,
 }
 
+#[cfg(not(windows))]
 impl LegacyPythonHouseholdSourceBrokerV1 for RejectingSourceBroker {
     fn probe_and_load<'a>(
         &'a self,
@@ -86,10 +102,12 @@ fn ready_mode(result: NativeHouseholdCompositionV1) -> NativeHouseholdModeV1 {
     }
 }
 
+#[cfg(not(windows))]
 fn timestamp() -> CanonicalTimestampV1 {
     CanonicalTimestampV1::parse("2026-07-30T12:00:00.000Z").expect("timestamp")
 }
 
+#[cfg(not(windows))]
 fn initial_state(
     account: AccountId,
     commit_id: CommitId,
@@ -137,6 +155,7 @@ fn initial_state(
     }
 }
 
+#[cfg(not(windows))]
 #[derive(Clone, Copy)]
 enum NativeFixtureCompletionV1 {
     UncommittedArtifacts,
@@ -144,6 +163,7 @@ enum NativeFixtureCompletionV1 {
     Completed,
 }
 
+#[cfg(not(windows))]
 async fn committed_native_fixture(
     name: &str,
     corrupt_initial_fingerprint: bool,
@@ -290,6 +310,31 @@ async fn committed_native_fixture(
     (root, vault, store)
 }
 
+#[test]
+fn clap_terminal_controls_leave_native_state_untouched() {
+    let root = TempRoot::new("terminal-controls");
+    let state = root.0.join("state");
+
+    for argument in ["--version", "--help"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_heyfood"))
+            .arg(argument)
+            .env("HEYFOOD_STATE_DIR", &state)
+            .output()
+            .expect("run terminal control");
+        assert!(
+            output.status.success(),
+            "{argument} failed: status={:?}, stdout={:?}, stderr={:?}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !state.exists(),
+            "{argument} must not create or inspect native state"
+        );
+    }
+}
+
 #[tokio::test]
 async fn clean_flag_zero_preserves_legacy_without_creating_native_root() {
     let root = TempRoot::new("clean-legacy");
@@ -334,6 +379,10 @@ async fn flag_one_without_native_credentials_fails_before_any_native_write() {
     assert!(!paths.data_dir().exists());
 }
 
+// Windows native-root identity is intentionally deferred with Windows
+// distribution; retain the portable flag-zero contract there without opening
+// the macOS/Linux-only household vault.
+#[cfg(not(windows))]
 #[tokio::test]
 async fn lock_only_directory_is_not_native_provenance_but_flag_one_never_falls_back() {
     let root = TempRoot::new("lock-only");
@@ -373,6 +422,7 @@ async fn lock_only_directory_is_not_native_provenance_but_flag_one_never_falls_b
     );
 }
 
+#[cfg(not(windows))]
 #[tokio::test]
 async fn committed_state_classifies_enabled_and_rollback_with_live_sessions() {
     let (_root, vault, store) = committed_native_fixture(
@@ -417,6 +467,7 @@ async fn committed_state_classifies_enabled_and_rollback_with_live_sessions() {
     }
 }
 
+#[cfg(not(windows))]
 #[tokio::test]
 async fn committed_startup_never_invokes_the_legacy_source_broker() {
     let (root, vault, store) = committed_native_fixture(
@@ -475,6 +526,7 @@ async fn committed_startup_never_invokes_the_legacy_source_broker() {
     );
 }
 
+#[cfg(not(windows))]
 #[tokio::test]
 async fn authenticated_artifact_resume_never_invokes_the_legacy_source_broker() {
     let broker = RejectingSourceBroker::default();
@@ -528,6 +580,7 @@ async fn authenticated_artifact_resume_never_invokes_the_legacy_source_broker() 
     );
 }
 
+#[cfg(not(windows))]
 #[tokio::test]
 async fn committed_state_with_wrong_initial_ledger_fingerprint_is_contradictory() {
     let (_root, vault, store) = committed_native_fixture(

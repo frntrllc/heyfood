@@ -573,10 +573,30 @@ async fn begin_native_login_reauthorization_intent_v1(
 }
 
 #[cfg(feature = "native-credentials")]
+fn native_account_teardown_directory_present(paths: &NativePaths) -> Result<bool, PortError> {
+    // This name is the stable v1 on-disk directory owned by
+    // `HouseholdTeardownJournalStoreV1`. Probing it before opening the store is
+    // intentionally read-only: startup must not manufacture a native root
+    // merely to discover that no recovery work exists.
+    let directory = paths.data_dir().join("household-teardown");
+    match std::fs::symlink_metadata(directory) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(PortError::new(
+            "household_teardown_journal_unavailable",
+            "native household teardown journal is unavailable",
+        )),
+    }
+}
+
+#[cfg(feature = "native-credentials")]
 async fn resume_native_account_teardown_outcomes(
     paths: &NativePaths,
     cancellation: CancellationToken,
 ) -> Result<Vec<HouseholdEraseOutcome>, PortError> {
+    if !native_account_teardown_directory_present(paths)? {
+        return Ok(Vec::new());
+    }
     let journals = HouseholdTeardownJournalStoreV1::open(paths.data_dir())?;
     if journals.scan()?.is_empty() {
         return Ok(Vec::new());
@@ -706,6 +726,20 @@ async fn main() -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
+    #[cfg(all(debug_assertions, feature = "native-credentials"))]
+    if std::env::var_os("HEYFOOD_TEST_DELETE_NATIVE_CREDENTIALS").as_deref()
+        == Some(std::ffi::OsStr::new("1"))
+    {
+        let result = NativePaths::discover().and_then(|paths| {
+            CredentialBrokerStore::open(paths.config_dir(), Duration::from_secs(15))
+        });
+        return match result {
+            Ok(store) if store.delete().await.is_ok() => ExitCode::SUCCESS,
+            Ok(_) | Err(_) => ExitCode::FAILURE,
+        };
+    }
+
+    let cli = Cli::parse_env();
     #[cfg(feature = "native-credentials")]
     if !raw_arguments_request_logout() {
         let startup_paths = if raw_arguments_request_mcp() {
@@ -724,20 +758,6 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    #[cfg(all(debug_assertions, feature = "native-credentials"))]
-    if std::env::var_os("HEYFOOD_TEST_DELETE_NATIVE_CREDENTIALS").as_deref()
-        == Some(std::ffi::OsStr::new("1"))
-    {
-        let result = NativePaths::discover().and_then(|paths| {
-            CredentialBrokerStore::open(paths.config_dir(), Duration::from_secs(15))
-        });
-        return match result {
-            Ok(store) if store.delete().await.is_ok() => ExitCode::SUCCESS,
-            Ok(_) | Err(_) => ExitCode::FAILURE,
-        };
-    }
-
-    let cli = Cli::parse_env();
     let machine = cli.machine_output();
     let no_input = cli.no_input;
     let output_mode = cli.output_mode(io::stdout().is_terminal());
@@ -2389,6 +2409,10 @@ async fn logout_inner() -> Result<LogoutOutcome, PortError> {
                 "native logout refresh was interrupted without its teardown journal",
             ));
         }
+        // The read-only startup scan no longer creates an absent native root.
+        // An explicit logout is authorized to establish the owner-only root
+        // needed to derive and verify every pre-native cleanup target.
+        let _journal_root = HouseholdTeardownJournalStoreV1::open(paths.data_dir())?;
         let backend = ProductionNativeAccountTeardownBackendV1::open(
             paths.clone(),
             NativeSessionStore::open(paths.config_dir())?,
@@ -3432,6 +3456,31 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[cfg(feature = "native-credentials")]
+    #[tokio::test]
+    async fn absent_teardown_directory_is_a_non_mutating_empty_scan() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "heyfood-empty-teardown-scan-{}-{nonce}",
+            std::process::id()
+        ));
+        assert!(!root.exists(), "test root must start absent");
+        let paths = NativePaths::under(&root);
+
+        let outcomes = resume_native_account_teardown_outcomes(&paths, CancellationToken::new())
+            .await
+            .expect("absent teardown directory");
+
+        assert!(outcomes.is_empty());
+        assert!(
+            !root.exists(),
+            "an empty recovery scan must not manufacture native state"
+        );
     }
 
     #[test]

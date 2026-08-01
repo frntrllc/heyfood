@@ -1102,7 +1102,13 @@ fn assert_installed_version(binary: &Path, expected_version: &str) {
         .stdin(Stdio::null())
         .output()
         .expect("execute installed binary version");
-    assert!(output.status.success(), "installed binary version failed");
+    assert!(
+        output.status.success(),
+        "installed binary version failed: status={:?}, stdout={:?}, stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(
         String::from_utf8(output.stdout)
             .expect("installed version output is UTF-8")
