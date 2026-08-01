@@ -2,8 +2,14 @@
 
 #![forbid(unsafe_code)]
 
-#[cfg(feature = "native-credentials")]
 mod credential_broker;
+mod household_migration;
+mod household_mutation_authority;
+mod household_repository;
+mod household_teardown;
+mod household_vault;
+mod native_household_evidence;
+mod native_state_floor;
 mod persistence;
 mod python_import;
 
@@ -17,9 +23,62 @@ use heyfood_core::{BrowserUrl, NetworkPolicy, ProxyUrl, ServiceUrl};
 use tokio::sync::mpsc;
 
 #[cfg(feature = "native-credentials")]
-pub use credential_broker::{CredentialBrokerStore, run_credential_broker_if_requested};
+pub use credential_broker::{
+    CredentialBrokerStore, HouseholdKeyBroker, LegacyPythonCredentialProbeResultV1,
+    LegacyPythonCredentialScrubAuthorityV1, LegacyPythonCredentialScrubResultV1,
+    LegacyPythonHouseholdLoadAuthorityV1, LegacyPythonHouseholdProbeResultV1,
+    run_credential_broker_if_requested,
+};
+pub use credential_broker::{
+    HOUSEHOLD_KEYRING_SERVICE_V1, HouseholdBrokerOperationV1, HouseholdKeyBundle,
+    HouseholdKeyBundlePhase, HouseholdKeyMaterial, HouseholdKeyStore, HouseholdKeyringLocatorsV1,
+    HouseholdMigrationCleanupPhaseV1, HouseholdMigrationGuardDocument,
+    HouseholdMigrationGuardStateV1, HouseholdMigrationGuardStore,
+    HouseholdMigrationInitializationPhaseV1, HouseholdMigrationPresentSourceKindV1,
+    HouseholdMigrationRepairFailureCategoryV1, HouseholdMigrationSourceIdentityV1,
+    HouseholdSecureStore, InMemoryHouseholdSecureStore, KeyBundleRevision, KeyId,
+    KeyStoreExpectation, LEGACY_PYTHON_KEYRING_SERVICE, LegacyPythonKeyringLocatorV1,
+    MAX_BROKER_DOCUMENT_BYTES, MAX_LEGACY_HOUSEHOLD_BROKER_RESPONSE_BYTES,
+    MigrationGuardExpectation, open_production_household_secure_store,
+};
+pub use household_migration::{
+    LegacyPythonHouseholdSourceBrokerV1, NativeHouseholdArtifactResumeCompletionV1,
+    NativeHouseholdMigrationCompletionV1, NativeHouseholdMigrationReservationV1,
+    complete_native_household_initialization_v1, resume_native_household_artifacts_v1,
+};
+pub use household_mutation_authority::NativeHouseholdMutationAuthorityV1;
+pub use household_repository::NativeHouseholdRepository;
+#[cfg(feature = "native-credentials")]
+pub use household_teardown::ProductionNativeAccountTeardownBackendV1;
+pub use household_teardown::{
+    HouseholdTeardownAttemptV1, HouseholdTeardownGuardStateV1, HouseholdTeardownJournalStoreV1,
+    HouseholdTeardownJournalV1, HouseholdTeardownKeyAbsenceBasisV1,
+    HouseholdTeardownLegacyTargetKindV1, HouseholdTeardownLegacyTargetOutcomeV1,
+    HouseholdTeardownLegacyTargetV1, HouseholdTeardownPhaseV1,
+    MAX_HOUSEHOLD_TEARDOWN_JOURNAL_BYTES, MAX_HOUSEHOLD_TEARDOWN_JOURNALS,
+    NativeAccountTeardownBackendV1, NativeAccountTeardownV1, PreparedHouseholdTeardownV1,
+};
+pub use household_vault::{
+    HouseholdAccountSlotV1, HouseholdLifecycleLease, HouseholdVault, HouseholdVaultHealthV1,
+    HouseholdVaultInitializationAbortV1, HouseholdVaultLease, HouseholdVaultLeaseModeV1,
+    HouseholdVaultLoad, HouseholdVaultWrite, MAX_HOUSEHOLD_VAULT_CIPHERTEXT_BYTES,
+    MAX_HOUSEHOLD_VAULT_PLAINTEXT_BYTES, NativeRootPlatformV1, VAULT_ENVELOPE_HEADER_BYTES,
+    VaultArtifactKindV1, VaultEnvelopeHeaderV1, household_native_root_instance_digest_v1,
+    household_vault_aad_v1,
+};
+pub use native_household_evidence::{
+    ClassifiedNativeHouseholdEvidenceV1, classify_native_household_evidence_v1,
+    household_teardown_barrier_present_v1, pre_floor_native_account_provenance_absent_v1,
+};
+pub use native_state_floor::{
+    MAX_NATIVE_STATE_FLOOR_BYTES, MINIMUM_COMPATIBLE_NATIVE_STATE_VERSION_V1,
+    NATIVE_STATE_CAPABILITIES_V1, NATIVE_STATE_FLOOR_REVISION_V1,
+    NATIVE_STATE_FLOOR_SCHEMA_VERSION_V1, NativeStateFloorStore, NativeStateFloorV1,
+};
 #[cfg(all(not(windows), feature = "native-credentials"))]
 pub use persistence::KeyringCredentialStore;
+#[cfg(any(not(windows), feature = "native-credentials"))]
+pub use persistence::NativeAuthIntentGuard;
 #[cfg(all(windows, feature = "qualification-credentials"))]
 pub use persistence::WindowsCredentialQualificationCleanup;
 #[cfg(all(windows, feature = "native-credentials"))]
@@ -29,7 +88,16 @@ pub use persistence::{
     AuthorizationSessionStore, FileCredentialStore, NativeAuthRefreshGuard, NativeAuthStore,
     NativeConfigStore, OwnerOnlyPath, SensitiveExportWriter,
 };
-pub use python_import::PythonStateImporter;
+pub use python_import::{
+    LegacyLocationRestartV1, LegacyPythonConfigKindV1, LegacyPythonConfigRootV1,
+    LegacyPythonHouseholdMigrationV1, LegacyPythonKeyringProbeOutcomeV1,
+    LegacyPythonKeyringProbeSetV1, LegacyPythonKeyringProbeV1, LegacyPythonPhaseAResultV1,
+    LegacyPythonPhaseBContextV1, LegacyPythonPhaseBResultV1, LegacyPythonResolvedInitializationV1,
+    LegacyPythonRestartStateV1, LegacyPythonSourceLeaseV1, LegacyPythonVaultReadbackVerificationV1,
+    LegacyRestaurantSearchRestartV1, ProtectedHouseholdReason, PythonSourceSetFingerprint,
+    PythonStateImporter, PythonStatePreview, PythonStateSourceKind, Sha256Digest,
+    VerifiedPythonState,
+};
 
 /// The package version shared by the native workspace.
 pub const VERSION: &str = heyfood_core::VERSION;

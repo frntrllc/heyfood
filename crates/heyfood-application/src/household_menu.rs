@@ -9,15 +9,31 @@ use std::fmt::Write as _;
 use heyfood_core::terminal_safe_text;
 use serde_json::Value;
 
+use crate::household_evaluation::contains_private_household_identifier;
+
+const MAX_MENU_NESTING_DEPTH: usize = 4;
+
+/// A privacy-safe refusal used when a household menu contains protocol values
+/// this client cannot map to reviewed human copy.
+pub const UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE: &str = "hey.food returned household guidance this version can’t display safely. Update heyfood, or ask about a specific item.";
+
 /// Render the structured household menu carried by an agent result.
 ///
 /// Returns `None` for every other result type. The caller remains responsible
 /// for rendering the agent's prose summary and any choices.
 #[must_use]
 pub fn render_household_menu(document: &Value) -> Option<String> {
-    let structured = household_menu_document(document)?;
+    let structured = household_menu_candidate_document(document)?;
+    if structured.get("type").and_then(Value::as_str) != Some("household_menu")
+        || !household_menu_is_presentable(structured)
+    {
+        return Some(UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE.to_owned());
+    }
     if structured.get("presentation").and_then(Value::as_str) != Some("full_menu") {
-        return Some(render_household_recommendations(structured));
+        return Some(private_safe_menu_output(
+            structured,
+            render_household_recommendations(structured),
+        ));
     }
 
     let restaurant_name = structured
@@ -95,11 +111,11 @@ pub fn render_household_menu(document: &Value) -> Option<String> {
             .unwrap_or("Menu");
         let _ = writeln!(output, "\n{}", inline_text(section_name));
         for item in items {
-            append_item(&mut output, item);
+            append_item(&mut output, structured, item);
         }
     }
 
-    Some(output)
+    Some(private_safe_menu_output(structured, output))
 }
 
 /// Return the supported household-menu payload from an agent result document.
@@ -109,10 +125,56 @@ pub fn render_household_menu(document: &Value) -> Option<String> {
 /// renderer and TUI behavior from accepting different wire shapes.
 #[must_use]
 pub fn household_menu_document(document: &Value) -> Option<&Value> {
-    let structured = document
-        .get("structured")
-        .or_else(|| (document.get("type").is_some()).then_some(document))?;
+    let structured = household_menu_candidate_document(document)?;
     (structured.get("type").and_then(Value::as_str) == Some("household_menu")).then_some(structured)
+}
+
+fn household_menu_candidate_document(document: &Value) -> Option<&Value> {
+    select_household_menu_candidate(document, 0)
+}
+
+fn select_household_menu_candidate(document: &Value, depth: usize) -> Option<&Value> {
+    if document.get("type").and_then(Value::as_str) == Some("household_menu")
+        || looks_household_menu_sensitive(document)
+    {
+        return Some(document);
+    }
+    if depth >= MAX_MENU_NESTING_DEPTH {
+        return None;
+    }
+    let object = document.as_object()?;
+    for key in [
+        "structured",
+        "structured_content",
+        "structuredContent",
+        "result",
+    ] {
+        if let Some(candidate) = object
+            .get(key)
+            .and_then(|value| select_household_menu_candidate(value, depth + 1))
+        {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn looks_household_menu_sensitive(document: &Value) -> bool {
+    let Some(object) = document.as_object() else {
+        return false;
+    };
+    if object.contains_key("member_summaries") || object.contains_key("agent_picks") {
+        return true;
+    }
+    object
+        .get("sections")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|section| section.get("items").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|item| item.get("safety").and_then(Value::as_object))
+        .any(|safety| !safety.is_empty() && safety.values().all(Value::is_object))
 }
 
 /// Whether an agent result carries a full household-menu presentation.
@@ -325,21 +387,7 @@ fn append_recommendation_conflicts(output: &mut String, structured: &Value) {
 }
 
 fn contains_raw_member_reference(structured: &Value, value: &str) -> bool {
-    let summary_ids = structured
-        .get("member_summaries")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|summary| summary.get("member_id").and_then(Value::as_str));
-    let pick_ids = structured
-        .get("agent_picks")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flat_map(|picks| picks.keys().map(String::as_str));
-    summary_ids
-        .chain(pick_ids)
-        .filter(|member_id| !member_id.trim().is_empty())
-        .any(|member_id| value.contains(member_id))
+    contains_known_member_id(structured, value)
 }
 
 fn append_recommendation_provenance(output: &mut String, structured: &Value) {
@@ -479,7 +527,7 @@ fn append_provenance(
     }
 }
 
-fn append_item(output: &mut String, item: &Value) {
+fn append_item(output: &mut String, structured: &Value, item: &Value) {
     let name = item
         .get("name")
         .and_then(Value::as_str)
@@ -511,11 +559,16 @@ fn append_item(output: &mut String, item: &Value) {
     {
         let _ = writeln!(output, "  {}", inline_text(description));
     }
-    append_member_safety(output, item, safety.as_deref());
+    append_member_safety(output, structured, item, safety.as_deref());
     append_allergen_detail(output, item);
 }
 
-fn append_member_safety(output: &mut String, item: &Value, composite: Option<&str>) {
+fn append_member_safety(
+    output: &mut String,
+    structured: &Value,
+    item: &Value,
+    composite: Option<&str>,
+) {
     let Some(safety) = item.get("safety").and_then(Value::as_object) else {
         append_missing_reason_warning(output, composite);
         return;
@@ -523,11 +576,10 @@ fn append_member_safety(output: &mut String, item: &Value, composite: Option<&st
 
     let mut entries: Vec<_> = safety.iter().collect();
     entries.sort_by(|(left_id, left), (right_id, right)| {
-        let left_label = left.get("label").and_then(Value::as_str).unwrap_or(left_id);
-        let right_label = right
-            .get("label")
-            .and_then(Value::as_str)
-            .unwrap_or(right_id);
+        let left_label =
+            household_member_label(structured, left_id, left).unwrap_or("Household member");
+        let right_label =
+            household_member_label(structured, right_id, right).unwrap_or("Household member");
         inline_text(left_label).cmp(&inline_text(right_label))
     });
 
@@ -544,18 +596,9 @@ fn append_member_safety(output: &mut String, item: &Value, composite: Option<&st
             .filter(|value| !value.trim().is_empty());
         let chips = string_array(member.get("chips"));
         let conflicts = string_array(member.get("conflicts"));
-        let label = member
-            .get("label")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
+        let label = household_member_label(structured, member_id, member)
             .map(inline_text)
-            .unwrap_or_else(|| {
-                if member_id.trim().is_empty() {
-                    "Household member".into()
-                } else {
-                    inline_text(member_id)
-                }
-            });
+            .unwrap_or_else(|| "Household member".into());
         let restrictive = matches!(level.as_str(), "caution" | "avoid" | "unable to evaluate");
         if restrictive {
             restrictive_members += 1;
@@ -673,8 +716,256 @@ fn safety_label(value: &str) -> String {
         "caution" | "risky" | "risk" => "caution".into(),
         "avoid" => "avoid".into(),
         "unable" | "unknown" | "unable_to_evaluate" => "unable to evaluate".into(),
-        other => inline_text(other).replace('_', " "),
+        _ => "unable to evaluate".into(),
     }
+}
+
+fn household_menu_is_presentable(structured: &Value) -> bool {
+    if declared_member_ids(structured).is_none() {
+        return false;
+    }
+    let summaries = structured
+        .get("member_summaries")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    if summaries.iter().any(|summary| {
+        let Some(member_id) = summary.get("member_id").and_then(Value::as_str) else {
+            return false;
+        };
+        let label = summary.get("label").and_then(Value::as_str);
+        label.is_some_and(|label| !household_label_is_presentable(structured, label))
+            || (member_id != "_self" && label.is_none())
+    }) {
+        return false;
+    }
+
+    let sections = structured
+        .get("sections")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for item in sections
+        .iter()
+        .filter_map(|section| section.get("items").and_then(Value::as_array))
+        .flatten()
+    {
+        if item.get("composite_level").is_some_and(|value| {
+            value
+                .as_str()
+                .is_none_or(|status| !known_safety_status(status))
+        }) {
+            return false;
+        }
+        if let Some(safety) = item.get("safety").and_then(Value::as_object) {
+            for (member_id, member) in safety {
+                if member.get("member_id").is_some_and(|value| {
+                    value.as_str().is_none_or(|declared| declared != member_id)
+                }) || member.get("level").is_some_and(|value| {
+                    value
+                        .as_str()
+                        .is_none_or(|status| !known_safety_status(status))
+                }) || member
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .is_some_and(|label| !household_label_is_presentable(structured, label))
+                    || (member_id != "_self"
+                        && household_member_label(structured, member_id, member).is_none())
+                {
+                    return false;
+                }
+            }
+        }
+    }
+
+    structured
+        .get("agent_picks")
+        .and_then(Value::as_object)
+        .is_none_or(|picks| {
+            picks.iter().all(|(member_id, member_picks)| {
+                (member_id == "_self"
+                    || summaries.iter().any(|summary| {
+                        summary.get("member_id").and_then(Value::as_str) == Some(member_id)
+                            && summary
+                                .get("label")
+                                .and_then(Value::as_str)
+                                .is_some_and(|label| {
+                                    household_label_is_presentable(structured, label)
+                                })
+                    }))
+                    && member_picks.as_array().is_some_and(|member_picks| {
+                        member_picks.iter().all(|pick| {
+                            pick.get("member_id")
+                                .is_none_or(|value| value.as_str() == Some(member_id.as_str()))
+                        })
+                    })
+            })
+        })
+}
+
+fn household_member_label<'a>(
+    structured: &'a Value,
+    member_id: &str,
+    member: &'a Value,
+) -> Option<&'a str> {
+    if member_id == "_self" {
+        return member
+            .get("label")
+            .and_then(Value::as_str)
+            .filter(|label| household_label_is_presentable(structured, label))
+            .or(Some("you"));
+    }
+    member
+        .get("label")
+        .and_then(Value::as_str)
+        .filter(|label| household_label_is_presentable(structured, label))
+        .or_else(|| {
+            structured
+                .get("member_summaries")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find(|summary| summary.get("member_id").and_then(Value::as_str) == Some(member_id))
+                .and_then(|summary| summary.get("label").and_then(Value::as_str))
+                .filter(|label| household_label_is_presentable(structured, label))
+        })
+}
+
+fn household_label_is_presentable(structured: &Value, label: &str) -> bool {
+    !label.trim().is_empty()
+        && !contains_private_household_identifier(label)
+        && !contains_known_member_id(structured, label)
+}
+
+fn contains_known_member_id(structured: &Value, value: &str) -> bool {
+    let Some(declared) = declared_member_ids(structured) else {
+        return true;
+    };
+    let summaries = structured
+        .get("member_summaries")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|summary| summary.get("member_id").and_then(Value::as_str));
+    let picks = structured
+        .get("agent_picks")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|picks| picks.keys().map(String::as_str));
+    let safety = structured
+        .get("sections")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|section| section.get("items").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|item| item.get("safety").and_then(Value::as_object))
+        .flat_map(|safety| {
+            safety.iter().flat_map(|(member_id, member)| {
+                std::iter::once(member_id.as_str())
+                    .chain(member.get("member_id").and_then(Value::as_str))
+            })
+        });
+    declared
+        .into_iter()
+        .chain(summaries)
+        .chain(picks)
+        .chain(safety)
+        .filter(|member_id| !member_id.trim().is_empty())
+        .any(|member_id| contains_transformed_member_id(value, member_id))
+}
+
+fn declared_member_ids(structured: &Value) -> Option<Vec<&str>> {
+    const MAX_MEMBER_ID_NESTING: usize = 32;
+    const MAX_MEMBER_ID_VALUES: usize = 4_096;
+
+    let mut identifiers = Vec::new();
+    let mut pending = vec![(structured, 0usize)];
+    let mut visited = 0usize;
+    while let Some((value, depth)) = pending.pop() {
+        visited = visited.checked_add(1)?;
+        if visited > MAX_MEMBER_ID_VALUES || depth > MAX_MEMBER_ID_NESTING {
+            return None;
+        }
+        match value {
+            Value::Object(object) => {
+                for (key, value) in object {
+                    if key == "member_id" {
+                        let identifier = value.as_str()?;
+                        if identifier.is_empty() || identifier.trim() != identifier {
+                            return None;
+                        }
+                        identifiers.push(identifier);
+                    }
+                    pending.push((value, depth + 1));
+                }
+            }
+            Value::Array(values) => {
+                pending.extend(values.iter().map(|value| (value, depth + 1)));
+            }
+            _ => {}
+        }
+    }
+    Some(identifiers)
+}
+
+fn contains_transformed_member_id(value: &str, member_id: &str) -> bool {
+    const MIN_PRIVATE_ID_PREFIX_CHARACTERS: usize = 8;
+
+    if member_id == "_self" {
+        return value.contains("_self");
+    }
+    if value.contains(member_id) {
+        return true;
+    }
+    let normalized_member_id = member_id
+        .chars()
+        .filter(|character| !character.is_whitespace() && *character != '_')
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if normalized_member_id.is_empty() {
+        return false;
+    }
+    let normalized_value = value
+        .chars()
+        .filter(|character| !character.is_whitespace() && *character != '_')
+        .collect::<String>()
+        .to_ascii_lowercase();
+    normalized_value.contains(&normalized_member_id)
+        || (normalized_member_id.chars().count() >= MIN_PRIVATE_ID_PREFIX_CHARACTERS
+            && normalized_value.contains(
+                &normalized_member_id
+                    .chars()
+                    .take(MIN_PRIVATE_ID_PREFIX_CHARACTERS)
+                    .collect::<String>(),
+            ))
+}
+
+fn private_safe_menu_output(structured: &Value, output: String) -> String {
+    if contains_private_household_identifier(&output)
+        || contains_known_member_id(structured, &output)
+    {
+        UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE.to_owned()
+    } else {
+        output
+    }
+}
+
+fn known_safety_status(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "safe"
+            | "safer"
+            | "generally_safe"
+            | "generally_safer"
+            | "caution"
+            | "risky"
+            | "risk"
+            | "avoid"
+            | "unable"
+            | "unknown"
+            | "unable_to_evaluate"
+    )
 }
 
 fn menu_source_label(value: &str) -> Option<&'static str> {
@@ -742,6 +1033,26 @@ mod tests {
             "presentation": "recommendations"
         })));
         assert!(!is_full_household_menu(&json!({"type": "meal"})));
+    }
+
+    #[test]
+    fn missing_type_household_menu_shape_fails_closed() {
+        let document = json!({
+            "text": "Unreviewed household menu prose.",
+            "structured": {
+                "member_summaries": [{
+                    "member_id": "member-a",
+                    "label": "Alex"
+                }],
+                "sections": []
+            }
+        });
+
+        assert!(household_menu_document(&document).is_none());
+        assert_eq!(
+            render_household_menu(&document).unwrap(),
+            UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE
+        );
     }
 
     #[test]
@@ -1229,6 +1540,206 @@ mod tests {
         assert!(!rendered.contains("\nSource: forged"));
         assert!(!rendered.contains("\nFreshness: forged"));
         assert!(!rendered.contains("\n• forged"));
+    }
+
+    #[test]
+    fn missing_member_labels_fail_closed_without_rendering_identifiers() {
+        let member_id = "3f1c9c2e-2f5a-4a5b-8f1e-9d2b7c6a4e01";
+        let context_hash = "54aa3228a67d4e262d383d0cfba6be4f4c0c94f21f5d095f3127d00928586bcb";
+        let rendered = render_household_menu(&json!({
+            "structured": {
+                "type": "household_menu",
+                "presentation": "full_menu",
+                "context_hash": context_hash,
+                "sections": [{
+                    "name": "Dinner",
+                    "items": [{
+                        "name": "Soup",
+                        "composite_level": "avoid",
+                        "safety": {
+                            (member_id): {
+                                "level": "avoid",
+                                "reason": "Contains a restricted ingredient."
+                            }
+                        }
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(rendered, UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE);
+        assert!(!rendered.contains(member_id));
+        assert!(!rendered.contains(context_hash));
+    }
+
+    #[test]
+    fn identifier_shaped_member_labels_fail_closed() {
+        let member_id = "3f1c9c2e-2f5a-4a5b-8f1e-9d2b7c6a4e01";
+        let rendered = render_household_menu(&json!({
+            "structured": {
+                "type": "household_menu",
+                "presentation": "full_menu",
+                "sections": [{
+                    "name": "Dinner",
+                    "items": [{
+                        "name": "Soup",
+                        "composite_level": "avoid",
+                        "safety": {
+                            (member_id): {
+                                "label": member_id,
+                                "level": "avoid",
+                                "reason": "Contains a restricted ingredient."
+                            }
+                        }
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(rendered, UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE);
+        assert!(!rendered.contains(member_id));
+    }
+
+    #[test]
+    fn allergen_humanization_cannot_transform_a_member_id_into_visible_text() {
+        let member_id = "legacy_opaque7";
+        for allergen_label in [member_id, "legacyOpa"] {
+            let rendered = render_household_menu(&json!({
+                "structured": {
+                    "type": "household_menu",
+                    "presentation": "full_menu",
+                    "member_summaries": [{"member_id": member_id, "label": "Maya"}],
+                    "sections": [{
+                        "name": "Dinner",
+                        "items": [{
+                            "name": "Soup",
+                            "composite_level": "avoid",
+                            "safety": {
+                                (member_id): {
+                                    "label": "Maya",
+                                    "level": "avoid",
+                                    "reason": "Contains a restricted ingredient."
+                                }
+                            },
+                            "allergen_detail": [{"allergen_label": allergen_label}]
+                        }]
+                    }]
+                }
+            }))
+            .unwrap();
+
+            assert_eq!(rendered, UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE);
+            assert!(!rendered.contains(member_id));
+            assert!(!rendered.contains("legacy opaque7"));
+            assert!(!rendered.contains("legacyOpa"));
+        }
+    }
+
+    #[test]
+    fn mismatched_nested_menu_member_ids_fail_closed() {
+        let foreign_id = "foreignOpaque7";
+        let full_menu = json!({
+            "structured": {
+                "type": "household_menu",
+                "presentation": "full_menu",
+                "member_summaries": [{"member_id": "slot-a", "label": "Maya"}],
+                "sections": [{
+                    "name": "Dinner",
+                    "items": [{
+                        "name": "Soup",
+                        "composite_level": "avoid",
+                        "safety": {
+                            "slot-a": {
+                                "member_id": foreign_id,
+                                "label": foreign_id,
+                                "level": "avoid",
+                                "reason": "Contains a restricted ingredient."
+                            }
+                        }
+                    }]
+                }]
+            }
+        });
+        let recommendations = json!({
+            "structured": {
+                "type": "household_menu",
+                "presentation": "recommendations",
+                "member_summaries": [{"member_id": "slot-a", "label": "Maya"}],
+                "sections": [{
+                    "name": "Dinner",
+                    "items": [{
+                        "item_id": "item-1",
+                        "name": "Soup",
+                        "safety": {"slot-a": {"level": "generally_safer"}}
+                    }]
+                }],
+                "agent_picks": {
+                    "slot-a": [{
+                        "item_id": "item-1",
+                        "member_id": foreign_id,
+                        "reason": "Recommended.",
+                        "tag": "Top pick"
+                    }]
+                }
+            }
+        });
+
+        let allergen_detail = json!({
+            "structured": {
+                "type": "household_menu",
+                "presentation": "full_menu",
+                "member_summaries": [{"member_id": "slot-a", "label": "Maya"}],
+                "sections": [{
+                    "name": "Dinner",
+                    "items": [{
+                        "name": "Soup",
+                        "composite_level": "avoid",
+                        "safety": {
+                            "slot-a": {
+                                "label": "Maya",
+                                "level": "avoid",
+                                "reason": "Contains a restricted ingredient."
+                            }
+                        },
+                        "allergen_detail": [{
+                            "member_id": foreign_id,
+                            "allergen_label": foreign_id
+                        }]
+                    }]
+                }]
+            }
+        });
+
+        for document in [full_menu, recommendations, allergen_detail] {
+            let rendered = render_household_menu(&document).unwrap();
+            assert_eq!(rendered, UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE);
+            assert!(!rendered.contains(foreign_id));
+        }
+    }
+
+    #[test]
+    fn unknown_safety_enums_fail_closed_without_protocol_copy() {
+        let rendered = render_household_menu(&json!({
+            "structured": {
+                "type": "household_menu",
+                "presentation": "full_menu",
+                "sections": [{
+                    "name": "Dinner",
+                    "items": [{
+                        "name": "Soup",
+                        "composite_level": "future_status",
+                        "safety": {}
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(rendered, UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE);
+        assert!(!rendered.contains("future_status"));
+        assert!(!rendered.contains("Soup"));
     }
 
     #[test]

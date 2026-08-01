@@ -1726,6 +1726,10 @@ mod tests {
             .unwrap();
         assert_eq!(result.is_error, Some(false));
         assert_eq!(service.calls.load(Ordering::SeqCst), 0);
+        let manifest = result.structured_content.unwrap();
+        assert_eq!(manifest["schema_version"], 1);
+        assert!(manifest.get("native_state_compatibility").is_none());
+        assert_eq!(manifest, heyfood_agent_contract::manifest());
     }
 
     #[tokio::test]

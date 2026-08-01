@@ -53,7 +53,7 @@ jobs:
       VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Download the public release assets
+      - name: Download the complete public release set
         shell: bash
         run: |
           set -euo pipefail
@@ -64,19 +64,70 @@ jobs:
             --pattern 'heyfood-*.tar.gz' \
             --pattern SHA256SUMS \
             --dir release
-      - name: Verify checksums, archive policy, and signed provenance
+          native_state_release=$(
+            awk -F '"' \
+              '$1 == "readonly NATIVE_STATE_RELEASE_VERSION=" && NF == 3 { print $2 }' \
+              install.sh
+          )
+          if [[ -n "$native_state_release" &&
+            "$VERSION" == "$native_state_release" ]]; then
+            gh release download "v$VERSION" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern 'heyfood-*-native-state.json' \
+              --dir release
+            test "$(find release -maxdepth 1 -type f | wc -l | tr -d '[:space:]')" -eq 10
+            test "$(wc -l <release/SHA256SUMS | tr -d '[:space:]')" -eq 9
+          elif [[ "$VERSION" != "0.6.2" ]]; then
+            echo "post-release smoke has no reviewed native-state boundary for v$VERSION" >&2
+            exit 1
+          else
+            test "$(find release -maxdepth 1 -type f | wc -l | tr -d '[:space:]')" -eq 5
+            test "$(wc -l <release/SHA256SUMS | tr -d '[:space:]')" -eq 4
+          fi
+      - name: Verify every checksum, asset boundary, and attestation
         shell: bash
         run: |
           set -euo pipefail
-          scripts/release/verify-assets.sh release "$VERSION"
-          for asset in release/*.tar.gz release/SHA256SUMS; do
+          native_state_release=$(
+            awk -F '"' \
+              '$1 == "readonly NATIVE_STATE_RELEASE_VERSION=" && NF == 3 { print $2 }' \
+              install.sh
+          )
+          if [[ -n "$native_state_release" &&
+            "$VERSION" == "$native_state_release" ]]; then
+            scripts/release/verify-assets.sh \
+              release "$VERSION" --native-state
+          else
+            scripts/release/verify-assets.sh release "$VERSION"
+          fi
+          shopt -s nullglob
+          assets=(release/*.tar.gz release/*.json release/SHA256SUMS)
+          if [[ "$VERSION" == "$native_state_release" ]]; then
+            test "${#assets[@]}" -eq 10
+          else
+            test "${#assets[@]}" -eq 5
+          fi
+          for asset in "${assets[@]}"; do
             gh attestation verify "$asset" --repo "$GITHUB_REPOSITORY"
           done
-      - name: Smoke the native public executable
+      - name: Smoke the public product and verifier executables
         shell: bash
         env:
           HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
-        run: scripts/release/smoke.sh release "$VERSION" "$TARGET"
+        run: |
+          set -euo pipefail
+          native_state_release=$(
+            awk -F '"' \
+              '$1 == "readonly NATIVE_STATE_RELEASE_VERSION=" && NF == 3 { print $2 }' \
+              install.sh
+          )
+          if [[ -n "$native_state_release" &&
+            "$VERSION" == "$native_state_release" ]]; then
+            scripts/release/smoke.sh \
+              release "$VERSION" "$TARGET" --native-state
+          else
+            scripts/release/smoke.sh release "$VERSION" "$TARGET"
+          fi
       - name: Verify hosted installer provenance
         if: inputs.verify_hosted_installer
         shell: bash

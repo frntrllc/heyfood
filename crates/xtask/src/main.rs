@@ -9,6 +9,22 @@ fn main() {
     let command = arguments.next();
 
     let root = Path::new(".");
+    if command.as_deref() == Some("native-state-declaration") {
+        let Some(version) = arguments.next() else {
+            usage();
+        };
+        no_extra_arguments(&mut arguments);
+        match xtask::native_state_declaration(&version) {
+            Ok(document) => {
+                print!("{document}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("validation failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     let result = match command.as_deref() {
         Some("dependency-dag") => {
             no_extra_arguments(&mut arguments);
@@ -162,7 +178,7 @@ fn required_option(arguments: &mut impl Iterator<Item = String>, expected: &str)
 
 fn usage() -> ! {
     eprintln!(
-        "usage: cargo xtask <dependency-dag|verify-migration-ledger|verify-contracts|verify-grocery-contracts|import-grocery-contracts --source-repo PATH|verify-assets|verify-assets-approved|verify-phase0-evidence|verify-phase1-evidence|verify-agent-phase1-evidence|evaluate-post-release --evidence-dir PATH --rubric PATH --output PATH>"
+        "usage: cargo xtask <native-state-declaration VERSION|dependency-dag|verify-migration-ledger|verify-contracts|verify-grocery-contracts|import-grocery-contracts --source-repo PATH|verify-assets|verify-assets-approved|verify-phase0-evidence|verify-phase1-evidence|verify-agent-phase1-evidence|evaluate-post-release --evidence-dir PATH --rubric PATH --output PATH>"
     );
     std::process::exit(2);
 }

@@ -7,6 +7,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(feature = "native-credentials")]
 use heyfood_application::CredentialPort;
 use heyfood_core::{
     AccountId, AuthCredentialBundle, ChannelCredentials, CredentialVersion, SensitiveString,
@@ -14,9 +15,10 @@ use heyfood_core::{
 };
 #[cfg(feature = "native-credentials")]
 use heyfood_platform::AuthorizationSessionStore;
-use heyfood_platform::{FileCredentialStore, NativeAuthStore};
+use heyfood_platform::{FileCredentialStore, NativeAuthStore, PythonStateImporter};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::{Value, json};
+#[cfg(feature = "native-credentials")]
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -134,6 +136,7 @@ async fn run(
     command
         .args(args)
         .env("HEYFOOD_STATE_DIR", root)
+        .env("XDG_CONFIG_HOME", root.join("xdg"))
         .env("HEYFOOD_CREDENTIAL_STORE", "file")
         .env("HEYFOOD_API_URL", base_url)
         .env("HEYFOOD_API_KEY", "fixture-api-key")
@@ -249,6 +252,151 @@ fn run_confirm_with_data_stdin_and_controlling_terminal(
         .expect("unlock PTY capture")
 }
 
+#[allow(clippy::too_many_arguments)]
+fn run_log_with_controlling_terminal(
+    root: &Path,
+    xdg_root: &Path,
+    base_url: &str,
+    arguments: &[&str],
+    expected_review_target: Option<&str>,
+    decision: Option<&[u8]>,
+    rewrite_before_decision: Option<(&Path, &[u8])>,
+    expect_success: bool,
+) -> Vec<u8> {
+    let pty = native_pty_system();
+    let pair = pty
+        .openpty(PtySize {
+            rows: 30,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open controlling PTY");
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_heyfood"));
+    command.args(arguments);
+    command.env("HEYFOOD_STATE_DIR", root);
+    command.env("XDG_CONFIG_HOME", xdg_root);
+    command.env("HEYFOOD_CREDENTIAL_STORE", "file");
+    command.env("HEYFOOD_API_URL", base_url);
+    command.env("HEYFOOD_API_KEY", "fixture-api-key");
+    command.env("NO_PROXY", "127.0.0.1,localhost");
+    command.env("TERM", "xterm-256color");
+    command.env_remove("HEYFOOD_TEST_FORCE_NO_CONTROLLING_TERMINAL");
+
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .expect("spawn public log binary");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone PTY reader");
+    let mut writer = Some(Arc::new(Mutex::new(
+        pair.master.take_writer().expect("take PTY writer"),
+    )));
+    let capture = Arc::new(Mutex::new(Vec::new()));
+    let reader_capture = Arc::clone(&capture);
+    let reader_task = std::thread::spawn(move || {
+        let mut chunk = [0_u8; 4096];
+        loop {
+            let count = reader.read(&mut chunk).expect("read public log PTY");
+            if count == 0 {
+                break;
+            }
+            reader_capture
+                .lock()
+                .expect("lock PTY capture")
+                .extend_from_slice(&chunk[..count]);
+        }
+    });
+
+    if let Some(expected_review_target) = expected_review_target {
+        let prompt_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let observed = capture.lock().expect("lock prompt capture").clone();
+            let text = String::from_utf8_lossy(&observed);
+            if text.contains("Type LOG to continue:") && text.contains(expected_review_target) {
+                break;
+            }
+            assert!(
+                Instant::now() < prompt_deadline,
+                "public log never rendered the resolved target: {text:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    if let Some((path, bytes)) = rewrite_before_decision {
+        std::fs::write(path, bytes).expect("rewrite reviewed Python source");
+    }
+    if let Some(decision) = decision {
+        let mut terminal = writer
+            .as_ref()
+            .expect("controlling terminal writer")
+            .lock()
+            .expect("lock controlling terminal");
+        terminal
+            .write_all(decision)
+            .expect("write exact log decision");
+        terminal.write_all(b"\r").expect("finish log decision");
+        terminal.flush().expect("flush exact log decision");
+    } else {
+        drop(writer.take());
+    }
+
+    let exit_deadline = Instant::now() + Duration::from_secs(15);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll public log PTY") {
+            break status;
+        }
+        if Instant::now() >= exit_deadline {
+            let _ = child.kill();
+            panic!("public log did not exit after terminal decision");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(
+        status.success(),
+        expect_success,
+        "public log PTY exit did not match expectation: {status:?}"
+    );
+    drop(writer);
+    drop(pair.master);
+    reader_task.join().expect("join public log PTY reader");
+    Arc::try_unwrap(capture)
+        .expect("release public log PTY capture")
+        .into_inner()
+        .expect("unlock public log PTY capture")
+}
+
+fn install_sarah_log_snapshot(root: &Path) -> PathBuf {
+    install_log_source(
+        root,
+        json!({
+            "account_user_id": "activated-account",
+            "first_name": "Justin",
+            "household": {
+                "active_scope": "member-sarah",
+                "members": [
+                    {"id": "_self", "name": "Justin", "relationship": "self", "archived": false},
+                    {"id": "member-sarah", "name": "Sarah", "relationship": "partner", "archived": false}
+                ]
+            }
+        }),
+        true,
+    )
+    .0
+}
+
+fn install_log_source(root: &Path, document: Value, import_snapshot: bool) -> (PathBuf, PathBuf) {
+    let xdg_root = root.join("xdg");
+    let source_dir = xdg_root.join("heyfood");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    let source = source_dir.join("config.json");
+    std::fs::write(&source, serde_json::to_vec(&document).unwrap()).unwrap();
+    if import_snapshot {
+        PythonStateImporter::under(&source, root).import().unwrap();
+    }
+    (xdg_root, source)
+}
+
 async fn read_request(socket: &mut TcpStream) -> String {
     let mut bytes = Vec::new();
     let header_end = loop {
@@ -303,10 +451,12 @@ async fn respond_status(
     socket.write_all(body).await.unwrap();
 }
 
+#[cfg(feature = "native-credentials")]
 fn old_scope() -> &'static str {
     "account:link account:delete knowledge:read menu:read recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe health:read integrations:manage"
 }
 
+#[cfg(feature = "native-credentials")]
 fn assert_legacy_health_authority(scope: &str) {
     let scopes = scope.split_whitespace().collect::<BTreeSet<_>>();
     assert!(scopes.contains("health:read"));
@@ -707,6 +857,94 @@ async fn public_binary_writes_json_export_to_an_owner_only_file() {
 }
 
 #[tokio::test]
+async fn human_grocery_export_without_out_refuses_before_the_export_get() {
+    let root = TempRoot::new("export-human-requires-out");
+    initialize(&root.0, FULL_SCOPE);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(
+            request.starts_with("GET /v1/auth/capabilities "),
+            "{request}"
+        );
+        let body = serde_json::to_vec(&capabilities(true)).unwrap();
+        respond(&mut socket, "application/json", &body).await;
+        tokio::time::timeout(Duration::from_millis(250), listener.accept())
+            .await
+            .is_err()
+    });
+
+    let output = run(
+        &root.0,
+        &base_url,
+        &["grocery", "export", LIST_ID, "--format", "markdown"],
+        None,
+    )
+    .await;
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("Use `--out FILE`"), "{error}");
+    assert!(!error.contains("maya-uuid"));
+    assert!(server.await.unwrap(), "human export issued a product GET");
+}
+
+#[tokio::test]
+async fn machine_text_exports_are_one_lossless_json_value() {
+    for (format, content_type, content) in [
+        (
+            "markdown",
+            "text/markdown",
+            "# Grocery\n\n- onion for maya-uuid\n",
+        ),
+        ("text", "text/plain", "Grocery\nonion for maya-uuid\n"),
+    ] {
+        let root = TempRoot::new(&format!("export-machine-{format}"));
+        initialize(&root.0, FULL_SCOPE);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let expected_query = format!("format={format}");
+        let server = tokio::spawn(async move {
+            for index in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_request(&mut socket).await;
+                if index == 0 {
+                    assert!(request.starts_with("GET /v1/auth/capabilities "));
+                    let body = serde_json::to_vec(&capabilities(true)).unwrap();
+                    respond(&mut socket, "application/json", &body).await;
+                } else {
+                    assert!(
+                        request.starts_with(&format!("GET /v1/grocery/lists/{LIST_ID}/export?")),
+                        "{request}"
+                    );
+                    assert!(request.contains(&expected_query), "{request}");
+                    respond(&mut socket, content_type, content.as_bytes()).await;
+                }
+            }
+        });
+
+        let output = run(
+            &root.0,
+            &base_url,
+            &["--json", "grocery", "export", LIST_ID, "--format", format],
+            None,
+        )
+        .await;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["format"], format);
+        assert_eq!(value["content"], content);
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn public_binary_fails_closed_before_route_dispatch_for_scope_deferral_capability_and_confirmation()
  {
     let old = TempRoot::new("old-scope");
@@ -794,6 +1032,7 @@ async fn public_binary_fails_closed_before_route_dispatch_for_scope_deferral_cap
     server.await.unwrap();
 }
 
+#[cfg(feature = "native-credentials")]
 #[tokio::test]
 async fn public_login_preserves_old_credentials_until_complete_then_replaces_both_stores() {
     let root = TempRoot::new("login-success");
@@ -975,6 +1214,7 @@ async fn public_login_preserves_old_credentials_until_complete_then_replaces_bot
     assert!(!root.0.join("auth.reconciliation").exists());
 }
 
+#[cfg(feature = "native-credentials")]
 #[tokio::test]
 async fn rejected_login_leaves_both_existing_credentials_byte_for_byte_authoritative() {
     let root = TempRoot::new("login-rejected");
@@ -1326,11 +1566,136 @@ async fn uncertain_logout_preflight_removes_refresh_markers_with_local_authority
     let document: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(document["remote_complete"], false);
     assert_eq!(document["local_credentials_cleared"], true);
+    assert_eq!(document["household_key_deleted"], false);
+    assert_eq!(document["household_ciphertext_deleted"], false);
+    assert_eq!(document["import_snapshot_deleted"], false);
+    assert_eq!(document["legacy_source_retained"], true);
+    assert_eq!(document["legacy_credentials_cleared"], true);
+    assert_eq!(document["legacy_credentials_retained"], false);
+    assert_eq!(document["outcome_uncertain"], true);
     for step in ["link", "device", "session"] {
         assert_eq!(document["teardown"][step]["attempted"], false);
         assert_eq!(document["teardown"][step]["outcome_uncertain"], true);
         assert_eq!(document["teardown"][step]["error"], "outcome_uncertain");
     }
+    assert_eq!(auth_store.load().unwrap(), None);
+    assert_eq!(session_store.load().await.unwrap(), None);
+    assert!(!root.0.join("auth.reconciliation").exists());
+    assert!(!root.0.join("credentials.reconciliation").exists());
+}
+
+#[tokio::test]
+#[cfg(feature = "native-credentials")]
+async fn incomplete_pre_native_logout_cleanup_is_never_reported_as_success() {
+    let root = TempRoot::new("logout-refresh-incomplete-legacy");
+    initialize_expired_mature_session(&root.0, FULL_SCOPE);
+    let source_dir = root.0.join("xdg/heyfood");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("config.json"), b"{malformed").unwrap();
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/channel/oauth/token "));
+        drop(socket);
+        listener
+    });
+
+    let output = run(&root.0, &base_url, &["--json", "logout"], None).await;
+    assert!(!output.status.success());
+    let listener = server.await.unwrap();
+    let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["ok"], false);
+    assert_eq!(document["remote_complete"], false);
+    assert_eq!(document["local_credentials_cleared"], false);
+    assert_eq!(document["legacy_credentials_cleared"], false);
+    assert_eq!(document["legacy_credentials_retained"], true);
+    assert_eq!(document["outcome_uncertain"], true);
+    let repeated = run(&root.0, &base_url, &["--json", "logout"], None).await;
+    assert!(!repeated.status.success());
+    let repeated: Value = serde_json::from_slice(&repeated.stdout).unwrap();
+    assert_eq!(repeated["ok"], false);
+    assert_eq!(repeated["local_credentials_cleared"], false);
+    assert_eq!(repeated["legacy_credentials_retained"], true);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "incomplete local cleanup dispatched remote teardown"
+    );
+    assert!(auth_store.load().is_err());
+    assert!(session_store.load().await.unwrap().is_some());
+    assert!(root.0.join("auth.reconciliation").exists());
+}
+
+#[tokio::test]
+#[cfg(feature = "native-credentials")]
+async fn uncertain_session_refresh_logout_scrubs_pre_native_authority_without_remote_teardown() {
+    let root = TempRoot::new("logout-session-refresh-uncertain");
+    initialize_expired_mature_session(&root.0, FULL_SCOPE);
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server_scope = FULL_SCOPE.to_owned();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/channel/oauth/token "));
+        respond(
+            &mut socket,
+            "application/json",
+            &serde_json::to_vec(&json!({
+                "access_token": "channel-access-new",
+                "refresh_token": "channel-refresh-new",
+                "token_type": "bearer",
+                "expires_in": 3600,
+                "scope": server_scope
+            }))
+            .unwrap(),
+        )
+        .await;
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/auth/session/refresh "));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("x-device-id: heyfood-activated-device\r\n")
+        );
+        drop(socket);
+        listener
+    });
+
+    let output = run(&root.0, &base_url, &["--json", "logout"], None).await;
+    assert!(
+        output.status.success(),
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let listener = server.await.unwrap();
+    let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["remote_complete"], false);
+    assert_eq!(document["local_credentials_cleared"], true);
+    assert_eq!(document["legacy_credentials_cleared"], true);
+    assert_eq!(document["legacy_credentials_retained"], false);
+    assert_eq!(document["outcome_uncertain"], true);
+    for step in ["link", "device", "session"] {
+        assert_eq!(document["teardown"][step]["attempted"], false);
+        assert_eq!(document["teardown"][step]["outcome_uncertain"], true);
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "failed session refresh dispatched remote teardown"
+    );
     assert_eq!(auth_store.load().unwrap(), None);
     assert_eq!(session_store.load().await.unwrap(), None);
     assert!(!root.0.join("auth.reconciliation").exists());
@@ -1356,8 +1721,9 @@ async fn restarted_logout_adopts_uncertain_channel_refresh_without_network_teard
 
     assert!(
         output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
     );
     let document: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(document["ok"], true);
@@ -1380,6 +1746,47 @@ async fn restarted_logout_adopts_uncertain_channel_refresh_without_network_teard
     assert!(!root.0.join("credentials.reconciliation").exists());
 }
 
+#[tokio::test]
+#[cfg(feature = "native-credentials")]
+async fn restarted_logout_adopts_uncertain_session_refresh_without_network_teardown() {
+    let root = TempRoot::new("logout-session-refresh-uncertain-restart");
+    initialize_expired_mature_session(&root.0, FULL_SCOPE);
+    let auth_store = NativeAuthStore::open(&root.0).unwrap();
+    let session_store = FileCredentialStore::open(&root.0).unwrap();
+    std::fs::write(
+        root.0.join("credentials.reconciliation"),
+        format!("{}\n", heyfood_core::CommitId::new().as_uuid()),
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+
+    let output = run(&root.0, &base_url, &["--json", "logout"], None).await;
+
+    assert!(
+        output.status.success(),
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["remote_complete"], false);
+    assert_eq!(document["local_credentials_cleared"], true);
+    assert_eq!(document["legacy_credentials_cleared"], true);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "session-refresh restart recovery dispatched a teardown request"
+    );
+    assert_eq!(auth_store.load().unwrap(), None);
+    assert_eq!(session_store.load().await.unwrap(), None);
+    assert!(!root.0.join("auth.reconciliation").exists());
+    assert!(!root.0.join("credentials.reconciliation").exists());
+}
+
+#[cfg(feature = "native-credentials")]
 #[tokio::test]
 async fn lost_prepare_response_then_expiry_recovers_old_authority_without_second_issuance() {
     let root = TempRoot::new("login-prepare-loss-expiry");
@@ -1536,5 +1943,425 @@ async fn lost_prepare_response_then_expiry_recovers_old_authority_without_second
             .pending_authorization_replacement()
             .unwrap()
             .is_none()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn public_log_omitted_for_reviews_and_dispatches_the_same_member() {
+    let root = TempRoot::new("public-prepared-log");
+    initialize(&root.0, FULL_SCOPE);
+    let xdg_root = install_sarah_log_snapshot(&root.0);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut consent, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut consent).await;
+        assert!(request.starts_with("GET /v1/profile/consent "));
+        respond(&mut consent, "application/json", br#"{"has_consent":true}"#).await;
+
+        let (mut profile, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut profile).await;
+        assert!(request.starts_with("GET /v1/profile/sync?member_id=member-sarah "));
+        respond(
+            &mut profile,
+            "application/json",
+            br#"{"profile_data":{"preferences":["vegetarian"]}}"#,
+        )
+        .await;
+
+        let (mut converse, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut converse).await;
+        assert!(request.starts_with("POST /v1/agent/converse "));
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["meal_context"]["active_member_id"], "member-sarah");
+        assert_eq!(body["meal_context"]["active_member_name"], "Sarah");
+        respond(
+            &mut converse,
+            "text/event-stream",
+            b"event: result\ndata: {\"message\":\"Logged.\"}\n\nevent: done\ndata: {}\n\n",
+        )
+        .await;
+    });
+
+    let pty_root = root.0.clone();
+    let pty_xdg = xdg_root.clone();
+    let pty_url = base_url.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        run_log_with_controlling_terminal(
+            &pty_root,
+            &pty_xdg,
+            &pty_url,
+            &["--json", "log", "oatmeal"],
+            Some("Household target: \"Sarah\""),
+            Some(b"LOG"),
+            None,
+            true,
+        )
+    })
+    .await
+    .unwrap();
+    let output = String::from_utf8_lossy(&output);
+    assert!(output.contains("Household target: \"Sarah\""));
+    assert!(!output.contains("member-id-utf8-hex"));
+    assert!(output.contains("\"message\":\"Logged.\""));
+    server.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn declined_public_log_dispatches_no_network_request() {
+    let root = TempRoot::new("public-declined-log");
+    initialize(&root.0, FULL_SCOPE);
+    let xdg_root = install_sarah_log_snapshot(&root.0);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+
+    let pty_root = root.0.clone();
+    let pty_xdg = xdg_root.clone();
+    let pty_url = base_url.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        run_log_with_controlling_terminal(
+            &pty_root,
+            &pty_xdg,
+            &pty_url,
+            &["--json", "log", "oatmeal"],
+            Some("Household target: \"Sarah\""),
+            Some(b"NO"),
+            None,
+            false,
+        )
+    })
+    .await
+    .unwrap();
+    let output = String::from_utf8_lossy(&output);
+    assert!(output.contains("human_confirmation_declined"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "declined public log must not connect to the service"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn public_log_no_source_reviews_self_without_writing_a_synthetic_snapshot() {
+    let root = TempRoot::new("public-no-source-log");
+    initialize(&root.0, FULL_SCOPE);
+    let xdg_root = root.0.join("empty-xdg");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut consent, _) = listener.accept().await.unwrap();
+        assert!(
+            read_request(&mut consent)
+                .await
+                .starts_with("GET /v1/profile/consent ")
+        );
+        respond(
+            &mut consent,
+            "application/json",
+            br#"{"has_consent":false}"#,
+        )
+        .await;
+
+        let (mut converse, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut converse).await;
+        assert!(request.starts_with("POST /v1/agent/converse "));
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["meal_context"]["active_member_id"], "_self");
+        assert_eq!(body["meal_context"]["active_member_name"], "Me");
+        respond(
+            &mut converse,
+            "text/event-stream",
+            b"event: result\ndata: {\"message\":\"Logged.\"}\n\nevent: done\ndata: {}\n\n",
+        )
+        .await;
+    });
+
+    let pty_root = root.0.clone();
+    let pty_url = base_url.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        run_log_with_controlling_terminal(
+            &pty_root,
+            &xdg_root,
+            &pty_url,
+            &["--json", "log", "oatmeal"],
+            Some("Household target: \"Me\""),
+            Some(b"LOG"),
+            None,
+            true,
+        )
+    })
+    .await
+    .unwrap();
+    let output = String::from_utf8_lossy(&output);
+    assert!(output.contains("Household target: \"Me\""));
+    assert!(!output.contains("scope=_self"));
+    assert!(output.contains("\"message\":\"Logged.\""));
+    assert!(!root.0.join("python-state-import.v1.json").exists());
+    server.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn public_log_protected_source_denies_inferred_targets_but_explicit_self_is_bound_and_redacted()
+ {
+    let root = TempRoot::new("public-protected-log");
+    initialize(&root.0, FULL_SCOPE);
+    let canary = "hf-public-protected-canary";
+    let (xdg_root, _source) = install_log_source(
+        &root.0,
+        json!({
+            "account_user_id": "activated-account",
+            "api_key": canary,
+            "household": {
+                "active_scope": "member-sarah",
+                "members": [
+                    {"id": "_self", "name": "Justin", "relationship": "self", "archived": false},
+                    {"id": "member-sarah", "name": "Sarah", "relationship": "partner", "archived": false}
+                ]
+            }
+        }),
+        false,
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+
+    for arguments in [
+        vec!["--json", "log", "oatmeal"],
+        vec!["--json", "log", "--for", "member-sarah", "oatmeal"],
+        vec!["--json", "log", "--for", "everyone", "oatmeal"],
+    ] {
+        let pty_root = root.0.clone();
+        let pty_xdg = xdg_root.clone();
+        let pty_url = base_url.clone();
+        let output = tokio::task::spawn_blocking(move || {
+            run_log_with_controlling_terminal(
+                &pty_root, &pty_xdg, &pty_url, &arguments, None, None, None, false,
+            )
+        })
+        .await
+        .unwrap();
+        let output = String::from_utf8_lossy(&output);
+        assert!(output.contains("household_state_protected"));
+        assert!(!output.contains("Type LOG to continue:"));
+        assert!(!output.contains(canary));
+        assert!(!root.0.join("python-state-import.v1.json").exists());
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
+    );
+
+    let server = tokio::spawn(async move {
+        let (mut consent, _) = listener.accept().await.unwrap();
+        assert!(
+            read_request(&mut consent)
+                .await
+                .starts_with("GET /v1/profile/consent ")
+        );
+        respond(
+            &mut consent,
+            "application/json",
+            br#"{"has_consent":false}"#,
+        )
+        .await;
+
+        let (mut converse, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut converse).await;
+        assert!(request.starts_with("POST /v1/agent/converse "));
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["meal_context"]["active_member_id"], "_self");
+        respond(
+            &mut converse,
+            "text/event-stream",
+            b"event: result\ndata: {\"message\":\"Logged.\"}\n\nevent: done\ndata: {}\n\n",
+        )
+        .await;
+    });
+    let pty_root = root.0.clone();
+    let pty_xdg = xdg_root.clone();
+    let pty_url = base_url.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        run_log_with_controlling_terminal(
+            &pty_root,
+            &pty_xdg,
+            &pty_url,
+            &["--json", "log", "--for", "self", "oatmeal"],
+            Some("Household target: \"Me\""),
+            Some(b"LOG"),
+            None,
+            true,
+        )
+    })
+    .await
+    .unwrap();
+    let output = String::from_utf8_lossy(&output);
+    assert!(!output.contains(canary));
+    let snapshot = std::fs::read_to_string(root.0.join("python-state-import.v1.json")).unwrap();
+    assert!(!snapshot.contains(canary));
+    server.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn public_log_unknown_ambiguous_and_invalid_targets_fail_before_terminal_decision() {
+    let root = TempRoot::new("public-invalid-log-targets");
+    initialize(&root.0, FULL_SCOPE);
+    let (xdg_root, _source) = install_log_source(
+        &root.0,
+        json!({
+            "account_user_id": "activated-account",
+            "household": {
+                "active_scope": "member-a",
+                "members": [
+                    {"id": "_self", "name": "Justin", "archived": false},
+                    {"id": "member-a", "name": "Sam", "archived": false},
+                    {"id": "member-b", "name": "SAM", "archived": false}
+                ]
+            }
+        }),
+        true,
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    for (selector, expected) in [
+        ("missing", "household_target_unknown"),
+        ("sam", "household_target_ambiguous"),
+        (" ", "household_target_invalid"),
+    ] {
+        let pty_root = root.0.clone();
+        let pty_xdg = xdg_root.clone();
+        let pty_url = base_url.clone();
+        let arguments = vec!["--json", "log", "--for", selector, "oatmeal"];
+        let output = tokio::task::spawn_blocking(move || {
+            run_log_with_controlling_terminal(
+                &pty_root, &pty_xdg, &pty_url, &arguments, None, None, None, false,
+            )
+        })
+        .await
+        .unwrap();
+        let output = String::from_utf8_lossy(&output);
+        assert!(output.contains(expected), "{output}");
+        assert!(!output.contains("Type LOG to continue:"));
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn public_log_eof_and_post_review_source_drift_dispatch_nothing() {
+    let eof_root = TempRoot::new("public-log-eof");
+    initialize(&eof_root.0, FULL_SCOPE);
+    let eof_xdg = install_sarah_log_snapshot(&eof_root.0);
+    let eof_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let eof_url = format!("http://{}", eof_listener.local_addr().unwrap());
+    let pty_root = eof_root.0.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        run_log_with_controlling_terminal(
+            &pty_root,
+            &eof_xdg,
+            &eof_url,
+            &["--json", "log", "oatmeal"],
+            Some("Household target: \"Sarah\""),
+            None,
+            None,
+            false,
+        )
+    })
+    .await
+    .unwrap();
+    let eof_output = String::from_utf8_lossy(&output);
+    assert!(
+        eof_output.contains("human_confirmation_declined"),
+        "unexpected EOF output: {eof_output}"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), eof_listener.accept())
+            .await
+            .is_err()
+    );
+
+    let drift_root = TempRoot::new("public-log-drift");
+    initialize(&drift_root.0, FULL_SCOPE);
+    let original = json!({
+        "account_user_id": "activated-account",
+        "household": {
+            "active_scope": "member-sarah",
+            "members": [
+                {"id": "_self", "name": "Justin", "archived": false},
+                {"id": "member-sarah", "name": "Sarah", "archived": false}
+            ]
+        }
+    });
+    let (drift_xdg, drift_source) = install_log_source(&drift_root.0, original, true);
+    let replacement = serde_json::to_vec(&json!({
+        "account_user_id": "activated-account",
+        "household": {
+            "active_scope": "_self",
+            "members": [
+                {"id": "_self", "name": "Justin", "archived": false},
+                {"id": "member-sarah", "name": "Sarah", "archived": false}
+            ]
+        }
+    }))
+    .unwrap();
+    let drift_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let drift_url = format!("http://{}", drift_listener.local_addr().unwrap());
+    let pty_root = drift_root.0.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        run_log_with_controlling_terminal(
+            &pty_root,
+            &drift_xdg,
+            &drift_url,
+            &["--json", "log", "oatmeal"],
+            Some("Household target: \"Sarah\""),
+            Some(b"LOG"),
+            Some((&drift_source, &replacement)),
+            false,
+        )
+    })
+    .await
+    .unwrap();
+    assert!(String::from_utf8_lossy(&output).contains("python_state_changed"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), drift_listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn public_log_no_input_rejects_before_source_or_network_access() {
+    let root = TempRoot::new("public-log-no-input");
+    initialize(&root.0, FULL_SCOPE);
+    let canary = "hf-public-no-input-canary";
+    let (xdg_root, _source) = install_log_source(
+        &root.0,
+        json!({"api_key": canary, "account_user_id": "activated-account"}),
+        false,
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let output = Command::new(env!("CARGO_BIN_EXE_heyfood"))
+        .args(["--json", "--no-input", "log", "oatmeal"])
+        .env("HEYFOOD_STATE_DIR", &root.0)
+        .env("XDG_CONFIG_HOME", &xdg_root)
+        .env("HEYFOOD_CREDENTIAL_STORE", "file")
+        .env("HEYFOOD_API_URL", &base_url)
+        .env("HEYFOOD_API_KEY", "fixture-api-key")
+        .output()
+        .await
+        .unwrap();
+    assert!(!output.status.success());
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    assert!(rendered.contains("human_input_disabled"));
+    assert!(!rendered.contains(canary));
+    assert!(!root.0.join("python-state-import.v1.json").exists());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
     );
 }

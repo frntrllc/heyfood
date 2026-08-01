@@ -9,7 +9,9 @@ self-description, opt-in Codex and Claude Code setup, and a bounded read-only
 MCP interface, plus account-bound logout with current-device authority
 revocation. Slow turns now stay alive with truthful progress, restaurant
 results render as terminal-native guidance instead of protocol data, and
-logout safely recovers expired or interrupted account authority.
+logout safely recovers expired or interrupted account authority. The attached
+TUI also provides a local encrypted household roster, complete member
+onboarding, and persistent Me/member/Everyone scope selection.
 
 See the [current capability and distribution status](docs/CAPABILITY_STATUS.md)
 before evaluating the client.
@@ -23,9 +25,17 @@ curl -fsSL https://hey.food/install.sh | bash
 ```
 
 The installer downloads the archive for the current CPU, verifies its checksum
-and exact version, and atomically installs it under the current user without
-`sudo` or shell-profile edits. Windows distribution remains deferred to a
-separately qualified future release.
+and exact version, verifies the matching standalone native-state verifier and
+canonical declaration, and atomically installs it under the current user
+without `sudo` or shell-profile edits. The complete public v0.6.3 set is four
+product archives, four verifier archives, one declaration, and `SHA256SUMS`.
+Windows distribution remains deferred to a separately qualified future
+release.
+
+After native household migration, the current installer rejects
+`HEYFOOD_VERSION=0.6.2` before download or replacement. The archived v0.6.2
+installer and binary do not enforce the later native-state floor; executing
+either after migration is unsupported and unprotected.
 
 ## Inspect or build from source
 
@@ -189,8 +199,10 @@ Account connection continues into the native Rust TUI and an authenticated bare
 stream, keeps bounded process-local prompt history, and preserves conversation
 continuity only for the lifetime of the process.
 
-The bounded `v0.6.3` release provides exactly four native archives: macOS
-Apple Silicon, macOS Intel, Linux ARM64, and Linux x64.
+The bounded `v0.6.3` release provides four native product archives and four
+matching standalone-verifier archives for macOS Apple Silicon, macOS Intel,
+Linux ARM64, and Linux x64, plus one native-state declaration and
+`SHA256SUMS`.
 Windows distribution remains deferred; ordinary Windows compile, test,
 Clippy, credential, and packaging qualification remains active in CI. Health,
 item-level Menu Watch diff detail, native voice, full legacy parity, and the
@@ -211,6 +223,18 @@ included in `v0.6.3`. Human progress labels stay separate from backend tool
 identifiers, structured restaurant recommendations and full menus retain
 prices and dietary evidence, and a slow or interrupted turn returns the
 composer to a usable state without blindly replaying accepted work.
+
+In the attached human TUI, `/household add` collects the same complete
+eight-step version-1 declared-profile questionnaire used for owner onboarding
+and commits the new local member and profile atomically. `/onboard --for <member>`
+completes an eligible existing member. `/for me`, `/for <member>`,
+and `/for everyone` persist the selected scope in the account-bound encrypted
+repository and reload it after restart. Non-owner profiles remain on this
+device as persisted state. Member/Everyone hosted guidance evaluates an exact
+revision-bound declared-profile projection sent as transient request context;
+it creates no remote member profile, sync consent, or non-owner outbox entry.
+Hosted member sync, learned graph, health/fitness data, remote erasure, and
+cross-device household state remain deferred.
 
 Health integrations are explicitly deferred from the supported `v0.6.3`
 contract: `health` is absent from root help and shell
@@ -269,9 +293,10 @@ rm "$HOME/.local/bin/heyfood"
 ```
 
 This removes only the native executable. Run `heyfood logout` first to revoke
-this installation's hosted authority and clear its owner-only authorization
-credentials. Logout intentionally does not delete non-credential preferences
-or other account-local application state.
+this installation's hosted authority, clear its owner-only authorization
+credentials, and remove the account-bound encrypted household key and vault
+artifacts through the resumable teardown journal. Unrelated non-credential
+preferences and retained legacy non-credential files are preserved.
 
 ## License and project boundary
 

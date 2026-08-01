@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://api.hello.food/schemas/v1/household-evaluation-contract.json",
+  "title": "hello.food household context on channel evaluation results",
+  "description": "The ADDITIVE household-context shapes the channel evaluation tools (evaluate_menu, describe_dietary_graph, suggest_recipes, log_meal) return once Phase 2.1(i) routed them through HouseholdContextResolver. Every field declared here is new; every pre-existing field keeps its shape and, for a single-member account, its exact value. A client that ignores this contract renders exactly what it rendered before.",
+  "x-heyfood-contract-version": 1,
+  "scope_resolution": {
+    "default": "An account with synced household members is evaluated HOUSEHOLD-WIDE. An account with only the owner resolves to the owner alone.",
+    "explicit_argument": "household_scope",
+    "explicit_values": {
+      "_self": "The account owner only, even when the account has synced members.",
+      "everyone": "Every synced member. Resolves to the owner alone for a household of one — not an error.",
+      "<member id>": "That member's own restriction set drives a single-profile evaluation, symmetric with _self."
+    },
+    "never_inferred": "Safety scope is explicit-or-default. It is NEVER derived from how a request was phrased in natural language.",
+    "errors": {
+      "422": "Malformed scope (not _self, not everyone, not a member id), or a scope that requires an authenticated account when there is none. Channel error code: invalid_household_scope.",
+      "404": "A well-formed member id that is not a synced member of THIS account. Channel error code: household_scope_not_found."
+    }
+  },
+  "household_block": {
+    "field": "household",
+    "presence": "Present on every result these four tools return; absent only on results produced before this contract shipped.",
+    "fields": {
+      "effective_scope": "\"_self\" | \"everyone\" | member id — the scope that was actually resolved.",
+      "members": "Stable-ID member refs projected from the snapshot: member_id, profile_version (never fabricated — null for request-first/ephemeral contexts), profile_source (persisted|request|ephemeral). Carries NO display name.",
+      "member_count": "Number of members in the resolved scope.",
+      "consent_state": "granted | revoked | not_applicable — the consent state under which the context was assembled.",
+      "context_hash": "Deterministic fingerprint of the resolved household context. A stored result whose context_hash no longer matches was produced under a household context that has since changed.",
+      "context_hash_version": "Travels beside any persisted hash so a serialization change can never silently invalidate or falsely match a stored result."
+    }
+  },
+  "member_annotation": {
+    "field": "items[].member_annotations",
+    "cardinality": "One entry per member in the resolved scope, per evaluated item.",
+    "disposition": {
+      "values": ["flag", "excluded"],
+      "flag": "INFORMATIONAL. The item stays in the result; the annotation explains what it means for that member. Every annotation these four tools emit is a flag.",
+      "excluded": "Reserved for the recommendation-integrity contract (2.3): the item was REMOVED from that member's recommendations because it conflicts with an ALLERGEN-class restriction, and is accounted for explicitly. Carries allergen and reason (including \"uncertain\" when allergen data is missing — when uncertain, avoid). Non-allergen restrictions never exclude.",
+      "shared_contract": "The two directives share ONE annotation type. A renderer branches on disposition, not on which tool produced the annotation."
+    },
+    "fields": {
+      "member_id": "Stable id. \"_self\" is the account owner (NOT a UUID). Annotations key on this, never on label.",
+      "label": "Display label when the household assembly surfaced one. Presentation only — never an identity.",
+      "disposition": "flag | excluded — see member_annotation.disposition. Always \"flag\" from these four tools.",
+      "status": "generally_safer | risky | avoid | unable_to_evaluate.",
+      "confidence": "0.0-1.0.",
+      "summary": "That member's own explanation.",
+      "conflicts": "That member's conflicts (ingredient, reason, category).",
+      "allergen": "Allergen that drove an exclusion (2.3). Null for flags.",
+      "reason": "Why the disposition was applied (2.3). Null for flags.",
+      "model_version": "C2: the concrete producer of this verdict. \"unrecorded\" when the evaluation did not run — never a fabricated model.",
+      "rules_version": "C2: the deterministic rules layer version.",
+      "context_hash": "C1: the snapshot this annotation was produced under. Equal to household.context_hash.",
+      "context_hash_version": "C1: hash recipe version.",
+      "member_profile_version": "The member's persisted profile version, or null when no persisted version exists."
+    }
+  },
+  "aggregation": {
+    "rule": "An item's headline fields (status, confidence, summary, conflicts) are the household AGGREGATE: the annotation with the WORST safety status wins; ties break to the least confident reading; remaining ties keep household order.",
+    "severity_order": ["generally_safer", "risky", "unable_to_evaluate", "avoid"],
+    "unknown_handling": "unable_to_evaluate outranks risky (an unknown is at least as serious as a known caution) but is NEVER promoted to avoid, which would assert a verdict that was never produced.",
+    "single_member_identity": "For a single-member scope the aggregate is trivially that member's own annotation, which is why a solo account's headline fields are unchanged."
+  },
+  "per_tool": {
+    "evaluate_menu": {
+      "additive": ["household", "items[].member_annotations"],
+      "argument": "household_scope",
+      "note": "Each item is evaluated once per member in scope. Identical (dish, member) pairs are evaluated once per call."
+    },
+    "describe_dietary_graph": {
+      "additive": ["household", "members"],
+      "argument": "household_scope",
+      "note": "summary describes the resolved scope; restriction_count / preference_count / avoid_ingredient_count are the DISTINCT UNION across the members in scope; meal_count_7d and rating_count cover those members."
+    },
+    "suggest_recipes": {
+      "additive": ["household", "member_match_hints"],
+      "argument": "household_scope",
+      "note": "For a household the recipe is optimized against the UNION of the scope's restrictions, preferences and avoided ingredients. match_hint is a tag-level compatibility hint and is NOT authoritative — safety_summary remains the verdict."
+    },
+    "log_meal": {
+      "additive": ["household", "member_id"],
+      "argument": "household_scope",
+      "note": "ATTRIBUTION ONLY — scope decides who the meal is filed against and changes no evaluation semantics. Precedence: an explicit member scope (validated against the account), then the client-asserted active_member_id, then the account owner. A household-wide scope files against the owner, because a meal is eaten by one person."
+    }
+  },
+  "compatibility": {
+    "kind": "purely additive",
+    "single_member_guarantee": "For an account with no synced members, every pre-existing field of all four results is byte-identical to the pre-2.1(i) output. Pinned by tests/test_channel_household_evaluation.py.",
+    "unknown_field_policy": "Clients must ignore unrecognized fields inside household and member_annotation objects; 2.3 extends member_annotation without a version bump."
+  },
+  "amendments": [
+    {
+      "date": "2026-08-01",
+      "change": "New contract. Declares the household block, the per-member annotation shape (including the flag/excluded disposition shared with the recommendation-integrity contract), the worst-case aggregation rule, and the explicit household_scope argument plus its 422/404 semantics, for evaluate_menu, describe_dietary_graph, suggest_recipes and log_meal. New fixture fixtures/household_evaluation/founding_scenario_maya_menu.json.",
+      "reason": "The four channel evaluation tools hardcoded member_id=\"_self\" and handed a household user solo verdicts while grocery screened household-wide — one product, two safety promises (capability audit gap 9). They now consume the same HouseholdContextSnapshot every other household-aware surface consumes.",
+      "compatibility": "Purely additive. No pre-existing field changed shape; a single-member account's values are unchanged byte-for-byte. household_scope is optional and defaults to the resolver's default resolution. No REST endpoint, confirmation envelope, capability or scope changed.",
+      "attestation_status": "Describes THIS tree. No deployment evidence is recorded yet; a deployment record is required after this change ships."
+    }
+  ]
+}

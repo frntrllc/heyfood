@@ -1,8 +1,8 @@
 //! Contract-derived Phase 2 REST operations.
 
 use heyfood_application::{
-    BoxFuture, CapabilityPort, CapabilitySnapshot, CreateMenuWatchRequest,
-    DeployedGroceryMutationRequest, GroceryDisplayItem, GroceryDisplayList,
+    AuthoritativeConsentStateV1, BoxFuture, CapabilityPort, CapabilitySnapshot,
+    CreateMenuWatchRequest, DeployedGroceryMutationRequest, GroceryDisplayItem, GroceryDisplayList,
     GroceryDisplayMemberFlag, GroceryDisplaySafety, GroceryDisplaySource, GroceryExclusions,
     GroceryExport, GroceryExportPort, GroceryMutationPort, GroceryReadPort, LogoutRemotePort,
     MenuWatchChangeEvent, MenuWatchChangeSummary, MenuWatchList, MenuWatchPort, MenuWatchReadPort,
@@ -10,14 +10,14 @@ use heyfood_application::{
 };
 use heyfood_core::{
     AddItemsRequestWire, ApplicationCapabilitiesWire, AuthCredentialBundle,
-    AuthorizationServerMetadataWire, ExclusionListResponseWire, ExclusionMutationRequestWire,
-    GroceryCapability, GroceryEntityId, GroceryListWire, GroceryMutationConfirmRequestWire,
-    GroceryMutationProposalWire, GroceryMutationResultWire, HealthContextWire,
-    IntegrationAuthorizeRequestWire, IntegrationAuthorizeResponseWire,
+    AuthorizationServerMetadataWire, ConsentVersionV1, ExclusionListResponseWire,
+    ExclusionMutationRequestWire, GroceryCapability, GroceryEntityId, GroceryListWire,
+    GroceryMutationConfirmRequestWire, GroceryMutationProposalWire, GroceryMutationResultWire,
+    HealthContextWire, IntegrationAuthorizeRequestWire, IntegrationAuthorizeResponseWire,
     IntegrationDisconnectResponseWire, IntegrationListWire, IntegrationRedirectTargetWire,
-    IntegrationSyncResponseWire, MenuWatchCreateRequestWire, MenuWatchId,
-    MenuWatchListResponseWire, MenuWatchResponseWire, OperationId, RemoveItemsRequestWire,
-    SelfRegistrationStatusWire, SessionCredentials, TRANSCRIPTION_CHANNELS,
+    IntegrationSyncResponseWire, MAX_OWNER_SYNC_REQUEST_BODY_BYTES, MenuWatchCreateRequestWire,
+    MenuWatchId, MenuWatchListResponseWire, MenuWatchResponseWire, OperationId,
+    RemoveItemsRequestWire, SelfRegistrationStatusWire, SessionCredentials, TRANSCRIPTION_CHANNELS,
     TRANSCRIPTION_CLIENT_ERROR_KINDS, TRANSCRIPTION_MAX_AUDIO_BYTES,
     TRANSCRIPTION_MAX_DURATION_SECONDS, TRANSCRIPTION_MAX_LANGUAGE_CHARACTERS,
     TRANSCRIPTION_MAX_REQUEST_BYTES, TRANSCRIPTION_SAMPLE_WIDTH_BYTES,
@@ -33,7 +33,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{HttpService, uncertain_transport};
 
-const MAX_JSON_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_JSON_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EXPORT_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TRANSCRIPTION_RESPONSE_BYTES: usize = 128 * 1024;
 const MAX_TRANSCRIPTION_ERROR_BYTES: usize = 16 * 1024;
@@ -45,6 +45,65 @@ enum DispatchKind {
     Mutation,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OwnerSyncOutcomeUncertainReasonV1 {
+    Timeout,
+    CancelledAfterSend,
+    Transport,
+    BodyRead,
+    BodyTooLarge,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub enum OwnerSyncTransportResultV1 {
+    CancelledBeforeSend,
+    Response {
+        status: u16,
+        body: Vec<u8>,
+    },
+    OutcomeUncertain {
+        reason: OwnerSyncOutcomeUncertainReasonV1,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileConsentStatusWireV1 {
+    has_consent: bool,
+    #[serde(default)]
+    granted_at: Option<String>,
+    #[serde(default)]
+    consent_version: Option<ConsentVersionV1>,
+}
+
+impl ProfileConsentStatusWireV1 {
+    fn authoritative_state(&self) -> Option<AuthoritativeConsentStateV1> {
+        let _ = &self.granted_at;
+        match (self.has_consent, self.consent_version) {
+            (true, Some(version)) => Some(AuthoritativeConsentStateV1::Active(version)),
+            (false, None) => Some(AuthoritativeConsentStateV1::Absent),
+            (true, None) | (false, Some(_)) => None,
+        }
+    }
+}
+
+impl std::fmt::Debug for OwnerSyncTransportResultV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CancelledBeforeSend => formatter.write_str("CancelledBeforeSend"),
+            Self::Response { status, body } => formatter
+                .debug_struct("Response")
+                .field("status", status)
+                .field("body_bytes", &body.len())
+                .finish(),
+            Self::OutcomeUncertain { reason } => formatter
+                .debug_struct("OutcomeUncertain")
+                .field("reason", reason)
+                .finish(),
+        }
+    }
+}
+
 impl DispatchKind {
     const fn uncertain(self) -> bool {
         matches!(self, Self::Mutation)
@@ -52,6 +111,36 @@ impl DispatchKind {
 }
 
 impl HttpService {
+    /// Dispatch an already-frozen owner-profile sync request without
+    /// classifying its HTTP result. Every observed status and bounded raw body
+    /// crosses this boundary unchanged so the household application state
+    /// machine can reconcile before any retry.
+    pub async fn send_owner_profile_sync_v1(
+        &self,
+        credentials: &SessionCredentials,
+        request_body: &[u8],
+        remote_request_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> Result<OwnerSyncTransportResultV1, PortError> {
+        if request_body.is_empty() || request_body.len() > MAX_OWNER_SYNC_REQUEST_BODY_BYTES {
+            return Err(PortError::new(
+                "owner_sync_request_body",
+                "frozen owner profile sync request body is invalid",
+            ));
+        }
+        let builder = self
+            .request(
+                Method::PUT,
+                "/v1/profile/sync",
+                Some(credentials),
+                remote_request_id,
+            )?
+            .header(header::ACCEPT, "application/json")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(request_body.to_vec());
+        Ok(dispatch_owner_sync_transport(builder, cancellation).await)
+    }
+
     /// Upload one bounded in-memory WAV using channel authority. This endpoint
     /// performs transcription only; it never submits the transcript to the
     /// agent or converts it into mutation consent.
@@ -155,6 +244,27 @@ impl HttpService {
             .await
     }
 
+    /// Read and strictly validate the authoritative profile-sync consent
+    /// state. Active consent always carries the exact PostgreSQL-compatible
+    /// integer version; absence cannot carry a contradictory version.
+    pub async fn profile_consent_authority_v1(
+        &self,
+        credentials: &SessionCredentials,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> Result<AuthoritativeConsentStateV1, PortError> {
+        let builder = self
+            .request(Method::GET, "/v1/profile/consent", None, operation_id)?
+            .header(header::ACCEPT, "application/json")
+            .bearer_auth(credentials.access_token.expose_secret());
+        let response: ProfileConsentStatusWireV1 = self
+            .dispatch_profile_consent_wire(builder, cancellation, DispatchKind::Safe)
+            .await?;
+        response
+            .authoritative_state()
+            .ok_or_else(|| profile_consent_contract_error(DispatchKind::Safe))
+    }
+
     /// Read one member's synchronized dietary profile. Household metadata
     /// remains local and this request is made only after positive consent.
     pub async fn download_profile(
@@ -192,6 +302,41 @@ impl HttpService {
             .json(&serde_json::json!({"consent_version": 1}));
         self.dispatch_json(builder, cancellation, DispatchKind::Mutation)
             .await
+    }
+
+    /// Grant owner profile-sync consent and return the exact authoritative
+    /// version from the response. This method never substitutes the requested
+    /// version for a missing, stale, or malformed response value.
+    pub async fn grant_owner_profile_consent_v1(
+        &self,
+        credentials: &SessionCredentials,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> Result<ConsentVersionV1, PortError> {
+        let builder = self
+            .request(
+                Method::POST,
+                "/v1/profile/consent",
+                Some(credentials),
+                operation_id,
+            )?
+            .header(header::ACCEPT, "application/json")
+            .json(&serde_json::json!({"consent_version": 1}));
+        let response: ProfileConsentStatusWireV1 = self
+            .dispatch_profile_consent_wire(builder, cancellation, DispatchKind::Mutation)
+            .await?;
+        match response
+            .authoritative_state()
+            .ok_or_else(|| profile_consent_contract_error(DispatchKind::Mutation))?
+        {
+            AuthoritativeConsentStateV1::Active(version) => Ok(version),
+            AuthoritativeConsentStateV1::Absent | AuthoritativeConsentStateV1::Malformed => {
+                Err(PortError::uncertain(
+                    "profile_consent_contract",
+                    "profile consent grant response is not authoritative",
+                ))
+            }
+        }
     }
 
     /// Replace one synchronized dietary profile using the last observed
@@ -747,6 +892,20 @@ impl HttpService {
             .map_err(|_| dispatch_error(kind, "response_json", "service response is invalid JSON"))
     }
 
+    async fn dispatch_profile_consent_wire(
+        &self,
+        builder: RequestBuilder,
+        cancellation: CancellationToken,
+        kind: DispatchKind,
+    ) -> Result<ProfileConsentStatusWireV1, PortError> {
+        let response = self.dispatch(builder, &cancellation, kind).await?;
+        if !is_json_media_type(&media_type(&response)) {
+            return Err(profile_consent_contract_error(kind));
+        }
+        let bytes = read_limited(response, &cancellation, kind, MAX_JSON_RESPONSE_BYTES).await?;
+        serde_json::from_slice(&bytes).map_err(|_| profile_consent_contract_error(kind))
+    }
+
     async fn dispatch(
         &self,
         builder: RequestBuilder,
@@ -886,6 +1045,91 @@ impl HttpService {
             )
         })
     }
+}
+
+async fn dispatch_owner_sync_transport(
+    builder: RequestBuilder,
+    cancellation: CancellationToken,
+) -> OwnerSyncTransportResultV1 {
+    if cancellation.is_cancelled() {
+        return OwnerSyncTransportResultV1::CancelledBeforeSend;
+    }
+
+    let send = builder.send();
+    let mut response = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => {
+            return OwnerSyncTransportResultV1::OutcomeUncertain {
+                reason: OwnerSyncOutcomeUncertainReasonV1::CancelledAfterSend,
+            };
+        }
+        result = send => match result {
+            Ok(response) => response,
+            Err(error) => {
+                return OwnerSyncTransportResultV1::OutcomeUncertain {
+                    reason: if error.is_timeout() {
+                        OwnerSyncOutcomeUncertainReasonV1::Timeout
+                    } else {
+                        OwnerSyncOutcomeUncertainReasonV1::Transport
+                    },
+                };
+            }
+        },
+    };
+    let status = response.status().as_u16();
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_JSON_RESPONSE_BYTES as u64)
+    {
+        return OwnerSyncTransportResultV1::OutcomeUncertain {
+            reason: OwnerSyncOutcomeUncertainReasonV1::BodyTooLarge,
+        };
+    }
+
+    let mut body = Vec::with_capacity(
+        response
+            .content_length()
+            .and_then(|length| usize::try_from(length).ok())
+            .unwrap_or(0)
+            .min(MAX_JSON_RESPONSE_BYTES),
+    );
+    loop {
+        let chunk = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {
+                return OwnerSyncTransportResultV1::OutcomeUncertain {
+                    reason: OwnerSyncOutcomeUncertainReasonV1::CancelledAfterSend,
+                };
+            }
+            result = response.chunk() => match result {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    return OwnerSyncTransportResultV1::OutcomeUncertain {
+                        reason: if error.is_timeout() {
+                            OwnerSyncOutcomeUncertainReasonV1::Timeout
+                        } else {
+                            OwnerSyncOutcomeUncertainReasonV1::BodyRead
+                        },
+                    };
+                }
+            },
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
+        let Some(total) = body.len().checked_add(chunk.len()) else {
+            return OwnerSyncTransportResultV1::OutcomeUncertain {
+                reason: OwnerSyncOutcomeUncertainReasonV1::BodyTooLarge,
+            };
+        };
+        if total > MAX_JSON_RESPONSE_BYTES {
+            return OwnerSyncTransportResultV1::OutcomeUncertain {
+                reason: OwnerSyncOutcomeUncertainReasonV1::BodyTooLarge,
+            };
+        }
+        body.extend_from_slice(&chunk);
+    }
+    OwnerSyncTransportResultV1::Response { status, body }
 }
 
 impl CapabilityPort for HttpService {
@@ -1251,6 +1495,14 @@ fn dispatch_error(kind: DispatchKind, code: &'static str, message: &'static str)
     } else {
         PortError::new(code, message)
     }
+}
+
+fn profile_consent_contract_error(kind: DispatchKind) -> PortError {
+    dispatch_error(
+        kind,
+        "profile_consent_contract",
+        "profile consent response is malformed or contradictory",
+    )
 }
 
 fn http_status_error(status: StatusCode) -> PortError {

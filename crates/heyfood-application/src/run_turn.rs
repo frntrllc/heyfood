@@ -40,6 +40,9 @@ pub struct TurnContext {
     pub dietary: Option<Value>,
     pub device: Option<Value>,
     pub meal: Option<Value>,
+    /// Authoritative backend evaluation scope. Native local `__everyone__`
+    /// is normalized by the transport to the deployed `everyone` value.
+    pub household_scope: Option<String>,
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     /// Structured C3 decision, mutually exclusive with a prompt.

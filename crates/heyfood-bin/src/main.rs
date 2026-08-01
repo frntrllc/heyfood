@@ -17,22 +17,27 @@ use heyfood_agent_runtime::{
 };
 #[cfg(feature = "native-credentials")]
 use heyfood_application::EnsureSessionError;
-use heyfood_application::{BoxFuture, BrowserPort, EnsureSession, EnsureSessionOutcome};
+use heyfood_application::PortError;
+use heyfood_application::{
+    BoxFuture, BrowserPort, EnsureSession, EnsureSessionOutcome, HouseholdSession,
+    NativeHouseholdModeV1,
+};
 #[cfg(feature = "native-credentials")]
 use heyfood_application::{
-    CredentialCommit, CredentialPort, Logout, LogoutLocalPort, LogoutOutcome, PortError,
+    CredentialCommit, CredentialPort, HouseholdEraseOutcome, Logout, LogoutLocalPort, LogoutOutcome,
 };
 use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
+use heyfood_core::AuthCredentialBundle;
 #[cfg(feature = "native-credentials")]
-use heyfood_core::{AuthCredentialBundle, CommitId, SessionCredentials};
+use heyfood_core::CommitId;
+#[cfg(any(feature = "native-credentials", all(test, not(windows))))]
+use heyfood_core::SessionCredentials;
 use heyfood_core::{
-    BrowserUrl, NetworkPolicy, OperationId, ProfileStatus, SensitiveString, ServiceUrl,
-    SessionSnapshot, terminal_safe_text,
+    BrowserUrl, HouseholdProfileStateV1, NativeHouseholdRolloutV1, NetworkPolicy, OperationId,
+    ProfileStatus, SensitiveString, ServiceUrl, SessionSnapshot, terminal_safe_text,
 };
 #[cfg(feature = "native-credentials")]
 use heyfood_mcp::{HeyfoodMcpServer, McpSessionContext, McpSessionProvider};
-#[cfg(feature = "native-credentials")]
-use heyfood_platform::AuthorizationSessionStore;
 #[cfg(feature = "native-credentials")]
 use heyfood_platform::CredentialBrokerStore;
 #[cfg(all(not(windows), not(feature = "native-credentials")))]
@@ -42,8 +47,15 @@ use heyfood_platform::FileCredentialStore;
 #[cfg(all(windows, not(feature = "native-credentials")))]
 use heyfood_platform::WindowsCredentialStore as NativeSessionStore;
 use heyfood_platform::{
-    AuthorizationReplacementJournal, AuthorizationReplacementPhase, NativeAuthStore, NativeBrowser,
-    NativeClock, NativePaths, PythonStateImporter,
+    AuthorizationReplacementJournal, AuthorizationReplacementPhase, AuthorizationSessionStore,
+    HouseholdVault, NativeAuthStore, NativeBrowser, NativeClock, NativePaths,
+    NativeStateFloorStore, PythonStateImporter, pre_floor_native_account_provenance_absent_v1,
+};
+#[cfg(feature = "native-credentials")]
+use heyfood_platform::{
+    HouseholdTeardownJournalStoreV1, HouseholdTeardownJournalV1, NativeAccountTeardownBackendV1,
+    NativeAccountTeardownV1, ProductionNativeAccountTeardownBackendV1,
+    household_teardown_barrier_present_v1,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -283,12 +295,82 @@ impl AuthorizationSessionStore for NativeSessionStore {
             }
         }
     }
+
+    fn load_authorized_session_after_preflight_failure(
+        &self,
+        expected_account: &heyfood_core::AccountId,
+    ) -> Result<Option<SessionCredentials>, PortError> {
+        match self {
+            Self::Platform(store) => {
+                store.load_authorized_session_after_preflight_failure(expected_account)
+            }
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => {
+                store.load_authorized_session_after_preflight_failure(expected_account)
+            }
+        }
+    }
+
+    fn delete_authorized_session_for_native_teardown(
+        &self,
+        expected_account_digest: [u8; 32],
+    ) -> Result<(), PortError> {
+        match self {
+            Self::Platform(store) => {
+                store.delete_authorized_session_for_native_teardown(expected_account_digest)
+            }
+            #[cfg(not(windows))]
+            Self::OwnerOnlyFile(store) => {
+                store.delete_authorized_session_for_native_teardown(expected_account_digest)
+            }
+        }
+    }
 }
 
 #[cfg(feature = "native-credentials")]
-struct NativeLogoutLocal<'a> {
-    auth: &'a NativeAuthStore,
-    session: &'a NativeSessionStore,
+enum NativeLogoutLocal<'a> {
+    Native {
+        journals: &'a HouseholdTeardownJournalStoreV1,
+        backend: &'a ProductionNativeAccountTeardownBackendV1<NativeSessionStore>,
+        cancellation: CancellationToken,
+    },
+    PreNativeCompatibility {
+        backend: &'a ProductionNativeAccountTeardownBackendV1<NativeSessionStore>,
+        cancellation: CancellationToken,
+    },
+}
+
+#[cfg(feature = "native-credentials")]
+impl NativeLogoutLocal<'_> {
+    async fn clear_after_preflight_failure(
+        &self,
+        expected: &AuthCredentialBundle,
+    ) -> Result<HouseholdEraseOutcome, PortError> {
+        match self {
+            Self::Native {
+                journals,
+                backend,
+                cancellation,
+            } => {
+                // The pre-dispatch journal binds account, client, and device;
+                // its teardown adapter adopts only known refresh markers.
+                NativeAccountTeardownV1::new(journals, *backend)
+                    .execute_authenticated(expected, cancellation.child_token())
+                    .await
+            }
+            Self::PreNativeCompatibility {
+                backend,
+                cancellation,
+            } => {
+                backend
+                    .clear_pre_native_account_after_preflight_failure(
+                        expected,
+                        cancellation.child_token(),
+                    )
+                    .await
+            }
+        }
+    }
 }
 
 #[cfg(feature = "native-credentials")]
@@ -296,9 +378,334 @@ impl LogoutLocalPort for NativeLogoutLocal<'_> {
     fn clear<'a>(
         &'a self,
         expected: &'a heyfood_core::AuthCredentialBundle,
-    ) -> BoxFuture<'a, Result<(), PortError>> {
-        Box::pin(async move { self.auth.clear_account_bound(expected, self.session) })
+    ) -> BoxFuture<'a, Result<HouseholdEraseOutcome, PortError>> {
+        Box::pin(async move {
+            match self {
+                Self::Native {
+                    journals,
+                    backend,
+                    cancellation,
+                } => {
+                    NativeAccountTeardownV1::new(journals, *backend)
+                        .execute_authenticated(expected, cancellation.child_token())
+                        .await
+                }
+                Self::PreNativeCompatibility {
+                    backend,
+                    cancellation,
+                } => {
+                    backend
+                        .clear_pre_native_account(expected, cancellation.child_token())
+                        .await
+                }
+            }
+        })
     }
+}
+
+/// Preserve the released pre-native logout path while the immutable D2 floor
+/// and every exact account-scoped D2 locator are absent. The rollout flag is
+/// not permission for logout to create native account evidence: only a
+/// durable floor selects the journaled native coordinator.
+#[cfg(feature = "native-credentials")]
+async fn pre_native_logout_compatibility_v1(
+    paths: &NativePaths,
+    account: heyfood_core::AccountId,
+    cancellation: CancellationToken,
+) -> Result<bool, PortError> {
+    match std::fs::symlink_metadata(paths.data_dir()) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(_) => {
+            return Err(PortError::new(
+                "household_native_root",
+                "native household root is unavailable",
+            ));
+        }
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(PortError::new(
+                "household_native_root",
+                "native household root must be a physical directory",
+            ));
+        }
+        Ok(_) => {}
+    }
+    let vault = HouseholdVault::from_native_paths(paths, account)?;
+    let floor = NativeStateFloorStore::open(
+        paths.data_dir(),
+        vault.account_slot().native_root_instance_digest(),
+    )?;
+    if floor.load(cancellation.child_token()).await?.is_some() {
+        return Ok(false);
+    }
+    if pre_floor_native_account_provenance_absent_v1(&vault)? {
+        return Ok(true);
+    }
+    Err(PortError::new(
+        "household_native_evidence_contradiction",
+        "native household account evidence exists without its compatibility floor",
+    ))
+}
+
+/// Reauthorization is not itself permission to activate native household
+/// storage. Only an already durable floor selects the lifecycle-serialized
+/// path; flag-on without a floor remains pre-native here, and contradictory
+/// account provenance fails closed without creating an account directory.
+async fn pre_native_login_compatibility_v1(
+    paths: &NativePaths,
+    account: heyfood_core::AccountId,
+    cancellation: CancellationToken,
+) -> Result<bool, PortError> {
+    match std::fs::symlink_metadata(paths.data_dir()) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(_) => {
+            return Err(PortError::new(
+                "household_native_root",
+                "native household root is unavailable",
+            ));
+        }
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(PortError::new(
+                "household_native_root",
+                "native household root must be a physical directory",
+            ));
+        }
+        Ok(_) => {}
+    }
+    let vault = HouseholdVault::from_native_paths(paths, account)?;
+    let floor = NativeStateFloorStore::open(
+        paths.data_dir(),
+        vault.account_slot().native_root_instance_digest(),
+    )?;
+    if floor.load(cancellation).await?.is_some() {
+        return Ok(false);
+    }
+    if pre_floor_native_account_provenance_absent_v1(&vault)? {
+        return Ok(true);
+    }
+    Err(PortError::new(
+        "household_native_evidence_contradiction",
+        "native household account evidence exists without its compatibility floor",
+    ))
+}
+
+/// Commit a reauthorization intent under the same account lifecycle fence as
+/// native household teardown. Accounts with no durable native floor or
+/// provenance use the released compatibility path and never create an account
+/// directory.
+/// Native accounts retain `account-lifecycle.lock` across the exact teardown
+/// barrier check and the auth-then-session replacement marker commit.
+async fn begin_login_reauthorization_intent_v1(
+    paths: &NativePaths,
+    auth_store: &NativeAuthStore,
+    session_store: &NativeSessionStore,
+    expected: &AuthCredentialBundle,
+    client_transaction_id: String,
+    cancellation: CancellationToken,
+) -> Result<AuthorizationReplacementJournal, PortError> {
+    // The auth-intent guard closes the pre-native classification window.
+    // Floor publication may proceed concurrently, but a native logout cannot
+    // pass its final auth comparison and commit a teardown journal until this
+    // guard either commits the replacement marker or is released.
+    let auth_intent = auth_store.begin_authorization_intent()?;
+    if pre_native_login_compatibility_v1(
+        paths,
+        expected.session.account_id.clone(),
+        cancellation.child_token(),
+    )
+    .await?
+    {
+        return auth_intent.begin_authorization_replacement_if_current(
+            client_transaction_id,
+            expected,
+            session_store,
+        );
+    }
+    drop(auth_intent);
+
+    #[cfg(feature = "native-credentials")]
+    {
+        let vault = HouseholdVault::from_native_paths(paths, expected.session.account_id.clone())?;
+        return begin_native_login_reauthorization_intent_v1(
+            &vault,
+            auth_store,
+            session_store,
+            expected,
+            client_transaction_id,
+            cancellation,
+        )
+        .await;
+    }
+
+    #[cfg(not(feature = "native-credentials"))]
+    Err(PortError::new(
+        "household_native_credentials_required",
+        "native household state exists; reauthorization requires a build with native credential support",
+    ))
+}
+
+#[cfg(feature = "native-credentials")]
+async fn begin_native_login_reauthorization_intent_v1(
+    vault: &HouseholdVault,
+    auth_store: &NativeAuthStore,
+    session_store: &NativeSessionStore,
+    expected: &AuthCredentialBundle,
+    client_transaction_id: String,
+    cancellation: CancellationToken,
+) -> Result<AuthorizationReplacementJournal, PortError> {
+    let lifecycle = vault
+        .acquire_lifecycle_lease(cancellation.child_token())
+        .await?;
+    if household_teardown_barrier_present_v1(vault, &lifecycle)? {
+        return Err(PortError::uncertain(
+            "household_teardown_resume_required",
+            "native household teardown must resume before login can replace authorization",
+        ));
+    }
+    let auth_intent = auth_store.begin_authorization_intent()?;
+    let journal = auth_intent.begin_authorization_replacement_if_current(
+        client_transaction_id,
+        expected,
+        session_store,
+    )?;
+    drop(auth_intent);
+    drop(lifecycle);
+    Ok(journal)
+}
+
+#[cfg(feature = "native-credentials")]
+fn native_account_teardown_directory_present(paths: &NativePaths) -> Result<bool, PortError> {
+    // This name is the stable v1 on-disk directory owned by
+    // `HouseholdTeardownJournalStoreV1`. Probing it before opening the store is
+    // intentionally read-only: startup must not manufacture a native root
+    // merely to discover that no recovery work exists.
+    let directory = paths.data_dir().join("household-teardown");
+    match std::fs::symlink_metadata(directory) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(PortError::new(
+            "household_teardown_journal_unavailable",
+            "native household teardown journal is unavailable",
+        )),
+    }
+}
+
+#[cfg(feature = "native-credentials")]
+async fn resume_native_account_teardown_outcomes(
+    paths: &NativePaths,
+    cancellation: CancellationToken,
+) -> Result<Vec<HouseholdEraseOutcome>, PortError> {
+    if !native_account_teardown_directory_present(paths)? {
+        return Ok(Vec::new());
+    }
+    let journals = HouseholdTeardownJournalStoreV1::open(paths.data_dir())?;
+    if journals.scan()?.is_empty() {
+        return Ok(Vec::new());
+    }
+    let session = NativeSessionStore::open(paths.config_dir())?;
+    let backend = ProductionNativeAccountTeardownBackendV1::open(
+        paths.clone(),
+        session,
+        Duration::from_secs(15),
+    )?;
+    NativeAccountTeardownV1::new(&journals, &backend)
+        .resume_all_outcomes(cancellation)
+        .await
+}
+
+#[cfg(feature = "native-credentials")]
+async fn complete_pending_native_account_teardowns(
+    paths: &NativePaths,
+    cancellation: CancellationToken,
+) -> Result<(), PortError> {
+    let outcomes = resume_native_account_teardown_outcomes(paths, cancellation).await?;
+    if outcomes.iter().any(|outcome| outcome.outcome_uncertain) {
+        return Err(PortError::uncertain(
+            "household_teardown_resume_incomplete",
+            "native household teardown remains incomplete",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "native-credentials")]
+fn combine_household_erase_outcomes(outcomes: &[HouseholdEraseOutcome]) -> HouseholdEraseOutcome {
+    HouseholdEraseOutcome {
+        household_key_deleted: outcomes.iter().all(|outcome| outcome.household_key_deleted),
+        household_ciphertext_deleted: outcomes
+            .iter()
+            .all(|outcome| outcome.household_ciphertext_deleted),
+        import_snapshot_deleted: outcomes
+            .iter()
+            .all(|outcome| outcome.import_snapshot_deleted),
+        legacy_source_retained: outcomes
+            .iter()
+            .any(|outcome| outcome.legacy_source_retained),
+        legacy_credentials_cleared: outcomes
+            .iter()
+            .all(|outcome| outcome.legacy_credentials_cleared),
+        legacy_credentials_retained: outcomes
+            .iter()
+            .any(|outcome| outcome.legacy_credentials_retained),
+        local_credentials_cleared: outcomes
+            .iter()
+            .all(|outcome| outcome.local_credentials_cleared),
+        outcome_uncertain: outcomes.iter().any(|outcome| outcome.outcome_uncertain),
+    }
+}
+
+/// Commit content-free, account-bound restart authority before any logout
+/// refresh request can make the credential state uncertain. The journal is
+/// the local logout commit point: a crash or failed refresh may skip remote
+/// revocation, but startup can still finish household and credential cleanup.
+#[cfg(feature = "native-credentials")]
+async fn commit_native_logout_teardown_intent(
+    journals: &HouseholdTeardownJournalStoreV1,
+    backend: &ProductionNativeAccountTeardownBackendV1<NativeSessionStore>,
+    auth_store: &NativeAuthStore,
+    session_store: &NativeSessionStore,
+    expected: &AuthCredentialBundle,
+    cancellation: CancellationToken,
+) -> Result<(), PortError> {
+    if !journals.scan()?.is_empty() {
+        return Err(PortError::uncertain(
+            "household_teardown_resume_required",
+            "native household teardown must resume before another logout can begin",
+        ));
+    }
+    let (lease, prepared) = backend
+        .acquire_authenticated(expected, cancellation)
+        .await?;
+    commit_prepared_native_logout_teardown_intent(
+        journals,
+        auth_store,
+        session_store,
+        expected,
+        lease,
+        prepared,
+    )
+}
+
+#[cfg(feature = "native-credentials")]
+fn commit_prepared_native_logout_teardown_intent<Lease>(
+    journals: &HouseholdTeardownJournalStoreV1,
+    auth_store: &NativeAuthStore,
+    session_store: &NativeSessionStore,
+    expected: &AuthCredentialBundle,
+    lease: Lease,
+    prepared: heyfood_platform::PreparedHouseholdTeardownV1,
+) -> Result<(), PortError> {
+    // `acquire_authenticated` deliberately releases its short auth read while
+    // it prepares native evidence. Reacquire the auth-intent fence while the
+    // lifecycle lease is still retained, recheck both credential stores, and
+    // keep the fence through the teardown-journal commit. A pre-native login
+    // can therefore never publish a replacement marker in this final window.
+    let auth_intent = auth_store.begin_authorization_intent()?;
+    auth_intent.verify_account_bound_current(expected, session_store)?;
+    let journal = HouseholdTeardownJournalV1::new(prepared)?;
+    journals.replace(&journal)?;
+    drop(auth_intent);
+    drop(lease);
+    Ok(())
 }
 
 #[tokio::main]
@@ -333,6 +740,24 @@ async fn main() -> ExitCode {
     }
 
     let cli = Cli::parse_env();
+    #[cfg(feature = "native-credentials")]
+    if !raw_arguments_request_logout() {
+        let startup_paths = if raw_arguments_request_mcp() {
+            NativePaths::discover_platform_default()
+        } else {
+            NativePaths::discover()
+        };
+        let startup_resume = match startup_paths {
+            Ok(paths) => {
+                complete_pending_native_account_teardowns(&paths, CancellationToken::new()).await
+            }
+            Err(error) => Err(error),
+        };
+        if let Err(error) = startup_resume {
+            eprintln!("heyfood: {}", terminal_safe_text(&error.message));
+            return ExitCode::FAILURE;
+        }
+    }
     let machine = cli.machine_output();
     let no_input = cli.no_input;
     let output_mode = cli.output_mode(io::stdout().is_terminal());
@@ -399,6 +824,14 @@ fn raw_arguments_request_mcp() -> bool {
         .skip(1)
         .find(|argument| !argument.to_string_lossy().starts_with('-'))
         .is_some_and(|argument| argument == std::ffi::OsStr::new("mcp"))
+}
+
+#[cfg(feature = "native-credentials")]
+fn raw_arguments_request_logout() -> bool {
+    std::env::args_os()
+        .skip(1)
+        .find(|argument| !argument.to_string_lossy().starts_with('-'))
+        .is_some_and(|argument| argument == std::ffi::OsStr::new("logout"))
 }
 
 #[cfg(feature = "native-credentials")]
@@ -633,10 +1066,20 @@ async fn interactive(machine: bool, force_onboarding: bool) -> ExitCode {
         startup_notice =
             Some("Review and replace your synced dietary profile through the guided setup.".into());
     }
-    let local_state = match load_interactive_state(
-        &prepared.paths,
-        prepared.snapshot.credentials.account_id.as_str(),
-    ) {
+    let local_state = match prepared.household_mode {
+        NativeHouseholdModeV1::LegacyCompatibility => load_interactive_state(
+            &prepared.paths,
+            prepared.snapshot.credentials.account_id.as_str(),
+        ),
+        NativeHouseholdModeV1::NativeEnabled | NativeHouseholdModeV1::NativeRollbackReadOnly => {
+            Ok(None)
+        }
+        _ => Err(heyfood_bin::OneShotError::new(
+            "household_native_mode_invalid",
+            "Native household lifecycle mode is not ready for the interactive terminal.",
+        )),
+    };
+    let local_state = match local_state {
         Ok(state) => state,
         Err(error) => {
             return failure(
@@ -649,14 +1092,20 @@ async fn interactive(machine: bool, force_onboarding: bool) -> ExitCode {
         }
     };
     let result = tokio::task::block_in_place(move || {
+        let session_provider = Arc::new(NativeInteractiveSessionProvider {
+            household_mode: prepared.household_mode,
+            household_session: prepared.household_session.clone(),
+        });
         let driver = heyfood_bin::InteractiveTurnDriver::new_http(
             prepared.service,
             prepared.ensure_session,
             prepared.snapshot,
             prepared.authorization_scope,
         )?
-        .with_session_provider(Arc::new(NativeInteractiveSessionProvider))
+        .with_session_provider(session_provider)
         .with_local_state(local_state)
+        .with_household_session(prepared.household_session)
+        .with_profile_presentation_mode(profile_presentation_mode(prepared.household_mode))
         .with_startup_notice(startup_notice)
         .with_startup_onboarding(startup_onboarding);
         #[cfg(all(
@@ -682,7 +1131,7 @@ async fn interactive(machine: bool, force_onboarding: bool) -> ExitCode {
 
 async fn prepare_bare_session()
 -> Result<(PreparedNativeSession, Option<String>, bool), heyfood_bin::OneShotError> {
-    match prepare_native_session(None, CancellationToken::new()).await {
+    match prepare_native_session(ScopeCapability::None, CancellationToken::new()).await {
         Ok(mut prepared) => {
             let startup_onboarding = profile_needs_onboarding(&mut prepared)
                 .await
@@ -708,7 +1157,8 @@ async fn prepare_bare_session()
             .await
             .map_err(registration_to_one_shot)?;
             eprintln!("Your hello.food account is connected.");
-            let prepared = prepare_native_session(None, CancellationToken::new()).await?;
+            let prepared =
+                prepare_native_session(ScopeCapability::None, CancellationToken::new()).await?;
             Ok((
                 prepared,
                 Some(registration_startup_notice(registration.profile_status)),
@@ -720,6 +1170,16 @@ async fn prepare_bare_session()
 }
 
 async fn profile_needs_onboarding(prepared: &mut PreparedNativeSession) -> Option<bool> {
+    match prepared.household_mode {
+        NativeHouseholdModeV1::NativeEnabled => {
+            let session = prepared.household_session.as_ref()?;
+            let loaded = session.load_required(CancellationToken::new()).await.ok()?;
+            return Some(loaded.state.owner.profile_state == HouseholdProfileStateV1::Incomplete);
+        }
+        NativeHouseholdModeV1::NativeRollbackReadOnly => return Some(false),
+        NativeHouseholdModeV1::LegacyCompatibility => {}
+        _ => return None,
+    }
     if !["profile:read", "profile:write"].iter().all(|required| {
         prepared
             .authorization_scope
@@ -777,6 +1237,23 @@ fn registration_startup_notice(status: ProfileStatus) -> String {
         }
         ProfileStatus::Missing => "Account connected. Complete the guided dietary profile before your first personalized request.".into(),
         ProfileStatus::Unknown => "Account connected. Dietary profile readiness could not be confirmed; personalized guidance may be limited.".into(),
+    }
+}
+
+const fn profile_presentation_mode(
+    mode: NativeHouseholdModeV1,
+) -> heyfood_tui::ProfilePresentationModeV1 {
+    match mode {
+        NativeHouseholdModeV1::LegacyCompatibility => {
+            heyfood_tui::ProfilePresentationModeV1::LegacyCompatibility
+        }
+        NativeHouseholdModeV1::NativeEnabled => {
+            heyfood_tui::ProfilePresentationModeV1::NativeEnabled
+        }
+        NativeHouseholdModeV1::NativeRollbackReadOnly => {
+            heyfood_tui::ProfilePresentationModeV1::NativeRollbackReadOnly
+        }
+        _ => heyfood_tui::ProfilePresentationModeV1::NativeRollbackReadOnly,
     }
 }
 
@@ -860,9 +1337,35 @@ struct PreparedNativeSession {
     ensure_session: Arc<EnsureSession>,
     snapshot: SessionSnapshot,
     authorization_scope: String,
+    household_mode: NativeHouseholdModeV1,
+    household_session: Option<HouseholdSession>,
 }
 
-struct NativeInteractiveSessionProvider;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReleasedLogHouseholdRoute {
+    LegacyCompatibility,
+    Native(NativeHouseholdRolloutV1),
+}
+
+struct PreparedNativeLogReviewPhase {
+    household_mode: NativeHouseholdModeV1,
+    household_session: HouseholdSession,
+    command: heyfood_bin::PreparedNativeLogCommand,
+}
+
+#[derive(Clone, Copy)]
+enum ScopeCapability {
+    None,
+    GroceryRead,
+    GroceryReadWrite,
+    MenuWatch,
+    MealsWrite,
+}
+
+struct NativeInteractiveSessionProvider {
+    household_mode: NativeHouseholdModeV1,
+    household_session: Option<HouseholdSession>,
+}
 
 impl heyfood_bin::InteractiveSessionProvider for NativeInteractiveSessionProvider {
     fn prepare(
@@ -871,7 +1374,12 @@ impl heyfood_bin::InteractiveSessionProvider for NativeInteractiveSessionProvide
     ) -> BoxFuture<'_, Result<heyfood_bin::InteractiveSessionPreparation, heyfood_bin::OneShotError>>
     {
         Box::pin(async move {
-            let prepared = prepare_native_session(None, cancellation).await?;
+            let prepared = prepare_native_interactive_session(
+                self.household_mode,
+                self.household_session.clone(),
+                cancellation,
+            )
+            .await?;
             Ok(heyfood_bin::InteractiveSessionPreparation::new(
                 prepared.service,
                 prepared.ensure_session,
@@ -888,6 +1396,9 @@ async fn prepare_mcp_session(
 ) -> Result<PreparedNativeSession, heyfood_bin::OneShotError> {
     let paths =
         NativePaths::discover_platform_default().map_err(heyfood_bin::OneShotError::from)?;
+    complete_pending_native_account_teardowns(&paths, cancellation.child_token())
+        .await
+        .map_err(heyfood_bin::OneShotError::from)?;
     let auth_store =
         NativeAuthStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?;
     let credential_store = Arc::new(
@@ -916,6 +1427,12 @@ async fn prepare_mcp_session(
                 "No native hello.food account is connected. Run `heyfood login` first.",
             )
         })?;
+    let (household_mode, household_session) = prepare_account_household(
+        &paths,
+        auth.session.account_id.clone(),
+        cancellation.child_token(),
+    )
+    .await?;
 
     let (service_url, policy) = production_service_url()?;
     let now = SystemTime::now()
@@ -1014,6 +1531,8 @@ async fn prepare_mcp_session(
             reconciliation_required,
         },
         authorization_scope,
+        household_mode,
+        household_session,
     })
 }
 
@@ -1030,10 +1549,106 @@ fn production_service_url() -> Result<(ServiceUrl, NetworkPolicy), heyfood_bin::
 }
 
 async fn prepare_native_session(
-    command: Option<&Command>,
+    capability: ScopeCapability,
     cancellation: CancellationToken,
 ) -> Result<PreparedNativeSession, heyfood_bin::OneShotError> {
     let paths = NativePaths::discover().map_err(heyfood_bin::OneShotError::from)?;
+    prepare_native_session_at(paths, capability, cancellation).await
+}
+
+async fn prepare_native_interactive_session(
+    household_mode: NativeHouseholdModeV1,
+    household_session: Option<HouseholdSession>,
+    cancellation: CancellationToken,
+) -> Result<PreparedNativeSession, heyfood_bin::OneShotError> {
+    let paths = NativePaths::discover().map_err(heyfood_bin::OneShotError::from)?;
+    prepare_native_session_at_with_household(
+        paths,
+        ScopeCapability::None,
+        cancellation,
+        household_session.map(|session| (household_mode, session)),
+    )
+    .await
+}
+
+async fn prepare_account_household(
+    paths: &NativePaths,
+    account: heyfood_core::AccountId,
+    cancellation: CancellationToken,
+) -> Result<(NativeHouseholdModeV1, Option<HouseholdSession>), heyfood_bin::OneShotError> {
+    use heyfood_bin::native_household_composition::{
+        NativeHouseholdCompositionV1, compose_native_household_v1,
+        native_household_rollout_from_environment_v1,
+    };
+
+    let rollout =
+        native_household_rollout_from_environment_v1().map_err(heyfood_bin::OneShotError::from)?;
+    match compose_native_household_v1(paths, account, rollout, cancellation)
+        .await
+        .map_err(heyfood_bin::OneShotError::from)?
+    {
+        NativeHouseholdCompositionV1::Ready(prepared) => {
+            Ok((prepared.mode(), prepared.household_session().cloned()))
+        }
+        NativeHouseholdCompositionV1::LifecycleRequired(required) => {
+            Err(heyfood_bin::OneShotError::new(
+                native_household_lifecycle_error_code(required.mode),
+                native_household_lifecycle_message(required.mode),
+            ))
+        }
+    }
+}
+
+const fn native_household_lifecycle_error_code(mode: NativeHouseholdModeV1) -> &'static str {
+    match mode {
+        NativeHouseholdModeV1::NativeEnable
+        | NativeHouseholdModeV1::ResumeNativeInitialization { .. } => {
+            "household_native_initialization_required"
+        }
+        NativeHouseholdModeV1::ResumeAbortingCleanup => "household_native_cleanup_required",
+        NativeHouseholdModeV1::NativeRepairBlocked => "household_native_repair_required",
+        NativeHouseholdModeV1::PostLogoutClean { .. } => "household_post_logout_cleanup_required",
+        NativeHouseholdModeV1::ResumeTeardown => "household_teardown_resume_required",
+        NativeHouseholdModeV1::LegacyCompatibility
+        | NativeHouseholdModeV1::NativeEnabled
+        | NativeHouseholdModeV1::NativeRollbackReadOnly => "household_native_mode_invalid",
+    }
+}
+
+const fn native_household_lifecycle_message(mode: NativeHouseholdModeV1) -> &'static str {
+    match mode {
+        NativeHouseholdModeV1::NativeRepairBlocked => {
+            "Native household migration is blocked for repair; no legacy state was opened."
+        }
+        NativeHouseholdModeV1::ResumeTeardown => {
+            "Native household teardown must be resumed before this account can open."
+        }
+        _ => {
+            "Native household lifecycle work must complete before this account can open; no legacy state was used."
+        }
+    }
+}
+
+async fn prepare_native_session_at(
+    paths: NativePaths,
+    capability: ScopeCapability,
+    cancellation: CancellationToken,
+) -> Result<PreparedNativeSession, heyfood_bin::OneShotError> {
+    prepare_native_session_at_with_household(paths, capability, cancellation, None).await
+}
+
+async fn prepare_native_session_at_with_household(
+    paths: NativePaths,
+    capability: ScopeCapability,
+    cancellation: CancellationToken,
+    retained_household: Option<(NativeHouseholdModeV1, HouseholdSession)>,
+) -> Result<PreparedNativeSession, heyfood_bin::OneShotError> {
+    #[cfg(feature = "native-credentials")]
+    if retained_household.is_none() {
+        complete_pending_native_account_teardowns(&paths, cancellation.child_token())
+            .await
+            .map_err(heyfood_bin::OneShotError::from)?;
+    }
     let auth_store =
         NativeAuthStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?;
     let credential_store = Arc::new(
@@ -1061,9 +1676,32 @@ async fn prepare_native_session(
                 "No hello.food account is connected. Run `heyfood login` first.",
             )
         })?;
-    if let Some(command) = command {
-        ensure_command_scopes(command, &auth.channel.scope)?;
-    }
+    ensure_command_scopes(capability, &auth.channel.scope)?;
+    let (household_mode, household_session) = match retained_household {
+        Some((mode, session)) => {
+            if session.account() != &auth.session.account_id {
+                return Err(heyfood_bin::OneShotError::new(
+                    "household_account_mismatch",
+                    "Native household context is bound to another account.",
+                ));
+            }
+            if mode != NativeHouseholdModeV1::NativeEnabled {
+                return Err(heyfood_bin::OneShotError::new(
+                    "household_hosted_mode_not_authorized",
+                    "Hosted guidance is unavailable in the current native household mode.",
+                ));
+            }
+            (mode, Some(session))
+        }
+        None => {
+            prepare_account_household(
+                &paths,
+                auth.session.account_id.clone(),
+                cancellation.child_token(),
+            )
+            .await?
+        }
+    };
 
     let (service_url, policy) = service_url().map_err(registration_to_one_shot)?;
     let now = SystemTime::now()
@@ -1166,6 +1804,8 @@ async fn prepare_native_session(
             reconciliation_required,
         },
         authorization_scope,
+        household_mode,
+        household_session,
     })
 }
 
@@ -1175,14 +1815,20 @@ async fn one_shot_inner(
     cancellation: CancellationToken,
     no_input: bool,
 ) -> Result<String, heyfood_bin::OneShotError> {
+    if let Command::Log(arguments) = command {
+        return one_shot_log(arguments, output_mode, cancellation, no_input).await;
+    }
     let stdin = read_command_stdin(&command)?;
     authorize_human_only_command(&command, &stdin, no_input)?;
-    let prepared = prepare_native_session(Some(&command), cancellation.child_token()).await?;
-    let imported_state = load_selector_state(
-        &prepared.paths,
-        &command,
-        prepared.snapshot.credentials.account_id.as_str(),
-    )?;
+    let capability = scope_capability_for_command(&command);
+    let prepared = prepare_native_session(capability, cancellation.child_token()).await?;
+    if prepared.household_mode != NativeHouseholdModeV1::LegacyCompatibility {
+        return Err(heyfood_bin::OneShotError::new(
+            "native_household_one_shot_not_composed",
+            "This one-shot command requires the live native household consumer seam; no legacy state was opened.",
+        ));
+    }
+    let imported_state = load_selector_state(&prepared.paths, &command)?;
     heyfood_bin::execute_qualified_one_shot_with_state(
         prepared.service.as_ref(),
         prepared.ensure_session.as_ref(),
@@ -1194,6 +1840,324 @@ async fn one_shot_inner(
         imported_state.as_ref(),
     )
     .await
+}
+
+async fn one_shot_log(
+    arguments: heyfood_cli::LogArgs,
+    output_mode: OutputMode,
+    cancellation: CancellationToken,
+    no_input: bool,
+) -> Result<String, heyfood_bin::OneShotError> {
+    if no_input {
+        return Err(heyfood_bin::OneShotError::new(
+            "human_input_disabled",
+            "This human-only command cannot run with --no-input.",
+        ));
+    }
+    let (input, mut output) = open_required_controlling_terminal()?;
+    let mut input = BufReader::new(input);
+    let stdin = read_stdin_if(arguments.meal.is_empty())?;
+    let paths = NativePaths::discover().map_err(heyfood_bin::OneShotError::from)?;
+    match released_log_household_route(&paths)? {
+        ReleasedLogHouseholdRoute::LegacyCompatibility => {
+            one_shot_legacy_log(
+                arguments,
+                &stdin,
+                paths,
+                output_mode,
+                cancellation,
+                &mut input,
+                &mut output,
+            )
+            .await
+        }
+        ReleasedLogHouseholdRoute::Native(rollout) => {
+            one_shot_native_log(
+                arguments,
+                &stdin,
+                paths,
+                rollout,
+                output_mode,
+                cancellation,
+                &mut input,
+                &mut output,
+            )
+            .await
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn one_shot_legacy_log(
+    arguments: heyfood_cli::LogArgs,
+    stdin: &[u8],
+    paths: NativePaths,
+    output_mode: OutputMode,
+    cancellation: CancellationToken,
+    input: &mut dyn BufRead,
+    output: &mut dyn Write,
+) -> Result<String, heyfood_bin::OneShotError> {
+    let importer =
+        PythonStateImporter::discover(&paths).map_err(heyfood_bin::OneShotError::from)?;
+    let preview = importer
+        .preview_state()
+        .map_err(heyfood_bin::OneShotError::from)?;
+    let prepared = heyfood_bin::prepare_log_command(arguments, stdin, preview)?;
+    review_prepared_log(&prepared, input, output)?;
+
+    let native = prepare_native_session_at(
+        paths,
+        ScopeCapability::MealsWrite,
+        cancellation.child_token(),
+    )
+    .await?;
+    if native.household_mode != NativeHouseholdModeV1::LegacyCompatibility {
+        return Err(heyfood_bin::OneShotError::new(
+            "household_state_changed",
+            "Native household state became authoritative after review; no meal was sent. Review the command again.",
+        ));
+    }
+    let credentials = match native
+        .ensure_session
+        .execute(native.snapshot, cancellation.child_token())
+        .await
+        .map_err(heyfood_bin::OneShotError::from)?
+    {
+        EnsureSessionOutcome::Current(credentials)
+        | EnsureSessionOutcome::Refreshed(credentials) => credentials,
+        EnsureSessionOutcome::CancelledBeforeDispatch => {
+            return Err(heyfood_bin::OneShotError::new(
+                "session_cancelled_before_dispatch",
+                "session refresh was cancelled before dispatch",
+            ));
+        }
+    };
+    let verified = importer
+        .verify_after_review(prepared.source_preview())
+        .map_err(heyfood_bin::OneShotError::from)?;
+    let prepared = heyfood_bin::prepare_qualified_log(
+        native.service.as_ref(),
+        &credentials,
+        prepared,
+        verified,
+        cancellation.child_token(),
+    )
+    .await?;
+    heyfood_bin::execute_qualified_prepared_log(
+        native.service.as_ref(),
+        credentials,
+        output_mode,
+        prepared,
+        cancellation,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn one_shot_native_log(
+    arguments: heyfood_cli::LogArgs,
+    stdin: &[u8],
+    paths: NativePaths,
+    rollout: NativeHouseholdRolloutV1,
+    output_mode: OutputMode,
+    cancellation: CancellationToken,
+    input: &mut dyn BufRead,
+    output: &mut dyn Write,
+) -> Result<String, heyfood_bin::OneShotError> {
+    let prepared = prepare_native_log_review_phase(
+        &paths,
+        rollout,
+        arguments,
+        stdin,
+        cancellation.child_token(),
+    )
+    .await?;
+    review_prepared_native_log(&prepared.command, input, output)?;
+    if cancellation.is_cancelled() {
+        return Err(heyfood_bin::OneShotError::new(
+            "session_cancelled_before_dispatch",
+            "meal logging was cancelled before credential preparation",
+        ));
+    }
+
+    let PreparedNativeLogReviewPhase {
+        household_mode,
+        household_session,
+        command,
+    } = prepared;
+    let native = prepare_native_session_at_with_household(
+        paths,
+        ScopeCapability::MealsWrite,
+        cancellation.child_token(),
+        Some((household_mode, household_session)),
+    )
+    .await?;
+    let credentials = match native
+        .ensure_session
+        .execute(native.snapshot, cancellation.child_token())
+        .await
+        .map_err(heyfood_bin::OneShotError::from)?
+    {
+        EnsureSessionOutcome::Current(credentials)
+        | EnsureSessionOutcome::Refreshed(credentials) => credentials,
+        EnsureSessionOutcome::CancelledBeforeDispatch => {
+            return Err(heyfood_bin::OneShotError::new(
+                "session_cancelled_before_dispatch",
+                "session refresh was cancelled before dispatch",
+            ));
+        }
+    };
+    let prepared = heyfood_bin::prepare_qualified_native_log(&credentials, command)?;
+    heyfood_bin::execute_qualified_native_log(
+        native.service.as_ref(),
+        credentials,
+        output_mode,
+        prepared,
+        cancellation,
+    )
+    .await
+}
+
+async fn prepare_native_log_review_phase(
+    paths: &NativePaths,
+    rollout: NativeHouseholdRolloutV1,
+    arguments: heyfood_cli::LogArgs,
+    stdin: &[u8],
+    cancellation: CancellationToken,
+) -> Result<PreparedNativeLogReviewPhase, heyfood_bin::OneShotError> {
+    // This is the deliberately narrow local-only exception to the ordinary
+    // pre-credential review rule. Native target labels and profiles are
+    // encrypted, so exact review must first read account-bound auth and key
+    // material. No service client is constructed here, and the credential
+    // bundle is dropped before the terminal prompt.
+    let auth_store =
+        NativeAuthStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?;
+    let credential_store =
+        NativeSessionStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?;
+    let auth = load_account_bound_for_native_log_review(&auth_store, &credential_store)?
+        .ok_or_else(|| {
+            heyfood_bin::OneShotError::new(
+                "login_required",
+                "No hello.food account is connected. Run `heyfood login` first.",
+            )
+        })?;
+    ensure_command_scopes(ScopeCapability::MealsWrite, &auth.channel.scope)?;
+    let account = auth.session.account_id.clone();
+    drop(auth);
+    drop(credential_store);
+    drop(auth_store);
+
+    use heyfood_bin::native_household_composition::{
+        NativeHouseholdCompositionV1, open_existing_native_household_for_review_v1,
+    };
+    let opened = open_existing_native_household_for_review_v1(
+        paths,
+        account,
+        rollout,
+        cancellation.child_token(),
+    )
+    .await
+    .map_err(heyfood_bin::OneShotError::from)?;
+    let (household_mode, household_session) = match opened {
+        NativeHouseholdCompositionV1::Ready(prepared)
+            if prepared.mode() == NativeHouseholdModeV1::NativeEnabled =>
+        {
+            let session = prepared.household_session().cloned().ok_or_else(|| {
+                heyfood_bin::OneShotError::new(
+                    "household_native_mode_invalid",
+                    "Native household mode did not provide an account-bound repository.",
+                )
+            })?;
+            (prepared.mode(), session)
+        }
+        NativeHouseholdCompositionV1::Ready(prepared) => {
+            return Err(heyfood_bin::OneShotError::new(
+                "household_hosted_mode_not_authorized",
+                if prepared.mode() == NativeHouseholdModeV1::NativeRollbackReadOnly {
+                    "Meal logging is unavailable while native Household state is rollback-read-only."
+                } else {
+                    "Meal logging is unavailable in the current native Household mode."
+                },
+            ));
+        }
+        NativeHouseholdCompositionV1::LifecycleRequired(required) => {
+            return Err(heyfood_bin::OneShotError::new(
+                native_household_lifecycle_error_code(required.mode),
+                native_household_lifecycle_message(required.mode),
+            ));
+        }
+    };
+    let command =
+        heyfood_bin::prepare_native_log_command(arguments, stdin, &household_session, cancellation)
+            .await?;
+    Ok(PreparedNativeLogReviewPhase {
+        household_mode,
+        household_session,
+        command,
+    })
+}
+
+/// Read the two credential stores without adopting or repairing an
+/// initialization window. Native log review may use account identity to open
+/// its encrypted local vault, but it must not mutate credential state before
+/// the human accepts `LOG`.
+fn load_account_bound_for_native_log_review(
+    auth_store: &NativeAuthStore,
+    session_store: &NativeSessionStore,
+) -> Result<Option<AuthCredentialBundle>, heyfood_bin::OneShotError> {
+    let authorization = auth_store.load().map_err(heyfood_bin::OneShotError::from)?;
+    let session = session_store
+        .load_authorized_session()
+        .map_err(heyfood_bin::OneShotError::from)?;
+    match (authorization, session) {
+        (None, None) => Ok(None),
+        (Some(authorization), Some(session))
+            if authorization.session.account_id == session.account_id =>
+        {
+            Ok(Some(AuthCredentialBundle {
+                channel: authorization.channel,
+                session,
+            }))
+        }
+        _ => Err(heyfood_bin::OneShotError::new(
+            "auth_reconciliation_required",
+            "Authorization and session credentials are not an exact account-bound pair; reconcile login before reviewing a meal write.",
+        )),
+    }
+}
+
+fn released_log_household_route(
+    paths: &NativePaths,
+) -> Result<ReleasedLogHouseholdRoute, heyfood_bin::OneShotError> {
+    let rollout =
+        heyfood_bin::native_household_composition::native_household_rollout_from_environment_v1()
+            .map_err(heyfood_bin::OneShotError::from)?;
+    released_log_household_route_for_rollout(paths, rollout)
+}
+
+fn released_log_household_route_for_rollout(
+    paths: &NativePaths,
+    rollout: NativeHouseholdRolloutV1,
+) -> Result<ReleasedLogHouseholdRoute, heyfood_bin::OneShotError> {
+    let floor_path = paths
+        .data_dir()
+        .join("compatibility")
+        .join("native-state-floor.v1.json");
+    let floor_may_exist = match std::fs::symlink_metadata(floor_path) {
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(_) => {
+            return Err(heyfood_bin::OneShotError::new(
+                "native_state_floor_unavailable",
+                "Native household compatibility evidence is unavailable; no legacy state was opened.",
+            ));
+        }
+    };
+    if rollout.is_enabled() || floor_may_exist {
+        Ok(ReleasedLogHouseholdRoute::Native(rollout))
+    } else {
+        Ok(ReleasedLogHouseholdRoute::LegacyCompatibility)
+    }
 }
 
 fn authorize_human_only_command(
@@ -1211,6 +2175,12 @@ fn authorize_human_only_command(
         ));
     }
 
+    let (input, mut output) = open_required_controlling_terminal()?;
+    let mut input = BufReader::new(input);
+    review_human_only_command(command, stdin, &mut input, &mut output)
+}
+
+fn open_required_controlling_terminal() -> Result<(File, File), heyfood_bin::OneShotError> {
     #[cfg(debug_assertions)]
     if std::env::var_os("HEYFOOD_TEST_FORCE_NO_CONTROLLING_TERMINAL").as_deref()
         == Some(std::ffi::OsStr::new("1"))
@@ -1221,14 +2191,28 @@ fn authorize_human_only_command(
         ));
     }
 
-    let (input, mut output) = open_controlling_terminal().map_err(|_| {
+    open_controlling_terminal().map_err(|_| {
         heyfood_bin::OneShotError::new(
             "human_terminal_required",
             "This human-only command requires a separate attached controlling terminal.",
         )
-    })?;
-    let mut input = BufReader::new(input);
-    review_human_only_command(command, stdin, &mut input, &mut output)
+    })
+}
+
+fn review_prepared_log(
+    prepared: &heyfood_bin::PreparedLogCommand<heyfood_bin::ReviewReady>,
+    input: &mut dyn BufRead,
+    output: &mut dyn Write,
+) -> Result<(), heyfood_bin::OneShotError> {
+    review_exact_document(&prepared.review_document(), "LOG", input, output)
+}
+
+fn review_prepared_native_log(
+    prepared: &heyfood_bin::PreparedNativeLogCommand,
+    input: &mut dyn BufRead,
+    output: &mut dyn Write,
+) -> Result<(), heyfood_bin::OneShotError> {
+    review_exact_document(&prepared.review_document(), "LOG", input, output)
 }
 
 const fn requires_human_terminal_authority(command: &Command) -> bool {
@@ -1260,6 +2244,15 @@ fn review_human_only_command(
     output: &mut dyn Write,
 ) -> Result<(), heyfood_bin::OneShotError> {
     let (review, expected) = human_review_document(command, stdin)?;
+    review_exact_document(&review, expected, input, output)
+}
+
+fn review_exact_document(
+    review: &str,
+    expected: &'static str,
+    input: &mut dyn BufRead,
+    output: &mut dyn Write,
+) -> Result<(), heyfood_bin::OneShotError> {
     writeln!(
         output,
         "\nheyfood human-only authorization\n\n{review}\n\nType {expected} to continue:"
@@ -1293,34 +2286,10 @@ fn human_review_document(
     stdin: &[u8],
 ) -> Result<(String, &'static str), heyfood_bin::OneShotError> {
     match command {
-        Command::Log(arguments) => {
-            let meal = bounded_human_data(
-                if arguments.meal.is_empty() {
-                    stdin_text(stdin, "meal")?
-                } else {
-                    arguments.meal_text()
-                },
-                500,
-                "meal",
-            )?;
-            let meal_type = arguments
-                .meal_type
-                .map(|value| value.as_str())
-                .unwrap_or("unspecified");
-            Ok((
-                format!(
-                    "Mutation: log meal memory\nMeal: {}\nMeal type: {}\nHousehold target selector: {}",
-                    inline_human_text(&meal),
-                    inline_human_text(meal_type),
-                    arguments
-                        .checking_for
-                        .as_deref()
-                        .map(inline_human_text)
-                        .unwrap_or_else(|| "self".into())
-                ),
-                "LOG",
-            ))
-        }
+        Command::Log(_) => Err(heyfood_bin::OneShotError::new(
+            "prepared_log_required",
+            "meal logging requires an immutable reviewed command",
+        )),
         Command::Grocery {
             command: Some(heyfood_cli::GroceryCommand::Add(arguments)),
         } => Ok((
@@ -1475,35 +2444,6 @@ fn human_review_document(
     }
 }
 
-fn stdin_text(stdin: &[u8], label: &'static str) -> Result<String, heyfood_bin::OneShotError> {
-    if stdin.is_empty() || stdin.len() > heyfood_bin::MAX_CONFIRMATION_STDIN_BYTES {
-        return Err(heyfood_bin::OneShotError::new(
-            "human_input",
-            format!("{label} input is missing or exceeds 1 MiB"),
-        ));
-    }
-    std::str::from_utf8(stdin)
-        .map(|value| value.trim_end_matches(['\r', '\n']).to_owned())
-        .map_err(|_| {
-            heyfood_bin::OneShotError::new("human_input", format!("{label} input is not UTF-8"))
-        })
-}
-
-fn bounded_human_data(
-    value: String,
-    maximum: usize,
-    label: &'static str,
-) -> Result<String, heyfood_bin::OneShotError> {
-    let value = value.trim().to_owned();
-    if value.is_empty() || value.chars().count() > maximum {
-        return Err(heyfood_bin::OneShotError::new(
-            "human_input",
-            format!("{label} must contain between 1 and {maximum} characters"),
-        ));
-    }
-    Ok(value)
-}
-
 fn review_lines(values: &[String]) -> String {
     values
         .iter()
@@ -1538,11 +2478,10 @@ fn open_controlling_terminal() -> io::Result<(File, File)> {
 fn load_selector_state(
     paths: &NativePaths,
     command: &Command,
-    account_id: &str,
 ) -> Result<Option<heyfood_core::ImportedPythonState>, heyfood_bin::OneShotError> {
     let required = matches!(
         command,
-        Command::Log(_) | Command::Item(heyfood_cli::ItemArgs { at: Some(_), .. })
+        Command::Item(heyfood_cli::ItemArgs { at: Some(_), .. })
     );
     if !required {
         return Ok(None);
@@ -1552,14 +2491,7 @@ fn load_selector_state(
     let imported = importer
         .load_state()
         .map_err(heyfood_bin::OneShotError::from)?;
-    if imported.is_some() || !matches!(command, Command::Log(_)) {
-        return Ok(imported);
-    }
-    Ok(Some(heyfood_core::ImportedPythonState {
-        account_user_id: Some(account_id.to_owned()),
-        global: std::collections::BTreeMap::new(),
-        account_scoped: std::collections::BTreeMap::new(),
-    }))
+    Ok(imported)
 }
 
 fn registration_to_one_shot(error: RegistrationError) -> heyfood_bin::OneShotError {
@@ -1581,12 +2513,15 @@ fn uncertain_one_shot(code: &'static str, message: impl Into<String>) -> heyfood
 fn read_command_stdin(command: &Command) -> Result<Vec<u8>, heyfood_bin::OneShotError> {
     let should_read = match command {
         Command::Ask(arguments) | Command::Reply(arguments) => arguments.text.is_empty(),
-        Command::Log(arguments) => arguments.meal.is_empty(),
         Command::Grocery {
             command: Some(heyfood_cli::GroceryCommand::Confirm(_)),
         } => true,
         _ => false,
     };
+    read_stdin_if(should_read)
+}
+
+fn read_stdin_if(should_read: bool) -> Result<Vec<u8>, heyfood_bin::OneShotError> {
     if !should_read || io::stdin().is_terminal() {
         return Ok(Vec::new());
     }
@@ -1612,11 +2547,8 @@ fn one_shot_hint(code: &str) -> Option<&'static str> {
     }
 }
 
-fn ensure_command_scopes(
-    command: &Command,
-    granted_scope: &str,
-) -> Result<(), heyfood_bin::OneShotError> {
-    let required: &[&str] = match command {
+fn scope_capability_for_command(command: &Command) -> ScopeCapability {
+    match command {
         Command::Grocery {
             command:
                 None
@@ -1625,10 +2557,23 @@ fn ensure_command_scopes(
                     | heyfood_cli::GroceryCommand::Exclusions
                     | heyfood_cli::GroceryCommand::Export(_),
                 ),
-        } => &["grocery:read"],
-        Command::Grocery { .. } => &["grocery:read", "grocery:write"],
-        Command::Watch { .. } => &["menu:watch"],
-        _ => &[],
+        } => ScopeCapability::GroceryRead,
+        Command::Grocery { .. } => ScopeCapability::GroceryReadWrite,
+        Command::Watch { .. } => ScopeCapability::MenuWatch,
+        _ => ScopeCapability::None,
+    }
+}
+
+fn ensure_command_scopes(
+    capability: ScopeCapability,
+    granted_scope: &str,
+) -> Result<(), heyfood_bin::OneShotError> {
+    let required: &[&str] = match capability {
+        ScopeCapability::None => &[],
+        ScopeCapability::GroceryRead => &["grocery:read"],
+        ScopeCapability::GroceryReadWrite => &["grocery:read", "grocery:write"],
+        ScopeCapability::MenuWatch => &["menu:watch"],
+        ScopeCapability::MealsWrite => &["meals:write"],
     };
     let granted = granted_scope.split_whitespace().collect::<Vec<_>>();
     let missing = required
@@ -1654,7 +2599,11 @@ async fn logout(machine: bool) -> ExitCode {
         Ok(document) => match heyfood_cli::render_logout_success(&document, machine) {
             Ok(output) => {
                 print!("{output}");
-                ExitCode::SUCCESS
+                if document.ok {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::FAILURE
+                }
             }
             Err(_) => failure(
                 "internal_error",
@@ -1677,9 +2626,48 @@ async fn logout(machine: bool) -> ExitCode {
 #[cfg(feature = "native-credentials")]
 async fn logout_inner() -> Result<LogoutOutcome, PortError> {
     let paths = NativePaths::discover()?;
+    let resumed = resume_native_account_teardown_outcomes(&paths, CancellationToken::new()).await?;
+    if !resumed.is_empty() {
+        return Ok(LogoutOutcome::recovered_local_teardown(
+            combine_household_erase_outcomes(&resumed),
+        ));
+    }
     let auth_store = NativeAuthStore::open(paths.config_dir())?;
     let session_store = Arc::new(NativeSessionStore::open(paths.config_dir())?);
     auth_store.finish_authorization_terminal_cleanup()?;
+    if let Some(interrupted) =
+        auth_store.load_interrupted_logout_preflight(session_store.as_ref())?
+    {
+        let cancellation = CancellationToken::new();
+        if !pre_native_logout_compatibility_v1(
+            &paths,
+            interrupted.session.account_id.clone(),
+            cancellation.child_token(),
+        )
+        .await?
+        {
+            return Err(PortError::uncertain(
+                "household_teardown_resume_required",
+                "native logout refresh was interrupted without its teardown journal",
+            ));
+        }
+        // The read-only startup scan no longer creates an absent native root.
+        // An explicit logout is authorized to establish the owner-only root
+        // needed to derive and verify every pre-native cleanup target.
+        let _journal_root = HouseholdTeardownJournalStoreV1::open(paths.data_dir())?;
+        let backend = ProductionNativeAccountTeardownBackendV1::open(
+            paths.clone(),
+            NativeSessionStore::open(paths.config_dir())?,
+            Duration::from_secs(15),
+        )?;
+        let local = backend
+            .clear_pre_native_account_after_preflight_failure(
+                &interrupted,
+                cancellation.child_token(),
+            )
+            .await?;
+        return Ok(LogoutOutcome::preflight_failed(true, local));
+    }
     if auth_store.finish_account_bound_logout(session_store.as_ref())? {
         return Ok(LogoutOutcome::recovered_local_logout());
     }
@@ -1693,6 +2681,42 @@ async fn logout_inner() -> Result<LogoutOutcome, PortError> {
         )
     })?;
     let cancellation = CancellationToken::new();
+    let pre_native_compatibility = pre_native_logout_compatibility_v1(
+        &paths,
+        initial_credentials.session.account_id.clone(),
+        cancellation.child_token(),
+    )
+    .await?;
+    let journals = HouseholdTeardownJournalStoreV1::open(paths.data_dir())?;
+    let teardown_session = NativeSessionStore::open(paths.config_dir())?;
+    let teardown_backend = ProductionNativeAccountTeardownBackendV1::open(
+        paths.clone(),
+        teardown_session,
+        Duration::from_secs(15),
+    )?;
+    if !pre_native_compatibility {
+        commit_native_logout_teardown_intent(
+            &journals,
+            &teardown_backend,
+            &auth_store,
+            session_store.as_ref(),
+            &initial_credentials,
+            cancellation.child_token(),
+        )
+        .await?;
+    }
+    let local = if pre_native_compatibility {
+        NativeLogoutLocal::PreNativeCompatibility {
+            backend: &teardown_backend,
+            cancellation: cancellation.clone(),
+        }
+    } else {
+        NativeLogoutLocal::Native {
+            journals: &journals,
+            backend: &teardown_backend,
+            cancellation: cancellation.clone(),
+        }
+    };
     let signal_cancellation = cancellation.clone();
     let signal = tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -1712,16 +2736,14 @@ async fn logout_inner() -> Result<LogoutOutcome, PortError> {
         Ok(value) => value,
         Err(error) => {
             signal.abort();
-            auth_store.clear_account_bound_after_preflight_failure(
-                &initial_credentials,
-                session_store.as_ref(),
-            )?;
-            return Ok(LogoutOutcome::preflight_failed(error.outcome_uncertain));
+            let local_outcome = local
+                .clear_after_preflight_failure(&initial_credentials)
+                .await?;
+            return Ok(LogoutOutcome::preflight_failed(
+                error.outcome_uncertain,
+                local_outcome,
+            ));
         }
-    };
-    let local = NativeLogoutLocal {
-        auth: &auth_store,
-        session: session_store.as_ref(),
     };
     let result = Logout::new(&service, &local)
         .execute(&credentials, cancellation)
@@ -1739,6 +2761,9 @@ async fn prepare_logout_authority(
     policy: NetworkPolicy,
     cancellation: CancellationToken,
 ) -> Result<(AuthCredentialBundle, HttpService), PortError> {
+    let expected_account = credentials.session.account_id.clone();
+    let expected_client_id = credentials.channel.client_id.clone();
+    let expected_device_id = credentials.channel.device_id.clone();
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |value| value.as_secs());
@@ -1751,6 +2776,15 @@ async fn prepare_logout_authority(
                 "native hello.food account authority disappeared before logout",
             )
         })?;
+        if credentials.session.account_id != expected_account
+            || credentials.channel.client_id != expected_client_id
+            || credentials.channel.device_id != expected_device_id
+        {
+            return Err(PortError::new(
+                "logout_account_changed",
+                "active account authorization changed before logout refresh dispatch",
+            ));
+        }
         if credentials.channel.expires_at_unix() <= now {
             if cancellation.is_cancelled() {
                 return Err(PortError::new(
@@ -1788,6 +2822,15 @@ async fn prepare_logout_authority(
                 "native hello.food account authority disappeared before logout",
             )
         })?;
+    if credentials.session.account_id != expected_account
+        || credentials.channel.client_id != expected_client_id
+        || credentials.channel.device_id != expected_device_id
+    {
+        return Err(PortError::new(
+            "logout_account_changed",
+            "active account authorization changed while logout preflight was in progress",
+        ));
+    }
     let api_key = std::env::var("HEYFOOD_API_KEY")
         .ok()
         .filter(|value| !value.is_empty())
@@ -1833,6 +2876,15 @@ async fn prepare_logout_authority(
                 "native hello.food account authority disappeared before logout",
             )
         })?;
+    if credentials.session.account_id != expected_account
+        || credentials.channel.client_id != expected_client_id
+        || credentials.channel.device_id != expected_device_id
+    {
+        return Err(PortError::new(
+            "logout_account_changed",
+            "active account authorization changed while logout preflight was in progress",
+        ));
+    }
     if credentials.session != session {
         return Err(PortError::uncertain(
             "logout_refresh_persistence_outcome_uncertain",
@@ -1895,24 +2947,49 @@ async fn login(arguments: heyfood_cli::LoginArgs, machine: bool) -> ExitCode {
     }
 }
 
+/// Grant-changing authorization requires the full native credential boundary.
+///
+/// Keep this as the first operation in every login/registration implementation
+/// so reduced-feature qualification builds cannot inspect or mutate account
+/// paths, resume staged grants, launch a browser, or contact an authorization
+/// provider. Released binaries enable `native-credentials` by default.
+fn require_native_credentials_for_grant_change() -> Result<(), PortError> {
+    #[cfg(feature = "native-credentials")]
+    {
+        Ok(())
+    }
+    #[cfg(not(feature = "native-credentials"))]
+    {
+        Err(PortError::new(
+            "household_native_credentials_required",
+            "account login and registration require native credential support",
+        ))
+    }
+}
+
 async fn login_inner(
     arguments: heyfood_cli::LoginArgs,
     machine: bool,
     offer_account_choice: bool,
 ) -> Result<RegistrationResultDocument, RegistrationError> {
+    require_native_credentials_for_grant_change().map_err(platform_error)?;
     let paths = NativePaths::discover().map_err(platform_error)?;
+    #[cfg(feature = "native-credentials")]
+    complete_pending_native_account_teardowns(&paths, CancellationToken::new())
+        .await
+        .map_err(platform_error)?;
     let auth_store = NativeAuthStore::open(paths.config_dir()).map_err(platform_error)?;
     let session_store = NativeSessionStore::open(paths.config_dir()).map_err(platform_error)?;
     auth_store
         .finish_authorization_terminal_cleanup()
         .map_err(platform_error)?;
-    let (service_url, policy) = service_url()?;
-    let client = RegistrationClient::new(service_url, policy)?;
 
     if let Some(journal) = auth_store
         .pending_authorization_replacement()
         .map_err(platform_error)?
     {
+        let (service_url, policy) = service_url()?;
+        let client = RegistrationClient::new(service_url, policy)?;
         return resume_authorization_replacement(&client, &auth_store, &session_store, journal)
             .await;
     }
@@ -1920,7 +2997,9 @@ async fn login_inner(
     let existing_authorization = auth_store
         .load_account_bound(&session_store)
         .map_err(platform_error)?;
-    if existing_authorization.is_none() {
+    let Some(existing_authorization) = existing_authorization else {
+        let (service_url, policy) = service_url()?;
+        let client = RegistrationClient::new(service_url, policy)?;
         let authorization = if offer_account_choice {
             client.start_device_connection().await?
         } else {
@@ -1939,12 +3018,21 @@ async fn login_inner(
             },
         )
         .await;
-    }
+    };
 
+    let (service_url, policy) = service_url()?;
+    let client = RegistrationClient::new(service_url, policy)?;
     let client_transaction_id = OperationId::new().as_uuid().to_string();
-    let journal = auth_store
-        .begin_authorization_replacement(client_transaction_id.clone(), &session_store)
-        .map_err(platform_error)?;
+    let journal = begin_login_reauthorization_intent_v1(
+        &paths,
+        &auth_store,
+        &session_store,
+        &existing_authorization,
+        client_transaction_id.clone(),
+        CancellationToken::new(),
+    )
+    .await
+    .map_err(platform_error)?;
     let authorization = client
         .start_device_reauthorization(
             &journal.previous.channel.scope,
@@ -2386,7 +3474,12 @@ async fn register_inner(
     arguments: heyfood_cli::RegisterArgs,
     machine: bool,
 ) -> Result<RegistrationResultDocument, RegistrationError> {
+    require_native_credentials_for_grant_change().map_err(platform_error)?;
     let paths = NativePaths::discover().map_err(platform_error)?;
+    #[cfg(feature = "native-credentials")]
+    complete_pending_native_account_teardowns(&paths, CancellationToken::new())
+        .await
+        .map_err(platform_error)?;
     let auth_store = NativeAuthStore::open(paths.config_dir()).map_err(platform_error)?;
     let session_store = NativeSessionStore::open(paths.config_dir()).map_err(platform_error)?;
     if auth_store
@@ -2510,6 +3603,9 @@ fn platform_error(error: heyfood_application::PortError) -> RegistrationError {
         "auth_exists" => {
             "A hello.food account is already connected. Log out before registering another account."
         }
+        "household_native_credentials_required" => {
+            "Login and registration require a heyfood build with native credential support."
+        }
         "lock_timeout" => "Native account state is busy. Wait a moment and retry.",
         _ => "Could not securely read or save native hello.food account state.",
     };
@@ -2537,6 +3633,9 @@ fn registration_hint(code: &str) -> Option<&'static str> {
         "reauthorization_persistence_outcome_uncertain" => Some(
             "Run one authenticated command; native state will reconcile locally before network dispatch.",
         ),
+        "household_native_credentials_required" => {
+            Some("Use the standard heyfood release build to connect or replace an account grant.")
+        }
         "session_exchange_outcome_uncertain"
         | "session_exchange_contract_uncertain"
         | "registration_persistence_outcome_uncertain" => {
@@ -2570,9 +3669,719 @@ fn failure(
 mod tests {
     use std::io::Cursor;
 
+    #[cfg(not(windows))]
+    use std::path::PathBuf;
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    use std::sync::Barrier;
+
     use clap::Parser;
 
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    use heyfood_core::CanonicalDigestV1;
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    use heyfood_platform::{
+        HouseholdMigrationSourceIdentityV1, HouseholdTeardownGuardStateV1,
+        HouseholdTeardownKeyAbsenceBasisV1, HouseholdTeardownLegacyTargetKindV1,
+        HouseholdTeardownLegacyTargetOutcomeV1, HouseholdTeardownLegacyTargetV1,
+        PreparedHouseholdTeardownV1,
+    };
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    use uuid::Uuid;
+
     use super::*;
+
+    #[cfg(not(windows))]
+    struct LogoutTempRoot(PathBuf);
+
+    #[cfg(not(windows))]
+    impl Drop for LogoutTempRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(feature = "native-credentials")]
+    #[tokio::test]
+    async fn absent_teardown_directory_is_a_non_mutating_empty_scan() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "heyfood-empty-teardown-scan-{}-{nonce}",
+            std::process::id()
+        ));
+        assert!(!root.exists(), "test root must start absent");
+        let paths = NativePaths::under(&root);
+
+        let outcomes = resume_native_account_teardown_outcomes(&paths, CancellationToken::new())
+            .await
+            .expect("absent teardown directory");
+
+        assert!(outcomes.is_empty());
+        assert!(
+            !root.exists(),
+            "an empty recovery scan must not manufacture native state"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "native-credentials")]
+    fn released_grant_change_gate_accepts_native_credential_builds() {
+        require_native_credentials_for_grant_change().unwrap();
+    }
+
+    #[test]
+    #[cfg(not(feature = "native-credentials"))]
+    fn portable_grant_change_gate_returns_the_explicit_local_error() {
+        let error = require_native_credentials_for_grant_change().unwrap_err();
+        assert_eq!(error.code, "household_native_credentials_required");
+        assert!(!error.outcome_uncertain);
+    }
+
+    #[cfg(not(windows))]
+    fn lifecycle_test_bundle(account: &str) -> AuthCredentialBundle {
+        AuthCredentialBundle {
+            channel: heyfood_core::ChannelCredentials::from_unix_expiry(
+                "lifecycle-client",
+                "lifecycle-device",
+                SensitiveString::new("channel-access"),
+                SensitiveString::new("channel-refresh"),
+                4_102_444_800,
+                "account:link profile:read",
+            )
+            .unwrap(),
+            session: SessionCredentials::from_unix_expiry(
+                heyfood_core::AccountId::parse(account).unwrap(),
+                SensitiveString::new("session-access"),
+                SensitiveString::new("session-refresh"),
+                heyfood_core::CredentialVersion::new(1),
+                4_102_444_800,
+            )
+            .unwrap(),
+        }
+    }
+
+    #[test]
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    fn native_log_review_credential_read_is_nonmutating_and_account_bound() {
+        let root = LogoutTempRoot(std::env::temp_dir().join(format!(
+            "heyfood-native-log-review-auth-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir_all(&root.0).unwrap();
+        let auth = NativeAuthStore::open(&root.0).unwrap();
+        let session =
+            NativeSessionStore::OwnerOnlyFile(FileCredentialStore::open(&root.0).unwrap());
+        let initial = lifecycle_test_bundle("native-log-review-account");
+        auth.initialize_account_bound(&initial, &session).unwrap();
+
+        let rotated = SessionCredentials::from_unix_expiry(
+            initial.session.account_id.clone(),
+            SensitiveString::new("rotated-session-access"),
+            SensitiveString::new("rotated-session-refresh"),
+            heyfood_core::CredentialVersion::new(2),
+            4_102_444_800,
+        )
+        .unwrap();
+        session.replace_authorized_session(&rotated).unwrap();
+        let auth_before = std::fs::read(root.0.join("auth.native")).unwrap();
+        let session_before = std::fs::read(root.0.join("credentials.native")).unwrap();
+
+        let reviewed = load_account_bound_for_native_log_review(&auth, &session)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(reviewed.channel, initial.channel);
+        assert_eq!(reviewed.session, rotated);
+        assert_eq!(
+            std::fs::read(root.0.join("auth.native")).unwrap(),
+            auth_before
+        );
+        assert_eq!(
+            std::fs::read(root.0.join("credentials.native")).unwrap(),
+            session_before
+        );
+
+        let other_account = lifecycle_test_bundle("native-log-review-other").session;
+        session.delete_authorized_session().unwrap();
+        session
+            .initialize_authorized_session(&other_account)
+            .unwrap();
+        let auth_before = std::fs::read(root.0.join("auth.native")).unwrap();
+        let session_before = std::fs::read(root.0.join("credentials.native")).unwrap();
+        let error = load_account_bound_for_native_log_review(&auth, &session).unwrap_err();
+        assert_eq!(error.code, "auth_reconciliation_required");
+        assert_eq!(
+            std::fs::read(root.0.join("auth.native")).unwrap(),
+            auth_before
+        );
+        assert_eq!(
+            std::fs::read(root.0.join("credentials.native")).unwrap(),
+            session_before
+        );
+    }
+
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    fn lifecycle_test_teardown_journal(
+        vault: &HouseholdVault,
+        store: &HouseholdTeardownJournalStoreV1,
+    ) -> HouseholdTeardownJournalV1 {
+        HouseholdTeardownJournalV1::new(lifecycle_test_teardown_prepared(vault, store)).unwrap()
+    }
+
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    fn lifecycle_test_teardown_prepared(
+        vault: &HouseholdVault,
+        store: &HouseholdTeardownJournalStoreV1,
+    ) -> PreparedHouseholdTeardownV1 {
+        let slot = vault.account_slot();
+        let target_kinds = [
+            HouseholdTeardownLegacyTargetKindV1::CurrentConfigFile,
+            HouseholdTeardownLegacyTargetKindV1::LegacyConfigFile,
+            HouseholdTeardownLegacyTargetKindV1::CurrentConfigKeyring,
+            HouseholdTeardownLegacyTargetKindV1::LegacyConfigKeyring,
+        ];
+        PreparedHouseholdTeardownV1 {
+            native_root_instance_digest: store.native_root_instance_digest(),
+            account_digest: CanonicalDigestV1::from_bytes(slot.account_digest()),
+            account_locator_digest: CanonicalDigestV1::from_bytes(slot.account_locator_digest()),
+            auth_client_id_digest: CanonicalDigestV1::from_bytes([0x21; 32]),
+            auth_device_id_digest: CanonicalDigestV1::from_bytes([0x22; 32]),
+            expected_guard_state: HouseholdTeardownGuardStateV1::BlockedRepair,
+            expected_guard_revision: 1,
+            source_identity: HouseholdMigrationSourceIdentityV1::no_source([0x23; 32]),
+            migration_id: Uuid::new_v4(),
+            initialization_id: Uuid::new_v4(),
+            initial_commit_id: Uuid::new_v4(),
+            expected_household_key_id: None,
+            expected_key_bundle_revision: None,
+            key_absence_basis: Some(
+                HouseholdTeardownKeyAbsenceBasisV1::BlockedRepairNoCommittedVaultV1,
+            ),
+            plaintext_snapshot_digest: Some(CanonicalDigestV1::from_bytes([0x24; 32])),
+            legacy_cleanup_targets: target_kinds
+                .into_iter()
+                .enumerate()
+                .map(|(index, kind)| HouseholdTeardownLegacyTargetV1 {
+                    kind,
+                    locator_digest: CanonicalDigestV1::from_bytes(
+                        [u8::try_from(index).unwrap() + 0x30; 32],
+                    ),
+                    expected_noncredential_digest: CanonicalDigestV1::from_bytes(
+                        [u8::try_from(index).unwrap() + 0x40; 32],
+                    ),
+                    outcome: HouseholdTeardownLegacyTargetOutcomeV1::Pending,
+                })
+                .collect(),
+        }
+    }
+
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    async fn install_lifecycle_test_floor(paths: &NativePaths, vault: &HouseholdVault) {
+        NativeStateFloorStore::open(
+            paths.data_dir(),
+            vault.account_slot().native_root_instance_digest(),
+        )
+        .unwrap()
+        .ensure_after_secure_store_probe(CancellationToken::new(), |_| async { Ok(()) })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    async fn changed_client_binding_is_rejected_before_logout_refresh_dispatch() {
+        let root = LogoutTempRoot(std::env::temp_dir().join(format!(
+            "heyfood-logout-binding-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir_all(&root.0).unwrap();
+        let auth = NativeAuthStore::open(&root.0).unwrap();
+        let session = FileCredentialStore::open(&root.0).unwrap();
+        let initial = AuthCredentialBundle {
+            channel: heyfood_core::ChannelCredentials::from_unix_expiry(
+                "initial-client",
+                "initial-device",
+                SensitiveString::new("channel-access"),
+                SensitiveString::new("channel-refresh"),
+                1,
+                "account:link",
+            )
+            .unwrap(),
+            session: SessionCredentials::from_unix_expiry(
+                heyfood_core::AccountId::parse("logout-binding-account").unwrap(),
+                SensitiveString::new("session-access"),
+                SensitiveString::new("session-refresh"),
+                heyfood_core::CredentialVersion::new(1),
+                4_102_444_800,
+            )
+            .unwrap(),
+        };
+        auth.initialize_account_bound(&initial, &session).unwrap();
+        {
+            let refresh = auth.begin_refresh().unwrap();
+            let mut replacement = refresh.load().unwrap().unwrap();
+            replacement.channel.client_id = "replacement-client".into();
+            refresh.replace(&replacement).unwrap();
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let service_url = ServiceUrl::parse(
+            &format!("http://{}", listener.local_addr().unwrap()),
+            NetworkPolicy::DEVELOPMENT,
+        )
+        .unwrap();
+        let session = Arc::new(NativeSessionStore::OwnerOnlyFile(
+            FileCredentialStore::open(&root.0).unwrap(),
+        ));
+
+        let error = prepare_logout_authority(
+            &auth,
+            session,
+            initial,
+            service_url,
+            NetworkPolicy::DEVELOPMENT,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, "logout_account_changed");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "binding change dispatched a refresh request"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    async fn logout_journal_wins_before_reauthorization_without_replacement_marker() {
+        let root = LogoutTempRoot(std::env::temp_dir().join(format!(
+            "heyfood-reauthorization-journal-wins-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir_all(&root.0).unwrap();
+        let paths = NativePaths::under(root.0.clone());
+        let auth = NativeAuthStore::open(paths.config_dir()).unwrap();
+        let session = FileCredentialStore::open(paths.config_dir()).unwrap();
+        let expected = lifecycle_test_bundle("reauthorization-journal-wins");
+        auth.initialize_account_bound(&expected, &session).unwrap();
+        let vault =
+            HouseholdVault::from_native_paths(&paths, expected.session.account_id.clone()).unwrap();
+        install_lifecycle_test_floor(&paths, &vault).await;
+        let lifecycle = vault
+            .acquire_lifecycle_lease(CancellationToken::new())
+            .await
+            .unwrap();
+        let journals = HouseholdTeardownJournalStoreV1::open(paths.data_dir()).unwrap();
+        let teardown = lifecycle_test_teardown_journal(&vault, &journals);
+        journals.replace(&teardown).unwrap();
+        drop(lifecycle);
+        let native_session = NativeSessionStore::OwnerOnlyFile(
+            FileCredentialStore::open(paths.config_dir()).unwrap(),
+        );
+
+        let error = begin_login_reauthorization_intent_v1(
+            &paths,
+            &auth,
+            &native_session,
+            &expected,
+            "client-transaction-journal-wins".to_owned(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, "household_teardown_resume_required");
+        assert!(error.outcome_uncertain);
+        assert!(
+            auth.pending_authorization_replacement().unwrap().is_none(),
+            "teardown authority must prevent a replacement marker"
+        );
+        assert_eq!(auth.load_account_bound(&session).unwrap(), Some(expected));
+        assert_eq!(journals.scan().unwrap(), vec![teardown]);
+    }
+
+    #[tokio::test]
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    async fn reauthorization_marker_wins_before_logout_without_teardown_journal() {
+        let root = LogoutTempRoot(std::env::temp_dir().join(format!(
+            "heyfood-reauthorization-marker-wins-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir_all(&root.0).unwrap();
+        let paths = NativePaths::under(root.0.clone());
+        let auth = NativeAuthStore::open(paths.config_dir()).unwrap();
+        let session = FileCredentialStore::open(paths.config_dir()).unwrap();
+        let expected = lifecycle_test_bundle("reauthorization-marker-wins");
+        auth.initialize_account_bound(&expected, &session).unwrap();
+        let vault =
+            HouseholdVault::from_native_paths(&paths, expected.session.account_id.clone()).unwrap();
+        install_lifecycle_test_floor(&paths, &vault).await;
+        let native_session = NativeSessionStore::OwnerOnlyFile(
+            FileCredentialStore::open(paths.config_dir()).unwrap(),
+        );
+        let replacement = begin_login_reauthorization_intent_v1(
+            &paths,
+            &auth,
+            &native_session,
+            &expected,
+            "client-transaction-marker-wins".to_owned(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let journals = HouseholdTeardownJournalStoreV1::open(paths.data_dir()).unwrap();
+        let backend = ProductionNativeAccountTeardownBackendV1::open(
+            paths.clone(),
+            NativeSessionStore::OwnerOnlyFile(
+                FileCredentialStore::open(paths.config_dir()).unwrap(),
+            ),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+
+        let error = commit_native_logout_teardown_intent(
+            &journals,
+            &backend,
+            &auth,
+            &native_session,
+            &expected,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, "auth_reconciliation_required");
+        assert!(error.outcome_uncertain);
+        assert_eq!(
+            auth.pending_authorization_replacement().unwrap(),
+            Some(replacement)
+        );
+        assert!(
+            journals.scan().unwrap().is_empty(),
+            "replacement authority must prevent a teardown journal"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    async fn floor_publication_between_pre_native_classification_and_marker_cannot_commit_logout() {
+        let root = LogoutTempRoot(std::env::temp_dir().join(format!(
+            "heyfood-reauthorization-floor-race-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir_all(&root.0).unwrap();
+        let paths = NativePaths::under(root.0.clone());
+        let auth = NativeAuthStore::open(paths.config_dir()).unwrap();
+        let session = FileCredentialStore::open(paths.config_dir()).unwrap();
+        let expected = lifecycle_test_bundle("reauthorization-floor-race");
+        auth.initialize_account_bound(&expected, &session).unwrap();
+        let vault =
+            HouseholdVault::from_native_paths(&paths, expected.session.account_id.clone()).unwrap();
+
+        // Actor A retains the production auth-intent fence across the exact
+        // pre-native classification. Actor B then publishes the floor before
+        // A commits its marker, reproducing the former transition window.
+        let login_intent = auth.begin_authorization_intent().unwrap();
+        assert!(
+            pre_native_login_compatibility_v1(
+                &paths,
+                expected.session.account_id.clone(),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap()
+        );
+        install_lifecycle_test_floor(&paths, &vault).await;
+
+        // Actor C has retained the lifecycle lease and is ready for the final
+        // exact auth check plus teardown-journal commit. It must wait for A.
+        let lifecycle = vault
+            .acquire_lifecycle_lease(CancellationToken::new())
+            .await
+            .unwrap();
+        let journals = HouseholdTeardownJournalStoreV1::open(paths.data_dir()).unwrap();
+        let prepared = lifecycle_test_teardown_prepared(&vault, &journals);
+        let worker_auth = auth.clone();
+        let worker_journals = journals.clone();
+        let worker_expected = expected.clone();
+        let worker_session = NativeSessionStore::OwnerOnlyFile(
+            FileCredentialStore::open(paths.config_dir()).unwrap(),
+        );
+        let started = Arc::new(Barrier::new(2));
+        let worker_started = Arc::clone(&started);
+        let logout = tokio::task::spawn_blocking(move || {
+            worker_started.wait();
+            commit_prepared_native_logout_teardown_intent(
+                &worker_journals,
+                &worker_auth,
+                &worker_session,
+                &worker_expected,
+                lifecycle,
+                prepared,
+            )
+        });
+        started.wait();
+
+        let replacement = login_intent
+            .begin_authorization_replacement_if_current(
+                "client-transaction-floor-race".to_owned(),
+                &expected,
+                &session,
+            )
+            .unwrap();
+        drop(login_intent);
+        let error = logout.await.unwrap().unwrap_err();
+
+        assert_eq!(error.code, "auth_reconciliation_required");
+        assert!(error.outcome_uncertain);
+        assert_eq!(
+            auth.pending_authorization_replacement().unwrap(),
+            Some(replacement)
+        );
+        assert!(
+            journals.scan().unwrap().is_empty(),
+            "the delayed native logout must not coexist with replacement authority"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    async fn retained_logout_intent_blocks_concurrent_reauthorization_until_journal_commit() {
+        let root = LogoutTempRoot(std::env::temp_dir().join(format!(
+            "heyfood-logout-intent-race-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir_all(&root.0).unwrap();
+        let paths = NativePaths::under(root.0.clone());
+        let auth = NativeAuthStore::open(paths.config_dir()).unwrap();
+        let session = FileCredentialStore::open(paths.config_dir()).unwrap();
+        let expected = lifecycle_test_bundle("logout-intent-race");
+        auth.initialize_account_bound(&expected, &session).unwrap();
+        let vault =
+            HouseholdVault::from_native_paths(&paths, expected.session.account_id.clone()).unwrap();
+        install_lifecycle_test_floor(&paths, &vault).await;
+        let lifecycle = vault
+            .acquire_lifecycle_lease(CancellationToken::new())
+            .await
+            .unwrap();
+        let journals = HouseholdTeardownJournalStoreV1::open(paths.data_dir()).unwrap();
+        let teardown = lifecycle_test_teardown_journal(&vault, &journals);
+        let logout_intent = auth.begin_authorization_intent().unwrap();
+        logout_intent
+            .verify_account_bound_current(&expected, &session)
+            .unwrap();
+
+        let worker_paths = paths.clone();
+        let worker_auth = auth.clone();
+        let worker_expected = expected.clone();
+        let worker_session = NativeSessionStore::OwnerOnlyFile(
+            FileCredentialStore::open(paths.config_dir()).unwrap(),
+        );
+        let started = Arc::new(Barrier::new(2));
+        let worker_started = Arc::clone(&started);
+        let runtime = tokio::runtime::Handle::current();
+        let login = tokio::task::spawn_blocking(move || {
+            worker_started.wait();
+            runtime.block_on(begin_login_reauthorization_intent_v1(
+                &worker_paths,
+                &worker_auth,
+                &worker_session,
+                &worker_expected,
+                "client-transaction-logout-race".to_owned(),
+                CancellationToken::new(),
+            ))
+        });
+        started.wait();
+
+        journals.replace(&teardown).unwrap();
+        drop(logout_intent);
+        drop(lifecycle);
+        let error = login.await.unwrap().unwrap_err();
+
+        assert_eq!(error.code, "household_teardown_resume_required");
+        assert!(error.outcome_uncertain);
+        assert!(auth.pending_authorization_replacement().unwrap().is_none());
+        assert_eq!(journals.scan().unwrap(), vec![teardown]);
+        assert_eq!(auth.load_account_bound(&session).unwrap(), Some(expected));
+    }
+
+    #[tokio::test]
+    #[cfg(all(feature = "native-credentials", not(windows)))]
+    async fn pre_native_reauthorization_does_not_create_account_directories() {
+        let root = LogoutTempRoot(std::env::temp_dir().join(format!(
+            "heyfood-reauthorization-pre-native-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir_all(&root.0).unwrap();
+        let paths = NativePaths::under(root.0.clone());
+        let auth = NativeAuthStore::open(paths.config_dir()).unwrap();
+        let session = FileCredentialStore::open(paths.config_dir()).unwrap();
+        let expected = lifecycle_test_bundle("reauthorization-pre-native");
+        auth.initialize_account_bound(&expected, &session).unwrap();
+        let native_session = NativeSessionStore::OwnerOnlyFile(
+            FileCredentialStore::open(paths.config_dir()).unwrap(),
+        );
+
+        begin_login_reauthorization_intent_v1(
+            &paths,
+            &auth,
+            &native_session,
+            &expected,
+            "client-transaction-pre-native".to_owned(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !paths.data_dir().join("accounts").exists(),
+            "reauthorization must not activate native account storage"
+        );
+        assert!(
+            !paths.data_dir().exists(),
+            "pre-native reauthorization must leave the native root absent"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(all(not(feature = "native-credentials"), not(windows)))]
+    async fn no_default_reauthorization_is_nonmutating_pre_native_and_rejects_native_evidence() {
+        let root = LogoutTempRoot(std::env::temp_dir().join(format!(
+            "heyfood-no-default-reauthorization-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir_all(&root.0).unwrap();
+
+        let clean_paths = NativePaths::under(root.0.join("clean"));
+        let clean_auth = NativeAuthStore::open(clean_paths.config_dir()).unwrap();
+        let clean_session = NativeSessionStore::open(clean_paths.config_dir()).unwrap();
+        let clean_expected = lifecycle_test_bundle("no-default-clean");
+        clean_auth
+            .initialize_account_bound(&clean_expected, &clean_session)
+            .unwrap();
+        begin_login_reauthorization_intent_v1(
+            &clean_paths,
+            &clean_auth,
+            &clean_session,
+            &clean_expected,
+            "client-transaction-no-default-clean".to_owned(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(!clean_paths.data_dir().exists());
+
+        let floor_paths = NativePaths::under(root.0.join("floor"));
+        let floor_auth = NativeAuthStore::open(floor_paths.config_dir()).unwrap();
+        let floor_session = NativeSessionStore::open(floor_paths.config_dir()).unwrap();
+        let floor_expected = lifecycle_test_bundle("no-default-floor");
+        floor_auth
+            .initialize_account_bound(&floor_expected, &floor_session)
+            .unwrap();
+        heyfood_platform::OwnerOnlyPath::directory(floor_paths.data_dir()).unwrap();
+        let floor_vault = HouseholdVault::from_native_paths(
+            &floor_paths,
+            floor_expected.session.account_id.clone(),
+        )
+        .unwrap();
+        NativeStateFloorStore::open(
+            floor_paths.data_dir(),
+            floor_vault.account_slot().native_root_instance_digest(),
+        )
+        .unwrap()
+        .ensure_after_secure_store_probe(CancellationToken::new(), |_| async { Ok(()) })
+        .await
+        .unwrap();
+        let floor_error = begin_login_reauthorization_intent_v1(
+            &floor_paths,
+            &floor_auth,
+            &floor_session,
+            &floor_expected,
+            "client-transaction-no-default-floor".to_owned(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(floor_error.code, "household_native_credentials_required");
+        assert!(
+            floor_auth
+                .pending_authorization_replacement()
+                .unwrap()
+                .is_none()
+        );
+        assert!(!floor_paths.data_dir().join("accounts").exists());
+
+        let evidence_paths = NativePaths::under(root.0.join("evidence"));
+        let evidence_auth = NativeAuthStore::open(evidence_paths.config_dir()).unwrap();
+        let evidence_session = NativeSessionStore::open(evidence_paths.config_dir()).unwrap();
+        let evidence_expected = lifecycle_test_bundle("no-default-evidence");
+        evidence_auth
+            .initialize_account_bound(&evidence_expected, &evidence_session)
+            .unwrap();
+        heyfood_platform::OwnerOnlyPath::directory(evidence_paths.data_dir()).unwrap();
+        let evidence_vault = HouseholdVault::from_native_paths(
+            &evidence_paths,
+            evidence_expected.session.account_id.clone(),
+        )
+        .unwrap();
+        heyfood_platform::OwnerOnlyPath::directory(&evidence_vault.account_directory()).unwrap();
+        let evidence_error = begin_login_reauthorization_intent_v1(
+            &evidence_paths,
+            &evidence_auth,
+            &evidence_session,
+            &evidence_expected,
+            "client-transaction-no-default-evidence".to_owned(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            evidence_error.code,
+            "household_native_evidence_contradiction"
+        );
+        assert!(
+            evidence_auth
+                .pending_authorization_replacement()
+                .unwrap()
+                .is_none()
+        );
+    }
 
     fn registration_arguments(no_onboard: bool) -> heyfood_cli::RegisterArgs {
         heyfood_cli::RegisterArgs {
@@ -2661,30 +4470,75 @@ mod tests {
     }
 
     #[test]
-    fn meal_review_requires_the_exact_terminal_phrase_and_sanitizes_controls() {
-        let command = parsed_command(&[
-            "heyfood",
-            "log",
-            "oatmeal\nforged\u{1b}[2J",
-            "--for",
-            "child\nforged\u{1b}[3J",
-        ]);
+    fn released_log_route_keeps_legacy_flag_off_and_admits_native_rollout_or_floor() {
+        let root = std::env::temp_dir().join(format!(
+            "heyfood-main-native-log-route-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = NativePaths::under(root.clone());
+        assert_eq!(
+            released_log_household_route_for_rollout(&paths, NativeHouseholdRolloutV1::Disabled,)
+                .unwrap(),
+            ReleasedLogHouseholdRoute::LegacyCompatibility
+        );
+        assert_eq!(
+            released_log_household_route_for_rollout(&paths, NativeHouseholdRolloutV1::Enabled)
+                .unwrap(),
+            ReleasedLogHouseholdRoute::Native(NativeHouseholdRolloutV1::Enabled)
+        );
+
+        let compatibility = paths.data_dir().join("compatibility");
+        std::fs::create_dir_all(&compatibility).unwrap();
+        std::fs::write(
+            compatibility.join("native-state-floor.v1.json"),
+            b"route-presence-only",
+        )
+        .unwrap();
+        assert_eq!(
+            released_log_household_route_for_rollout(&paths, NativeHouseholdRolloutV1::Disabled,)
+                .unwrap(),
+            ReleasedLogHouseholdRoute::Native(NativeHouseholdRolloutV1::Disabled)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepared_meal_review_requires_the_exact_terminal_phrase_and_canonical_target() {
+        let command = parsed_command(&["heyfood", "log", "oatmeal", "--for", "self"]);
+        let Command::Log(arguments) = command else {
+            panic!("expected log command");
+        };
+        let root = std::env::temp_dir().join(format!(
+            "heyfood-main-prepared-review-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let importer = PythonStateImporter::under(root.join("missing.json"), root.join("native"));
+        let prepared =
+            heyfood_bin::prepare_log_command(arguments, &[], importer.preview_state().unwrap())
+                .unwrap();
         let mut approved_input = Cursor::new(b"LOG\n");
         let mut review = Vec::new();
 
-        review_human_only_command(&command, &[], &mut approved_input, &mut review).unwrap();
+        review_prepared_log(&prepared, &mut approved_input, &mut review).unwrap();
 
         let review = String::from_utf8(review).unwrap();
         assert!(review.contains("Mutation: log meal memory"));
-        assert!(review.contains("Meal: oatmeal forged[2J"));
-        assert!(review.contains("Household target selector: child forged[3J"));
+        assert!(review.contains("Meal: oatmeal"));
+        assert!(review.contains("Household target: \"Me\""));
+        assert!(!review.contains("scope=_self"));
         assert!(!review.contains('\u{1b}'));
-        assert!(!review.contains("\nforged"));
 
         let mut rejected_input = Cursor::new(b"yes\n");
-        let error = review_human_only_command(&command, &[], &mut rejected_input, &mut Vec::new())
-            .unwrap_err();
+        let error =
+            review_prepared_log(&prepared, &mut rejected_input, &mut Vec::new()).unwrap_err();
         assert_eq!(error.code, "human_confirmation_declined");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2781,11 +4635,6 @@ mod tests {
         .unwrap();
         let cases = [
             (
-                parsed_command(&["heyfood", "log", "oatmeal"]),
-                Vec::new(),
-                "LOG",
-            ),
-            (
                 parsed_command(&[
                     "heyfood",
                     "grocery",
@@ -2877,5 +4726,11 @@ mod tests {
             assert!(requires_human_terminal_authority(&command));
             assert_eq!(human_review_document(&command, &stdin).unwrap().1, expected);
         }
+        let raw_log = parsed_command(&["heyfood", "log", "oatmeal"]);
+        assert!(requires_human_terminal_authority(&raw_log));
+        assert_eq!(
+            human_review_document(&raw_log, &[]).unwrap_err().code,
+            "prepared_log_required"
+        );
     }
 }

@@ -8,6 +8,10 @@ const SCHEMA: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../schemas/v1/heyfood-agent-manifest.schema.json"
 ));
+const V2_SCHEMA: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../schemas/v2/heyfood-agent-manifest.schema.json"
+));
 const GOLDEN: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/agent/manifest-v1-golden.json"
@@ -273,6 +277,42 @@ fn guide_format_is_typed_and_matches_the_approved_spelling() {
     };
     assert_eq!(arguments.format, AgentGuideFormat::Markdown);
     assert!(arguments.safety);
+}
+
+#[test]
+fn discovery_schema_version_defaults_to_v1_and_requires_an_explicit_v2() {
+    for (arguments, expected) in [
+        (vec!["heyfood", "agent", "describe"], 1),
+        (
+            vec!["heyfood", "agent", "describe", "--schema-version", "2"],
+            2,
+        ),
+    ] {
+        let parsed = CommandLine::try_parse_from(arguments).unwrap();
+        let Some(heyfood_cli::Command::Agent {
+            command: Some(AgentCommand::Describe(arguments)),
+        }) = parsed.command
+        else {
+            panic!("agent describe must parse to the typed discovery command");
+        };
+        assert_eq!(arguments.schema_version, expected);
+    }
+
+    let parsed =
+        CommandLine::try_parse_from(["heyfood", "agent", "doctor", "--schema-version", "2"])
+            .unwrap();
+    let Some(heyfood_cli::Command::Agent {
+        command: Some(AgentCommand::Doctor(arguments)),
+    }) = parsed.command
+    else {
+        panic!("agent doctor must parse to the typed discovery command");
+    };
+    assert_eq!(arguments.schema_version, 2);
+
+    assert!(
+        CommandLine::try_parse_from(["heyfood", "agent", "describe", "--schema-version", "3"])
+            .is_err()
+    );
 }
 
 #[test]
@@ -649,30 +689,35 @@ fn validate_schema_instance(
 }
 
 #[test]
-fn golden_manifest_contains_every_required_nullable_and_surface_field() {
-    let schema: Value = serde_json::from_str(SCHEMA).expect("manifest schema JSON");
+fn closed_v1_golden_and_current_v2_manifest_freeze_the_complete_surface() {
+    let v1_schema: Value = serde_json::from_str(SCHEMA).expect("v1 manifest schema JSON");
+    let v2_schema: Value = serde_json::from_str(V2_SCHEMA).expect("v2 manifest schema JSON");
+    let proposal_schema: Value =
+        serde_json::from_str(PROPOSAL_PRESENTATION_SCHEMA).expect("proposal schema JSON");
     let golden: Value = serde_json::from_str(GOLDEN).expect("golden manifest JSON");
-    let mut runtime = heyfood_agent_contract::manifest();
-    runtime["build"] = golden["build"].clone();
+    let mut runtime_v1 = heyfood_agent_contract::manifest();
+    runtime_v1["build"] = golden["build"].clone();
 
-    assert_required_object(&schema, "/required", &golden);
-    assert_required_object(&schema, "/$defs/build/required", &golden["build"]);
+    validate_schema_instance(&v1_schema, &proposal_schema, &v1_schema, &golden)
+        .expect("published v1 golden must retain the closed v1 contract");
+    assert_required_object(&v1_schema, "/required", &golden);
+    assert_required_object(&v1_schema, "/$defs/build/required", &golden["build"]);
     assert_required_object(
-        &schema,
+        &v1_schema,
         "/$defs/compatibility/required",
         &golden["compatibility"],
     );
     assert_required_object(
-        &schema,
+        &v1_schema,
         "/$defs/automation_surfaces/required",
         &golden["automation_surfaces"],
     );
-    assert_required_object(&schema, "/$defs/limits/required", &golden["limits"]);
+    assert_required_object(&v1_schema, "/$defs/limits/required", &golden["limits"]);
     for capability in golden["capabilities"].as_array().expect("capabilities") {
-        assert_required_object(&schema, "/$defs/capability/required", capability);
+        assert_required_object(&v1_schema, "/$defs/capability/required", capability);
     }
     for command in golden["commands"].as_array().expect("commands") {
-        assert_required_object(&schema, "/$defs/command/required", command);
+        assert_required_object(&v1_schema, "/$defs/command/required", command);
     }
 
     assert_eq!(golden["automation_surfaces"]["mcp_stdio"], "active");
@@ -681,8 +726,70 @@ fn golden_manifest_contains_every_required_nullable_and_surface_field() {
         "unsupported"
     );
     assert_eq!(
-        runtime, golden,
-        "the golden fixture must contain the complete current semantic surface"
+        runtime_v1, golden,
+        "the default manifest must remain byte-structure-compatible with the shipped v0.6.2 v1 contract"
+    );
+
+    let mut expected_v2 = golden.clone();
+    expected_v2["schema_version"] = Value::from(2);
+    expected_v2.as_object_mut().unwrap().insert(
+        "native_state_compatibility".to_owned(),
+        serde_json::json!({
+            "binary_version": env!("CARGO_PKG_VERSION"),
+            "maximum_native_state_version": 2,
+            "native_state_capabilities": [
+                "household-account-slot-v1",
+                "household-lifecycle-lock-v1",
+                "household-migration-guard-v1",
+                "household-teardown-journal-v1"
+            ],
+            "schema_version": 1
+        }),
+    );
+    for command in expected_v2["commands"].as_array_mut().unwrap() {
+        match command["path"].as_str().unwrap() {
+            "agent describe" => {
+                command["purpose"] = Value::from(
+                    "Describe the exact installed agent contract using v1 by default or an explicitly requested v2.",
+                );
+                command["input_channel"] = Value::from("arguments");
+                command["output_family"] = Value::from("heyfood_agent_manifest_v1_or_v2");
+                command["output_schema_id"] = Value::Null;
+                command["output_schema_sha256"] = Value::Null;
+                command["examples"] = serde_json::json!([
+                    "heyfood agent describe",
+                    "heyfood agent describe --schema-version 2"
+                ]);
+            }
+            "agent doctor" => {
+                command["purpose"] = Value::from(
+                    "Inspect the local integration using v1 by default or an explicitly requested v2.",
+                );
+                command["input_channel"] = Value::from("arguments");
+                command["output_family"] = Value::from("agent_doctor_v1_or_v2");
+                command["output_schema_id"] = Value::Null;
+                command["output_schema_sha256"] = Value::Null;
+                command["examples"] = serde_json::json!([
+                    "heyfood agent doctor",
+                    "heyfood agent doctor --schema-version 2"
+                ]);
+            }
+            _ => {}
+        }
+    }
+    assert_required_object(&v2_schema, "/required", &expected_v2);
+    assert_required_object(
+        &v2_schema,
+        "/$defs/native_state_compatibility/required",
+        &expected_v2["native_state_compatibility"],
+    );
+    validate_schema_instance(&v2_schema, &proposal_schema, &v2_schema, &expected_v2)
+        .expect("explicit v2 manifest must validate against the v2 schema");
+    let mut runtime_v2 = heyfood_agent_contract::manifest_v2();
+    runtime_v2["build"] = golden["build"].clone();
+    assert_eq!(
+        runtime_v2, expected_v2,
+        "v2 must differ from the closed v1 golden only by the explicit versioned delta"
     );
 }
 

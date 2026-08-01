@@ -1,0 +1,31 @@
+{
+  "account_user_id": "acct-migration-owner",
+  "credential_store": "file",
+  "first_name": "Owner",
+  "household": {
+    "active_scope": "explicit-member",
+    "members": [
+      {
+        "id": "_self",
+        "name": "Owner",
+        "relationship": "self",
+        "archived": false
+      },
+      {
+        "id": "explicit-member",
+        "name": "Explicit Member",
+        "relationship": "partner",
+        "archived": false
+      }
+    ]
+  },
+  "household_profile_outbox": {
+    "explicit-member": {
+      "local_context": {
+        "restrictions": [
+          "shellfish"
+        ]
+      }
+    }
+  }
+}

@@ -243,24 +243,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Linux native credential build dependencies
         run: sudo apt-get update && sudo apt-get install --yes libdbus-1-dev pkg-config
-      - name: Build and package the host executable as the four-archive fixture set
+      - name: Build and package the complete native-state fixture set
         shell: bash
         run: |
           set -euo pipefail
           version=$(cargo metadata --locked --no-deps --format-version 1 |
             jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
-          cargo build --release --locked --package heyfood-bin
+          cargo build --release --locked \
+            --package heyfood-bin \
+            --package heyfood-installer
           binary=target/release/heyfood
+          verifier=target/release/heyfood-installer
           for target in \
             aarch64-apple-darwin \
             aarch64-unknown-linux-gnu \
             x86_64-apple-darwin \
             x86_64-unknown-linux-gnu; do
             scripts/release/package.sh "$binary" "$version" "$target" dist
+            scripts/release/package-installer.sh \
+              "$verifier" "$version" "$target" dist
           done
-          scripts/release/checksums.sh dist "$version"
-          scripts/release/verify-assets.sh dist "$version"
-          scripts/release/smoke.sh dist "$version" x86_64-unknown-linux-gnu
+          scripts/release/checksums.sh dist "$version" --native-state
+          scripts/release/verify-assets.sh dist "$version" --native-state
+          scripts/release/smoke.sh \
+            dist "$version" x86_64-unknown-linux-gnu --native-state
       - name: Prove deterministic archive bytes
         shell: bash
         run: |
@@ -269,9 +275,17 @@ jobs:
             jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
           scripts/release/package.sh \
             target/release/heyfood "$version" x86_64-unknown-linux-gnu dist-repeat
+          scripts/release/package-installer.sh \
+            target/release/heyfood-installer \
+            "$version" \
+            x86_64-unknown-linux-gnu \
+            dist-repeat
           cmp \
             "dist/heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz" \
             "dist-repeat/heyfood-v$version-x86_64-unknown-linux-gnu.tar.gz"
+          cmp \
+            "dist/heyfood-installer-v$version-x86_64-unknown-linux-gnu.tar.gz" \
+            "dist-repeat/heyfood-installer-v$version-x86_64-unknown-linux-gnu.tar.gz"
 
   protected-candidate-preflight:
     name: Protected candidate signing preflight
@@ -279,6 +293,23 @@ jobs:
     runs-on: ubuntu-22.04
     environment: native-release
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require the activated native-state release boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --locked --no-deps --format-version 1 |
+            jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
+          if [[ "$version" == "0.6.2" ]]; then
+            echo "v0.6.2 is immutable and has no native-state verifier or declaration assets; choose a reviewed native-state-capable release before protected qualification." >&2
+            exit 1
+          fi
+          grep -Fqx "readonly SUPPORTED_VERSION=\"$version\"" install.sh
+          grep -Fqx \
+            "readonly NATIVE_STATE_RELEASE_VERSION=\"$version\"" \
+            install.sh
       - name: Require every protected signing input
         shell: bash
         env:
@@ -307,6 +338,10 @@ jobs:
     needs: protected-candidate-preflight
     runs-on: ${{ matrix.runner }}
     environment: native-release
+    env:
+      # These signed bytes are the publication candidate. The tag workflow
+      # downloads this exact release-channel set and never rebuilds it.
+      HEYFOOD_DISTRIBUTION_CHANNEL: release
     permissions:
       attestations: write
       contents: read
@@ -348,7 +383,7 @@ jobs:
           rustup toolchain install 1.94.0 --profile minimal --no-self-update
           rustup target add "$TARGET" --toolchain 1.94.0
           test "$(rustc -vV | sed -n 's/^host: //p')" = "$TARGET"
-      - name: Build the exact protected candidate executable
+      - name: Build and cross-check the exact protected candidate executables
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
@@ -357,17 +392,36 @@ jobs:
           export CARGO_INCREMENTAL=0
           export SOURCE_DATE_EPOCH
           SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
-          cargo build --locked --release --package heyfood-bin --target "$TARGET"
+          cargo build --locked --release \
+            --package heyfood-bin \
+            --package heyfood-installer \
+            --target "$TARGET"
           binary="target/$TARGET/release/heyfood"
-          "$binary" agent describe |
-            jq -e \
-              --arg commit "$GITHUB_SHA" \
-              --arg tree "$(git rev-parse 'HEAD^{tree}')" \
-              '.build.distribution_channel == "candidate"
-               and .build.dirty == false
-               and .build.source_commit == $commit
-               and .build.source_tree == $tree'
-      - name: Sign and notarize the macOS executable
+          verifier="target/$TARGET/release/heyfood-installer"
+          version=$(cargo metadata --locked --no-deps --format-version 1 |
+            jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
+          test "$($binary --version)" = "heyfood $version"
+          test "$($verifier --version)" = "heyfood-installer $version"
+          "$binary" agent describe --schema-version 2 \
+            >candidate-agent-manifest.json
+          jq -e \
+            --arg commit "$GITHUB_SHA" \
+            --arg tree "$(git rev-parse 'HEAD^{tree}')" \
+            '.schema_version == 2
+             and .build.distribution_channel == "release"
+             and .build.dirty == false
+             and .build.source_commit == $commit
+             and .build.source_tree == $tree' \
+            candidate-agent-manifest.json
+          "$verifier" native-state-declaration "$version" \
+            >candidate-native-state.json
+          "$verifier" verify-native-state \
+            "$version" \
+            - \
+            - \
+            candidate-native-state.json \
+            candidate-agent-manifest.json
+      - name: Sign and notarize the macOS executables
         if: runner.os == 'macOS'
         shell: bash
         env:
@@ -377,7 +431,10 @@ jobs:
           HEYFOOD_APPLE_ID: ${{ secrets.APPLE_NOTARY_ACCOUNT }}
           HEYFOOD_APPLE_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
           HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
-        run: packaging/macos/sign-and-notarize.sh "target/$TARGET/release/heyfood"
+        run: |
+          packaging/macos/sign-and-notarize.sh "target/$TARGET/release/heyfood"
+          packaging/macos/sign-and-notarize.sh \
+            "target/$TARGET/release/heyfood-installer"
       - name: Package the protected macOS or Linux candidate
         shell: bash
         env:
@@ -389,10 +446,16 @@ jobs:
           mkdir -p candidate-dist candidate-evidence
           scripts/release/package.sh \
             "target/$TARGET/release/heyfood" "$version" "$TARGET" candidate-dist
+          scripts/release/package-installer.sh \
+            "target/$TARGET/release/heyfood-installer" \
+            "$version" \
+            "$TARGET" \
+            candidate-dist
           archive="heyfood-v$version-$TARGET.tar.gz"
+          verifier_archive="heyfood-installer-v$version-$TARGET.tar.gz"
           (
             cd candidate-dist
-            shasum -a 256 "$archive" >SHA256SUMS
+            shasum -a 256 "$archive" "$verifier_archive" >SHA256SUMS
           )
           {
             echo "HEYFOOD_SHOWCASE_ARCHIVE=$GITHUB_WORKSPACE/candidate-dist/$archive"
@@ -403,6 +466,7 @@ jobs:
             echo "HEYFOOD_SHOWCASE_CREDENTIAL_BACKEND=native"
             echo "HEYFOOD_SHOWCASE_SIGNED_CANDIDATE=true"
             echo "HEYFOOD_CANDIDATE_ARCHIVE=$GITHUB_WORKSPACE/candidate-dist/$archive"
+            echo "HEYFOOD_CANDIDATE_VERIFIER_ARCHIVE=$GITHUB_WORKSPACE/candidate-dist/$verifier_archive"
           } >>"$GITHUB_ENV"
       - name: Create an ephemeral macOS qualification keychain
         if: runner.os == 'macOS'
@@ -425,7 +489,9 @@ jobs:
         env:
           HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
           TARGET: ${{ matrix.target }}
-        run: scripts/release/smoke-archive.sh candidate-dist "$HEYFOOD_SHOWCASE_VERSION" "$TARGET"
+        run: >-
+          scripts/release/smoke-archive.sh candidate-dist
+          "$HEYFOOD_SHOWCASE_VERSION" "$TARGET" --native-state
       - name: Run the protected candidate matrix with native credentials
         if: runner.os != 'Linux'
         run: >-
@@ -464,10 +530,12 @@ jobs:
               status: "passed",
               credentials_absent_after_container_destruction: true
             }' >candidate-evidence/native-credential-cleanup.json
-      - name: Attest the exact protected candidate archive
+      - name: Attest the exact protected candidate archives
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: ${{ env.HEYFOOD_CANDIDATE_ARCHIVE }}
+          subject-path: |
+            ${{ env.HEYFOOD_CANDIDATE_ARCHIVE }}
+            ${{ env.HEYFOOD_CANDIDATE_VERIFIER_ARCHIVE }}
       - name: Upload protected candidate archive and qualification evidence
         if: ${{ always() && hashFiles('candidate-dist/**', 'candidate-evidence/**') != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -480,10 +548,12 @@ jobs:
           retention-days: 14
 
   protected-candidate-release-set:
-    name: Verify protected four-archive release set
+    name: Verify protected native-state release set
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.qualify_signed_candidate }}
     needs: protected-release-candidate
     runs-on: ubuntu-22.04
+    env:
+      HEYFOOD_DISTRIBUTION_CHANNEL: release
     permissions:
       attestations: write
       contents: read
@@ -509,17 +579,30 @@ jobs:
             x86_64-apple-darwin \
             x86_64-unknown-linux-gnu; do
             archive="heyfood-v$version-$target.tar.gz"
+            verifier_archive="heyfood-installer-v$version-$target.tar.gz"
             mapfile -t sources < <(find protected-download -type f -name "$archive")
             test "${#sources[@]}" -eq 1
             cp "${sources[0]}" "candidate-release/$archive"
+            mapfile -t verifier_sources < <(
+              find protected-download -type f -name "$verifier_archive"
+            )
+            test "${#verifier_sources[@]}" -eq 1
+            cp "${verifier_sources[0]}" "candidate-release/$verifier_archive"
           done
-          scripts/release/checksums.sh candidate-release "$version"
-          scripts/release/verify-assets.sh candidate-release "$version"
-      - name: Attest the protected complete-set manifest
+          scripts/release/checksums.sh \
+            candidate-release "$version" --native-state
+          scripts/release/verify-assets.sh \
+            candidate-release "$version" --native-state
+          test "$(find candidate-release -maxdepth 1 -type f | wc -l | tr -d '[:space:]')" -eq 10
+          test "$(wc -l <candidate-release/SHA256SUMS | tr -d '[:space:]')" -eq 9
+      - name: Attest every protected release asset
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: candidate-release/SHA256SUMS
-      - name: Upload the protected four-archive release set
+          subject-path: |
+            candidate-release/*.tar.gz
+            candidate-release/*.json
+            candidate-release/SHA256SUMS
+      - name: Upload the protected native-state release set
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: protected-candidate-release-set

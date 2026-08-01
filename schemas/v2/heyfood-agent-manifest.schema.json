@@ -1,0 +1,667 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v2/heyfood-agent-manifest.schema.json",
+  "title": "heyfood agent manifest v2",
+  "description": "Network-free self-description for one exact installed heyfood artifact.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "product",
+    "binary_version",
+    "build",
+    "compatibility",
+    "automation_surfaces",
+    "native_state_compatibility",
+    "limits",
+    "capabilities",
+    "commands"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "product": {
+      "const": "heyfood"
+    },
+    "binary_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "build": {
+      "$ref": "#/$defs/build"
+    },
+    "compatibility": {
+      "$ref": "#/$defs/compatibility"
+    },
+    "automation_surfaces": {
+      "$ref": "#/$defs/automation_surfaces"
+    },
+    "native_state_compatibility": {
+      "$ref": "#/$defs/native_state_compatibility"
+    },
+    "limits": {
+      "$ref": "#/$defs/limits"
+    },
+    "capabilities": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/capability"
+      }
+    },
+    "commands": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/command"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "git_object": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_commit",
+        "source_tree",
+        "dirty",
+        "toolchain",
+        "distribution_channel",
+        "target",
+        "features",
+        "build_input_digest_sha256"
+      ],
+      "properties": {
+        "source_commit": {
+          "$ref": "#/$defs/git_object"
+        },
+        "source_tree": {
+          "$ref": "#/$defs/git_object"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "toolchain": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "distribution_channel": {
+          "type": "string",
+          "enum": [
+            "development",
+            "candidate",
+            "release"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "features": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "build_input_digest_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "guide_version",
+        "mcp_protocol_version",
+        "minimum_skill_manifest_version",
+        "maximum_skill_manifest_version",
+        "additive_optional_fields"
+      ],
+      "properties": {
+        "guide_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "mcp_protocol_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "minimum_skill_manifest_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "maximum_skill_manifest_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "additive_optional_fields": {
+          "type": "boolean",
+          "const": false
+        }
+      }
+    },
+    "automation_surfaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "one_shot_json",
+        "mcp_stdio",
+        "tui_automation"
+      ],
+      "properties": {
+        "one_shot_json": {
+          "enum": [
+            "active",
+            "deferred",
+            "unsupported"
+          ]
+        },
+        "mcp_stdio": {
+          "enum": [
+            "active",
+            "deferred",
+            "unsupported"
+          ]
+        },
+        "tui_automation": {
+          "const": "unsupported"
+        }
+      }
+    },
+    "native_state_compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binary_version",
+        "maximum_native_state_version",
+        "native_state_capabilities",
+        "schema_version"
+      ],
+      "properties": {
+        "binary_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "maximum_native_state_version": {
+          "const": 2
+        },
+        "native_state_capabilities": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "household-account-slot-v1"
+            },
+            {
+              "const": "household-lifecycle-lock-v1"
+            },
+            {
+              "const": "household-migration-guard-v1"
+            },
+            {
+              "const": "household-teardown-journal-v1"
+            }
+          ],
+          "items": false,
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "schema_version": {
+          "const": 1
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest_bytes",
+        "schema_bytes",
+        "mcp_inbound_frame_bytes",
+        "mcp_tool_arguments_bytes",
+        "mcp_structured_result_bytes",
+        "sse_line_bytes",
+        "sse_event_bytes",
+        "stream_event_count",
+        "stream_total_bytes",
+        "outstanding_requests",
+        "remote_in_flight",
+        "queued_requests",
+        "page_records"
+      ],
+      "properties": {
+        "manifest_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "schema_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "mcp_inbound_frame_bytes": {
+          "const": 1048576
+        },
+        "mcp_tool_arguments_bytes": {
+          "const": 1048576
+        },
+        "mcp_structured_result_bytes": {
+          "const": 4194304
+        },
+        "sse_line_bytes": {
+          "const": 65536
+        },
+        "sse_event_bytes": {
+          "const": 1048576
+        },
+        "stream_event_count": {
+          "const": 4096
+        },
+        "stream_total_bytes": {
+          "const": 4194304
+        },
+        "outstanding_requests": {
+          "const": 8
+        },
+        "remote_in_flight": {
+          "const": 1
+        },
+        "queued_requests": {
+          "const": 7
+        },
+        "page_records": {
+          "const": 100
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "contract_version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]{0,127}$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "deferred",
+            "unavailable"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "contract_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 64
+        }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "purpose",
+        "status",
+        "audience",
+        "input_channel",
+        "output_family",
+        "output_schema_id",
+        "output_schema_sha256",
+        "error_schema_id",
+        "error_schema_sha256",
+        "exit_behavior",
+        "operation_class",
+        "network",
+        "product_state_mutation",
+        "credential_side_effect_possible",
+        "required_scopes",
+        "authorization_upgrade_command",
+        "retry_class",
+        "reconciliation_command",
+        "human_confirmation",
+        "interactivity",
+        "browser_handoff",
+        "examples"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*( [a-z][a-z0-9-]*)*$",
+          "maxLength": 256
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "deferred",
+            "unavailable"
+          ]
+        },
+        "audience": {
+          "type": "string",
+          "enum": [
+            "agent_safe",
+            "human_terminal_only",
+            "agent_unsupported"
+          ]
+        },
+        "input_channel": {
+          "type": "string",
+          "enum": [
+            "none",
+            "arguments",
+            "json_stdin",
+            "utf8_stdin",
+            "arguments_or_utf8_stdin",
+            "attached_terminal",
+            "arguments_or_utf8_stdin_plus_controlling_terminal",
+            "arguments_plus_controlling_terminal",
+            "json_stdin_plus_controlling_terminal",
+            "mcp_stdio"
+          ]
+        },
+        "output_family": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "output_schema_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256
+        },
+        "output_schema_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_schema_id": {
+          "const": "https://hey.food/schemas/v1/heyfood-cli-error.schema.json"
+        },
+        "error_schema_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "exit_behavior": {
+          "type": "string",
+          "enum": [
+            "one_json_value",
+            "raw_markdown_or_one_json_value",
+            "human_terminal",
+            "shell_source",
+            "typed_rejection",
+            "long_lived_json_rpc_frames"
+          ]
+        },
+        "operation_class": {
+          "type": "string",
+          "enum": [
+            "local_read",
+            "remote_read",
+            "prepare",
+            "confirm",
+            "cancel",
+            "mutation",
+            "interactive",
+            "authorization",
+            "unavailable"
+          ]
+        },
+        "network": {
+          "type": "boolean"
+        },
+        "product_state_mutation": {
+          "type": "boolean"
+        },
+        "credential_side_effect_possible": {
+          "type": "boolean"
+        },
+        "required_scopes": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9:_-]{0,127}$"
+          }
+        },
+        "authorization_upgrade_command": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256
+        },
+        "retry_class": {
+          "type": "string",
+          "enum": [
+            "not_applicable",
+            "safe_read",
+            "no_blind_retry",
+            "reconcile_before_retry",
+            "tool_specific"
+          ]
+        },
+        "reconciliation_command": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256
+        },
+        "human_confirmation": {
+          "type": "string",
+          "enum": [
+            "none",
+            "attached_terminal",
+            "heyfood_out_of_band"
+          ]
+        },
+        "interactivity": {
+          "type": "string",
+          "enum": [
+            "none",
+            "attached_terminal",
+            "controlling_terminal",
+            "independent_browser_or_device"
+          ]
+        },
+        "browser_handoff": {
+          "type": "string",
+          "enum": [
+            "none",
+            "optional",
+            "required"
+          ]
+        },
+        "examples": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "audience": {
+                "const": "agent_safe"
+              }
+            },
+            "required": [
+              "audience"
+            ]
+          },
+          "then": {
+            "properties": {
+              "product_state_mutation": {
+                "const": false
+              },
+              "human_confirmation": {
+                "const": "none"
+              },
+              "interactivity": {
+                "const": "none"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "product_state_mutation": {
+                "const": true
+              }
+            },
+            "required": [
+              "product_state_mutation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "audience": {
+                "enum": [
+                  "human_terminal_only",
+                  "agent_unsupported"
+                ]
+              },
+              "retry_class": {
+                "enum": [
+                  "no_blind_retry",
+                  "reconcile_before_retry"
+                ]
+              },
+              "human_confirmation": {
+                "enum": [
+                  "attached_terminal",
+                  "heyfood_out_of_band"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "audience": {
+                "const": "human_terminal_only"
+              }
+            },
+            "required": [
+              "audience"
+            ]
+          },
+          "then": {
+            "properties": {
+              "interactivity": {
+                "enum": [
+                  "attached_terminal",
+                  "controlling_terminal",
+                  "independent_browser_or_device"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "retry_class": {
+                "const": "safe_read"
+              }
+            },
+            "required": [
+              "retry_class"
+            ]
+          },
+          "then": {
+            "properties": {
+              "product_state_mutation": {
+                "const": false
+              },
+              "operation_class": {
+                "enum": [
+                  "local_read",
+                  "remote_read"
+                ]
+              }
+            }
+          }
+        }
+        ,
+        {
+          "if": {
+            "properties": {
+              "output_schema_id": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "output_schema_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "output_schema_sha256": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "output_schema_sha256": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

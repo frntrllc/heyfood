@@ -24,11 +24,13 @@ completion    print shell completion syntax
 
 ```bash
 heyfood agent describe
+heyfood agent describe --schema-version 2
 heyfood agent guide --format markdown
 heyfood agent guide --format markdown --safety
 heyfood agent schema --list
 heyfood agent schema manifest
 heyfood agent doctor
+heyfood agent doctor --schema-version 2
 heyfood agent setup --target codex|claude|all --scope user|project \
   [--project-root /absolute/path] [--dry-run|--apply] \
   [--plan-sha256 REVIEWED_SHA256] [--replace]
@@ -40,6 +42,10 @@ heyfood agent uninstall --target codex|claude|all --scope user|project \
 These commands do not read credentials, contact hello.food, mutate product
 state, or start the TUI. Schema lookup accepts only a public name or exact
 identifier from `--list`; unknown names return a typed runtime error.
+
+Discovery schema v1 is the default retained for installed-skill compatibility.
+Schema v2 must be requested explicitly and adds native-state compatibility
+metadata used by the v0.6.3 installer and release verifier.
 
 `agent setup` and `agent uninstall` are separate opt-in user configuration
 operations. They default to dry-run, require `--apply` to change state,
@@ -89,7 +95,9 @@ heyfood ask --lat 35.28 --lng -120.66 "What can I order nearby?"
 ## Human-only mutation authority
 
 These direct CLI routes require a fresh decision on an attached controlling
-terminal before credential access or network dispatch:
+terminal before network dispatch or mutation. Except for local-only native
+Household target qualification for `log`, review also precedes credential
+access:
 
 | Command family | Required phrase |
 |---|---|
@@ -102,8 +110,21 @@ terminal before credential access or network dispatch:
 
 The controlling terminal is opened independently from stdin and stdout.
 Arguments and redirected stdin carry data only; they never count as consent.
-The `log` review shows the meal, meal type, and exact `--for` household
-selector before `LOG` is accepted.
+The `log` review shows the meal, meal type, and privacy-safe resolved canonical
+Household label before `LOG` is accepted. Stable member IDs and reversible
+identity tokens remain hidden from human output. For an `Everyone` target, the
+review also states that the single meal is filed to the owner using the owner's
+canonical label. An omitted selector resolves the strictly valid saved active
+scope exactly once from the retained native Household revision, and the frozen
+resolved identity is dispatched after review without resolving the selector
+again. Native target qualification may read account-bound authorization and key
+material locally to unlock the encrypted vault and retain that exact revision
+under a read lock. It performs no provider or network request and no mutation
+before `LOG`; credentials are dropped before the prompt and reloaded only after
+approval. Legacy compatibility preview remains credential-free before review.
+If only an uninspected mixed legacy source is visible, or the native snapshot
+reports skipped Python keyring data, only explicit self can reach review;
+omitted, member, and Everyone targets fail closed before credential access.
 Consequently these commands fail with `human_terminal_required` in unattended
 processes even when an automation host allocates ordinary pipes. Agents must
 not drive the prompt through a PTY or use these human-only commands as a
@@ -141,6 +162,10 @@ heyfood grocery state --list-id UUID --version VERSION ITEM purchased
 heyfood grocery export UUID --format markdown [--out FILE [--overwrite]]
 heyfood grocery confirm --decision accept --proposal-stdin < proposal.json
 ```
+
+Omitting `--out` on `grocery export` is supported only with `--json`. Human
+output requires an owner-only export file and refuses before the export request
+is sent.
 
 Mutation commands prepare a proposal and do not commit it. The human must type
 `PREPARE` before the capability-bearing proposal is emitted. Confirmation
@@ -203,8 +228,12 @@ the same TUI process.
 /grocery             open the capability-gated active Grocery list
 /watch               open recurring Menu Watch subscriptions
 /profile             read consent and synchronized dietary profile state
-/household           show account-bound local household context
-/for MEMBER|everyone change household scope and reset conversation continuity
+/household           show account-bound encrypted local household context
+/household add       add one local member and complete declared profile
+/onboard --for MEMBER
+                     onboard one eligible existing local member
+/for me|MEMBER|everyone
+                     persist household scope and reset conversation continuity
 /location            show account-bound local location context
 /status              check service, profile, optional scopes, and voice readiness
 /voice               start/stop native capture in a qualified native-audio artifact
@@ -214,19 +243,26 @@ the same TUI process.
 /exit                leave the TUI
 ```
 
-The panels are read-only and cancellable. `/voice`, Ctrl+Space, and F8 use the
-same bounded capture/transcription/review state machine when the artifact
+Read panels are cancellable. `/household add` and `/onboard --for …` are the
+human-attached-TUI exceptions: they commit one complete version-1 declared
+member profile to the local encrypted repository only after explicit review.
+`/for me`, `/for <member>`, and `/for everyone` persist local scope across
+restart. Ordinary hosted turns evaluate the selected member or Everyone from
+an exact leased projection of the local declared profiles without creating
+remote member profiles or sync consent. `/voice`, Ctrl+Space, and F8 use
+the same bounded capture/transcription/review state machine when the artifact
 contains native audio support; unavailable artifacts and insufficient scopes
-fail before microphone access. Dietary onboarding, interactive Grocery
-confirmation, and the bounded installed-artifact core matrix remain active
-release work. Item-level Menu Watch diff detail, real-hardware voice
-qualification, full parity, and the complete twelve-stage showcase are
+fail before microphone access. Item-level Menu Watch diff detail, real-hardware
+voice qualification, full parity, hosted household sync/learned graph/health,
+cross-device household state, and the complete twelve-stage showcase are
 post-`v0.6.3` conformance work, not release gates.
 
 ## Unavailable compatibility topology
 
 Health integrations, profile editing, restaurant search, recommendation, menu,
-recipe, household management, voice device configuration, diagnostics, and
-account management are not active Rust commands. Some names remain hidden
-for migration topology only. Health returns `capability_deferred`; unfinished
-compatibility topology returns `command_not_available`.
+recipe, top-level one-shot household management, voice device configuration,
+diagnostics, and account management are not active Rust process commands. The
+local household lifecycle is available only in the attached TUI described
+above. Some names remain hidden for migration topology only. Health returns
+`capability_deferred`; unfinished compatibility topology returns
+`command_not_available`.

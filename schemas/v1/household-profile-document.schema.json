@@ -1,0 +1,420 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/household-profile-document.schema.json",
+  "title": "hey.food native household profile document v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "declared_profile",
+    "legacy_source_document",
+    "legacy_source_digest",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "declared_profile": {
+      "oneOf": [
+        { "$ref": "#/$defs/declaredProfile" },
+        { "type": "null" }
+      ]
+    },
+    "legacy_source_document": {
+      "oneOf": [
+        { "$ref": "#/$defs/legacyProjection" },
+        { "type": "null" }
+      ]
+    },
+    "legacy_source_digest": {
+      "oneOf": [
+        { "$ref": "#/$defs/digest" },
+        { "type": "null" }
+      ]
+    },
+    "provenance": {
+      "enum": ["native_declared", "legacy_local_projection"]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "provenance": { "const": "native_declared" } },
+        "required": ["provenance"]
+      },
+      "then": {
+        "properties": {
+          "declared_profile": { "$ref": "#/$defs/declaredProfile" },
+          "legacy_source_document": { "type": "null" },
+          "legacy_source_digest": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "provenance": { "const": "legacy_local_projection" } },
+        "required": ["provenance"]
+      },
+      "then": {
+        "properties": {
+          "declared_profile": { "type": "null" },
+          "legacy_source_document": { "$ref": "#/$defs/legacyProjection" },
+          "legacy_source_digest": { "$ref": "#/$defs/digest" }
+        }
+      }
+    }
+  ],
+  "x-heyfood-canonical-byte-limit": 262144,
+  "x-heyfood-max-json-depth": 8,
+  "x-heyfood-max-json-nodes": 65536,
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "boundedString": {
+      "type": "string",
+      "maxLength": 2048,
+      "x-heyfood-max-utf8-bytes": 2048
+    },
+    "boundedStringArray": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/boundedString" }
+    },
+    "dietStyleIds": {
+      "type": "array",
+      "maxItems": 24,
+      "items": {
+        "enum": [
+          "gluten_free",
+          "dairy_free",
+          "vegetarian",
+          "vegan",
+          "keto",
+          "pescatarian",
+          "paleo",
+          "whole30",
+          "low_fodmap",
+          "mediterranean",
+          "low_carb",
+          "low_sodium",
+          "low_fat",
+          "high_protein",
+          "raw_food",
+          "carnivore",
+          "flexitarian",
+          "macrobiotic",
+          "anti_inflammatory",
+          "aip",
+          "scd",
+          "dash",
+          "halal",
+          "kosher"
+        ]
+      }
+    },
+    "allergyIds": {
+      "type": "array",
+      "maxItems": 28,
+      "items": {
+        "enum": [
+          "dairy",
+          "eggs",
+          "tree_nuts",
+          "peanuts",
+          "shellfish",
+          "fish",
+          "wheat",
+          "soy",
+          "sesame",
+          "mustard",
+          "celery",
+          "lupin",
+          "mollusks",
+          "sulfites",
+          "corn",
+          "nightshades",
+          "legumes",
+          "coconut",
+          "latex_fruit",
+          "stone_fruits",
+          "citrus",
+          "gluten_sensitivity",
+          "lactose",
+          "caffeine",
+          "alcohol",
+          "artificial_sweeteners",
+          "msg",
+          "food_colorings"
+        ]
+      }
+    },
+    "healthConditionIds": {
+      "type": "array",
+      "maxItems": 31,
+      "items": {
+        "enum": [
+          "celiac",
+          "diabetes_type_1",
+          "diabetes_type_2",
+          "ibs",
+          "crohns",
+          "gastroparesis",
+          "gerd",
+          "food_allergies_general",
+          "colitis",
+          "diverticulitis",
+          "eoe",
+          "cvs",
+          "ckd",
+          "pku",
+          "alpha_gal",
+          "mcas",
+          "histamine_intolerance",
+          "fructose_malabsorption",
+          "sibo",
+          "pancreatitis",
+          "short_bowel",
+          "dumping_syndrome",
+          "gallbladder",
+          "liver_disease",
+          "eating_disorder_recovery",
+          "gestational_diabetes",
+          "hyperemesis",
+          "thyroid",
+          "hypertension",
+          "arfid",
+          "autism_sensory"
+        ]
+      }
+    },
+    "cuisineIds": {
+      "type": "array",
+      "maxItems": 28,
+      "items": {
+        "enum": [
+          "mexican",
+          "italian",
+          "japanese",
+          "thai",
+          "indian",
+          "mediterranean",
+          "korean",
+          "american",
+          "chinese",
+          "vietnamese",
+          "ethiopian",
+          "french",
+          "greek",
+          "middle_eastern",
+          "spanish",
+          "brazilian",
+          "peruvian",
+          "turkish",
+          "caribbean",
+          "southern",
+          "cajun_creole",
+          "german",
+          "british",
+          "filipino",
+          "malaysian",
+          "indonesian",
+          "hawaiian",
+          "georgian"
+        ]
+      }
+    },
+    "custom40Array": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 40,
+        "x-heyfood-max-utf8-bytes": 160,
+        "x-heyfood-not-unicode-whitespace-only": true,
+        "x-heyfood-no-controls": true
+      }
+    },
+    "custom60Array": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 60,
+        "x-heyfood-max-utf8-bytes": 240,
+        "x-heyfood-not-unicode-whitespace-only": true,
+        "x-heyfood-no-controls": true
+      }
+    },
+    "declaredProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "diet_style_ids",
+        "custom_diet_styles",
+        "allergy_ids",
+        "custom_restrictions",
+        "health_condition_ids",
+        "custom_health_conditions",
+        "avoid_ingredients",
+        "activity_level",
+        "cuisine_preferences",
+        "custom_cuisines",
+        "severity_level",
+        "notes"
+      ],
+      "properties": {
+        "diet_style_ids": { "$ref": "#/$defs/dietStyleIds" },
+        "custom_diet_styles": { "$ref": "#/$defs/custom40Array" },
+        "allergy_ids": { "$ref": "#/$defs/allergyIds" },
+        "custom_restrictions": { "$ref": "#/$defs/custom60Array" },
+        "health_condition_ids": { "$ref": "#/$defs/healthConditionIds" },
+        "custom_health_conditions": { "$ref": "#/$defs/custom60Array" },
+        "avoid_ingredients": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "x-heyfood-max-utf8-bytes": 160,
+            "x-heyfood-not-unicode-whitespace-only": true,
+            "x-heyfood-no-controls": true
+          }
+        },
+        "activity_level": {
+          "oneOf": [
+            {
+              "enum": [
+                "very_active",
+                "moderate",
+                "light",
+                "sedentary",
+                "prefer_not_to_say"
+              ]
+            },
+            { "type": "null" }
+          ]
+        },
+        "cuisine_preferences": { "$ref": "#/$defs/cuisineIds" },
+        "custom_cuisines": { "$ref": "#/$defs/custom40Array" },
+        "severity_level": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1, "maximum": 5 },
+            { "type": "null" }
+          ]
+        },
+        "notes": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 280,
+              "x-heyfood-max-utf8-bytes": 1120,
+              "x-heyfood-not-unicode-whitespace-only": true,
+              "x-heyfood-no-controls": true
+            },
+            { "type": "null" }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "severity_level": { "type": "integer" }
+            },
+            "required": ["severity_level"]
+          },
+          "then": {
+            "properties": {
+              "health_condition_ids": { "minItems": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "stringMap": {
+      "type": "object",
+      "maxProperties": 128,
+      "additionalProperties": { "$ref": "#/$defs/boundedString" }
+    },
+    "severityMap": {
+      "type": "object",
+      "maxProperties": 128,
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 5
+      }
+    },
+    "legacyProjection": {
+      "type": "object",
+      "maxProperties": 128,
+      "additionalProperties": true,
+      "x-heyfood-recursive-number-domain": "safe_integer_or_finite_binary64",
+      "properties": {
+        "preferences": { "$ref": "#/$defs/boundedStringArray" },
+        "restrictions": { "$ref": "#/$defs/boundedStringArray" },
+        "avoid_ingredients": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 40,
+            "x-heyfood-max-utf8-bytes": 160
+          }
+        },
+        "medical_constraints": { "$ref": "#/$defs/boundedStringArray" },
+        "cuisine_preferences": { "$ref": "#/$defs/boundedStringArray" },
+        "health_condition_ids": { "$ref": "#/$defs/boundedStringArray" },
+        "custom_health_conditions": { "$ref": "#/$defs/custom60Array" },
+        "custom_diet_styles": { "$ref": "#/$defs/custom40Array" },
+        "custom_restrictions": { "$ref": "#/$defs/custom60Array" },
+        "custom_cuisines": { "$ref": "#/$defs/custom40Array" },
+        "diet_style_ids": { "$ref": "#/$defs/boundedStringArray" },
+        "allergy_ids": { "$ref": "#/$defs/boundedStringArray" },
+        "additional_restriction_ids": { "$ref": "#/$defs/boundedStringArray" },
+        "additional_medical_constraints": { "$ref": "#/$defs/boundedStringArray" },
+        "preference_strictness": { "$ref": "#/$defs/stringMap" },
+        "restriction_handling": { "$ref": "#/$defs/stringMap" },
+        "condition_severity_levels": { "$ref": "#/$defs/severityMap" },
+        "notes": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 280,
+              "x-heyfood-max-utf8-bytes": 1120
+            },
+            { "type": "null" }
+          ]
+        },
+        "medical_condition_id": {
+          "oneOf": [
+            { "$ref": "#/$defs/boundedString" },
+            { "type": "null" }
+          ]
+        },
+        "activity_level": {
+          "oneOf": [
+            { "$ref": "#/$defs/boundedString" },
+            { "type": "null" }
+          ]
+        },
+        "severity_level": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1, "maximum": 5 },
+            { "type": "null" }
+          ]
+        },
+        "selection_provenance_version": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      }
+    }
+  }
+}

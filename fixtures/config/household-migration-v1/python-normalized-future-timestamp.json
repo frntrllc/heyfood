@@ -1,0 +1,22 @@
+{
+  "account_user_id": "acct-migration-owner",
+  "credential_store": "file",
+  "first_name": "Owner",
+  "household": {
+    "version": 1,
+    "owner_id": "_self",
+    "active_scope": "_self",
+    "members": [
+      {
+        "id": "_self",
+        "name": "Owner",
+        "relationship": "self",
+        "is_owner": true,
+        "archived": false,
+        "profile_synced": false
+      }
+    ],
+    "applied_mutation_ids": [],
+    "updated_at": "2026-07-31T00:00:00Z"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "account_user_id": "acct-migration-owner",
+  "credential_store": "file",
+  "first_name": "Owner",
+  "household": {
+    "version": 4,
+    "active_scope": "fixture-member",
+    "members": [
+      {
+        "id": "fixture-member",
+        "name": "Fixture Member"
+      }
+    ]
+  },
+  "household_local_profiles": {
+    "fixture-member": {
+      "restrictions": [
+        "dairy"
+      ]
+    }
+  },
+  "household_profile_outbox": {
+    "fixture-mutation": {
+      "member_id": "fixture-member",
+      "repair": true
+    }
+  }
+}

@@ -8,6 +8,10 @@ invocation opens the same native TUI as `heyfood chat`.
 Human rendering may improve between compatible releases; machine-facing changes
 follow the compatibility policy below.
 
+The supported `v0.6.3` contract includes local native household roster
+management and complete declared-profile onboarding for members. Persistent Me/member/Everyone scope selection
+is stored in an account-bound encrypted repository.
+
 ## Availability boundary
 
 The following commands perform native product work:
@@ -17,9 +21,9 @@ The following commands perform native product work:
 | `agent` | Describes the exact installed executable, prints its embedded integration/safety guides and public schemas, and runs bounded local diagnostics without credentials or network access. |
 | `register` | Explicitly starts create-account device authorization, exchanges the approved grant, validates the response contract, and persists the complete native session. |
 | `login` | Connects an existing account on a fresh machine; on a connected machine, explicitly signs in again and atomically replaces the native grant with the canonical supported scope set. Refresh is never used to change authority. |
-| `logout` | Resolves and revokes the current channel link, revokes the current device, revokes the app session last, and then clears the exact account-bound local credential pair. Remote failures never prevent local teardown. |
-| `chat` | Opens the authenticated interactive Rust TUI. |
-| `onboard` | Opens the Rust TUI directly in guided dietary-profile onboarding. |
+| `logout` | Resolves and revokes the current channel link, revokes the current device, revokes the app session last, and then clears the exact account-bound local credential pair plus the encrypted household key and vault artifacts. Remote failures never prevent resumable local teardown. |
+| `chat` | Opens the authenticated interactive Rust TUI, including local native-household management when the account-bound encrypted repository is enabled. |
+| `onboard` | Opens the Rust TUI directly in guided owner dietary-profile onboarding. Member onboarding is available only inside the attached TUI. |
 | `ask` | Runs one hosted-agent turn. |
 | `reply` | Runs one hosted-agent turn and requires `--conversation-id`. |
 | `log` | Sends meal-log text through the hosted-agent turn endpoint. |
@@ -34,6 +38,12 @@ authoritative allowlist: internal approval/commit schemas are deliberately not
 exposed. `agent doctor` reports only bounded build/contract facts and never
 prints a user-specific executable or configuration path.
 
+Bare `agent`, `agent describe`, and `agent doctor` retain their closed schema-v1
+outputs for compatibility with Agent Skills installed by v0.6.2. The explicit
+`agent describe --schema-version 2` and `agent doctor --schema-version 2`
+forms expose the v0.6.3 native-state-aware contracts. Unsupported schema
+versions fail during argument parsing before credentials or network access.
+
 Health integrations are deferred from the supported `v0.6.3` contract.
 `health` is hidden from root help and generated shell completion, `/health` is
 absent from the TUI command registry, and new grants do not request
@@ -42,27 +52,84 @@ absent from the TUI command registry, and new grants do not request
 provider-neutral types, transports, and frozen fixtures are not a support claim
 and require no additional implementation or production canary for this release.
 
+Native household management is a human-attached-TUI surface. In
+`NativeEnabled` mode, `/household`, `/household add`,
+`/onboard --for <exact member ID or exact display name>`, `/for me`,
+`/for <exact member ID or exact display name>`, and `/for everyone` operate on
+the live account-bound encrypted repository. Adding a member atomically saves
+the roster entry, the complete version-1 declared dietary profile, and the
+selected member scope. Existing active members with an incomplete or local
+profile can complete the same questionnaire. Duplicate names require an
+explicit stable-ID-bound choice; archived, unknown, incomplete, conflicted, or
+otherwise ineligible targets fail closed.
+
+Member profiles and member/Everyone scope remain encrypted and local to this
+device. They create no member profile-sync consent, remote member profile, or
+non-owner outbox entry. For an ordinary hosted turn, the client acquires an
+exact revision-bound read lease and sends only the selected declared-profile
+projection as transient request context. Member scope evaluates that member;
+Everyone scope evaluates the owner and every eligible active member. The
+client does not set the top-level server-synced `household_scope` for this
+request-first path, so an unsynced local member is never misresolved as a
+remote member ID. `/for me` returns to the owner context.
+
+“Dietary graph” support in this slice means only the complete declared local
+profile used for these turns. Learned preferences, history, goals,
+health/fitness data, cross-device roster sync, remote member profile sync, and
+remote member erasure remain deferred.
+
+Legacy compatibility and rollback/repair modes remain read-only and never
+advertise an enabled add action. Household mutations are not exposed through
+one-shot JSON, agent manifests, MCP, redirected stdin, or process arguments.
+Edit, archive, restore, and permanent member erasure are not part of this
+slice.
+
 `ask`, `reply`, `log`, and `item` accept positional UTF-8 text, an optional
 `--conversation-id`, and optional paired `--latitude`/`--longitude` values. If
 positional text is omitted and stdin is not a terminal, the command reads the
 prompt from stdin. `reply` fails locally when `--conversation-id` is absent.
 
 Direct one-shot `log`, Grocery proposal preparation/confirmation, and Menu
-Watch creation/removal are human-terminal-only commands. Before credentials
-are read or a network request is dispatched, the executable opens the
-controlling terminal independently of stdin/stdout, renders terminal-safe
-review details, and requires the command-specific phrase `LOG`, `PREPARE`,
-`ACCEPT`, `CANCEL`, `CREATE`, or `REMOVE`. Missing terminal, EOF, an I/O error,
-or any other response fails closed. Redirected stdin may carry meal or Grocery
-proposal data, and JSON stdout remains exactly one value; neither channel
-supplies semantic authority. The direct CLI routes are not agent-safe
-fallbacks. `--no-input` rejects these routes before opening a terminal.
+Watch creation/removal are human-terminal-only commands. Before a network
+request or mutation, the executable opens the controlling terminal
+independently of stdin/stdout, renders terminal-safe review details, and
+requires the command-specific phrase `LOG`, `PREPARE`, `ACCEPT`, `CANCEL`,
+`CREATE`, or `REMOVE`. Except for the local-only native Household target
+qualification described below, review also precedes credential access. Missing
+terminal, EOF, an I/O error, or any other response fails closed. Redirected
+stdin may carry meal or Grocery proposal data, and JSON stdout remains exactly
+one value; neither channel supplies semantic authority. The direct CLI routes
+are not agent-safe fallbacks. `--no-input` rejects these routes before opening a
+terminal.
 The review is the submitted intent, not a summary: meal logging includes the
-meal, type, and `--for` household selector; Menu Watch creation includes every
-schedule/source/notification field and `--confirm-menu-url`; Grocery
+meal, type, and privacy-safe resolved canonical Household label. Stable member
+IDs and reversible identity tokens remain hidden from human output. For an
+`Everyone` target, the review also states that the single meal is filed to the
+owner using the owner's canonical label. In native Household mode, an omitted
+`--for` uses the strictly validated active scope from the exact retained native
+Household revision; execution consumes that frozen identity after `LOG` and
+does not resolve the selector again. Menu Watch creation includes
+every schedule/source/notification field and `--confirm-menu-url`; Grocery
 confirmation includes confirmation ID, operation, expiry, the complete
 structured preview, and every frozen precondition. Confirmation tokens and
 idempotency authority remain hidden.
+
+Native Household target qualification may perform a local-only read of the
+account-bound authorization and key material needed to unlock the encrypted
+vault and retain the exact revision under a read lock. It performs no provider
+or network request and no mutation before `LOG`; the credentials are dropped
+before the review prompt and reloaded only after approval. The legacy
+compatibility preview remains credential-free before review.
+
+Before `LOG`, the executable may stat the known mixed Python configuration
+locators but never opens, hashes, or parses their bytes. If a mixed source is
+visible without a complete credential-elided native snapshot, or the snapshot
+reports that Python keyring data was not read, Household state is protected:
+only an explicit self selector may be reviewed. Omitted, member, and Everyone
+targets fail locally until authenticated migration can reconcile that source.
+Malformed or duplicate roster identity and a missing, unknown, aliased, or
+archived active scope fail closed rather than being dropped, rewritten, or
+changed to self.
 
 Existing credentials missing a command's required scope fail locally with
 `authorization_scope_upgrade_required` and direct the user to `heyfood login`.
@@ -72,17 +139,21 @@ blocks use if the final two-store replacement cannot complete. The replacement
 may add Grocery or Menu Watch authority while removing scopes for deferred
 capabilities such as Health.
 
-`logout` is an explicit, idempotent authorization teardown. It performs no
-automatic mutation retries. A channel-link lookup uses channel authority;
+`logout` is an explicit, idempotent authorization and account-local household
+teardown. It performs no automatic mutation retries. A channel-link lookup
+uses channel authority;
 link, device, and session revocation use the current app session, with session
 revocation last. HTTP 404 is success-equivalent for these identity-bound
 deletes. Local account-bound credentials are cleared even if remote cleanup
-fails or is canceled. The two local stores are committed under a durable
-`account_logout_pending` marker so interruption can be resumed without
-deleting a concurrently replaced account. Human success is `Logged out.`; a
-partial remote outcome is stated explicitly. JSON includes `remote_complete`,
-per-step attempted/ok/uncertainty fields, and
-`local_credentials_cleared`, but never tokens or raw server errors.
+fails or is canceled. The two authorization stores are committed under a
+durable `account_logout_pending` marker so interruption can be resumed without
+deleting a concurrently replaced account. The native teardown journal also
+removes the exact account household key and encrypted vault artifacts while
+preserving unrelated non-credential data. Human success is `Logged out.`; a
+partial remote or local outcome is stated explicitly. JSON includes
+`remote_complete`, per-step attempted/ok/uncertainty fields, and
+`local_credentials_cleared`, but never tokens, household content, or raw server
+errors.
 
 Grocery reads include `grocery show` (compatibility alias `list`) and
 `grocery exclusions`.
@@ -96,7 +167,11 @@ LIST_ID --out FILE` creates an owner-only file exclusively by default;
 `--overwrite` opts into same-directory atomic replacement. Targets and direct
 parent directories that are symlinks or Windows reparse points are rejected,
 temporary files are removed on pre-commit failure, and export contents never
-enter diagnostics. Windows installs the protected single-owner DACL in the
+enter diagnostics. Human output requires `--out`; without it the command
+refuses before writing private Household annotations to the terminal. In
+machine mode, text and Markdown exports are wrapped as one JSON object carrying
+`format` and exact `content`, preserving the global one-value invariant.
+Windows installs the protected single-owner DACL in the
 creation call, publishes by the still-open file handle without delete sharing,
 and verifies the final ACL and non-reparse identity before success.
 Conversational Grocery proposals use the C3 item-list card in the TUI: `y`

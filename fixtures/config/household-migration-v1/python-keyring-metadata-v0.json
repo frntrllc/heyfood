@@ -1,0 +1,5 @@
+{
+  "account_user_id": "acct-migration-owner",
+  "credential_store": "keyring",
+  "first_name": "Owner"
+}

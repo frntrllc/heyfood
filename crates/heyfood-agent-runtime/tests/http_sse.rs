@@ -710,6 +710,7 @@ async fn conversational_confirmation_uses_the_frozen_confirm_xor_query_shape() {
             })
         );
         assert_eq!(body["conversation_id"], "conversation-grocery");
+        assert!(body.get("household_scope").is_none());
         let stream = b"event: result\ndata: {\"conversation_id\":\"conversation-grocery\",\"text\":\"Grocery list updated.\",\"structured\":{\"type\":\"general_response\"}}\n\nevent: done\ndata: {}\n\n";
         respond(&mut socket, "text/event-stream", stream).await;
     });
@@ -744,6 +745,56 @@ async fn conversational_confirmation_uses_the_frozen_confirm_xor_query_shape() {
                             .unwrap(),
                         ),
                     }),
+                    ..TurnContext::default()
+                },
+                refresh: RefreshPolicy::Never,
+            },
+            credentials(1),
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let mut events = accepted.events;
+    assert!(matches!(
+        events.next().await.unwrap(),
+        Some(AgentEvent::Result { .. })
+    ));
+    assert!(events.next().await.unwrap().is_none());
+    events.close().await.unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn conversational_household_scope_is_top_level_and_normalizes_everyone() {
+    let (listener, base) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        let body: serde_json::Value = serde_json::from_str(
+            request
+                .split("\r\n\r\n")
+                .nth(1)
+                .expect("household request body"),
+        )
+        .unwrap();
+        assert_eq!(body["household_scope"], "everyone");
+        assert_eq!(body["query"], "What can all of us order?");
+        assert!(body["dietary_context"].get("household_scope").is_none());
+        let stream = b"event: result\ndata: {\"conversation_id\":\"conversation-household\",\"text\":\"I evaluated everyone.\"}\n\nevent: done\ndata: {}\n\n";
+        respond(&mut socket, "text/event-stream", stream).await;
+    });
+    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines())
+        .unwrap()
+        .with_cli_auth(cli_auth(None));
+    let accepted = service
+        .open_turn(
+            TurnRequest {
+                prompt: "What can all of us order?".into(),
+                conversation_id: None,
+                context: TurnContext {
+                    dietary: Some(serde_json::json!({"mode": "household"})),
+                    household_scope: Some("__everyone__".into()),
                     ..TurnContext::default()
                 },
                 refresh: RefreshPolicy::Never,

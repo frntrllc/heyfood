@@ -1,0 +1,14 @@
+{
+  "account_user_id": "acct-migration-owner",
+  "credential_store": "file",
+  "first_name": "Owner",
+  "household": {
+    "members": [
+      {
+        "id": "implicit-member",
+        "name": "Implicit Member",
+        "relationship": "friend"
+      }
+    ]
+  }
+}

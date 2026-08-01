@@ -48,6 +48,7 @@ tar.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 unicode-width.workspace = true
+uuid = { workspace = true, features = ["std", "v4"] }
 
 [target.'cfg(windows)'.dev-dependencies]
 heyfood-platform = { version = "=0.6.3", path = "../heyfood-platform", features = ["qualification-credentials"] }

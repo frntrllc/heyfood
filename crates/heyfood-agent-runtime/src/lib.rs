@@ -22,6 +22,9 @@ pub use registration::{
     ReauthorizationStatus, RegistrationClient, RegistrationError, RegistrationOutcome,
     StagedReauthorization,
 };
+pub use service_api::{
+    MAX_JSON_RESPONSE_BYTES, OwnerSyncOutcomeUncertainReasonV1, OwnerSyncTransportResultV1,
+};
 pub use sse::SseEventStream;
 
 /// The package version shared by the native workspace.
@@ -329,6 +332,13 @@ impl ServicePort for HttpService {
             }
             if let Some(value) = request.context.meal {
                 body["meal_context"] = value;
+            }
+            if let Some(value) = request.context.household_scope {
+                body["household_scope"] = serde_json::Value::String(if value == "__everyone__" {
+                    "everyone".to_owned()
+                } else {
+                    value
+                });
             }
             if let Some(value) = request.context.latitude {
                 body["lat"] = serde_json::Value::from(value);

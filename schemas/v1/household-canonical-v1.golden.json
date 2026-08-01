@@ -1,0 +1,213 @@
+{
+  "schema_version": 1,
+  "canonical_contract": "heyfood.household.canonical.v1",
+  "canonical_json": [
+    {
+      "name": "numbers_and_negative_zero",
+      "source": "{\"z\":4.50,\"a\":2e-3,\"large\":1e30,\"small\":1e-7,\"zero\":-0.0}",
+      "canonical_utf8": "{\"a\":0.002,\"large\":1e+30,\"small\":1e-7,\"z\":4.5,\"zero\":0}",
+      "canonical_hex": "7b2261223a302e3030322c226c61726765223a31652b33302c22736d616c6c223a31652d372c227a223a342e352c227a65726f223a307d",
+      "sha256": "b243d9ddffed4b176c8627616b4fc817e55d33b67d2f29c0f59d39c03e0c4129"
+    },
+    {
+      "name": "utf16_key_order_and_escaped_control",
+      "source": "{\"😀\":3,\"€\":1,\"\\r\":2}",
+      "canonical_utf8": "{\"\\r\":2,\"€\":1,\"😀\":3}",
+      "canonical_hex": "7b225c72223a322c22e282ac223a312c22f09f9880223a337d",
+      "sha256": "8fde7e6ce2edb16824e7d353d9d0d4b6681bc3b39ef01049f9a66b2e3eb579e3"
+    },
+    {
+      "name": "rfc8785_binary64_sample",
+      "source": "[333333333.33333329,1E30,4.50,2e-3,0.000000000000000000000000001]",
+      "canonical_utf8": "[333333333.3333333,1e+30,4.5,0.002,1e-27]",
+      "canonical_hex": "5b3333333333333333332e333333333333332c31652b33302c342e352c302e3030322c31652d32375d",
+      "sha256": "7c6bc86d861387d823ae596b79ca0b26567dddc22a77acb1f4e06d441f555adf"
+    },
+    {
+      "name": "raw_profile_extension",
+      "source": "{\"unknown\":{\"safe\":9007199254740991,\"n\":4.50},\"restrictions\":[\"glutenFree\"]}",
+      "canonical_utf8": "{\"restrictions\":[\"glutenFree\"],\"unknown\":{\"n\":4.5,\"safe\":9007199254740991}}",
+      "canonical_hex": "7b227265737472696374696f6e73223a5b22676c7574656e46726565225d2c22756e6b6e6f776e223a7b226e223a342e352c2273616665223a393030373139393235343734303939317d7d",
+      "sha256": "3edfcf9516fb54a0a49090dbdaca13534fbe4b5f961b098d00efcf1decec2885"
+    }
+  ],
+  "numeric_admission": {
+    "safe_integer_minimum": -9007199254740991,
+    "safe_integer_maximum": 9007199254740991,
+    "accepted_fraction_examples": ["-0.0", "2e-3", "1e30", "1e-7"],
+    "rejected_tokens": [
+      "9007199254740992",
+      "-9007199254740992",
+      "1e999",
+      "1e-999"
+    ]
+  },
+  "typed_identities": {
+    "self": "self",
+    "member": {
+      "member": "member-01"
+    },
+    "everyone": "everyone",
+    "compatibility_self": "_self",
+    "compatibility_everyone": "__everyone__"
+  },
+  "wire_enums": {
+    "relationship": ["self", "spouse", "partner", "parent", "child", "sibling", "grandparent", "friend", "other"],
+    "relationship_source": ["native_declared", "legacy_declared", "legacy_missing"],
+    "minor_status": ["minor", "adult", "unknown"],
+    "age_band": ["under_13", "age_13_17", "age_18_plus"],
+    "age_evidence_source": ["native_declared", "legacy_date_of_birth", "legacy_age_band"],
+    "lifecycle": ["active", "archived"],
+    "profile_state": ["incomplete", "local_only", "pending_sync", "synced", "conflicted"],
+    "profile_document_provenance": ["native_declared", "legacy_local_projection"],
+    "legacy_outbox_source_kind": ["python_subject_keyed_v1", "rust_mutation_keyed_embedded_member_v0", "rust_subject_keyed_local_context_v0", "python_subject_keyed_patch_v0"],
+    "legacy_outbox_phase": ["policy_blocked_legacy"],
+    "owner_sync_phase": ["needs_consent_check", "needs_remote_base", "ready_to_dispatch", "dispatching_outcome_unknown", "outcome_uncertain", "definite_failure", "conflicted", "local_only_no_consent"],
+    "owner_sync_error": ["consent_absent", "unauthorized", "forbidden", "validation", "version_conflict", "not_found", "predispatch_cancelled", "consent_version_changed_requires_new_save", "consent_revoked_regrant_required"],
+    "remote_profile_existence": ["absent", "present"],
+    "applied_commit_outcome": ["initialized", "committed"],
+    "migration_disposition": ["migrated", "retired", "reauthentication_required"]
+  },
+  "deterministic_outbox_ids": [
+    {
+      "source_kind": "python_subject_keyed_v1",
+      "source_digest": "0101010101010101010101010101010101010101010101010101010101010101",
+      "source_key": "_self",
+      "entry_digest": "0202020202020202020202020202020202020202020202020202020202020202",
+      "preimage": "{\"contract\":\"heyfood.household.legacy-outbox-id.python-subject-v1\",\"entry_digest\":\"0202020202020202020202020202020202020202020202020202020202020202\",\"source_digest\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"source_key\":\"_self\",\"source_kind\":\"python_subject_keyed_v1\"}",
+      "outbox_id": "legacy-py-v1-75cf1b94c4be125c9083e3edc6e4481c5bd18f09852971be6796fd239e7d654e",
+      "length": 77
+    },
+    {
+      "source_kind": "rust_subject_keyed_local_context_v0",
+      "source_digest": "0101010101010101010101010101010101010101010101010101010101010101",
+      "source_key": "_self",
+      "entry_digest": "0202020202020202020202020202020202020202020202020202020202020202",
+      "preimage": "{\"contract\":\"heyfood.household.legacy-outbox-id.rust-subject-v0\",\"entry_digest\":\"0202020202020202020202020202020202020202020202020202020202020202\",\"source_digest\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"source_key\":\"_self\",\"source_kind\":\"rust_subject_keyed_local_context_v0\"}",
+      "outbox_id": "legacy-rust-subject-v0-3172532ee6e61eb8b472f49210b020e2c945627858a8ad6fd44d0974e0654cc1",
+      "length": 87
+    },
+    {
+      "source_kind": "python_subject_keyed_patch_v0",
+      "source_digest": "0101010101010101010101010101010101010101010101010101010101010101",
+      "source_key": "_self",
+      "entry_digest": "0202020202020202020202020202020202020202020202020202020202020202",
+      "preimage": "{\"contract\":\"heyfood.household.legacy-outbox-id.python-patch-v0\",\"entry_digest\":\"0202020202020202020202020202020202020202020202020202020202020202\",\"source_digest\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"source_key\":\"_self\",\"source_kind\":\"python_subject_keyed_patch_v0\"}",
+      "outbox_id": "legacy-py-patch-v0-262e1dd605be5f9af866bd620878f9a04374ea7b97fb2197aaaae23ed37c945d",
+      "length": 83
+    }
+  ],
+  "legacy_outbox_classifier_vectors": [
+    {
+      "source_digest": "0303030303030303030303030303030303030303030303030303030303030303",
+      "source_key": "_self",
+      "source": "{\"version\":1,\"fields\":{},\"local_context\":{\"restrictions\":[\"x\"]},\"updated_at\":\"2026-07-30T11:59:00Z\"}",
+      "source_kind": "python_subject_keyed_v1",
+      "target": "self",
+      "entry_digest": "eac3a67e7c70b58e3028a4a6a43fdf7b35919c0868da96c36ff5de1d3d2b88c3",
+      "outbox_id": "legacy-py-v1-6f89671e53350a3524378e5e644611b3502eee5fc8c4f89beb4a792a6c81de72"
+    },
+    {
+      "source_digest": "0303030303030303030303030303030303030303030303030303030303030303",
+      "source_key": "mutation-1",
+      "source": "{\"member_id\":\"member-1\",\"repair\":true}",
+      "source_kind": "rust_mutation_keyed_embedded_member_v0",
+      "target": {"member": "member-1"},
+      "entry_digest": "b84139762fed5a7a1ed7051d131d8ad8ab232ae512f93ca77eab987fc60ff334",
+      "outbox_id": "mutation-1"
+    },
+    {
+      "source_digest": "0303030303030303030303030303030303030303030303030303030303030303",
+      "source_key": "member-1",
+      "source": "{\"local_context\":{\"restrictions\":[\"x\"]}}",
+      "source_kind": "rust_subject_keyed_local_context_v0",
+      "target": {"member": "member-1"},
+      "entry_digest": "b4e337ca86f28dd792f0472410f8b88c336d03271c5f4e73baee96d05298e6fd",
+      "outbox_id": "legacy-rust-subject-v0-b90e6af55e8e61d6307e124169873e9b7b0d08853e601f597301a379d5a9f76d"
+    },
+    {
+      "source_digest": "0303030303030303030303030303030303030303030303030303030303030303",
+      "source_key": "member-1",
+      "source": "{\"fields\":{\"restrictions\":[\"x\"]},\"local_context\":{}}",
+      "source_kind": "python_subject_keyed_patch_v0",
+      "target": {"member": "member-1"},
+      "entry_digest": "4230140d336dfd007debad71ec37ef7f7be3abeb5bbb207d4783f4d85a930e1f",
+      "outbox_id": "legacy-py-patch-v0-5b46e72db6bc1d4a76f9a1fa1800767c474624b29cb1c9bf35527362a3d204a5"
+    }
+  ],
+  "state": {
+    "canonical_utf8": "{\"account_binding\":\"acct_example_01\",\"active_scope\":\"self\",\"bounded_applied_commits\":[],\"imported_compatibility\":{\"fields\":[],\"legacy_python_applied_mutation_ids\":[],\"legacy_python_applied_mutation_ids_digest\":null,\"legacy_remote_profile_references\":[],\"legacy_timestamp_provenance\":[]},\"members\":[],\"migration_dispositions\":{\"dispositions\":[]},\"migration_provenance\":{\"initial_commit_id\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\",\"initialization_id\":\"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\",\"legacy_python_snapshot\":null,\"migration_frozen_at\":\"2026-07-30T12:00:00.000Z\",\"migration_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"source_identity\":{\"kind\":\"no_source\",\"source_set_fingerprint\":\"0707070707070707070707070707070707070707070707070707070707070707\"}},\"outbox\":[],\"owner\":{\"created_at\":\"2026-07-30T12:00:00.000Z\",\"display_name\":\"Owner\",\"profile_state\":\"incomplete\",\"relationship\":\"self\",\"updated_at\":\"2026-07-30T12:00:00.000Z\"},\"profiles\":[],\"revision\":1,\"schema_version\":1,\"updated_at\":\"2026-07-30T12:00:00.000Z\"}",
+    "sha256": "44ceb1197a45320484d6862a5c00411bfd02c7ba9dee168d60770531b0527a8c",
+    "atomic_owner_save_effect_preimage_utf8": "{\"account_digest\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"commit_id\":\"11111111-1111-4111-8111-111111111111\",\"contract\":\"heyfood.household.effect.v1\",\"expected_state\":{\"kind\":\"expected_revision\",\"revision\":1},\"frozen_commit_timestamp\":\"2026-07-30T12:00:00.000Z\",\"normalized_typed_effect\":{\"kind\":\"save_owner_profile_and_owner_sync_intent\",\"owner_profile\":{\"document\":{\"declared_profile\":null,\"legacy_source_digest\":\"b663e1ef13e0f5a161db08cc48f600cf9eed772da9f79f63e52b2fd4303e6688\",\"legacy_source_document\":{\"restrictions\":[\"canary-profile-secret\"]},\"provenance\":\"legacy_local_projection\",\"schema_version\":1},\"profile_revision\":1,\"subject\":\"self\"},\"owner_sync_record\":{\"entry\":{\"intent\":{\"attempt_count\":0,\"consent_version\":null,\"created_at\":\"2026-07-30T12:00:00.000Z\",\"expected_remote_version\":null,\"intent_id\":\"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee\",\"intent_revision\":1,\"last_definite_error\":null,\"local_household_revision\":2,\"local_profile_digest\":\"b663e1ef13e0f5a161db08cc48f600cf9eed772da9f79f63e52b2fd4303e6688\",\"local_profile_revision\":1,\"phase\":\"needs_consent_check\",\"remote_base\":null,\"remote_request_id\":\"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee\",\"request_body\":null,\"request_body_digest\":null,\"request_method\":null,\"request_path\":null,\"schema_version\":1,\"subject\":\"self\",\"updated_at\":\"2026-07-30T12:00:00.000Z\"},\"kind\":\"owner_sync\",\"target\":\"self\",\"version\":1},\"outbox_id\":\"owner-sync-v1:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee\",\"outbox_revision\":1},\"replaced_outbox_id\":null},\"resulting_revision\":2,\"semantic_candidate_state_without_applied_commit_ledger\":{\"account_binding\":\"acct_example_01\",\"active_scope\":\"self\",\"bounded_applied_commits\":[],\"imported_compatibility\":{\"fields\":[],\"legacy_python_applied_mutation_ids\":[],\"legacy_python_applied_mutation_ids_digest\":null,\"legacy_remote_profile_references\":[],\"legacy_timestamp_provenance\":[]},\"members\":[],\"migration_dispositions\":{\"dispositions\":[]},\"migration_provenance\":{\"initial_commit_id\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\",\"initialization_id\":\"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\",\"legacy_python_snapshot\":null,\"migration_frozen_at\":\"2026-07-30T12:00:00.000Z\",\"migration_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"source_identity\":{\"kind\":\"no_source\",\"source_set_fingerprint\":\"0707070707070707070707070707070707070707070707070707070707070707\"}},\"outbox\":[{\"entry\":{\"intent\":{\"attempt_count\":0,\"consent_version\":null,\"created_at\":\"2026-07-30T12:00:00.000Z\",\"expected_remote_version\":null,\"intent_id\":\"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee\",\"intent_revision\":1,\"last_definite_error\":null,\"local_household_revision\":2,\"local_profile_digest\":\"b663e1ef13e0f5a161db08cc48f600cf9eed772da9f79f63e52b2fd4303e6688\",\"local_profile_revision\":1,\"phase\":\"needs_consent_check\",\"remote_base\":null,\"remote_request_id\":\"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee\",\"request_body\":null,\"request_body_digest\":null,\"request_method\":null,\"request_path\":null,\"schema_version\":1,\"subject\":\"self\",\"updated_at\":\"2026-07-30T12:00:00.000Z\"},\"kind\":\"owner_sync\",\"target\":\"self\",\"version\":1},\"outbox_id\":\"owner-sync-v1:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee\",\"outbox_revision\":1}],\"owner\":{\"created_at\":\"2026-07-30T12:00:00.000Z\",\"display_name\":\"Owner\",\"profile_state\":\"pending_sync\",\"relationship\":\"self\",\"updated_at\":\"2026-07-30T12:00:00.000Z\"},\"profiles\":[{\"document\":{\"declared_profile\":null,\"legacy_source_digest\":\"b663e1ef13e0f5a161db08cc48f600cf9eed772da9f79f63e52b2fd4303e6688\",\"legacy_source_document\":{\"restrictions\":[\"canary-profile-secret\"]},\"provenance\":\"legacy_local_projection\",\"schema_version\":1},\"profile_revision\":1,\"subject\":\"self\"}],\"revision\":2,\"schema_version\":1,\"updated_at\":\"2026-07-30T12:00:00.000Z\"}}",
+    "atomic_owner_save_effect_fingerprint": "9327a5c6f7c2e32f346cd44b2f39078a342ea1b44fccb11fe8500978a884ea1b",
+    "effect_preimage_utf8": "{\"account_digest\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"commit_id\":\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"contract\":\"heyfood.household.effect.v1\",\"expected_state\":{\"kind\":\"expected_absence\"},\"frozen_commit_timestamp\":\"2026-07-30T12:00:00.000Z\",\"normalized_typed_effect\":{\"kind\":\"initialize\"},\"resulting_revision\":1,\"semantic_candidate_state_without_applied_commit_ledger\":{\"account_binding\":\"acct_example_01\",\"active_scope\":\"self\",\"bounded_applied_commits\":[],\"imported_compatibility\":{\"fields\":[],\"legacy_python_applied_mutation_ids\":[],\"legacy_python_applied_mutation_ids_digest\":null,\"legacy_remote_profile_references\":[],\"legacy_timestamp_provenance\":[]},\"members\":[],\"migration_dispositions\":{\"dispositions\":[]},\"migration_provenance\":{\"initial_commit_id\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\",\"initialization_id\":\"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\",\"legacy_python_snapshot\":null,\"migration_frozen_at\":\"2026-07-30T12:00:00.000Z\",\"migration_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"source_identity\":{\"kind\":\"no_source\",\"source_set_fingerprint\":\"0707070707070707070707070707070707070707070707070707070707070707\"}},\"outbox\":[],\"owner\":{\"created_at\":\"2026-07-30T12:00:00.000Z\",\"display_name\":\"Owner\",\"profile_state\":\"incomplete\",\"relationship\":\"self\",\"updated_at\":\"2026-07-30T12:00:00.000Z\"},\"profiles\":[],\"revision\":1,\"schema_version\":1,\"updated_at\":\"2026-07-30T12:00:00.000Z\"}}",
+    "effect_fingerprint": "ce35a542346d0abd1c7ee59246c649ad50e5b67e404945b9e664794db9b411cb"
+  },
+  "full_width_identity_vectors": [
+    {
+      "platform": "macos",
+      "account_id": "acct_example_01",
+      "native_root": "/Users/alice/Library/Application Support/ai.frntr.heyfood",
+      "account_digest": "2fac3a067b2de70732b3ce5846d8acd3ae98e700748a37bafe31b00bbeb5909b",
+      "native_root_instance_digest": "61c1a73e0f6dc4059111ba62a9c1f79bf06da4e65f90bcbc0da0cba6dab13a9a",
+      "account_locator_digest": "91ea4f9a8ba072d501475d70042ae061555ec7995995f3d995230c7844a39420"
+    },
+    {
+      "platform": "linux",
+      "account_id": "acct_example_01",
+      "native_root": "/home/alice/.local/share/heyfood",
+      "account_digest": "2fac3a067b2de70732b3ce5846d8acd3ae98e700748a37bafe31b00bbeb5909b",
+      "native_root_instance_digest": "eca9baf8e73318a57e522116993dddf48f7dcc833b89d12123e4bd424ac39ad8",
+      "account_locator_digest": "3ebdb4e0de17178d13fb15aa5295258afd7ea3b3e5d69b1efa358c2e18b3fbaa"
+    }
+  ],
+  "native_keyring_locators": {
+    "service": "ai.frntr.heyfood.household.v1",
+    "macos_key_username": "key-91ea4f9a8ba072d501475d70042ae061555ec7995995f3d995230c7844a39420",
+    "macos_guard_username": "migration-guard-91ea4f9a8ba072d501475d70042ae061555ec7995995f3d995230c7844a39420",
+    "linux_key_username": "key-3ebdb4e0de17178d13fb15aa5295258afd7ea3b3e5d69b1efa358c2e18b3fbaa",
+    "linux_guard_username": "migration-guard-3ebdb4e0de17178d13fb15aa5295258afd7ea3b3e5d69b1efa358c2e18b3fbaa"
+  },
+  "legacy_keyring_locators": [
+    {
+      "platform": "macos",
+      "config_path": "/Users/alice/.config/heyfood/config.json",
+      "service": "heyfood-cli",
+      "username": "config-708cb8bd7cc7bdc9b42f"
+    },
+    {
+      "platform": "macos",
+      "config_path": "/Users/alice/.config/hellofood/config.json",
+      "service": "heyfood-cli",
+      "username": "config-f4f9aebd2346a951e341"
+    },
+    {
+      "platform": "linux",
+      "config_path": "/home/alice/.config/heyfood/config.json",
+      "service": "heyfood-cli",
+      "username": "config-d12b1ca554fb38660c4d"
+    },
+    {
+      "platform": "linux",
+      "config_path": "/home/alice/.config/hellofood/config.json",
+      "service": "heyfood-cli",
+      "username": "config-cc800c000e80f0a94363"
+    }
+  ],
+  "envelope_vectors": {
+    "generation_header_hex": "48465641554c5431000100020001000100112233445566778899aabbccddeeff000000000000002a0123456789ab4def8123456789abcdef000102030405060708090a0b0c0d0e0f101112131415161700000020",
+    "journal_header_hex": "48465641554c5431000101ff0001000100112233445566778899aabbccddeeff00000000000000070123456789ab4def8123456789abcdef18191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f00000030",
+    "generation_aad_hex": "686579666f6f642e686f757365686f6c642e7661756c742e6161642e76310000000f616363745f6578616d706c655f30312fac3a067b2de70732b3ce5846d8acd3ae98e700748a37bafe31b00bbeb5909b61c1a73e0f6dc4059111ba62a9c1f79bf06da4e65f90bcbc0da0cba6dab13a9a48465641554c5431000100020001000100112233445566778899aabbccddeeff000000000000002a0123456789ab4def8123456789abcdef000102030405060708090a0b0c0d0e0f101112131415161700000020",
+    "journal_aad_hex": "686579666f6f642e686f757365686f6c642e7661756c742e6161642e76310000000f616363745f6578616d706c655f30312fac3a067b2de70732b3ce5846d8acd3ae98e700748a37bafe31b00bbeb5909b61c1a73e0f6dc4059111ba62a9c1f79bf06da4e65f90bcbc0da0cba6dab13a9a48465641554c5431000101ff0001000100112233445566778899aabbccddeeff00000000000000070123456789ab4def8123456789abcdef18191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f00000030",
+    "journal_header_revision_semantics": "independent_journal_revision",
+    "journal_header_commit_semantics": "current_generation_commit_id"
+  },
+  "hkdf_vectors": {
+    "ikm_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "salt_ascii": "heyfood.household.vault.hkdf.salt.v1",
+    "generation_info_ascii": "heyfood.household.vault.subkey.generation.v1",
+    "generation_output_hex": "61e6bd9a668675016d2e4988740979177cc53599fb0504fab232abb63668365b",
+    "journal_info_ascii": "heyfood.household.vault.subkey.journal.v1",
+    "journal_output_hex": "17b17c6f07db7115736b390583806d1f876965b2abb64c353a73d762d5cd5603"
+  }
+}

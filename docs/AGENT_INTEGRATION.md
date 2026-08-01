@@ -98,6 +98,12 @@ removing a manifest field requires a new manifest schema version. A consumer
 must fail with an upgrade instruction when the installed manifest is outside
 its declared compatibility range.
 
+The default `agent describe`, `agent doctor`, and MCP manifest responses remain
+schema v1 across the v0.6.2 to v0.6.3 binary upgrade. Agents following this
+guide should keep using those defaults. The explicit `--schema-version 2`
+forms expose native-state release compatibility metadata for installer and
+diagnostic tooling; they are not a prerequisite for an installed v0.6.2 Skill.
+
 This guide describes only the exact binary that embeds it. Public support
 claims require installed-artifact qualification for the named host, version,
 platform, and tool set.

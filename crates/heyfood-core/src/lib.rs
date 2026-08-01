@@ -8,6 +8,10 @@ pub mod config;
 pub mod error;
 pub mod grocery;
 pub mod health;
+pub mod household_canonical;
+pub mod household_effect;
+pub mod household_evaluation;
+pub mod household_state;
 pub mod menu_watch;
 pub mod migration;
 pub mod network;
@@ -26,7 +30,10 @@ pub use auth::{
     RegistrationStatus, SelfRegistrationCapability, SensitiveString, SessionCredentials,
     SessionSnapshot, negotiate_grocery_scopes,
 };
-pub use config::{CURRENT_CONFIG_SCHEMA, ClientConfig, ConfigRevision, ConfigSchemaVersion};
+pub use config::{
+    CURRENT_CONFIG_SCHEMA, ClientConfig, ConfigRevision, ConfigSchemaVersion,
+    NativeHouseholdRolloutV1,
+};
 pub use error::{ClientError, ErrorCategory, ErrorCode};
 pub use grocery::{
     ContextFingerprint, FrozenGroceryPreconditions, GroceryCapability, GroceryConfirmation,
@@ -37,6 +44,54 @@ pub use grocery::{
 pub use health::{
     HealthCapability, HealthConnectionStatus, HealthFreshness, HealthFreshnessStatus, HealthMetric,
     HealthProvider, HealthTrend, TrendDirection,
+};
+pub use household_canonical::{
+    CANONICAL_BYTES_V1_CONTRACT, CanonicalDigestV1, CanonicalJsonError, CanonicalJsonObjectV1,
+    CanonicalJsonValueV1, CompatibilityJsonLimitsV1, MAX_SAFE_IJSON_INTEGER,
+    MIN_SAFE_IJSON_INTEGER, canonical_sha256_v1, canonicalize_json_value_v1, decode_lower_hex_32,
+    domain_hash_v1, encode_lower_hex, parse_bounded_json_object_v1, parse_bounded_json_v1,
+    parse_bounded_typed_json_v1, to_canonical_bytes_v1,
+};
+pub use household_effect::{
+    ExpectedHouseholdStateV1, HOUSEHOLD_EFFECT_FINGERPRINT_CONTRACT,
+    HouseholdEffectFingerprintInputV1, HouseholdEffectFingerprintV1, HouseholdEffectV1,
+    effect_fingerprint_v1,
+};
+pub use household_evaluation::{
+    AnnotationDisposition, EvaluateMenuItem, EvaluateMenuResponse, EvaluationConfidence,
+    EvaluationConsentState, EvaluationContextHash, EvaluationContextHashVersion,
+    EvaluationMemberId, EvaluationProfileSource, EvaluationProfileVersion, EvaluationScope,
+    HOUSEHOLD_EVALUATION_AGGREGATE_SHA256, HOUSEHOLD_EVALUATION_CONTRACT_SHA256,
+    HOUSEHOLD_EVALUATION_CONTRACT_VERSION, HOUSEHOLD_EVALUATION_FIXTURE_SHA256,
+    HOUSEHOLD_EVALUATION_SOURCE_COMMIT, HOUSEHOLD_EVALUATION_SOURCE_TREE, HouseholdContext,
+    HouseholdEvaluationError, HouseholdMemberRef, HumanLabel, MealAttribution, MemberAnnotation,
+    SafetyStatus,
+};
+pub use household_state::{
+    AgeBandV1, AgeEvidenceSourceV1, AgeEvidenceV1, AppliedCommitOutcomeV1, AppliedCommitRecordV1,
+    CanonicalDateV1, CanonicalTimestampV1, ConsentVersionV1, DateOfBirthV1,
+    DietaryProfileProjectionV1, DisplayName, HOUSEHOLD_PROFILE_DOCUMENT_SCHEMA_VERSION,
+    HOUSEHOLD_STATE_SCHEMA_VERSION, HouseholdDeclaredProfileV1, HouseholdLifecycleV1,
+    HouseholdMemberV1, HouseholdOutboxId, HouseholdOutboxRecordV1, HouseholdOwnerV1,
+    HouseholdProfileDocumentV1, HouseholdProfileOutboxEntryV1, HouseholdProfileRecordV1,
+    HouseholdProfileStateV1, HouseholdRevision, HouseholdScope, HouseholdStateError,
+    HouseholdStateV1, HouseholdSubjectId, ImportedCompatibilityFieldV1,
+    ImportedCompatibilityStateV1, LastDefiniteOwnerSyncErrorV1, LegacyOutboxSourceKindV1,
+    LegacyProfileOutboxEntryV1, LegacyPythonSnapshotProvenanceV1, LegacyRemoteProfileReferenceV1,
+    LegacySourceIdentityV1, LegacyTimestampDispositionV1, LegacyTimestampProvenanceV1,
+    LegacyTimestampRecordV1, MAX_APPLIED_COMMITS, MAX_CANONICAL_VAULT_PLAINTEXT_BYTES,
+    MAX_COMPATIBILITY_ARRAY_ENTRIES, MAX_COMPATIBILITY_JSON_DEPTH, MAX_COMPATIBILITY_JSON_NODES,
+    MAX_COMPATIBILITY_OBJECT_KEYS, MAX_HOUSEHOLD_MEMBERS, MAX_HOUSEHOLD_OUTBOX_ENTRIES,
+    MAX_HOUSEHOLD_PROFILES, MAX_HOUSEHOLD_SUBJECTS, MAX_IMPORTED_COMPATIBILITY_FIELDS,
+    MAX_LEGACY_APPLIED_MUTATION_IDS, MAX_LEGACY_REMOTE_PROFILE_REFERENCES,
+    MAX_LEGACY_TIMESTAMP_PROVENANCE, MAX_MIGRATION_CANDIDATE_BYTES, MAX_MIGRATION_DISPOSITIONS,
+    MAX_OWNER_SYNC_REQUEST_BODY_BYTES, MAX_PROFILE_DOCUMENT_BYTES, MemberId,
+    MigrationDispositionKindV1, MigrationDispositionManifestV1, MigrationDispositionV1,
+    MigrationProvenanceV1, MinorStatusV1, OWNER_SYNC_OUTBOX_PREFIX, OutboxPhaseV1, OutboxRevision,
+    OwnerSyncIntentPhaseV1, OwnerSyncIntentV1, ProfileDocumentProvenanceV1, ProfileRevision,
+    RelationshipSourceV1, RelationshipV1, RemoteProfileBaseV1, RemoteProfileExistenceV1,
+    classify_legacy_outbox_v1, decode_canonical_household_state_v1, derive_minor_status_v1,
+    normalize_legacy_timestamp_v1,
 };
 pub use menu_watch::{
     MENU_WATCH_SCOPE, MENU_WATCH_SOURCE_COMMIT, MENU_WATCH_SOURCE_SHA256, MenuWatchChangeEventWire,

@@ -235,6 +235,12 @@ fn clean_profile_discovers_the_exact_protocol_and_gets_a_typed_auth_handoff() {
     );
     let manifest = response(&receiver, 3, Duration::from_secs(5));
     assert_eq!(manifest["result"]["structuredContent"]["schema_version"], 1);
+    assert!(
+        manifest["result"]["structuredContent"]
+            .get("native_state_compatibility")
+            .is_none(),
+        "MCP must retain the closed v1 default used by installed v0.6.2 skills"
+    );
     assert_eq!(manifest["result"]["isError"], false);
 
     send_request(

@@ -1,0 +1,17 @@
+{
+  "account_user_id": "acct-migration-owner",
+  "credential_store": "file",
+  "first_name": "Owner",
+  "household": {
+    "version": 1,
+    "active_scope": "_self",
+    "members": [
+      {
+        "id": "_self",
+        "name": "Owner",
+        "relationship": "self",
+        "archived": false
+      }
+    ]
+  }
+}

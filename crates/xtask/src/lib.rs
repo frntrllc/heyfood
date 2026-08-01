@@ -74,6 +74,35 @@ const FROZEN_COMPATIBILITY_DIGEST: &str =
 const FROZEN_COMPATIBILITY_BLOB: &[u8] =
     include_bytes!("../fixtures/called_endpoints.73494a5.json");
 
+pub fn native_state_declaration(version: &str) -> Result<String, String> {
+    let mut parts = version.split('.');
+    let valid_part = |part: &str| {
+        !part.is_empty()
+            && part.bytes().all(|byte| byte.is_ascii_digit())
+            && (part == "0" || !part.starts_with('0'))
+    };
+    if !matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(major), Some(minor), Some(patch), None)
+            if valid_part(major) && valid_part(minor) && valid_part(patch)
+    ) {
+        return Err("native-state declaration version must be exact release semver".to_owned());
+    }
+    Ok(format!(
+        concat!(
+            "{{\"binary_version\":\"{}\",",
+            "\"maximum_native_state_version\":2,",
+            "\"native_state_capabilities\":[",
+            "\"household-account-slot-v1\",",
+            "\"household-lifecycle-lock-v1\",",
+            "\"household-migration-guard-v1\",",
+            "\"household-teardown-journal-v1\"],",
+            "\"schema_version\":1}}"
+        ),
+        version
+    ))
+}
+
 #[derive(Clone, Copy)]
 struct GroceryContractSpec {
     name: &'static str,
@@ -2932,7 +2961,7 @@ fn expected_workspace_dependencies() -> BTreeMap<&'static str, BTreeSet<&'static
             "heyfood-tui",
             BTreeSet::from(["heyfood-application", "heyfood-core"]),
         ),
-        ("heyfood-installer", BTreeSet::from(["heyfood-core"])),
+        ("heyfood-installer", BTreeSet::new()),
         ("heyfood-windows-file", BTreeSet::new()),
         (
             "heyfood-bin",
@@ -3761,7 +3790,7 @@ mod tests {
     use super::{
         FROZEN_COMPATIBILITY_DIGEST, FROZEN_COMPATIBILITY_SHA, FROZEN_COMPATIBILITY_TREE,
         GROCERY_CONTRACTS, GROCERY_PHASE_A_FILES, GROCERY_PHASE_A_PROVENANCE_TARGET,
-        GROCERY_PHASE_A_TARGET_ROOT, import_grocery_contracts,
+        GROCERY_PHASE_A_TARGET_ROOT, import_grocery_contracts, native_state_declaration,
         validate_agent_phase1_evidence_separation, validate_agent_phase1_hosted,
         validate_agent_phase1_requirements, validate_agent_phase1_review, validate_dependency_dag,
         validate_grok_pattern_provenance, validate_health_contract_provenance,
@@ -3777,6 +3806,26 @@ mod tests {
 
     fn root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    #[test]
+    fn native_state_declaration_is_exact_and_rejects_nonrelease_versions() {
+        assert_eq!(
+            native_state_declaration("0.6.2").unwrap(),
+            concat!(
+                "{\"binary_version\":\"0.6.2\",",
+                "\"maximum_native_state_version\":2,",
+                "\"native_state_capabilities\":[",
+                "\"household-account-slot-v1\",",
+                "\"household-lifecycle-lock-v1\",",
+                "\"household-migration-guard-v1\",",
+                "\"household-teardown-journal-v1\"],",
+                "\"schema_version\":1}"
+            )
+        );
+        for invalid in ["0.06.2", "0.6", "0.6.2-beta", "v0.6.2", "0.6.2.1"] {
+            assert!(native_state_declaration(invalid).is_err(), "{invalid}");
+        }
     }
 
     fn scratch(label: &str) -> PathBuf {

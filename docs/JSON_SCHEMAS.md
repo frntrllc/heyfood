@@ -49,6 +49,32 @@ price fit, and menu freshness. It is neither a probability nor a safety status.
 Recipe `dietary_match_hint` is likewise compatibility ranking unless the result
 contains a separate explicit safety assessment.
 
+## Household evaluation contract
+
+The v0.6.3 source tree freezes the reviewed hello.food household-evaluation
+contract at
+`fixtures/contracts/household-backend/v1/household-evaluation-contract.json`
+and its founding Maya menu scenario beneath the adjacent `fixtures/` directory.
+`provenance.json` records the exact hellofood source commit and tree, merge
+ancestry, per-file SHA-256 digests, aggregate digest, and separately qualified
+deployment evidence. Provider SDK types and secrets are not imported.
+
+The additive contract supplies `household` snapshot identity and one named
+`items[].member_annotations` entry per resolved member. Strict client parsing
+recognizes only `generally_safer`, `risky`, `unable_to_evaluate`, and `avoid`;
+unknown statuses or annotation dispositions and missing display labels fail
+closed in human output. Human TUI/CLI presentation omits stable IDs, context
+hashes, producer/rules versions, tool names, and raw JSON. It distinguishes an
+informational `flag` from an allergen-driven `excluded` annotation and never
+promotes `unable_to_evaluate` into an invented `avoid` verdict.
+
+Machine output has a different obligation: `ask --json` and `reply --json`
+emit the complete terminal agent result document unchanged in shape, including
+all additive household/member annotations and unknown additive fields. This
+JSON parity is intentional; the privacy-safe human projection must not be used
+as a machine-data replacement. Single-member responses retain every
+pre-existing result value, while the household fields remain purely additive.
+
 ## Agent-native contracts
 
 The supported v0.6.3 release exposes its public installed contracts through
@@ -77,3 +103,16 @@ schema discovery because it describes commit authority. The golden manifest
 fixture is `fixtures/agent/manifest-v1-golden.json`. Self-description does not
 by itself claim MCP support; Agent Skill setup is a separately versioned,
 opt-in, receipt-bound surface.
+
+The v0.6.3 native-state boundary does not modify that closed v1 default. Bare
+`heyfood agent`, `heyfood agent describe`, `heyfood agent doctor`, and the MCP
+manifest tool continue to return v1. Their schemas are named `manifest` and
+`doctor` in installed discovery, preserving already-installed v0.6.2 Agent
+Skills.
+
+The explicit `--schema-version 2` discovery option uses
+`schemas/v2/heyfood-agent-manifest.schema.json` and
+`schemas/v2/heyfood-agent-doctor.schema.json`, named `manifest-v2` and
+`doctor-v2`. The v2 manifest adds the exact top-level
+`native_state_compatibility` declaration for the managed installer and release
+verifier; a consumer receives it only by requesting v2.
