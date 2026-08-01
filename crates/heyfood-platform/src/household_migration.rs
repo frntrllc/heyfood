@@ -1019,7 +1019,7 @@ mod tests {
             .acquire_lifecycle_lease(CancellationToken::new())
             .await
             .unwrap();
-        let mut source_lease = migration
+        let source_lease = migration
             .acquire_source_lease(lifecycle, CancellationToken::new())
             .await
             .unwrap();
@@ -1047,12 +1047,10 @@ mod tests {
             expected.migration_frozen_at.clone(),
         )
         .unwrap();
-        let lifecycle = migration
-            .take_lifecycle_for_vault(&mut source_lease)
-            .unwrap();
-        let mut vault_lease = vault
-            .acquire_vault_lease(
-                lifecycle,
+        let mut source_vault_lease = migration
+            .acquire_source_vault_lease(
+                source_lease,
+                &vault,
                 HouseholdVaultLeaseModeV1::CreateIfMissing,
                 CancellationToken::new(),
             )
@@ -1060,21 +1058,14 @@ mod tests {
             .unwrap();
         HouseholdMigrationGuardStore::compare_exchange(
             store.as_ref(),
-            &mut vault_lease,
+            source_vault_lease.vault_lease_mut(),
             MigrationGuardExpectation::Absent,
             Some(guard.clone()),
             CancellationToken::new(),
         )
         .await
         .unwrap();
-        let lifecycle = vault_lease
-            .release_vault(CancellationToken::new())
-            .await
-            .unwrap();
-        let lifecycle = migration
-            .release_source_locks_retaining_lifecycle(source_lease, lifecycle)
-            .unwrap();
-        drop(lifecycle);
+        drop(source_vault_lease);
 
         let broker = FixedSourceBroker::missing();
         let completion = complete_native_household_initialization_with_reservation_v1(

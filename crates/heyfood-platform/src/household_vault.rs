@@ -1730,6 +1730,13 @@ impl HouseholdVault {
             })?
     }
 
+    /// Consume a standalone lifecycle authority into an opaque vault lease.
+    ///
+    /// This ordinary seam cannot be combined with legacy source authority by
+    /// downstream callers: source/snapshot acquisition consumes the same
+    /// non-cloneable lifecycle value, keeps it private, and exposes only an
+    /// opaque source/vault composite for the subsequent transition. The
+    /// returned lease itself releases `vault.lock` before lifecycle.
     pub async fn acquire_vault_lease(
         &self,
         lifecycle_lease: HouseholdLifecycleLease,

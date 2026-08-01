@@ -585,7 +585,7 @@ async fn d2_phase_a_then_b_preserves_valid_owner_only_state_and_is_replay_stable
         .acquire_lifecycle_lease(CancellationToken::new())
         .await
         .unwrap();
-    let mut source_lease = migration
+    let source_lease = migration
         .acquire_source_lease(lifecycle, CancellationToken::new())
         .await
         .unwrap();
@@ -619,12 +619,10 @@ async fn d2_phase_a_then_b_preserves_valid_owner_only_state_and_is_replay_stable
     );
 
     let context = d2_context(&phase_a, &slot);
-    let lifecycle = migration
-        .take_lifecycle_for_vault(&mut source_lease)
-        .unwrap();
-    let vault_lease = vault
-        .acquire_vault_lease(
-            lifecycle,
+    let source_vault_lease = migration
+        .acquire_source_vault_lease(
+            source_lease,
+            &vault,
             HouseholdVaultLeaseModeV1::CreateIfMissing,
             CancellationToken::new(),
         )
@@ -635,8 +633,8 @@ async fn d2_phase_a_then_b_preserves_valid_owner_only_state_and_is_replay_stable
             &phase_a,
             &context,
             &slot,
-            &vault_lease,
-            &source_lease,
+            source_vault_lease.vault_lease(),
+            source_vault_lease.source_lease(),
             &probes,
             CancellationToken::new(),
         )
@@ -647,8 +645,8 @@ async fn d2_phase_a_then_b_preserves_valid_owner_only_state_and_is_replay_stable
             &phase_a,
             &context,
             &slot,
-            &vault_lease,
-            &source_lease,
+            source_vault_lease.vault_lease(),
+            source_vault_lease.source_lease(),
             &probes,
             CancellationToken::new(),
         )
@@ -702,7 +700,7 @@ async fn d2_accepts_each_frozen_household_family_and_its_only_allowed_outbox_sha
             .acquire_lifecycle_lease(CancellationToken::new())
             .await
             .unwrap();
-        let mut source_lease = migration
+        let source_lease = migration
             .acquire_source_lease(lifecycle, CancellationToken::new())
             .await
             .unwrap();
@@ -720,12 +718,10 @@ async fn d2_accepts_each_frozen_household_family_and_its_only_allowed_outbox_sha
             .await
             .unwrap();
         let context = d2_context(&phase_a, &slot);
-        let lifecycle = migration
-            .take_lifecycle_for_vault(&mut source_lease)
-            .unwrap();
-        let vault_lease = vault
-            .acquire_vault_lease(
-                lifecycle,
+        let source_vault_lease = migration
+            .acquire_source_vault_lease(
+                source_lease,
+                &vault,
                 HouseholdVaultLeaseModeV1::CreateIfMissing,
                 CancellationToken::new(),
             )
@@ -736,8 +732,8 @@ async fn d2_accepts_each_frozen_household_family_and_its_only_allowed_outbox_sha
                 &phase_a,
                 &context,
                 &slot,
-                &vault_lease,
-                &source_lease,
+                source_vault_lease.vault_lease(),
+                source_vault_lease.source_lease(),
                 &probes,
                 CancellationToken::new(),
             )
@@ -755,7 +751,7 @@ async fn d2_accepts_each_frozen_household_family_and_its_only_allowed_outbox_sha
         .acquire_lifecycle_lease(CancellationToken::new())
         .await
         .unwrap();
-    let mut source_lease = migration
+    let source_lease = migration
         .acquire_source_lease(lifecycle, CancellationToken::new())
         .await
         .unwrap();
@@ -777,12 +773,10 @@ async fn d2_accepts_each_frozen_household_family_and_its_only_allowed_outbox_sha
         .await
         .unwrap();
     let context = d2_context(&phase_a, &slot);
-    let lifecycle = migration
-        .take_lifecycle_for_vault(&mut source_lease)
-        .unwrap();
-    let vault_lease = vault
-        .acquire_vault_lease(
-            lifecycle,
+    let source_vault_lease = migration
+        .acquire_source_vault_lease(
+            source_lease,
+            &vault,
             HouseholdVaultLeaseModeV1::CreateIfMissing,
             CancellationToken::new(),
         )
@@ -793,8 +787,8 @@ async fn d2_accepts_each_frozen_household_family_and_its_only_allowed_outbox_sha
             &phase_a,
             &context,
             &slot,
-            &vault_lease,
-            &source_lease,
+            source_vault_lease.vault_lease(),
+            source_vault_lease.source_lease(),
             &keyring,
             CancellationToken::new(),
         )
@@ -839,7 +833,7 @@ async fn d2_rejects_family_outbox_cross_product_in_phase_b() {
         .acquire_lifecycle_lease(CancellationToken::new())
         .await
         .unwrap();
-    let mut source_lease = migration
+    let source_lease = migration
         .acquire_source_lease(lifecycle, CancellationToken::new())
         .await
         .unwrap();
@@ -857,12 +851,10 @@ async fn d2_rejects_family_outbox_cross_product_in_phase_b() {
         .await
         .unwrap();
     let context = d2_context(&phase_a, &slot);
-    let lifecycle = migration
-        .take_lifecycle_for_vault(&mut source_lease)
-        .unwrap();
-    let vault_lease = vault
-        .acquire_vault_lease(
-            lifecycle,
+    let source_vault_lease = migration
+        .acquire_source_vault_lease(
+            source_lease,
+            &vault,
             HouseholdVaultLeaseModeV1::CreateIfMissing,
             CancellationToken::new(),
         )
@@ -874,8 +866,8 @@ async fn d2_rejects_family_outbox_cross_product_in_phase_b() {
                 &phase_a,
                 &context,
                 &slot,
-                &vault_lease,
-                &source_lease,
+                source_vault_lease.vault_lease(),
+                source_vault_lease.source_lease(),
                 &probes,
                 CancellationToken::new(),
             )
@@ -895,7 +887,7 @@ async fn d2_no_source_requires_authoritative_probes_and_replays_exact_fingerprin
         .acquire_lifecycle_lease(CancellationToken::new())
         .await
         .unwrap();
-    let mut source_lease = migration
+    let source_lease = migration
         .acquire_source_lease(lifecycle, CancellationToken::new())
         .await
         .unwrap();
@@ -927,12 +919,10 @@ async fn d2_no_source_requires_authoritative_probes_and_replays_exact_fingerprin
     assert_eq!(first.source_identity(), replay.source_identity());
 
     let context = d2_context(&first, &slot);
-    let lifecycle = migration
-        .take_lifecycle_for_vault(&mut source_lease)
-        .unwrap();
-    let vault_lease = vault
-        .acquire_vault_lease(
-            lifecycle,
+    let source_vault_lease = migration
+        .acquire_source_vault_lease(
+            source_lease,
+            &vault,
             HouseholdVaultLeaseModeV1::CreateIfMissing,
             CancellationToken::new(),
         )
@@ -943,8 +933,8 @@ async fn d2_no_source_requires_authoritative_probes_and_replays_exact_fingerprin
             &first,
             &context,
             &slot,
-            &vault_lease,
-            &source_lease,
+            source_vault_lease.vault_lease(),
+            source_vault_lease.source_lease(),
             &probes,
             CancellationToken::new(),
         )
@@ -956,12 +946,9 @@ async fn d2_no_source_requires_authoritative_probes_and_replays_exact_fingerprin
         result.state.owner.profile_state,
         HouseholdProfileStateV1::Incomplete
     );
-    let lifecycle = vault_lease
-        .release_vault(CancellationToken::new())
+    let source_lease = migration
+        .release_source_vault_lease(source_vault_lease, CancellationToken::new())
         .await
-        .unwrap();
-    migration
-        .restore_lifecycle_after_vault_release(&mut source_lease, lifecycle)
         .unwrap();
 
     let unavailable = migration
@@ -1106,7 +1093,7 @@ async fn d2_future_timestamp_and_dob_pass_phase_a_then_fail_phase_b() {
             .acquire_lifecycle_lease(CancellationToken::new())
             .await
             .unwrap();
-        let mut source_lease = migration
+        let source_lease = migration
             .acquire_source_lease(lifecycle, CancellationToken::new())
             .await
             .unwrap();
@@ -1124,12 +1111,10 @@ async fn d2_future_timestamp_and_dob_pass_phase_a_then_fail_phase_b() {
             .await
             .unwrap();
         let context = d2_context(&phase_a, &slot);
-        let lifecycle = migration
-            .take_lifecycle_for_vault(&mut source_lease)
-            .unwrap();
-        let vault_lease = vault
-            .acquire_vault_lease(
-                lifecycle,
+        let source_vault_lease = migration
+            .acquire_source_vault_lease(
+                source_lease,
+                &vault,
                 HouseholdVaultLeaseModeV1::CreateIfMissing,
                 CancellationToken::new(),
             )
@@ -1140,8 +1125,8 @@ async fn d2_future_timestamp_and_dob_pass_phase_a_then_fail_phase_b() {
                 &phase_a,
                 &context,
                 &slot,
-                &vault_lease,
-                &source_lease,
+                source_vault_lease.vault_lease(),
+                source_vault_lease.source_lease(),
                 &probes,
                 CancellationToken::new(),
             )
@@ -1161,7 +1146,7 @@ async fn d2_phase_b_rejects_source_change_and_never_reselects_or_refreezes() {
         .acquire_lifecycle_lease(CancellationToken::new())
         .await
         .unwrap();
-    let mut source_lease = migration
+    let source_lease = migration
         .acquire_source_lease(lifecycle, CancellationToken::new())
         .await
         .unwrap();
@@ -1184,12 +1169,10 @@ async fn d2_phase_b_rejects_source_change_and_never_reselects_or_refreezes() {
     changed.push(b'\n');
     std::fs::write(source, changed).unwrap();
 
-    let lifecycle = migration
-        .take_lifecycle_for_vault(&mut source_lease)
-        .unwrap();
-    let vault_lease = vault
-        .acquire_vault_lease(
-            lifecycle,
+    let source_vault_lease = migration
+        .acquire_source_vault_lease(
+            source_lease,
+            &vault,
             HouseholdVaultLeaseModeV1::CreateIfMissing,
             CancellationToken::new(),
         )
@@ -1200,8 +1183,8 @@ async fn d2_phase_b_rejects_source_change_and_never_reselects_or_refreezes() {
             &phase_a,
             &context,
             &slot,
-            &vault_lease,
-            &source_lease,
+            source_vault_lease.vault_lease(),
+            source_vault_lease.source_lease(),
             &probes,
             CancellationToken::new(),
         )
@@ -1220,7 +1203,7 @@ async fn d2_secret_free_candidate_complete_dispositions_and_typed_restart_verify
         .acquire_lifecycle_lease(CancellationToken::new())
         .await
         .unwrap();
-    let mut source_lease = migration
+    let source_lease = migration
         .acquire_source_lease(lifecycle, CancellationToken::new())
         .await
         .unwrap();
@@ -1248,12 +1231,10 @@ async fn d2_secret_free_candidate_complete_dispositions_and_typed_restart_verify
         assert!(!phase_a_debug.contains(canary));
     }
     let context = d2_context(&phase_a, &slot);
-    let lifecycle = migration
-        .take_lifecycle_for_vault(&mut source_lease)
-        .unwrap();
-    let vault_lease = vault
-        .acquire_vault_lease(
-            lifecycle,
+    let source_vault_lease = migration
+        .acquire_source_vault_lease(
+            source_lease,
+            &vault,
             HouseholdVaultLeaseModeV1::CreateIfMissing,
             CancellationToken::new(),
         )
@@ -1264,8 +1245,8 @@ async fn d2_secret_free_candidate_complete_dispositions_and_typed_restart_verify
             &phase_a,
             &context,
             &slot,
-            &vault_lease,
-            &source_lease,
+            source_vault_lease.vault_lease(),
+            source_vault_lease.source_lease(),
             &probes,
             CancellationToken::new(),
         )
@@ -1392,7 +1373,7 @@ async fn d2_phase_a_and_phase_b_are_cancellable_at_authority_boundaries() {
         .acquire_lifecycle_lease(CancellationToken::new())
         .await
         .unwrap();
-    let mut source_lease = migration
+    let source_lease = migration
         .acquire_source_lease(lifecycle, CancellationToken::new())
         .await
         .unwrap();
@@ -1420,12 +1401,10 @@ async fn d2_phase_a_and_phase_b_are_cancellable_at_authority_boundaries() {
         .await
         .unwrap();
     let context = d2_context(&phase_a, &slot);
-    let lifecycle = migration
-        .take_lifecycle_for_vault(&mut source_lease)
-        .unwrap();
-    let vault_lease = vault
-        .acquire_vault_lease(
-            lifecycle,
+    let source_vault_lease = migration
+        .acquire_source_vault_lease(
+            source_lease,
+            &vault,
             HouseholdVaultLeaseModeV1::CreateIfMissing,
             CancellationToken::new(),
         )
@@ -1439,8 +1418,8 @@ async fn d2_phase_a_and_phase_b_are_cancellable_at_authority_boundaries() {
                 &phase_a,
                 &context,
                 &slot,
-                &vault_lease,
-                &source_lease,
+                source_vault_lease.vault_lease(),
+                source_vault_lease.source_lease(),
                 &probes,
                 cancelled,
             )
@@ -1617,7 +1596,7 @@ async fn d2_verified_readback_retires_only_the_exact_snapshot_bytes() {
         .acquire_lifecycle_lease(CancellationToken::new())
         .await
         .unwrap();
-    let mut source_lease = migration
+    let source_lease = migration
         .acquire_source_lease(lifecycle, CancellationToken::new())
         .await
         .unwrap();
@@ -1652,12 +1631,10 @@ async fn d2_verified_readback_retires_only_the_exact_snapshot_bytes() {
         DisplayName::parse("Owner").unwrap(),
     )
     .unwrap();
-    let lifecycle = migration
-        .take_lifecycle_for_vault(&mut source_lease)
-        .unwrap();
-    let vault_lease = vault
-        .acquire_vault_lease(
-            lifecycle,
+    let source_vault_lease = migration
+        .acquire_source_vault_lease(
+            source_lease,
+            &vault,
             HouseholdVaultLeaseModeV1::CreateIfMissing,
             CancellationToken::new(),
         )
@@ -1668,8 +1645,8 @@ async fn d2_verified_readback_retires_only_the_exact_snapshot_bytes() {
             &phase_a,
             &context,
             &slot,
-            &vault_lease,
-            &source_lease,
+            source_vault_lease.vault_lease(),
+            source_vault_lease.source_lease(),
             &probes,
             CancellationToken::new(),
         )
@@ -1683,7 +1660,11 @@ async fn d2_verified_readback_retires_only_the_exact_snapshot_bytes() {
     std::fs::write(migration.snapshot_path(), b"changed-after-readback").unwrap();
     assert_eq!(
         migration
-            .retire_verified_snapshot(&source_lease, &verification, CancellationToken::new(),)
+            .retire_verified_snapshot(
+                source_vault_lease.source_lease(),
+                &verification,
+                CancellationToken::new(),
+            )
             .await
             .unwrap_err()
             .code,
@@ -1692,7 +1673,11 @@ async fn d2_verified_readback_retires_only_the_exact_snapshot_bytes() {
     assert!(migration.snapshot_path().exists());
     std::fs::write(migration.snapshot_path(), exact_snapshot).unwrap();
     migration
-        .retire_verified_snapshot(&source_lease, &verification, CancellationToken::new())
+        .retire_verified_snapshot(
+            source_vault_lease.source_lease(),
+            &verification,
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
     assert!(!migration.snapshot_path().exists());
@@ -1714,7 +1699,7 @@ async fn d2_committed_snapshot_resume_uses_only_guard_vault_and_exact_snapshot()
         .acquire_lifecycle_lease(CancellationToken::new())
         .await
         .unwrap();
-    let mut source_lease = migration
+    let source_lease = migration
         .acquire_source_lease(lifecycle, CancellationToken::new())
         .await
         .unwrap();
@@ -1749,12 +1734,10 @@ async fn d2_committed_snapshot_resume_uses_only_guard_vault_and_exact_snapshot()
         DisplayName::parse("Owner").unwrap(),
     )
     .unwrap();
-    let lifecycle = migration
-        .take_lifecycle_for_vault(&mut source_lease)
-        .unwrap();
-    let vault_lease = vault
-        .acquire_vault_lease(
-            lifecycle,
+    let source_vault_lease = migration
+        .acquire_source_vault_lease(
+            source_lease,
+            &vault,
             HouseholdVaultLeaseModeV1::CreateIfMissing,
             CancellationToken::new(),
         )
@@ -1765,8 +1748,8 @@ async fn d2_committed_snapshot_resume_uses_only_guard_vault_and_exact_snapshot()
             &phase_a,
             &context,
             &slot,
-            &vault_lease,
-            &source_lease,
+            source_vault_lease.vault_lease(),
+            source_vault_lease.source_lease(),
             &probes,
             CancellationToken::new(),
         )
@@ -1781,12 +1764,9 @@ async fn d2_committed_snapshot_resume_uses_only_guard_vault_and_exact_snapshot()
         .unwrap()
         .complete_initialization()
         .unwrap();
-    let lifecycle = vault_lease
-        .release_vault(CancellationToken::new())
+    let source_lease = migration
+        .release_source_vault_lease(source_vault_lease, CancellationToken::new())
         .await
-        .unwrap();
-    migration
-        .restore_lifecycle_after_vault_release(&mut source_lease, lifecycle)
         .unwrap();
     drop(source_lease);
 
@@ -1795,16 +1775,14 @@ async fn d2_committed_snapshot_resume_uses_only_guard_vault_and_exact_snapshot()
         .acquire_lifecycle_lease(CancellationToken::new())
         .await
         .unwrap();
-    let mut snapshot_lease = migration
+    let snapshot_lease = migration
         .acquire_snapshot_retirement_lease(lifecycle, CancellationToken::new())
         .await
         .unwrap();
-    let lifecycle = migration
-        .take_snapshot_lifecycle_for_vault(&mut snapshot_lease)
-        .unwrap();
-    let vault_lease = vault
-        .acquire_vault_lease(
-            lifecycle,
+    let snapshot_vault_lease = migration
+        .acquire_snapshot_vault_lease(
+            snapshot_lease,
+            &vault,
             HouseholdVaultLeaseModeV1::CreateIfMissing,
             CancellationToken::new(),
         )
@@ -1854,8 +1832,8 @@ async fn d2_committed_snapshot_resume_uses_only_guard_vault_and_exact_snapshot()
     assert_eq!(
         migration
             .committed_snapshot_retirement_authority(
-                &snapshot_lease,
-                &vault_lease,
+                snapshot_vault_lease.snapshot_lease(),
+                snapshot_vault_lease.vault_lease(),
                 &wrong_source,
                 &authenticated_later_load,
             )
@@ -1887,8 +1865,8 @@ async fn d2_committed_snapshot_resume_uses_only_guard_vault_and_exact_snapshot()
     assert_eq!(
         migration
             .committed_snapshot_retirement_authority(
-                &snapshot_lease,
-                &vault_lease,
+                snapshot_vault_lease.snapshot_lease(),
+                snapshot_vault_lease.vault_lease(),
                 &wrong_snapshot,
                 &authenticated_later_load,
             )
@@ -1899,8 +1877,8 @@ async fn d2_committed_snapshot_resume_uses_only_guard_vault_and_exact_snapshot()
 
     let authority = migration
         .committed_snapshot_retirement_authority(
-            &snapshot_lease,
-            &vault_lease,
+            snapshot_vault_lease.snapshot_lease(),
+            snapshot_vault_lease.vault_lease(),
             &committed,
             &authenticated_later_load,
         )
@@ -1908,7 +1886,11 @@ async fn d2_committed_snapshot_resume_uses_only_guard_vault_and_exact_snapshot()
     std::fs::write(migration.snapshot_path(), b"changed-after-commit").unwrap();
     assert_eq!(
         migration
-            .retire_committed_snapshot(&snapshot_lease, &authority, CancellationToken::new(),)
+            .retire_committed_snapshot(
+                snapshot_vault_lease.snapshot_lease(),
+                &authority,
+                CancellationToken::new(),
+            )
             .await
             .unwrap_err()
             .code,
@@ -1916,7 +1898,11 @@ async fn d2_committed_snapshot_resume_uses_only_guard_vault_and_exact_snapshot()
     );
     std::fs::write(migration.snapshot_path(), exact_snapshot).unwrap();
     migration
-        .retire_committed_snapshot(&snapshot_lease, &authority, CancellationToken::new())
+        .retire_committed_snapshot(
+            snapshot_vault_lease.snapshot_lease(),
+            &authority,
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
     assert!(!migration.snapshot_path().exists());
