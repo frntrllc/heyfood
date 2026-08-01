@@ -605,11 +605,11 @@ pub enum HouseholdVaultLeaseModeV1 {
 /// this type so the copy-on-write files, key bundle, and migration guard share
 /// one critical section.
 pub struct HouseholdVaultLease {
-    lifecycle_lease: HouseholdLifecycleLease,
     vault_lock: Arc<LockedFile>,
     vault_lock_path: PathBuf,
     #[cfg(unix)]
     owner_uid: u32,
+    lifecycle_lease: HouseholdLifecycleLease,
     operation_gate: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -684,17 +684,17 @@ impl HouseholdVaultLease {
             return Err(cancelled_error());
         }
         Ok(HouseholdVaultLeaseOperationGuard {
-            _gate: gate,
-            _lifecycle_lock: lifecycle_lock,
             _vault_lock: vault_lock,
+            _lifecycle_lock: lifecycle_lock,
+            _gate: gate,
         })
     }
 }
 
 pub(crate) struct HouseholdVaultLeaseOperationGuard {
-    _gate: tokio::sync::OwnedMutexGuard<()>,
-    _lifecycle_lock: Arc<LockedFile>,
     _vault_lock: Arc<LockedFile>,
+    _lifecycle_lock: Arc<LockedFile>,
+    _gate: tokio::sync::OwnedMutexGuard<()>,
 }
 
 impl fmt::Debug for HouseholdVaultLease {
@@ -995,11 +995,11 @@ impl HouseholdTeardownVaultTargetV1 {
         let vault_lock_path = household_directory.join("vault.lock");
         let vault_lock = self.acquire_lock(&vault_lock_path, cancellation)?;
         Ok(HouseholdVaultLease {
-            lifecycle_lease,
             vault_lock: Arc::new(vault_lock),
             vault_lock_path,
             #[cfg(unix)]
             owner_uid: self.owner_uid,
+            lifecycle_lease,
             operation_gate: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
@@ -1339,7 +1339,7 @@ impl HouseholdTeardownVaultTargetV1 {
         loop {
             self.check_cancelled(cancellation)?;
             match file.try_lock_exclusive() {
-                Ok(()) => return Ok(LockedFile(file)),
+                Ok(()) => return Ok(LockedFile::new(file)),
                 Err(error)
                     if error.kind() == std::io::ErrorKind::WouldBlock
                         && started.elapsed() < LOCK_TIMEOUT =>
@@ -3201,11 +3201,11 @@ impl HouseholdVault {
         validate_private_directory(&household_directory)?;
         self.check_cancelled(cancellation)?;
         Ok(HouseholdVaultLease {
-            lifecycle_lease,
             vault_lock: Arc::new(vault_lock),
             vault_lock_path,
             #[cfg(unix)]
             owner_uid: self.owner_uid,
+            lifecycle_lease,
             operation_gate: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
@@ -3379,7 +3379,7 @@ impl HouseholdVault {
         loop {
             self.check_cancelled(cancellation)?;
             match file.try_lock_exclusive() {
-                Ok(()) => return Ok(LockedFile(file)),
+                Ok(()) => return Ok(LockedFile::new(file)),
                 Err(error)
                     if error.kind() == std::io::ErrorKind::WouldBlock
                         && started.elapsed() < LOCK_TIMEOUT =>
@@ -3499,11 +3499,48 @@ impl fmt::Debug for HouseholdVault {
     }
 }
 
-struct LockedFile(File);
+#[cfg(test)]
+struct LockedFileDropObserver {
+    label: &'static str,
+    events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+}
+
+struct LockedFile {
+    file: File,
+    #[cfg(test)]
+    drop_observer: Option<LockedFileDropObserver>,
+}
+
+impl LockedFile {
+    fn new(file: File) -> Self {
+        Self {
+            file,
+            #[cfg(test)]
+            drop_observer: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn observe_drop(
+        &mut self,
+        label: &'static str,
+        events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    ) {
+        self.drop_observer = Some(LockedFileDropObserver { label, events });
+    }
+}
 
 impl Drop for LockedFile {
     fn drop(&mut self) {
-        let _ = self.0.unlock();
+        let _ = self.file.unlock();
+        #[cfg(test)]
+        if let Some(observer) = &self.drop_observer {
+            observer
+                .events
+                .lock()
+                .expect("lock drop observer poisoned")
+                .push(observer.label);
+        }
     }
 }
 
@@ -3913,7 +3950,7 @@ fn validate_held_lock(lock: &LockedFile, path: &Path, owner_uid: u32) -> Result<
     let path_metadata = std::fs::symlink_metadata(path)
         .map_err(|_| PortError::new("household_vault_lease", "held lock path is unavailable"))?;
     let file_metadata = lock
-        .0
+        .file
         .metadata()
         .map_err(|_| PortError::new("household_vault_lease", "held lock is unavailable"))?;
     if path_metadata.file_type().is_symlink()
@@ -3939,7 +3976,7 @@ fn validate_held_lock(lock: &LockedFile, path: &Path) -> Result<(), PortError> {
     let path_metadata = std::fs::symlink_metadata(path)
         .map_err(|_| PortError::new("household_vault_lease", "held lock path is unavailable"))?;
     let file_metadata = lock
-        .0
+        .file
         .metadata()
         .map_err(|_| PortError::new("household_vault_lease", "held lock is unavailable"))?;
     if path_metadata.file_type().is_symlink()
@@ -5425,6 +5462,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(test_root);
     }
 
+    fn observe_vault_lease_lock_release_order(
+        vault_lease: &mut HouseholdVaultLease,
+    ) -> Arc<std::sync::Mutex<Vec<&'static str>>> {
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        Arc::get_mut(&mut vault_lease.vault_lock)
+            .expect("vault lock must not be shared before an operation is detached")
+            .observe_drop("vault", Arc::clone(&events));
+        Arc::get_mut(&mut vault_lease.lifecycle_lease.lock)
+            .expect("lifecycle lock must not be shared before an operation is detached")
+            .observe_drop("lifecycle", Arc::clone(&events));
+        events
+    }
+
+    #[tokio::test]
+    async fn ordinary_vault_lease_releases_vault_before_lifecycle() {
+        let test_root =
+            std::env::temp_dir().join(format!("heyfood-vault-release-order-{}", Uuid::new_v4()));
+        let vault = HouseholdVault::open(
+            &test_root.join("data"),
+            AccountId::parse("acct_example_01").unwrap(),
+        )
+        .unwrap();
+        let lifecycle_lease = vault
+            .acquire_lifecycle_lease(CancellationToken::new())
+            .await
+            .unwrap();
+        let mut vault_lease = vault
+            .acquire_vault_lease(
+                lifecycle_lease,
+                HouseholdVaultLeaseModeV1::CreateIfMissing,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let release_events = observe_vault_lease_lock_release_order(&mut vault_lease);
+
+        drop(vault_lease);
+
+        assert_eq!(*release_events.lock().unwrap(), vec!["vault", "lifecycle"]);
+        drop(
+            vault
+                .acquire_lifecycle_lease(CancellationToken::new())
+                .await
+                .unwrap(),
+        );
+        let _ = std::fs::remove_dir_all(test_root);
+    }
+
     #[tokio::test]
     async fn detached_operation_guard_retains_both_locks_after_outer_lease_drop() {
         let test_root = std::env::temp_dir().join(format!(
@@ -5440,7 +5525,7 @@ mod tests {
             .acquire_lifecycle_lease(CancellationToken::new())
             .await
             .unwrap();
-        let vault_lease = vault
+        let mut vault_lease = vault
             .acquire_vault_lease(
                 lifecycle_lease,
                 HouseholdVaultLeaseModeV1::CreateIfMissing,
@@ -5448,11 +5533,13 @@ mod tests {
             )
             .await
             .unwrap();
+        let release_events = observe_vault_lease_lock_release_order(&mut vault_lease);
         let detached_operation = vault_lease
             .acquire_operation(&CancellationToken::new())
             .await
             .unwrap();
         drop(vault_lease);
+        assert!(release_events.lock().unwrap().is_empty());
 
         let cancellation = CancellationToken::new();
         let trigger = cancellation.clone();
@@ -5467,6 +5554,7 @@ mod tests {
         );
 
         drop(detached_operation);
+        assert_eq!(*release_events.lock().unwrap(), vec!["vault", "lifecycle"]);
         drop(
             vault
                 .acquire_lifecycle_lease(CancellationToken::new())

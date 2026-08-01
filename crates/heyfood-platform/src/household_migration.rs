@@ -625,8 +625,9 @@ where
     migration
         .retire_verified_snapshot(&source_lease, &verification, CancellationToken::new())
         .await?;
-    drop(vault_lease);
-    drop(source_lease);
+    let lifecycle = vault_lease.release_vault(CancellationToken::new()).await?;
+    let lifecycle = migration.release_source_locks_retaining_lifecycle(source_lease, lifecycle)?;
+    drop(lifecycle);
 
     Ok(NativeHouseholdMigrationCompletionV1 {
         repository,
@@ -1041,8 +1042,14 @@ mod tests {
         )
         .await
         .unwrap();
-        drop(vault_lease);
-        drop(source_lease);
+        let lifecycle = vault_lease
+            .release_vault(CancellationToken::new())
+            .await
+            .unwrap();
+        let lifecycle = migration
+            .release_source_locks_retaining_lifecycle(source_lease, lifecycle)
+            .unwrap();
+        drop(lifecycle);
 
         let broker = FixedSourceBroker::missing();
         let completion = complete_native_household_initialization_with_reservation_v1(
