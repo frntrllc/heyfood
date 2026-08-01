@@ -53,6 +53,30 @@ launch the TUI, automate a terminal, or record asset contents. `HOME`,
 `HEYFOOD_BIN_DIR`, and `HEYFOOD_STATE_DIR` still select the isolated profile
 for the journey.
 
+The approved candidate version and an installer-request version are separate
+inputs. The ordinary form above requests the approved `0.6.3` candidate. For
+Journey B's post-migration refusal, run this exact command against that same
+approved candidate set and the isolated profile that now contains v0.6.3:
+
+```bash
+HOME="$journey_home" \
+HEYFOOD_BIN_DIR="$journey_bin_directory" \
+HEYFOOD_STATE_DIR="$journey_state_directory" \
+scripts/release/candidate-transport.sh \
+  --expect-no-download 0.6.2 \
+  "$candidate_directory" \
+  0.6.3 \
+  "$approved_manifest_sha256" \
+  ./install.sh
+```
+
+The expected result is exit status 1 with exactly
+`heyfood installer: this installer supports heyfood 0.6.3; requested 0.6.2`
+on stderr and no stdout. In this mode the fixture verifies the approved
+candidate binding but refuses every `curl` invocation before serving bytes;
+it also fails if the installer accepts the request or emits any other result.
+The command does not launch or automate the TUI.
+
 ## Preconditions
 
 - Use isolated local OS profiles and disposable hello.food test accounts.
@@ -128,12 +152,13 @@ for the journey.
    member, restart, and confirm its local declared profile and selected scope
    persist.
 4. After the native-state compatibility floor exists, invoke the current
-   v0.6.3 installer with `HEYFOOD_VERSION=0.6.2`. Confirm its exact
-   supported-version gate refuses the request before any release download or
-   executable replacement, leaves v0.6.3 installed, and leaves the floor and
-   encrypted household state unchanged. Do not run the archived v0.6.2
-   installer or binary: neither knows about the future floor, and either is
-   unsupported and unprotected after migration.
+   v0.6.3 installer with the exact `--expect-no-download 0.6.2` candidate
+   transport command above. Confirm its exact supported-version gate refuses
+   the request before any release download or executable replacement, leaves
+   v0.6.3 installed, and leaves the floor and encrypted household state
+   unchanged. Do not run the archived v0.6.2 installer or binary: neither
+   knows about the future floor, and either is unsupported and unprotected
+   after migration.
 
 ## Journey C — authorization rollover without household rebinding
 

@@ -262,6 +262,9 @@ done
 grep -Fq 'scripts/release/candidate-transport.sh' \
   "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" ||
   fail "manual household acceptance must use the checked-in candidate transport"
+grep -Fq -- '--expect-no-download 0.6.2' \
+  "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" ||
+  fail "Journey B must document the exact no-download v0.6.2 refusal mode"
 
 candidate_manifest_sha256=$(shasum -a 256 \
   "$native_state_distribution/SHA256SUMS" | awk '{print $1}')
@@ -300,6 +303,98 @@ cmp \
 cmp \
   "$native_state_distribution/heyfood-v0.6.3-x86_64-unknown-linux-gnu.tar.gz" \
   "$candidate_transport_output/product.tar.gz"
+
+refusal_root="$CASE_DIR/candidate-transport-refusal"
+refusal_home="$refusal_root/home"
+refusal_bin="$refusal_root/bin"
+refusal_state="$refusal_root/state"
+refusal_floor="$refusal_state/data/compatibility/native-state-floor.v1.json"
+refusal_vault="$refusal_state/data/accounts/test-account/household-state.enc"
+refusal_stdout="$refusal_root/stdout"
+refusal_stderr="$refusal_root/stderr"
+expected_refusal="$refusal_root/expected.stderr"
+mkdir -p -- \
+  "$refusal_home" \
+  "$refusal_bin" \
+  "$(dirname "$refusal_floor")" \
+  "$(dirname "$refusal_vault")"
+chmod 0700 \
+  "$refusal_home" \
+  "$refusal_bin" \
+  "$refusal_state" \
+  "$refusal_state/data" \
+  "$(dirname "$refusal_floor")" \
+  "$refusal_state/data/accounts" \
+  "$(dirname "$refusal_vault")"
+printf '#!/usr/bin/env bash\nprintf "heyfood 0.6.3\\n"\n' \
+  >"$refusal_bin/heyfood"
+printf 'native-state floor sentinel\n' >"$refusal_floor"
+printf 'encrypted household state sentinel\n' >"$refusal_vault"
+chmod 0755 "$refusal_bin/heyfood"
+chmod 0600 "$refusal_floor" "$refusal_vault"
+cp "$refusal_bin/heyfood" "$refusal_root/heyfood.before"
+cp "$refusal_floor" "$refusal_root/floor.before"
+cp "$refusal_vault" "$refusal_root/vault.before"
+printf '%s\n' \
+  'heyfood installer: this installer supports heyfood 0.6.3; requested 0.6.2' \
+  >"$expected_refusal"
+
+refusal_status=0
+HOME="$refusal_home" \
+  HEYFOOD_BIN_DIR="$refusal_bin" \
+  HEYFOOD_STATE_DIR="$refusal_state" \
+  "$candidate_transport" \
+  --expect-no-download 0.6.2 \
+  "$native_state_distribution" \
+  0.6.3 \
+  "$candidate_manifest_sha256" \
+  "$ROOT/install.sh" >"$refusal_stdout" 2>"$refusal_stderr" ||
+  refusal_status=$?
+[[ "$refusal_status" -eq 1 ]] ||
+  fail "the candidate refusal fixture did not preserve installer exit status 1"
+[[ ! -s "$refusal_stdout" ]] ||
+  fail "the current installer wrote stdout before refusing requested v0.6.2"
+cmp "$expected_refusal" "$refusal_stderr" ||
+  fail "the current installer did not receive requested v0.6.2 or emit the exact refusal"
+cmp "$refusal_root/heyfood.before" "$refusal_bin/heyfood" ||
+  fail "the no-download refusal changed the installed executable sentinel"
+cmp "$refusal_root/floor.before" "$refusal_floor" ||
+  fail "the no-download refusal changed the native-state floor sentinel"
+cmp "$refusal_root/vault.before" "$refusal_vault" ||
+  fail "the no-download refusal changed the encrypted household state sentinel"
+
+prohibited_download_installer="$CASE_DIR/prohibited-download-installer.sh"
+prohibited_download_output="$CASE_DIR/prohibited-download-output"
+prohibited_download_stderr="$CASE_DIR/prohibited-download.stderr"
+cat >"$prohibited_download_installer" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT:?}"
+: "${HEYFOOD_VERSION:?}"
+[[ "$HEYFOOD_VERSION" == "0.6.2" ]]
+curl -qfsSL \
+  --proto '=https' \
+  --tlsv1.2 \
+  --retry 3 \
+  --output "$HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT" \
+  "https://github.com/frntrllc/heyfood/releases/download/v0.6.3/SHA256SUMS"
+EOF
+chmod 0755 "$prohibited_download_installer"
+if HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT="$prohibited_download_output" \
+  "$candidate_transport" \
+  --expect-no-download 0.6.2 \
+  "$native_state_distribution" \
+  0.6.3 \
+  "$candidate_manifest_sha256" \
+  "$prohibited_download_installer" >/dev/null 2>"$prohibited_download_stderr"; then
+  fail "expect-no-download mode accepted an installer curl invocation"
+fi
+grep -Fq \
+  'candidate transport: the installer attempted a download in expect-no-download mode' \
+  "$prohibited_download_stderr" ||
+  fail "expect-no-download mode did not fail closed on curl invocation"
+[[ ! -e "$prohibited_download_output" && ! -L "$prohibited_download_output" ]] ||
+  fail "expect-no-download mode served candidate bytes"
 
 rejected_transport_output="$CASE_DIR/rejected-candidate-transport-output"
 if HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT="$rejected_transport_output" \

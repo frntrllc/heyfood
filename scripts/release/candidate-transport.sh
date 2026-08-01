@@ -70,13 +70,39 @@ serve_verified_asset() {
   install -m 0600 "$source" "$destination"
 }
 
+refuse_asset_transport() {
+  local invocation_marker=${HEYFOOD_CANDIDATE_TRANSPORT_INVOCATION_MARKER:-}
+
+  [[ "$invocation_marker" == /* &&
+    "$invocation_marker" != *$'\n'* &&
+    "$invocation_marker" != *$'\r'* &&
+    ! -e "$invocation_marker" &&
+    ! -L "$invocation_marker" ]] ||
+    fail "the expect-no-download invocation marker is unsafe"
+  (umask 077 && printf 'curl invoked\n' >"$invocation_marker") ||
+    fail "could not record the prohibited curl invocation"
+  fail "the installer invoked curl in expect-no-download mode"
+}
+
 if [[ "${0##*/}" == "curl" ]]; then
+  if [[ "${HEYFOOD_CANDIDATE_TRANSPORT_EXPECT_NO_DOWNLOAD:-}" == "1" ]]; then
+    refuse_asset_transport
+  fi
   serve_verified_asset "$@"
   exit 0
 fi
 
+expect_no_download=false
+installer_request_version=
+if [[ "${1:-}" == "--expect-no-download" ]]; then
+  [[ "$#" -ge 2 ]] || fail "--expect-no-download requires an installer request version"
+  expect_no_download=true
+  installer_request_version=$2
+  shift 2
+fi
+
 if [[ "$#" -ne 4 ]]; then
-  echo "usage: candidate-transport.sh RELEASE_DIRECTORY VERSION SHA256SUMS_SHA256 INSTALLER" >&2
+  echo "usage: candidate-transport.sh [--expect-no-download INSTALLER_REQUEST_VERSION] RELEASE_DIRECTORY APPROVED_VERSION SHA256SUMS_SHA256 INSTALLER" >&2
   exit 64
 fi
 
@@ -86,7 +112,15 @@ approved_manifest_sha256=$3
 installer_input=$4
 
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
-  fail "VERSION must be an exact release version"
+  fail "APPROVED_VERSION must be an exact release version"
+if [[ -z "$installer_request_version" ]]; then
+  installer_request_version=$version
+fi
+[[ "$installer_request_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  fail "INSTALLER_REQUEST_VERSION must be an exact release version"
+if [[ "$expect_no_download" == true && "$installer_request_version" == "$version" ]]; then
+  fail "expect-no-download requires a request different from the approved version"
+fi
 [[ "$approved_manifest_sha256" =~ ^[0-9a-f]{64}$ ]] ||
   fail "SHA256SUMS_SHA256 must be a lowercase SHA-256 digest"
 [[ -d "$release_directory_input" && ! -L "$release_directory_input" ]] ||
@@ -104,7 +138,13 @@ script="$script_directory/$(basename "${BASH_SOURCE[0]}")"
 verify_assets="$script_directory/verify-assets.sh"
 [[ -x "$verify_assets" ]] || fail "the release-set verifier is unavailable"
 
-"$verify_assets" "$release_directory" "$version" --native-state
+if [[ "$expect_no_download" == true ]]; then
+  "$verify_assets" "$release_directory" "$version" --native-state \
+    >/dev/null 2>&1 ||
+    fail "the approved candidate release set did not verify"
+else
+  "$verify_assets" "$release_directory" "$version" --native-state
+fi
 [[ "$(sha256_file "$release_directory/SHA256SUMS")" == "$approved_manifest_sha256" ]] ||
   fail "the candidate release-set digest does not match the approved digest"
 for candidate_asset in "$release_directory"/*; do
@@ -119,9 +159,43 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 ln -s "$script" "$transport_bin/curl"
 
+if [[ "$expect_no_download" == true ]]; then
+  invocation_marker="$transport_bin/curl-invoked"
+  refusal_stdout="$transport_bin/installer.stdout"
+  refusal_stderr="$transport_bin/installer.stderr"
+  expected_refusal="$transport_bin/expected.stderr"
+  printf 'heyfood installer: this installer supports heyfood %s; requested %s\n' \
+    "$version" "$installer_request_version" >"$expected_refusal"
+
+  installer_status=0
+  PATH="$transport_bin:$PATH" \
+    HEYFOOD_VERSION="$installer_request_version" \
+    HEYFOOD_CANDIDATE_TRANSPORT_DIRECTORY="$release_directory" \
+    HEYFOOD_CANDIDATE_TRANSPORT_VERSION="$version" \
+    HEYFOOD_CANDIDATE_TRANSPORT_MANIFEST_SHA256="$approved_manifest_sha256" \
+    HEYFOOD_CANDIDATE_TRANSPORT_EXPECT_NO_DOWNLOAD=1 \
+    HEYFOOD_CANDIDATE_TRANSPORT_INVOCATION_MARKER="$invocation_marker" \
+    /bin/bash "$installer" >"$refusal_stdout" 2>"$refusal_stderr" ||
+    installer_status=$?
+
+  [[ ! -e "$invocation_marker" && ! -L "$invocation_marker" ]] ||
+    fail "the installer attempted a download in expect-no-download mode"
+  [[ "$installer_status" -eq 1 ]] ||
+    fail "the installer did not exit 1 at its supported-version refusal"
+  [[ ! -s "$refusal_stdout" ]] ||
+    fail "the installer wrote stdout before its supported-version refusal"
+  cmp -s "$expected_refusal" "$refusal_stderr" ||
+    fail "the installer did not emit the exact supported-version refusal"
+
+  printf 'heyfood installer: this installer supports heyfood %s; requested %s\n' \
+    "$version" "$installer_request_version" >&2
+  exit 1
+fi
+
 PATH="$transport_bin:$PATH" \
-  HEYFOOD_VERSION="$version" \
+  HEYFOOD_VERSION="$installer_request_version" \
   HEYFOOD_CANDIDATE_TRANSPORT_DIRECTORY="$release_directory" \
   HEYFOOD_CANDIDATE_TRANSPORT_VERSION="$version" \
   HEYFOOD_CANDIDATE_TRANSPORT_MANIFEST_SHA256="$approved_manifest_sha256" \
+  HEYFOOD_CANDIDATE_TRANSPORT_EXPECT_NO_DOWNLOAD=0 \
   /bin/bash "$installer"
