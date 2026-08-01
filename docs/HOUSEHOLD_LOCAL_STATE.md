@@ -97,8 +97,11 @@ The immutable v0.6.2 release remains four product archives plus its checksum
 manifest and gains no verifier or declaration. A managed v0.6.2-to-v0.6.3
 upgrade must preserve the prior executable until the v0.6.3 product,
 standalone verifier, declaration, checksum, and native-state floor all verify.
-After the floor exists, a managed pre-native-state downgrade must fail before
-download or executable replacement.
+After the floor exists, the current v0.6.3 installer invoked with
+`HEYFOOD_VERSION=0.6.2` must fail at its exact supported-version gate before
+download or executable replacement and must leave v0.6.3 and local state
+unchanged. The archived v0.6.2 installer and binary do not know about the
+future floor; executing either after migration is unsupported and unprotected.
 
 ## Diagnostic handling
 

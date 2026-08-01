@@ -97,9 +97,9 @@
   "manual_release_gates": [
     "clean_v0_6_3_install",
     "v0_6_2_to_v0_6_3_upgrade",
-    "pre_native_state_downgrade_floor_refusal",
+    "current_v0_6_3_installer_refuses_v0_6_2_request",
     "authorization_rollover_preserves_household_binding",
-    "logout_removes_account_vault_and_preserves_global_floor"
+    "rotated_session_logout_refreshes_resumes_teardown_removes_vault_key_and_preserves_global_floor"
   ],
   "canary_or_defer": [
     "menu_watch_management"

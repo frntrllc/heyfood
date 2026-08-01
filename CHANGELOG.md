@@ -21,6 +21,9 @@ authentication contracts are stabilized.
   `SHA256SUMS`. Both macOS executables are Developer ID signed and notarized;
   every public asset is attested and the complete downloaded set is verified
   and smoke-qualified.
+- Request the closed v2 agent manifest explicitly for release verification.
+  The current installer rejects a requested v0.6.2 before download or
+  replacement; archived v0.6.2 code is not a protected post-migration rollback.
 - Replace backend stage and tool identifiers with calm, human progress copy,
   while unknown identifiers fall back to neutral language.
 - Render restaurant recommendations and full menus as structured terminal

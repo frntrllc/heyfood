@@ -130,11 +130,13 @@ jobs:
           "$binary" --help >/dev/null
           "$binary" register --help >/dev/null
           "$binary" logout --help >/dev/null
-          "$binary" agent describe >candidate-agent-manifest.json
+          "$binary" agent describe --schema-version 2 \
+            >candidate-agent-manifest.json
           jq -e \
             --arg commit "$GITHUB_SHA" \
             --arg tree "$(git rev-parse 'HEAD^{tree}')" \
-            '.build.distribution_channel == "release"
+            '.schema_version == 2
+             and .build.distribution_channel == "release"
              and .build.dirty == false
              and .build.source_commit == $commit
              and .build.source_tree == $tree' \

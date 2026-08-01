@@ -8,7 +8,6 @@ readonly ROOT
 readonly INSTALLER="$ROOT/install.sh"
 TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/heyfood-installer-tests.XXXXXX")
 readonly TEST_ROOT
-readonly PRE_NATIVE_INSTALLER="$TEST_ROOT/install-pre-native-state.sh"
 
 (
   cd "$ROOT"
@@ -22,12 +21,6 @@ TARGET_DIRECTORY=$(
 readonly TARGET_DIRECTORY
 readonly VERIFIER_BINARY="$TARGET_DIRECTORY/debug/heyfood-installer"
 test -x "$VERIFIER_BINARY"
-
-sed \
-  's/^readonly NATIVE_STATE_RELEASE_VERSION="0.6.3"$/readonly NATIVE_STATE_RELEASE_VERSION=""/' \
-  "$INSTALLER" >"$PRE_NATIVE_INSTALLER"
-chmod 0755 "$PRE_NATIVE_INSTALLER"
-grep -Fqx 'readonly NATIVE_STATE_RELEASE_VERSION=""' "$PRE_NATIVE_INSTALLER"
 
 cleanup() {
   rm -rf -- "$TEST_ROOT"
@@ -52,6 +45,12 @@ assert_not_contains() {
   if grep -Fi -- "$unexpected" "$path" >/dev/null; then
     fail "expected $path not to contain: $unexpected"
   fi
+}
+
+line_of_exact() {
+  local path="$1"
+  local expected="$2"
+  awk -v expected="$expected" '$0 == expected { print NR; exit }' "$path"
 }
 
 sha256_file() {
@@ -173,10 +172,6 @@ EOF
 
 use_native_state_installer() {
   CASE_INSTALLER="$INSTALLER"
-}
-
-use_pre_native_state_installer() {
-  CASE_INSTALLER="$PRE_NATIVE_INSTALLER"
 }
 
 make_release() {
@@ -347,6 +342,7 @@ write_native_state_floor() {
 }
 
 test_source_invariants() {
+  local download_line floor_line version_gate_line
   /bin/bash -n "$INSTALLER"
   [[ "$(sha256_file "$INSTALLER")  install.sh" == "$(tr -d '\n' <"$ROOT/install.sh.sha256")" ]] ||
     fail "install.sh.sha256 does not match install.sh"
@@ -366,6 +362,16 @@ test_source_invariants() {
   assert_not_contains "$INSTALLER" 'HEYFOOD_NATIVE_INSTALLATION_SUSPENDED'
   assert_not_contains "$INSTALLER" 'pypi'
   assert_not_contains "$INSTALLER" 'python'
+  version_gate_line=$(line_of_exact \
+    "$INSTALLER" "[[ \"\$VERSION\" == \"\$SUPPORTED_VERSION\" ]] ||")
+  floor_line=$(line_of_exact "$INSTALLER" 'inspect_native_state_floor')
+  download_line=$(line_of_exact \
+    "$INSTALLER" \
+    "download \"\$DOWNLOAD_BASE/\$CHECKSUMS\" \"\$CHECKSUMS_PATH\" ||")
+  if [[ -z "$version_gate_line" || -z "$floor_line" || -z "$download_line" ||
+    "$version_gate_line" -ge "$floor_line" || "$floor_line" -ge "$download_line" ]]; then
+    fail "the exact supported-version gate must precede floor inspection and downloads"
+  fi
   if grep -E '^[[:space:]]*(sudo|eval)([[:space:]]|$)' "$INSTALLER" >/dev/null; then
     fail "installer must not invoke sudo or eval"
   fi
@@ -540,6 +546,19 @@ assert_existing_binary_untouched() {
     fail "a failed installation changed the existing executable"
 }
 
+write_existing_v063_binary() {
+  mkdir -p "$BIN_DIR"
+  cat >"$BIN_DIR/heyfood" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'heyfood 0.6.3\n'
+  exit 0
+fi
+printf 'installed v0.6.3 sentinel\n'
+EOF
+  chmod 0755 "$BIN_DIR/heyfood"
+}
+
 test_checksum_failure_preserves_existing_binary() {
   new_case bad-checksum
   make_release 0.6.3 0.6.3 native
@@ -578,23 +597,41 @@ test_version_mismatch_preserves_existing_binary() {
   assert_existing_binary_untouched
 }
 
-test_pre_native_state_installer_rejects_recorded_floor_before_download() {
-  new_case pre-native-state-floor
-  use_pre_native_state_installer
-  make_release 0.6.3
-  write_existing_binary
+test_current_installer_refuses_v062_before_download_and_preserves_state() {
+  local binary_digest floor_digest state_digest state_sentinel
+  new_case current-installer-v062-refusal
+  use_native_state_installer
+  write_existing_v063_binary
   write_native_state_floor
+  state_sentinel="$HEYFOOD_STATE_DIR/data/accounts/test-account/household-state.enc"
+  mkdir -p "$(dirname "$state_sentinel")"
+  printf 'opaque encrypted household state sentinel\n' >"$state_sentinel"
+  binary_digest=$(sha256_file "$BIN_DIR/heyfood")
+  floor_digest=$(sha256_file \
+    "$HEYFOOD_STATE_DIR/data/compatibility/native-state-floor.v1.json")
+  state_digest=$(sha256_file "$state_sentinel")
+  export HEYFOOD_VERSION=0.6.2
   if run_installer; then
-    fail "an installer without native-state verification crossed a native-state floor"
+    fail "the current v0.6.3 installer accepted a v0.6.2 request"
   fi
 
   [[ ! -e "$DOWNLOAD_LOG" ]] ||
-    fail "the pre-native-state installer downloaded before rejecting the floor"
-  assert_contains "$STDERR_LOG" "predates the native-state compatibility floor"
-  assert_existing_binary_untouched
+    fail "the current installer downloaded before rejecting the v0.6.2 request"
+  assert_contains "$STDERR_LOG" \
+    "this installer supports heyfood 0.6.3; requested 0.6.2"
+  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.3" ]] ||
+    fail "the rejected v0.6.2 request replaced the installed v0.6.3 executable"
+  [[ "$(sha256_file "$BIN_DIR/heyfood")" == "$binary_digest" ]] ||
+    fail "the rejected v0.6.2 request changed the installed v0.6.3 bytes"
+  [[ "$(sha256_file \
+    "$HEYFOOD_STATE_DIR/data/compatibility/native-state-floor.v1.json")" == \
+    "$floor_digest" ]] ||
+    fail "the rejected v0.6.2 request changed the native-state floor"
+  [[ "$(sha256_file "$state_sentinel")" == "$state_digest" ]] ||
+    fail "the rejected v0.6.2 request changed account household state"
 }
 
-test_verified_native_state_install_and_compatible_rollback() {
+test_verified_native_state_install_and_compatible_reinstall() {
   new_case native-state-install
   use_native_state_installer
   make_release 0.6.3 0.6.3 native
@@ -612,7 +649,7 @@ test_verified_native_state_install_and_compatible_rollback() {
   write_native_state_floor
   run_installer
   [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.3" ]] ||
-    fail "a compatible native-state-aware rollback was rejected"
+    fail "a compatible native-state-aware reinstall was rejected"
 }
 
 test_malformed_native_state_floor_rejects_before_download() {
@@ -758,8 +795,8 @@ test_failed_install_preserves_known_legacy_pipx_symlink
 test_checksum_failure_preserves_existing_binary
 test_archive_shape_failure_preserves_existing_binary
 test_version_mismatch_preserves_existing_binary
-test_pre_native_state_installer_rejects_recorded_floor_before_download
-test_verified_native_state_install_and_compatible_rollback
+test_current_installer_refuses_v062_before_download_and_preserves_state
+test_verified_native_state_install_and_compatible_reinstall
 test_malformed_native_state_floor_rejects_before_download
 test_pre_native_state_and_disagreeing_metadata_preserve_existing_binary
 test_structurally_invalid_candidate_manifests_preserve_existing_binary

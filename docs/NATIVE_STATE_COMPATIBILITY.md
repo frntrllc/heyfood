@@ -10,9 +10,15 @@ does not contain a native-state declaration or a standalone
 The checked-in installer now coordinates `SUPPORTED_VERSION` and
 `NATIVE_STATE_RELEASE_VERSION` at `0.6.3`. It requires the v0.6.3 native-state
 asset set and never fabricates, targets, replaces, or expects new assets on the
-immutable v0.6.2 release. If a verified native-state floor exists, any
-installer configuration without the activated compatibility verifier is
-rejected before downloading anything.
+immutable v0.6.2 release. The current v0.6.3 installer accepts only its exact
+supported version. Invoking it with `HEYFOOD_VERSION=0.6.2` is rejected before
+any release download or executable replacement and leaves the installed v0.6.3
+binary, compatibility floor, and account state unchanged.
+
+The archived v0.6.2 installer and binary predate the future compatibility
+floor. They do not enforce it, and direct execution of either after native
+migration is unsupported and unprotected. They must not be used as a managed
+downgrade path.
 
 This source activation does not itself authorize a tag, upload, or public
 release; those remain protected release-workflow decisions.
@@ -68,11 +74,14 @@ addressable as `manifest-v2` and `doctor-v2`. The managed installer and release
 smoke request v2 explicitly; installed skills are neither silently replaced
 nor required to understand v2 during the binary upgrade.
 
-## Rollback boundary
+## Managed-install and archived-code boundary
 
 Once the native-state floor exists, managed installation accepts only a
 candidate whose maximum native-state version and complete capability set
-satisfy that floor. A pre-native-state binary is rejected before executable
-replacement. Direct execution of a pre-native-state binary after native
-migration is unsupported; the supported rollback is a native-state-compatible
-binary operating in its native rollback-read-only mode.
+satisfy that floor. The current v0.6.3 installer independently rejects every
+requested version other than v0.6.3 before download, so a request for v0.6.2
+cannot reach executable replacement. The compatibility floor cannot constrain
+an independently executed archived installer or binary; archived v0.6.2 code
+after migration remains unsupported and unprotected. A future supported
+rollback must use a separately qualified native-state-compatible binary in its
+native rollback-read-only mode.

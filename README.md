@@ -32,6 +32,11 @@ product archives, four verifier archives, one declaration, and `SHA256SUMS`.
 Windows distribution remains deferred to a separately qualified future
 release.
 
+After native household migration, the current installer rejects
+`HEYFOOD_VERSION=0.6.2` before download or replacement. The archived v0.6.2
+installer and binary do not enforce the later native-state floor; executing
+either after migration is unsupported and unprotected.
+
 ## Inspect or build from source
 
 The native workspace requires the Rust toolchain declared in `Cargo.toml`.

@@ -38,6 +38,12 @@ manifest are covered by GitHub artifact attestations. Public smoke verifies
 every attestation and the complete asset boundary before executing the product
 and verifier for its target.
 
+Before the standalone verifier runs, protected candidate and tag builds invoke
+`heyfood agent describe --schema-version 2`, require the closed v2 manifest,
+and bind its native-state declaration to the release declaration. The default
+v1 self-description remains the compatibility surface and is never passed to
+the v2-only verifier.
+
 The immutable v0.6.2 asset set remains exactly its released four product
 archives and checksum manifest. Native-state source does not add verifier or
 declaration assets to that historical release. v0.6.3 is the first activated

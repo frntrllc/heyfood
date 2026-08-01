@@ -398,11 +398,13 @@ jobs:
             jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
           test "$($binary --version)" = "heyfood $version"
           test "$($verifier --version)" = "heyfood-installer $version"
-          "$binary" agent describe >candidate-agent-manifest.json
+          "$binary" agent describe --schema-version 2 \
+            >candidate-agent-manifest.json
           jq -e \
             --arg commit "$GITHUB_SHA" \
             --arg tree "$(git rev-parse 'HEAD^{tree}')" \
-            '.build.distribution_channel == "candidate"
+            '.schema_version == 2
+             and .build.distribution_channel == "candidate"
              and .build.dirty == false
              and .build.source_commit == $commit
              and .build.source_tree == $tree' \

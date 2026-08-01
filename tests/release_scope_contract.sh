@@ -159,6 +159,19 @@ assert_four_targets "$protected_slice"
 assert_no_windows_release_path "$RELEASE_WORKFLOW"
 assert_no_windows_release_path "$PUBLIC_SMOKE_WORKFLOW"
 assert_no_windows_release_path "$protected_slice"
+for source in "$RELEASE_WORKFLOW" "$protected_slice"; do
+  v2_manifest_line=$(line_of "$source" 'agent describe --schema-version 2')
+  verifier_line=$(line_of "$source" '"$verifier" verify-native-state')
+  if [[ -z "$v2_manifest_line" || -z "$verifier_line" ||
+    "$v2_manifest_line" -ge "$verifier_line" ]]; then
+    fail "$source must request the closed v2 manifest before native-state verification"
+  fi
+  grep -Fq '.schema_version == 2' "$source" ||
+    fail "$source must assert the explicit candidate manifest schema"
+  if grep -Fq 'agent describe >candidate-agent-manifest.json' "$source"; then
+    fail "$source must not pass the default v1 manifest to the v2-only verifier"
+  fi
+done
 grep -Fq "if [[ -z \"\${HEYFOOD_QUALIFICATION_KEYCHAIN:-}\" ]]; then" "$protected_slice" ||
   fail "protected cleanup must tolerate a keychain that was never created"
 grep -Fq "if: \${{ always() && hashFiles('candidate-dist/**', 'candidate-evidence/**') != '' }}" \
@@ -329,9 +342,9 @@ jq -e '
   .manual_release_gates == [
     "clean_v0_6_3_install",
     "v0_6_2_to_v0_6_3_upgrade",
-    "pre_native_state_downgrade_floor_refusal",
+    "current_v0_6_3_installer_refuses_v0_6_2_request",
     "authorization_rollover_preserves_household_binding",
-    "logout_removes_account_vault_and_preserves_global_floor"
+    "rotated_session_logout_refreshes_resumes_teardown_removes_vault_key_and_preserves_global_floor"
   ]
 ' "$ROOT/tests/showcase/core-release-matrix.v1.json" >/dev/null ||
   fail "the core matrix must preserve the bounded distribution and non-gates"

@@ -41,6 +41,8 @@ assert_contains "$ROOT/README.md" "local encrypted household roster"
 assert_contains "$ROOT/README.md" "four native product archives and four"
 assert_contains "$ROOT/README.md" \
   "Member/Everyone hosted guidance and evaluation fail locally"
+assert_contains "$ROOT/README.md" \
+  "installer and binary do not enforce the later native-state floor"
 assert_contains "$ROOT/docs/CAPABILITY_STATUS.md" \
   "Supported in v$version: the human TUI adds or onboards active members atomically"
 assert_contains "$ROOT/docs/CLI_CONTRACT.md" \
@@ -55,11 +57,17 @@ assert_contains "$ROOT/docs/RELEASE_SIGNING.md" \
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
   "Journey A — clean v$version install and household lifecycle"
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
-  "Journey B — v0.6.2 to v$version upgrade and downgrade floor"
+  "Journey B — v0.6.2 to v$version upgrade and current-installer refusal"
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
   "Journey C — authorization rollover without household rebinding"
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
   "Journey D — logout vault teardown"
+assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
+  "Rotated-session logout refreshes, resumes teardown, removes vault/key, and retains floor"
+assert_contains "$ROOT/docs/NATIVE_STATE_COMPATIBILITY.md" \
+  "Invoking it with \`HEYFOOD_VERSION=0.6.2\` is rejected before"
+assert_contains "$ROOT/docs/NATIVE_STATE_COMPATIBILITY.md" \
+  "archived v0.6.2 installer and binary"
 assert_contains "$ROOT/docs/JSON_SCHEMAS.md" "supported v$version release"
 assert_contains "$ROOT/docs/SHOWCASE_CONFORMANCE.md" "\`$version\` bounded release matrix"
 assert_contains "$ROOT/tests/installer_contract.sh" "SUPPORTED_VERSION=\"$version\""

@@ -16,8 +16,9 @@ tokens, vault bytes, or authorization responses.
   content-free qualification transport fixture. The fixture may substitute
   transport only; it must serve the exact candidate bytes and must not edit the
   installer or automate the TUI.
-- Retain the immutable public v0.6.2 installer and host product archive for the
-  upgrade and downgrade-floor journeys; do not alter that release.
+- Retain the immutable public v0.6.2 installer and host product archive only to
+  prepare the pre-migration side of the upgrade journey; do not alter that
+  release and do not execute its installer or binary after native migration.
 - On macOS, use the signed and notarized candidate. On Linux, use the exact
   attested candidate. Confirm the target's public-set attestation before any
   TUI journey.
@@ -65,7 +66,7 @@ tokens, vault bytes, or authorization responses.
 11. Exit normally and confirm alternate screen, cursor, input mode, and terminal
     presentation are restored.
 
-## Journey B — v0.6.2 to v0.6.3 upgrade and downgrade floor
+## Journey B — v0.6.2 to v0.6.3 upgrade and current-installer refusal
 
 1. In a new isolated profile, install the immutable public v0.6.2 product and
    connect a disposable account. Launch and exit normally so its supported
@@ -79,10 +80,13 @@ tokens, vault bytes, or authorization responses.
    repair or imported-snapshot fallback is reported. Add and save one synthetic
    member, restart, and confirm its local declared profile and selected scope
    persist.
-4. After the native-state compatibility floor exists, invoke the immutable
-   v0.6.2 managed installer. Confirm it refuses the downgrade before release
-   download or executable replacement, leaves v0.6.3 installed, and leaves the
-   encrypted household state usable by v0.6.3.
+4. After the native-state compatibility floor exists, invoke the current
+   v0.6.3 installer with `HEYFOOD_VERSION=0.6.2`. Confirm its exact
+   supported-version gate refuses the request before any release download or
+   executable replacement, leaves v0.6.3 installed, and leaves the floor and
+   encrypted household state unchanged. Do not run the archived v0.6.2
+   installer or binary: neither knows about the future floor, and either is
+   unsupported and unprotected after migration.
 
 ## Journey C — authorization rollover without household rebinding
 
@@ -101,10 +105,13 @@ tokens, vault bytes, or authorization responses.
 
 ## Journey D — logout vault teardown
 
-1. With the synthetic household present, run `heyfood logout`. If the test
-   harness injects an interruption, resume the documented logout recovery and
-   confirm it completes the original teardown rather than creating a second
-   account or household operation.
+1. With the synthetic household present, use the content-free test control to
+   expire or rotate the disposable account's application session immediately
+   before `heyfood logout`; perform no intervening authenticated operation.
+   Confirm logout refreshes or reconciles that authority for the same account
+   before revocation begins. If the test harness injects an interruption,
+   resume the documented logout recovery and confirm it completes the original
+   teardown rather than creating a second account or household operation.
 2. Confirm hosted cleanup is reported truthfully and local cleanup completes
    even if a controlled remote step is unavailable. Do not record remote
    response content.
@@ -135,13 +142,14 @@ tokens, vault bytes, or authorization responses.
 | Terminal restoration |  | `terminal_restoration_failed` |
 | v0.6.2 to v0.6.3 atomic upgrade |  | `upgrade_failed` |
 | Native initialization preserves account binding |  | `migration_binding_failed` |
-| Downgrade floor refuses v0.6.2 before replacement |  | `downgrade_floor_failed` |
+| Current v0.6.3 installer refuses requested v0.6.2 before download |  | `managed_v062_request_refusal_failed` |
 | Expired-authority rollover preserves household |  | `authorization_rollover_failed` |
 | Same-account login replacement preserves household |  | `authorization_replacement_failed` |
 | Member preflight precedes expired-authority refresh |  | `member_refresh_order_failed` |
 | Logout resumes and completes |  | `logout_resume_failed` |
 | Account key, vault, credentials, and journal absent |  | `vault_teardown_failed` |
 | Global native-state downgrade floor retained |  | `downgrade_floor_removed` |
+| Rotated-session logout refreshes, resumes teardown, removes vault/key, and retains floor |  | `rotated_session_logout_failed` |
 | Unrelated non-credential state retained |  | `teardown_scope_failed` |
 | Post-logout launch exposes no prior household |  | `post_logout_isolation_failed` |
 
