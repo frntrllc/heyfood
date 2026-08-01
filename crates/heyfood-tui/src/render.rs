@@ -6,7 +6,152 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::{AppModel, OperationState, Speaker, slash_suggestions};
+use heyfood_core::{
+    HouseholdLifecycleV1, HouseholdProfileStateV1, HouseholdScope, HouseholdSubjectId,
+    RelationshipV1, terminal_safe_text,
+};
+
+use crate::{
+    AppModel, HouseholdMemberPresentationV1, OperationState, ProfileCopyStateV1, Speaker,
+    slash_suggestions,
+};
+
+#[must_use]
+pub fn profile_copy(state: ProfileCopyStateV1) -> String {
+    match state {
+        ProfileCopyStateV1::OnboardingSaveReview => "Save this profile on this device? Saving does not grant profile-sync consent. If you already granted consent, sync may continue after the local save.".into(),
+        ProfileCopyStateV1::OnboardingSaveCancelled => {
+            "Profile not saved. Profile-sync consent was not changed.".into()
+        }
+        ProfileCopyStateV1::SavedWithAbsentConsent => "Saved on this device. Sync is off because profile-sync consent is not granted. Run /profile consent to review consent.".into(),
+        ProfileCopyStateV1::ConsentReview => "Grant profile-sync consent for Me? This allows hello.food to store and update your owner dietary profile in your account. It does not sync household members, and granting consent does not upload a profile.".into(),
+        ProfileCopyStateV1::ConsentReviewPrompt => {
+            "Press y to grant consent; n or Esc to cancel.".into()
+        }
+        ProfileCopyStateV1::ConsentCancelled => {
+            "Profile-sync consent was not changed. Nothing was uploaded.".into()
+        }
+        ProfileCopyStateV1::ConsentGranted { consent_version } => format!(
+            "Profile-sync consent active for Me (version {}). No profile was uploaded.",
+            consent_version.get()
+        ),
+        ProfileCopyStateV1::RetryOffered { consent_version } => format!(
+            "Consent version {} is active. Your owner profile is still saved only on this device. Run /profile retry-sync to retry.",
+            consent_version.get()
+        ),
+        ProfileCopyStateV1::InterruptedRetry => {
+            "Sync was interrupted. Run /profile retry-sync to resume the exact saved owner profile."
+                .into()
+        }
+        ProfileCopyStateV1::ConsentVersionChanged => {
+            "Profile-sync consent changed. Review and save your owner profile again before syncing."
+                .into()
+        }
+        ProfileCopyStateV1::ConsentRevoked => "Profile-sync consent is no longer active. Run /profile consent, then review and save your owner profile again.".into(),
+        ProfileCopyStateV1::SyncPending => "Saved on this device; sync pending.".into(),
+        ProfileCopyStateV1::RetryUnavailable => {
+            "Owner profile sync retry is unavailable.".into()
+        }
+    }
+}
+
+#[must_use]
+pub fn household_panel_copy(
+    members: &[HouseholdMemberPresentationV1],
+    active_scope: &HouseholdScope,
+    management_enabled: bool,
+) -> String {
+    let mut output = String::from("Household\n\nActive\n");
+    for member in members
+        .iter()
+        .filter(|member| member.lifecycle() == HouseholdLifecycleV1::Active)
+    {
+        let label = match member.subject() {
+            HouseholdSubjectId::Self_ => "Me",
+            HouseholdSubjectId::Member(_) => member.display_label(),
+        };
+        let current = match active_scope {
+            HouseholdScope::Subject(subject) if subject == member.subject() => " · current",
+            HouseholdScope::Subject(_) | HouseholdScope::Everyone => "",
+        };
+        output.push_str(&format!(
+            "• {} · {} · {}{}\n",
+            terminal_safe_text(label),
+            relationship_copy(member.relationship()),
+            profile_readiness_copy(member.profile_readiness()),
+            current
+        ));
+    }
+    let archived = members
+        .iter()
+        .filter(|member| member.lifecycle() == HouseholdLifecycleV1::Archived)
+        .collect::<Vec<_>>();
+    if !archived.is_empty() {
+        output.push_str("\nArchived (not selectable)\n");
+        for member in archived {
+            output.push_str(&format!(
+                "• {} · {} · {}\n",
+                terminal_safe_text(member.display_label()),
+                relationship_copy(member.relationship()),
+                profile_readiness_copy(member.profile_readiness())
+            ));
+        }
+    }
+    if matches!(active_scope, HouseholdScope::Everyone) {
+        output.push_str("\nCurrent target: Everyone\n");
+    }
+    if management_enabled {
+        output.push_str("\nAdd a household member: /household add\n");
+    }
+    output.push_str(
+        "\nEdit, archive, restore, and permanent member erasure are not yet available in the native TUI.",
+    );
+    output
+}
+
+fn relationship_copy(relationship: RelationshipV1) -> &'static str {
+    match relationship {
+        RelationshipV1::Self_ => "self",
+        RelationshipV1::Spouse => "spouse",
+        RelationshipV1::Partner => "partner",
+        RelationshipV1::Parent => "parent",
+        RelationshipV1::Child => "child",
+        RelationshipV1::Sibling => "sibling",
+        RelationshipV1::Grandparent => "grandparent",
+        RelationshipV1::Friend => "friend",
+        RelationshipV1::Other => "other",
+    }
+}
+
+fn profile_readiness_copy(readiness: HouseholdProfileStateV1) -> &'static str {
+    match readiness {
+        HouseholdProfileStateV1::Incomplete => "incomplete",
+        HouseholdProfileStateV1::LocalOnly => "saved on this device",
+        HouseholdProfileStateV1::PendingSync => "pending sync",
+        HouseholdProfileStateV1::Synced => "synced",
+        HouseholdProfileStateV1::Conflicted => "conflicted",
+    }
+}
+
+#[must_use]
+pub fn household_chrome_copy(model: &AppModel, width: u16) -> Option<String> {
+    let label = terminal_safe_text(model.household_chrome_label()?);
+    let maximum = match responsive_mode(width) {
+        ResponsiveMode::Compact => usize::from(width.saturating_sub(24)).max(4),
+        ResponsiveMode::Standard => usize::from(width.saturating_sub(50)).max(8),
+        ResponsiveMode::Wide => usize::from(width.saturating_sub(72)).max(12),
+    };
+    let mut characters = label.chars();
+    let retained = characters.by_ref().take(maximum).collect::<String>();
+    let label = if characters.next().is_some() && maximum > 1 {
+        let mut shortened = retained.chars().take(maximum - 1).collect::<String>();
+        shortened.push('…');
+        shortened
+    } else {
+        retained
+    };
+    Some(format!("For: {label}"))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResponsiveMode {
@@ -68,22 +213,28 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         OperationState::Finishing(_) => "finishing",
         OperationState::Exiting(_) => "closing",
     };
+    let scope = household_chrome_copy(model, area.width)
+        .map(|scope| format!(" · {scope}"))
+        .unwrap_or_default();
     let line = match responsive_mode(area.width) {
         ResponsiveMode::Compact => Line::from(vec![
             Span::styled(" hey.food", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" · {status}"), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(" · {status}{scope}"),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]),
         ResponsiveMode::Standard => Line::from(vec![
             Span::styled(" hey.food", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
-                format!("  thoughtful food guidance · {status}"),
+                format!("  thoughtful food guidance · {status}{scope}"),
                 Style::default().fg(Color::DarkGray),
             ),
         ]),
         ResponsiveMode::Wide => Line::from(vec![
             Span::styled(" hey.food", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
-                format!("  Ask about food, meals, restaurants, or recipes · {status}"),
+                format!("  Ask about food, meals, restaurants, or recipes · {status}{scope}"),
                 Style::default().fg(Color::DarkGray),
             ),
         ]),
@@ -370,6 +521,67 @@ mod tests {
             }),
         );
         model
+    }
+
+    #[test]
+    fn reviewed_native_profile_copy_is_exact() {
+        let version = heyfood_core::ConsentVersionV1::new(3).unwrap();
+        assert_eq!(
+            profile_copy(ProfileCopyStateV1::OnboardingSaveReview),
+            "Save this profile on this device? Saving does not grant profile-sync consent. If you already granted consent, sync may continue after the local save."
+        );
+        assert_eq!(
+            profile_copy(ProfileCopyStateV1::OnboardingSaveCancelled),
+            "Profile not saved. Profile-sync consent was not changed."
+        );
+        assert_eq!(
+            profile_copy(ProfileCopyStateV1::SavedWithAbsentConsent),
+            "Saved on this device. Sync is off because profile-sync consent is not granted. Run /profile consent to review consent."
+        );
+        assert_eq!(
+            profile_copy(ProfileCopyStateV1::ConsentReview),
+            "Grant profile-sync consent for Me? This allows hello.food to store and update your owner dietary profile in your account. It does not sync household members, and granting consent does not upload a profile."
+        );
+        assert_eq!(
+            profile_copy(ProfileCopyStateV1::ConsentReviewPrompt),
+            "Press y to grant consent; n or Esc to cancel."
+        );
+        assert_eq!(
+            profile_copy(ProfileCopyStateV1::ConsentCancelled),
+            "Profile-sync consent was not changed. Nothing was uploaded."
+        );
+        assert_eq!(
+            profile_copy(ProfileCopyStateV1::ConsentGranted {
+                consent_version: version,
+            }),
+            "Profile-sync consent active for Me (version 3). No profile was uploaded."
+        );
+        assert_eq!(
+            profile_copy(ProfileCopyStateV1::RetryOffered {
+                consent_version: version,
+            }),
+            "Consent version 3 is active. Your owner profile is still saved only on this device. Run /profile retry-sync to retry."
+        );
+        assert_eq!(
+            profile_copy(ProfileCopyStateV1::InterruptedRetry),
+            "Sync was interrupted. Run /profile retry-sync to resume the exact saved owner profile."
+        );
+        assert_eq!(
+            profile_copy(ProfileCopyStateV1::ConsentVersionChanged),
+            "Profile-sync consent changed. Review and save your owner profile again before syncing."
+        );
+        assert_eq!(
+            profile_copy(ProfileCopyStateV1::ConsentRevoked),
+            "Profile-sync consent is no longer active. Run /profile consent, then review and save your owner profile again."
+        );
+        assert_eq!(
+            profile_copy(ProfileCopyStateV1::SyncPending),
+            "Saved on this device; sync pending."
+        );
+        assert_eq!(
+            profile_copy(ProfileCopyStateV1::RetryUnavailable),
+            "Owner profile sync retry is unavailable."
+        );
     }
 
     #[test]

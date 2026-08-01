@@ -182,21 +182,57 @@ for target in \
   aarch64-unknown-linux-gnu \
   x86_64-apple-darwin \
   x86_64-unknown-linux-gnu; do
-  "$ROOT/scripts/release/package.sh" "$ROOT/install.sh" 0.6.3 "$target" "$distribution"
+  "$ROOT/scripts/release/package.sh" "$ROOT/install.sh" 0.6.2 "$target" "$distribution"
 done
-"$ROOT/scripts/release/checksums.sh" "$distribution" 0.6.3
-"$ROOT/scripts/release/verify-assets.sh" "$distribution" 0.6.3
+"$ROOT/scripts/release/checksums.sh" "$distribution" 0.6.2
+"$ROOT/scripts/release/verify-assets.sh" "$distribution" 0.6.2
 [[ "$(wc -l <"$distribution/SHA256SUMS" | tr -d '[:space:]')" -eq 4 ]] ||
-  fail "the release manifest must bind exactly four archives"
+  fail "the immutable v0.6.2 release manifest must remain the exact four-archive set"
+[[ ! -e "$distribution/heyfood-v0.6.2-native-state.json" ]] ||
+  fail "release tooling must not invent a declaration for immutable v0.6.2"
 
-windows_asset="$distribution/heyfood-v0.6.3-x86_64-pc-windows-msvc.zip"
+d2_distribution="$CASE_DIR/d2-distribution"
+mkdir "$d2_distribution"
+for target in \
+  aarch64-apple-darwin \
+  aarch64-unknown-linux-gnu \
+  x86_64-apple-darwin \
+  x86_64-unknown-linux-gnu; do
+  "$ROOT/scripts/release/package.sh" \
+    "$ROOT/install.sh" \
+    0.6.3 \
+    "$target" \
+    "$d2_distribution"
+  "$ROOT/scripts/release/package-installer.sh" \
+    "$ROOT/install.sh" \
+    0.6.3 \
+    "$target" \
+    "$d2_distribution"
+done
+"$ROOT/scripts/release/checksums.sh" "$d2_distribution" 0.6.3 --native-state
+"$ROOT/scripts/release/verify-assets.sh" "$d2_distribution" 0.6.3 --native-state
+[[ "$(wc -l <"$d2_distribution/SHA256SUMS" | tr -d '[:space:]')" -eq 9 ]] ||
+  fail "a D2 release manifest must bind four product archives, four verifier archives, and one declaration"
+[[ -f "$d2_distribution/heyfood-v0.6.3-native-state.json" ]] ||
+  fail "a D2 release must contain the canonical native-state declaration"
+
+windows_asset="$distribution/heyfood-v0.6.2-x86_64-pc-windows-msvc.zip"
 touch "$windows_asset"
-if "$ROOT/scripts/release/checksums.sh" "$distribution" 0.6.3 >/dev/null 2>&1; then
-  fail "checksum generation must reject a Windows v0.6.3 asset"
+if "$ROOT/scripts/release/checksums.sh" "$distribution" 0.6.2 >/dev/null 2>&1; then
+  fail "checksum generation must reject a Windows v0.6.2 asset"
 fi
-if "$ROOT/scripts/release/verify-assets.sh" "$distribution" 0.6.3 >/dev/null 2>&1; then
-  fail "complete-set verification must reject a Windows v0.6.3 asset"
+if "$ROOT/scripts/release/verify-assets.sh" "$distribution" 0.6.2 >/dev/null 2>&1; then
+  fail "complete-set verification must reject a Windows v0.6.2 asset"
 fi
+
+grep -Fq -- '--package heyfood-installer' "$RELEASE_WORKFLOW" ||
+  fail "the release workflow must build the standalone verifier"
+grep -Fq 'scripts/release/package-installer.sh' "$RELEASE_WORKFLOW" ||
+  fail "the release workflow must package the standalone verifier"
+grep -Fq "target/\$TARGET/release/heyfood-installer" "$RELEASE_WORKFLOW" ||
+  fail "the release workflow must sign and smoke the target verifier bytes"
+grep -Fq 'dist/*.json' "$RELEASE_WORKFLOW" ||
+  fail "the release workflow must attest the native-state declaration"
 
 grep -Fq "Windows distribution remains deferred" "$ROOT/README.md" ||
   fail "README must state the Windows release boundary"

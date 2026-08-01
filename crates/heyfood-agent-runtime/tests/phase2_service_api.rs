@@ -1,9 +1,12 @@
 use std::time::Duration;
 
-use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
+use heyfood_agent_runtime::{
+    CliAuthContext, HttpDeadlines, HttpService, MAX_JSON_RESPONSE_BYTES,
+    OwnerSyncOutcomeUncertainReasonV1, OwnerSyncTransportResultV1,
+};
 use heyfood_application::{
-    CapabilitySnapshot, DiscoverCapabilities, ListMenuWatches, ReadActiveGroceryDisplay,
-    ReadGroceryExclusions, RegistrationAvailability, StatusPort,
+    AuthoritativeConsentStateV1, CapabilitySnapshot, DiscoverCapabilities, ListMenuWatches,
+    ReadActiveGroceryDisplay, ReadGroceryExclusions, RegistrationAvailability, StatusPort,
 };
 use heyfood_core::{
     AccountId, AddItemsRequestWire, CredentialVersion, ExclusionMutationRequestWire,
@@ -71,6 +74,28 @@ fn capabilities(version: Option<&str>) -> CapabilitySnapshot {
 
 async fn fixture_service() -> (TcpListener, HttpService) {
     fixture_service_with_transcription_timeout(Duration::from_secs(2)).await
+}
+
+async fn fixture_service_with_request_timeout(request: Duration) -> (TcpListener, HttpService) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = ServiceUrl::parse(
+        &format!("http://{}/", listener.local_addr().unwrap()),
+        NetworkPolicy::DEVELOPMENT,
+    )
+    .unwrap();
+    let mut deadlines = deadlines();
+    deadlines.request = request;
+    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines)
+        .unwrap()
+        .with_cli_auth(
+            CliAuthContext::new(
+                "phase2-device",
+                SensitiveString::new("channel-access"),
+                Some(SensitiveString::new("app-key")),
+            )
+            .unwrap(),
+        );
+    (listener, service)
 }
 
 async fn fixture_service_with_transcription_timeout(
@@ -145,6 +170,20 @@ async fn respond(socket: &mut TcpStream, status: u16, body: Value) {
         .await
         .unwrap();
     socket.write_all(&body).await.unwrap();
+}
+
+async fn respond_raw(socket: &mut TcpStream, status: u16, body: &[u8]) {
+    socket
+        .write_all(
+            format!(
+                "HTTP/1.1 {status} Result\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    socket.write_all(body).await.unwrap();
 }
 
 fn display_list_fixture() -> Value {
@@ -934,6 +973,157 @@ async fn malformed_successful_profile_consent_fails_closed() {
 }
 
 #[tokio::test]
+async fn typed_consent_get_and_grant_preserve_exact_authoritative_versions() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("GET /v1/profile/consent "));
+        respond(
+            &mut socket,
+            200,
+            json!({
+                "has_consent": true,
+                "granted_at": "2026-07-30T12:00:00Z",
+                "consent_version": 2
+            }),
+        )
+        .await;
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/profile/consent "));
+        assert_eq!(request_body(&request), json!({"consent_version": 1}));
+        respond(
+            &mut socket,
+            200,
+            json!({
+                "has_consent": true,
+                "granted_at": "2026-07-30T12:01:00Z",
+                "consent_version": 3
+            }),
+        )
+        .await;
+    });
+
+    assert_eq!(
+        service
+            .profile_consent_authority_v1(
+                &credentials(),
+                OperationId::new(),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap(),
+        AuthoritativeConsentStateV1::Active(heyfood_core::ConsentVersionV1::new(2).unwrap())
+    );
+    assert_eq!(
+        service
+            .grant_owner_profile_consent_v1(
+                &credentials(),
+                OperationId::new(),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap()
+            .get(),
+        3
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn typed_consent_contract_rejects_missing_contradictory_and_noninteger_versions() {
+    let invalid = [
+        json!({"has_consent": true}),
+        json!({"has_consent": false, "consent_version": 1}),
+        json!({"has_consent": true, "consent_version": 0}),
+        json!({"has_consent": true, "consent_version": -1}),
+        json!({"has_consent": true, "consent_version": 1.0}),
+        json!({"has_consent": true, "consent_version": "1"}),
+        json!({"has_consent": true, "consent_version": true}),
+        json!({"has_consent": true, "consent_version": 2_147_483_648_u64}),
+        json!({"has_consent": true, "consent_version": 1, "unexpected": true}),
+    ];
+    for body in invalid {
+        let (listener, service) = fixture_service().await;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _request = read_request(&mut socket).await;
+            respond(&mut socket, 200, body).await;
+        });
+
+        let error = service
+            .profile_consent_authority_v1(
+                &credentials(),
+                OperationId::new(),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "profile_consent_contract");
+        assert!(!error.outcome_uncertain);
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn typed_consent_absence_accepts_only_missing_or_null_version() {
+    for body in [
+        json!({"has_consent": false}),
+        json!({"has_consent": false, "granted_at": null, "consent_version": null}),
+    ] {
+        let (listener, service) = fixture_service().await;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _request = read_request(&mut socket).await;
+            respond(&mut socket, 200, body).await;
+        });
+
+        assert_eq!(
+            service
+                .profile_consent_authority_v1(
+                    &credentials(),
+                    OperationId::new(),
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap(),
+            AuthoritativeConsentStateV1::Absent
+        );
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn malformed_consent_grant_is_uncertain_and_never_uses_requested_version() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert_eq!(request_body(&request), json!({"consent_version": 1}));
+        respond(
+            &mut socket,
+            200,
+            json!({"has_consent": true, "consent_version": null}),
+        )
+        .await;
+    });
+
+    let error = service
+        .grant_owner_profile_consent_v1(
+            &credentials(),
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "profile_consent_contract");
+    assert!(error.outcome_uncertain);
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn every_grocery_post_preserves_the_contract_payload() {
     let (listener, service) = fixture_service().await;
     let server = tokio::spawn(async move {
@@ -1314,4 +1504,252 @@ async fn h1_h2_management_posts_are_provider_neutral_and_token_free() {
         .await
         .unwrap();
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn owner_sync_transport_preserves_exact_status_body_request_and_stable_headers() {
+    for status in [
+        200_u16, 302, 400, 401, 403, 404, 408, 409, 418, 422, 425, 429, 500, 599,
+    ] {
+        let (listener, service) = fixture_service().await;
+        let request_id = OperationId::new();
+        let request_id_text = request_id.as_uuid().to_string();
+        let response_body = format!("opaque-error-body-{status}").into_bytes();
+        let expected_response_body = response_body.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            assert!(request.starts_with("PUT /v1/profile/sync "));
+            assert!(request.contains("authorization: Bearer session-access\r\n"));
+            assert!(request.contains("x-app-client-id: heyfood-cli\r\n"));
+            assert!(request.contains("content-type: application/json\r\n"));
+            assert!(request.contains(&format!("x-request-id: {request_id_text}\r\n")));
+            assert_eq!(
+                request.split("\r\n\r\n").nth(1).unwrap_or_default(),
+                r#"{"member_id":"_self","profile_data":{"allergies":["milk"]}}"#
+            );
+            respond_raw(&mut socket, status, &response_body).await;
+        });
+
+        let result = service
+            .send_owner_profile_sync_v1(
+                &credentials(),
+                br#"{"member_id":"_self","profile_data":{"allergies":["milk"]}}"#,
+                request_id,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            OwnerSyncTransportResultV1::Response {
+                status,
+                body: expected_response_body
+            }
+        );
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn owner_sync_pre_send_cancellation_performs_no_network_io() {
+    let (listener, service) = fixture_service().await;
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+
+    let result = service
+        .send_owner_profile_sync_v1(
+            &credentials(),
+            br#"{"member_id":"_self","profile_data":{}}"#,
+            OperationId::new(),
+            cancellation,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result, OwnerSyncTransportResultV1::CancelledBeforeSend);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn owner_sync_post_send_cancellation_is_explicitly_uncertain() {
+    let (listener, service) = fixture_service().await;
+    let (dispatched_tx, dispatched_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _request = read_request(&mut socket).await;
+        dispatched_tx.send(()).unwrap();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    });
+    let cancellation = CancellationToken::new();
+    let task_cancellation = cancellation.clone();
+    let task = tokio::spawn(async move {
+        service
+            .send_owner_profile_sync_v1(
+                &credentials(),
+                br#"{"member_id":"_self","profile_data":{}}"#,
+                OperationId::new(),
+                task_cancellation,
+            )
+            .await
+    });
+    dispatched_rx.await.unwrap();
+    cancellation.cancel();
+
+    assert_eq!(
+        task.await.unwrap().unwrap(),
+        OwnerSyncTransportResultV1::OutcomeUncertain {
+            reason: OwnerSyncOutcomeUncertainReasonV1::CancelledAfterSend
+        }
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn owner_sync_oversized_or_truncated_response_is_never_definite() {
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _request = read_request(&mut socket).await;
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    MAX_JSON_RESPONSE_BYTES + 1
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+
+    let oversized = service
+        .send_owner_profile_sync_v1(
+            &credentials(),
+            br#"{"member_id":"_self","profile_data":{}}"#,
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        oversized,
+        OwnerSyncTransportResultV1::OutcomeUncertain {
+            reason: OwnerSyncOutcomeUncertainReasonV1::BodyTooLarge
+        }
+    );
+    server.await.unwrap();
+
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _request = read_request(&mut socket).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nshort")
+            .await
+            .unwrap();
+    });
+    let truncated = service
+        .send_owner_profile_sync_v1(
+            &credentials(),
+            br#"{"member_id":"_self","profile_data":{}}"#,
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        truncated,
+        OwnerSyncTransportResultV1::OutcomeUncertain {
+            reason: OwnerSyncOutcomeUncertainReasonV1::BodyRead
+        }
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn owner_sync_timeout_and_transport_failure_remain_uncertain() {
+    let (listener, service) = fixture_service_with_request_timeout(Duration::from_millis(50)).await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _request = read_request(&mut socket).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    });
+    let timed_out = service
+        .send_owner_profile_sync_v1(
+            &credentials(),
+            br#"{"member_id":"_self","profile_data":{}}"#,
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        timed_out,
+        OwnerSyncTransportResultV1::OutcomeUncertain {
+            reason: OwnerSyncOutcomeUncertainReasonV1::Timeout
+        }
+    );
+    server.abort();
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = ServiceUrl::parse(
+        &format!("http://{}/", listener.local_addr().unwrap()),
+        NetworkPolicy::DEVELOPMENT,
+    )
+    .unwrap();
+    drop(listener);
+    let service = HttpService::new(base, NetworkPolicy::DEVELOPMENT, deadlines()).unwrap();
+    let transport = service
+        .send_owner_profile_sync_v1(
+            &credentials(),
+            br#"{"member_id":"_self","profile_data":{}}"#,
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        transport,
+        OwnerSyncTransportResultV1::OutcomeUncertain {
+            reason: OwnerSyncOutcomeUncertainReasonV1::Transport
+        }
+    );
+}
+
+#[tokio::test]
+async fn owner_sync_streaming_body_timeout_preserves_timeout_reason() {
+    let (listener, service) = fixture_service_with_request_timeout(Duration::from_millis(75)).await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _request = read_request(&mut socket).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    });
+
+    let result = service
+        .send_owner_profile_sync_v1(
+            &credentials(),
+            br#"{"member_id":"_self","profile_data":{}}"#,
+            OperationId::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result,
+        OwnerSyncTransportResultV1::OutcomeUncertain {
+            reason: OwnerSyncOutcomeUncertainReasonV1::Timeout
+        }
+    );
+    server.abort();
 }

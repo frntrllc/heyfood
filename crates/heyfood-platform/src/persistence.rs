@@ -17,6 +17,7 @@ use heyfood_application::{
 use heyfood_core::{
     AccountId, AuthCredentialBundle, ChannelCredentials, ClientConfig, CommitId, ConfigRevision,
     CredentialVersion, NetworkPolicy, OperationId, SensitiveString, ServiceUrl, SessionCredentials,
+    decode_lower_hex_32, domain_hash_v1, encode_lower_hex,
 };
 #[cfg(windows)]
 use heyfood_windows_file::AtomicOwnerOnlyFile;
@@ -47,6 +48,49 @@ const MAX_CONVERSATION_POINTER_BYTES: usize = 4 * 1_024;
 const MAX_LOCAL_RECORD_KIND_BYTES: usize = 64;
 const MAX_LOCAL_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_LOCAL_RECORDS: usize = 1_024;
+const LEGACY_ACCOUNT_LOGOUT_MARKER: &[u8] = b"account_logout_pending\n";
+const ACCOUNT_LOGOUT_MARKER_V2_PREFIX: &str = "account_logout_pending_v2:";
+
+fn account_logout_digest(account: &AccountId) -> Result<[u8; 32], PortError> {
+    domain_hash_v1(
+        "heyfood.household.account-digest.v1",
+        &[account.as_str().as_bytes()],
+    )
+    .map(|digest| *digest.as_bytes())
+    .map_err(|_| {
+        PortError::new(
+            "logout_account_binding",
+            "account logout binding could not be derived",
+        )
+    })
+}
+
+fn encode_account_logout_marker(account: &AccountId) -> Result<Vec<u8>, PortError> {
+    let digest = account_logout_digest(account)?;
+    Ok(format!(
+        "{ACCOUNT_LOGOUT_MARKER_V2_PREFIX}{}\n",
+        encode_lower_hex(&digest)
+    )
+    .into_bytes())
+}
+
+fn parse_account_logout_marker(bytes: &[u8]) -> Result<Option<[u8; 32]>, PortError> {
+    let Ok(marker) = std::str::from_utf8(bytes) else {
+        return Ok(None);
+    };
+    let Some(encoded) = marker
+        .strip_prefix(ACCOUNT_LOGOUT_MARKER_V2_PREFIX)
+        .and_then(|value| value.strip_suffix('\n'))
+    else {
+        return Ok(None);
+    };
+    decode_lower_hex_32(encoded).map(Some).map_err(|_| {
+        PortError::new(
+            "logout_account_binding",
+            "pending account logout binding is invalid",
+        )
+    })
+}
 
 /// Same-directory, exclusive staging followed by a flushed atomic replace.
 pub struct AtomicFile;
@@ -1120,6 +1164,7 @@ impl NativeAuthStore {
             return Ok(false);
         }
         let marker = read_limited(&self.reconciliation_path, 512)?;
+        let bound_logout_marker = parse_account_logout_marker(&marker)?;
         let expected_session = if marker == b"channel_refresh_outcome_uncertain\n" {
             if self.load_authorization_journal_unlocked()?.is_some() {
                 return Err(PortError::uncertain(
@@ -1152,15 +1197,65 @@ impl NativeAuthStore {
                     ));
                 }
             };
-            AtomicFile::replace(&self.reconciliation_path, b"account_logout_pending\n")
+            let logout_marker = encode_account_logout_marker(&session.account_id)?;
+            AtomicFile::replace(&self.reconciliation_path, &logout_marker)
                 .map_err(|error| PortError::uncertain("logout_marker_write", error.to_string()))?;
             Some(session)
-        } else if marker != b"account_logout_pending\n" {
+        } else if marker != LEGACY_ACCOUNT_LOGOUT_MARKER && bound_logout_marker.is_none() {
             return Ok(false);
         } else {
             None
         };
         session_store.delete_authorized_session_for_logout(expected_session.as_ref())?;
+        self.delete_unlocked_for_logout()?;
+        clear_any_reconciliation_marker(&self.reconciliation_path)?;
+        Ok(true)
+    }
+
+    /// Resume an account-bound logout while proving that every credential
+    /// record still present belongs to the exact teardown journal account.
+    ///
+    /// The legacy unbound marker is accepted only as crash residue: any
+    /// remaining authorization or session record must independently hash to
+    /// `expected_account_digest` before deletion. New markers persist that
+    /// digest directly.
+    #[cfg(any(not(windows), feature = "native-credentials"))]
+    pub fn finish_account_bound_logout_for_account_digest(
+        &self,
+        expected_account_digest: [u8; 32],
+        session_store: &impl AuthorizationSessionStore,
+    ) -> Result<bool, PortError> {
+        let _lock = FileLock::acquire(&self.lock_path, true)?;
+        if !self.reconciliation_path.exists() {
+            return Ok(false);
+        }
+        let marker = read_limited(&self.reconciliation_path, 512)?;
+        let bound_marker = parse_account_logout_marker(&marker)?;
+        if marker != LEGACY_ACCOUNT_LOGOUT_MARKER && bound_marker.is_none() {
+            return Ok(false);
+        }
+        if bound_marker.is_some_and(|digest| digest != expected_account_digest) {
+            return Err(PortError::new(
+                "logout_account_changed",
+                "pending account logout belongs to a different account",
+            ));
+        }
+        let authorization = self.load_unlocked()?;
+        let session = session_store.load_authorized_session()?;
+        for account in authorization
+            .as_ref()
+            .map(|bundle| &bundle.session.account_id)
+            .into_iter()
+            .chain(session.as_ref().map(|session| &session.account_id))
+        {
+            if account_logout_digest(account)? != expected_account_digest {
+                return Err(PortError::new(
+                    "logout_account_changed",
+                    "active account authorization changed while logout was in progress",
+                ));
+            }
+        }
+        session_store.delete_authorized_session_for_logout(session.as_ref())?;
         self.delete_unlocked_for_logout()?;
         clear_any_reconciliation_marker(&self.reconciliation_path)?;
         Ok(true)
@@ -1189,7 +1284,8 @@ impl NativeAuthStore {
                 "active account authorization changed while logout was in progress",
             ));
         }
-        AtomicFile::replace(&self.reconciliation_path, b"account_logout_pending\n")
+        let marker = encode_account_logout_marker(&expected.session.account_id)?;
+        AtomicFile::replace(&self.reconciliation_path, &marker)
             .map_err(|error| PortError::uncertain("logout_marker_write", error.to_string()))?;
         if let Err(error) =
             session_store.delete_authorized_session_for_logout(Some(&expected.session))
@@ -1251,7 +1347,8 @@ impl NativeAuthStore {
                 "active account authorization changed while logout was in progress",
             ));
         }
-        AtomicFile::replace(&self.reconciliation_path, b"account_logout_pending\n")
+        let logout_marker = encode_account_logout_marker(&expected.session.account_id)?;
+        AtomicFile::replace(&self.reconciliation_path, &logout_marker)
             .map_err(|error| PortError::uncertain("logout_marker_write", error.to_string()))?;
         if let Err(error) = session_store
             .delete_authorized_session_after_preflight_failure(&expected.session.account_id)
@@ -4871,6 +4968,44 @@ mod credential_write_verification_tests {
             Some(bundle.clone())
         );
 
+        let foreign_account = AccountId::parse("account-foreign").unwrap();
+        AtomicFile::replace(
+            &auth.reconciliation_path,
+            &encode_account_logout_marker(&foreign_account).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            auth.finish_account_bound_logout_for_account_digest(
+                account_logout_digest(&bundle.session.account_id).unwrap(),
+                &session,
+            )
+            .unwrap_err()
+            .code,
+            "logout_account_changed"
+        );
+        assert_eq!(
+            session.load_authorized_session().unwrap(),
+            Some(bundle.session.clone())
+        );
+        assert!(auth.load_unlocked().unwrap().is_some());
+        clear_any_reconciliation_marker(&auth.reconciliation_path).unwrap();
+
+        AtomicFile::replace(
+            &auth.reconciliation_path,
+            &encode_account_logout_marker(&bundle.session.account_id).unwrap(),
+        )
+        .unwrap();
+        session.delete_authorized_session().unwrap();
+        assert!(
+            auth.finish_account_bound_logout_for_account_digest(
+                account_logout_digest(&bundle.session.account_id).unwrap(),
+                &session,
+            )
+            .unwrap()
+        );
+        assert_eq!(auth.load_account_bound(&session).unwrap(), None);
+
+        auth.initialize_account_bound(&bundle, &session).unwrap();
         AtomicFile::replace(&auth.reconciliation_path, b"account_logout_pending\n").unwrap();
         session.delete_authorized_session().unwrap();
         assert!(auth.finish_account_bound_logout(&session).unwrap());

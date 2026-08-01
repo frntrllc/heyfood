@@ -33,12 +33,10 @@ const TEST_PROMPT: &str = "Plan a synthetic dinner for installed-artifact qualif
 const TEST_RESPONSE: &str = "Installed artifact first turn complete.";
 const RETURNING_PROMPT: &str = "Give me a second authenticated installed-artifact turn.";
 const RETURNING_RESPONSE: &str = "Returning installed user turn complete.";
-const GROCERY_CANCEL_PROMPT: &str = "Prepare onion for Maya, then let me cancel it.";
-const GROCERY_EDIT_PROMPT: &str = "Prepare onion for Maya so I can edit and accept it.";
+const GROCERY_CANCEL_PROMPT: &str = "Prepare onion for me, then let me cancel it.";
+const GROCERY_EDIT_PROMPT: &str = "Prepare onion for me so I can edit and accept it.";
 const GROCERY_STALE_LIST_PROMPT: &str =
     "Prepare a Grocery proposal with intentionally stale list authority.";
-const GROCERY_STALE_CONTEXT_PROMPT: &str =
-    "Prepare a Grocery proposal with intentionally stale household context.";
 const GROCERY_CTRL_C_PROMPT: &str = "Prepare a Grocery proposal that I will cancel with Ctrl+C.";
 const STREAM_CANCEL_PROMPT: &str = "Stream until I cancel this installed turn.";
 const UNCERTAIN_PROMPT: &str = "Consume this mutation-like turn and close before responding.";
@@ -58,15 +56,22 @@ const EDIT_CONFIRMATION_ID: &str = "00000000-0000-4000-8000-000000000021";
 const EDIT_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-000000000022";
 const STALE_LIST_CONFIRMATION_ID: &str = "00000000-0000-4000-8000-000000000031";
 const STALE_LIST_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-000000000032";
-const STALE_CONTEXT_CONFIRMATION_ID: &str = "00000000-0000-4000-8000-000000000033";
-const STALE_CONTEXT_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-000000000034";
 const CTRL_C_CONFIRMATION_ID: &str = "00000000-0000-4000-8000-000000000041";
 const CTRL_C_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-000000000042";
 const FULL_SCOPE: &str = "account:link account:delete knowledge:read menu:read menu:watch recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe grocery:read grocery:write";
-const CORE_MATRIX_GROUPS: [&str; 5] = [
+// The v1 release contract still inventories the historical household group.
+// The installed PTY smoke deliberately substitutes owner-only Grocery coverage.
+const CORE_RELEASE_CONTRACT_GROUPS: [&str; 5] = [
     "clean-user",
     "returning-user",
     "household-grocery",
+    "failure-safety",
+    "artifact-behavior",
+];
+const INSTALLED_PTY_SMOKE_GROUPS: [&str; 5] = [
+    "clean-user",
+    "returning-user",
+    "owner-grocery",
     "failure-safety",
     "artifact-behavior",
 ];
@@ -247,7 +252,6 @@ struct FixtureSummary {
     ctrl_c_proposal_cancellations: usize,
     proposal_accepts: usize,
     stale_list_rejections: usize,
-    stale_context_rejections: usize,
     stream_cancellations: usize,
     list_version: u64,
     prompt_counts: BTreeMap<String, usize>,
@@ -267,7 +271,6 @@ struct FixtureState {
     ctrl_c_proposal_cancellations: usize,
     proposal_accepts: usize,
     stale_list_rejections: usize,
-    stale_context_rejections: usize,
     stream_cancellations: usize,
     prompt_counts: BTreeMap<String, usize>,
 }
@@ -288,7 +291,6 @@ impl Default for FixtureState {
             ctrl_c_proposal_cancellations: 0,
             proposal_accepts: 0,
             stale_list_rejections: 0,
-            stale_context_rejections: 0,
             stream_cancellations: 0,
             prompt_counts: BTreeMap::new(),
         }
@@ -307,7 +309,6 @@ impl FixtureState {
             ctrl_c_proposal_cancellations: self.ctrl_c_proposal_cancellations,
             proposal_accepts: self.proposal_accepts,
             stale_list_rejections: self.stale_list_rejections,
-            stale_context_rejections: self.stale_context_rejections,
             stream_cancellations: self.stream_cancellations,
             list_version: self.list_version,
             prompt_counts: self.prompt_counts,
@@ -501,10 +502,7 @@ async fn run_installed_archive_core_release_matrix() {
     assert_installed_version(&installed_binary, &expected_version);
 
     let user = TempRoot::new("user");
-    assert!(
-        !user.0.join("heyfood").join("config.json").exists(),
-        "clean-user registration must start without a legacy import source"
-    );
+    assert_no_legacy_python_state(&user.0);
     #[cfg(windows)]
     let mut credential_cleanup = WindowsCredentialCleanup::open(&user.0);
     #[cfg(all(not(windows), feature = "native-credentials"))]
@@ -571,8 +569,7 @@ async fn run_installed_archive_core_release_matrix() {
         "the held browser preconnect must remain idle and open while the installed journey progresses"
     );
     drop(held_speculative_connection);
-
-    write_household_import_source(&user.0);
+    assert_no_legacy_python_state(&user.0);
 
     let returning_user = run_installed_pty(
         &installed_binary,
@@ -585,42 +582,34 @@ async fn run_installed_archive_core_release_matrix() {
             PtyAction::Submit(RETURNING_PROMPT.into()),
             PtyAction::Wait(RETURNING_RESPONSE.into()),
             PtyAction::Pause(Duration::from_millis(250)),
-            PtyAction::Submit("/for Maya".into()),
-            PtyAction::Wait("Future turns will consider Maya.".into()),
-            PtyAction::Pause(Duration::from_millis(250)),
             PtyAction::Submit("/grocery".into()),
-            PtyAction::Wait("onion for maya-uuid".into()),
-            PtyAction::Wait("maya-uuid: risky · intended".into()),
+            PtyAction::Wait("onion for _self".into()),
+            PtyAction::Wait("_self: risky · intended".into()),
             PtyAction::Wait("source: recipe:list-dahl-001".into()),
             PtyAction::Wait("Onion is high-FODMAP.".into()),
             PtyAction::Wait("green parts of scallion".into()),
             PtyAction::Pause(Duration::from_millis(250)),
             PtyAction::Submit(GROCERY_CANCEL_PROMPT.into()),
-            PtyAction::Wait("Cancel proposal for Maya".into()),
+            PtyAction::Wait("Cancel owner Grocery proposal".into()),
             PtyAction::Submit("n".into()),
             PtyAction::Wait("cancelled without mutation".into()),
             PtyAction::Pause(Duration::from_millis(250)),
             PtyAction::Submit(GROCERY_EDIT_PROMPT.into()),
-            PtyAction::Wait("Edit proposal for Maya".into()),
-            PtyAction::Wait("1. onion for maya-uuid".into()),
-            PtyAction::Wait("maya-uuid: risky · intended".into()),
+            PtyAction::Wait("Edit owner Grocery proposal".into()),
+            PtyAction::Wait("1. onion for _self".into()),
+            PtyAction::Wait("_self: risky · intended".into()),
             PtyAction::Wait("source: recipe:dahl-001".into()),
             PtyAction::Wait("scallion greens".into()),
             PtyAction::Submit("edit #1 scallion greens".into()),
             PtyAction::Wait("advanced exactly once to version 5".into()),
             PtyAction::Pause(Duration::from_millis(250)),
             PtyAction::Submit(GROCERY_STALE_LIST_PROMPT.into()),
-            PtyAction::Wait("Stale list proposal for Maya".into()),
+            PtyAction::Wait("Stale owner Grocery proposal".into()),
             PtyAction::Submit("y".into()),
             PtyAction::Wait("Stale Grocery list authority rejected".into()),
             PtyAction::Pause(Duration::from_millis(250)),
-            PtyAction::Submit(GROCERY_STALE_CONTEXT_PROMPT.into()),
-            PtyAction::Wait("Stale context proposal for Maya".into()),
-            PtyAction::Submit("y".into()),
-            PtyAction::Wait("Stale household context authority rejected".into()),
-            PtyAction::Pause(Duration::from_millis(250)),
             PtyAction::Submit(GROCERY_CTRL_C_PROMPT.into()),
-            PtyAction::Wait("Ctrl+C proposal for Maya".into()),
+            PtyAction::Wait("Ctrl+C owner Grocery proposal".into()),
             PtyAction::CtrlC,
             PtyAction::Wait("Ctrl+C Grocery cancellation completed".into()),
             PtyAction::Pause(Duration::from_millis(250)),
@@ -639,6 +628,7 @@ async fn run_installed_archive_core_release_matrix() {
         ],
     )
     .await;
+    assert_no_legacy_python_state(&user.0);
 
     let width_40 = run_installed_pty(
         &installed_binary,
@@ -656,6 +646,7 @@ async fn run_installed_archive_core_release_matrix() {
         ],
     )
     .await;
+    assert_no_legacy_python_state(&user.0);
 
     let width_120_no_color = run_installed_pty(
         &installed_binary,
@@ -672,6 +663,7 @@ async fn run_installed_archive_core_release_matrix() {
         ],
     )
     .await;
+    assert_no_legacy_python_state(&user.0);
 
     let interrupt_exit = run_installed_pty(
         &installed_binary,
@@ -687,6 +679,7 @@ async fn run_installed_archive_core_release_matrix() {
         ],
     )
     .await;
+    assert_no_legacy_python_state(&user.0);
 
     shutdown
         .send(())
@@ -760,12 +753,13 @@ async fn run_installed_archive_core_release_matrix() {
         Vec::<&str>::new()
     } else {
         vec![
-            "rerun_exact_matrix_against_signed_archives",
+            "rerun_exact_non_household_smoke_against_signed_archives",
             "real_platform_credential_backend_on_every_signed_candidate",
         ]
     };
     let remaining_release_gates = if signed_candidate_native_backend_proven {
         vec![
+            "manual_attached_terminal_household_lifecycle",
             "production_registration_and_grocery_canaries",
             "production_heartbeat_and_terminal_recovery_journeys",
             "production_human_presentation_journeys",
@@ -775,6 +769,7 @@ async fn run_installed_archive_core_release_matrix() {
         ]
     } else {
         vec![
+            "manual_attached_terminal_household_lifecycle",
             "production_registration_and_grocery_canaries",
             "production_heartbeat_and_terminal_recovery_journeys",
             "production_human_presentation_journeys",
@@ -786,10 +781,13 @@ async fn run_installed_archive_core_release_matrix() {
         ]
     };
     let evidence = json!({
+        // Preserve the v2 evidence envelope consumed by post-release tooling,
+        // while refusing to claim that PTY smoke completed the household group.
         "schema_version": 2,
         "qualification": "installed-artifact-core-matrix",
         "release_gate_complete": false,
-        "signed_candidate_matrix_complete": signed_candidate_native_backend_proven,
+        "signed_candidate_matrix_complete": false,
+        "signed_candidate_non_household_smoke_complete": signed_candidate_native_backend_proven,
         "archive": {
             "file_name": expected_archive_name,
             "sha256": archive_digest,
@@ -803,8 +801,9 @@ async fn run_installed_archive_core_release_matrix() {
         },
         "environment": {
             "clean_user_state": true,
-            "legacy_import_absent_during_clean_user": true,
-            "household_import_after_clean_user_exit": true,
+            "legacy_python_state_absent_for_entire_run": true,
+            "python_household_seeded": false,
+            "household_lifecycle_pty_exercised": false,
             "credentials_absent_after_run": !external_credential_cleanup,
             "pty": true,
             "columns": [40, 80, 120],
@@ -819,6 +818,11 @@ async fn run_installed_archive_core_release_matrix() {
             },
             "signed_candidate_native_backend_required": true,
             "signed_candidate_native_backend_proven": signed_candidate_native_backend_proven
+        },
+        "coverage_boundary": {
+            "installed_pty": "non_household_only",
+            "owner_grocery": "self_scope_only",
+            "household_lifecycle": "manual_attached_terminal_required"
         },
         "core_matrix": [
             {
@@ -850,18 +854,26 @@ async fn run_installed_archive_core_release_matrix() {
                 ]
             },
             {
-                "id": "household-grocery",
+                "id": "owner-grocery",
                 "status": "passed",
                 "assertions": [
-                    "maya_household_scope_bound",
-                    "active_list_member_binding_screening_substitution_and_provenance_rendered",
-                    "proposal_member_binding_screening_substitution_and_provenance_rendered",
+                    "active_list_self_binding_screening_substitution_and_provenance_rendered",
+                    "proposal_self_binding_screening_substitution_and_provenance_rendered",
                     "proposal_cancelled_without_mutation",
                     "proposal_edited_and_accepted_once",
                     "exact_server_minted_idempotency_authority_replayed",
                     "list_advanced_once",
-                    "stale_list_authority_rejected",
-                    "stale_household_context_authority_rejected"
+                    "stale_list_authority_rejected"
+                ]
+            },
+            {
+                "id": "household-grocery",
+                "status": "manual-required",
+                "assertions": [
+                    "not_exercised_by_installed_pty"
+                ],
+                "remaining": [
+                    "manual_attached_terminal_household_lifecycle"
                 ]
             },
             {
@@ -902,9 +914,9 @@ async fn run_installed_archive_core_release_matrix() {
             "consent_grants": summary.consent_grants,
             "profile_uploads": summary.profile_uploads,
             "proposal_cancellations": summary.proposal_cancellations,
+            "ctrl_c_proposal_cancellations": summary.ctrl_c_proposal_cancellations,
             "proposal_accepts": summary.proposal_accepts,
             "stale_list_rejections": summary.stale_list_rejections,
-            "stale_context_rejections": summary.stale_context_rejections,
             "stream_cancellations": summary.stream_cancellations,
             "final_list_version": summary.list_version
         },
@@ -914,6 +926,7 @@ async fn run_installed_archive_core_release_matrix() {
             "contains_credentials": false
         })).collect::<Vec<_>>(),
         "deferred": {
+            "household_lifecycle": "requires a separate human attached-terminal pass",
             "native_voice": format!("not enabled in the default {expected_version} artifact"),
             "menu_watch_diff": format!("not a {expected_version} gate"),
             "health_integrations": format!("deferred from the supported {expected_version} contract"),
@@ -928,43 +941,18 @@ async fn run_installed_archive_core_release_matrix() {
     .expect("write installed evidence");
 }
 
-fn write_household_import_source(user_root: &Path) {
-    let source = user_root.join("heyfood").join("config.json");
-    fs::create_dir_all(source.parent().expect("household import parent"))
-        .expect("create household import parent");
-    let document = json!({
-        "account_user_id": TEST_ACCOUNT,
-        "first_name": "Showcase",
-        "household": {
-            "version": 1,
-            "active_scope": "_self",
-            "members": [
-                {
-                    "id": "_self",
-                    "name": "Showcase",
-                    "relationship": "self",
-                    "archived": false
-                },
-                {
-                    "id": "maya-uuid",
-                    "name": "Maya",
-                    "relationship": "child",
-                    "archived": false
-                }
-            ]
-        },
-        "household_local_profiles": {
-            "maya-uuid": {
-                "restrictions": ["low_fodmap"],
-                "avoid_ingredients": ["onion", "garlic"]
-            }
-        }
-    });
-    fs::write(
-        source,
-        serde_json::to_vec_pretty(&document).expect("encode household import source"),
-    )
-    .expect("write household import source");
+fn assert_no_legacy_python_state(user_root: &Path) {
+    for relative in [
+        Path::new("heyfood").join("config.json"),
+        Path::new("hellofood").join("config.json"),
+        PathBuf::from("python-state-import.v1.json"),
+    ] {
+        assert!(
+            !user_root.join(&relative).exists(),
+            "installed non-household smoke must not create or seed legacy Python state at {}",
+            relative.display()
+        );
+    }
 }
 
 fn required_env(name: &str) -> String {
@@ -1502,7 +1490,7 @@ fn grocery_list_document(version: u64) -> Value {
             "package_quantity": null,
             "note": "Edited before confirmation",
             "state": "active",
-            "intended_for": "maya-uuid",
+            "intended_for": "_self",
             "sources": [{
                 "source_type": "manual",
                 "source_ref": null,
@@ -1523,7 +1511,7 @@ fn grocery_list_document(version: u64) -> Value {
             "package_quantity": null,
             "note": null,
             "state": "active",
-            "intended_for": "maya-uuid",
+            "intended_for": "_self",
             "sources": [{
                 "source_type": "recipe",
                 "source_ref": "list-dahl-001",
@@ -1533,7 +1521,7 @@ fn grocery_list_document(version: u64) -> Value {
                 "basis": "ingredient",
                 "status": "generally_safer",
                 "member_flags": [{
-                    "member_id": "maya-uuid",
+                    "member_id": "_self",
                     "status": "generally_safer",
                     "reason": null,
                     "substitutions": []
@@ -1557,7 +1545,7 @@ fn grocery_list_document(version: u64) -> Value {
             "package_quantity": null,
             "note": null,
             "state": "active",
-            "intended_for": "maya-uuid",
+            "intended_for": "_self",
             "sources": [{
                 "source_type": "recipe",
                 "source_ref": "list-dahl-001",
@@ -1567,7 +1555,7 @@ fn grocery_list_document(version: u64) -> Value {
                 "basis": "ingredient",
                 "status": "risky",
                 "member_flags": [{
-                    "member_id": "maya-uuid",
+                    "member_id": "_self",
                     "status": "risky",
                     "reason": "Onion is high-FODMAP.",
                     "substitutions": ["green parts of scallion", "garlic-infused oil"]
@@ -1588,7 +1576,7 @@ fn grocery_list_document(version: u64) -> Value {
     }
     json!({
         "id": TEST_LIST_ID,
-        "title": "Maya household groceries",
+        "title": "My groceries",
         "state": "active",
         "version": version,
         "items": items,
@@ -1605,62 +1593,46 @@ async fn respond_to_conversation(socket: &mut TcpStream, body: &Value, state: &m
             RETURNING_PROMPT => respond_sse_message(socket, RETURNING_RESPONSE).await,
             WIDTH_PROMPT => respond_sse_message(socket, WIDTH_RESPONSE).await,
             GROCERY_CANCEL_PROMPT => {
-                assert_household_agent_context(body);
                 respond_confirmation(
                     socket,
                     CANCEL_CONFIRMATION_ID,
                     CANCEL_IDEMPOTENCY_KEY,
-                    "Cancel proposal for Maya",
+                    "Cancel owner Grocery proposal",
                     state.list_version,
                 )
                 .await;
             }
             GROCERY_EDIT_PROMPT => {
-                assert_household_agent_context(body);
                 respond_confirmation(
                     socket,
                     EDIT_CONFIRMATION_ID,
                     EDIT_IDEMPOTENCY_KEY,
-                    "Edit proposal for Maya",
+                    "Edit owner Grocery proposal",
                     state.list_version,
                 )
                 .await;
             }
             GROCERY_STALE_LIST_PROMPT => {
-                assert_household_agent_context(body);
                 respond_confirmation(
                     socket,
                     STALE_LIST_CONFIRMATION_ID,
                     STALE_LIST_IDEMPOTENCY_KEY,
-                    "Stale list proposal for Maya",
+                    "Stale owner Grocery proposal",
                     state.list_version.saturating_sub(1),
                 )
                 .await;
             }
-            GROCERY_STALE_CONTEXT_PROMPT => {
-                assert_household_agent_context(body);
-                respond_confirmation(
-                    socket,
-                    STALE_CONTEXT_CONFIRMATION_ID,
-                    STALE_CONTEXT_IDEMPOTENCY_KEY,
-                    "Stale context proposal for Maya",
-                    state.list_version,
-                )
-                .await;
-            }
             GROCERY_CTRL_C_PROMPT => {
-                assert_household_agent_context(body);
                 respond_confirmation(
                     socket,
                     CTRL_C_CONFIRMATION_ID,
                     CTRL_C_IDEMPOTENCY_KEY,
-                    "Ctrl+C proposal for Maya",
+                    "Ctrl+C owner Grocery proposal",
                     state.list_version,
                 )
                 .await;
             }
             STREAM_CANCEL_PROMPT => {
-                assert_household_agent_context(body);
                 respond_cancellable_stream(socket).await;
                 state.stream_cancellations += 1;
             }
@@ -1683,7 +1655,6 @@ async fn respond_to_conversation(socket: &mut TcpStream, body: &Value, state: &m
         .and_then(Value::as_object)
         .expect("conversational request must carry query or confirmation");
     assert!(body.get("query").is_none());
-    assert_household_agent_context(body);
     let confirmation_id = confirmation["confirmation_id"]
         .as_str()
         .expect("confirmation ID");
@@ -1691,7 +1662,6 @@ async fn respond_to_conversation(socket: &mut TcpStream, body: &Value, state: &m
         CANCEL_CONFIRMATION_ID => CANCEL_IDEMPOTENCY_KEY,
         EDIT_CONFIRMATION_ID => EDIT_IDEMPOTENCY_KEY,
         STALE_LIST_CONFIRMATION_ID => STALE_LIST_IDEMPOTENCY_KEY,
-        STALE_CONTEXT_CONFIRMATION_ID => STALE_CONTEXT_IDEMPOTENCY_KEY,
         CTRL_C_CONFIRMATION_ID => CTRL_C_IDEMPOTENCY_KEY,
         _ => panic!("unexpected installed confirmation ID: {confirmation_id}"),
     };
@@ -1745,35 +1715,8 @@ async fn respond_to_conversation(socket: &mut TcpStream, body: &Value, state: &m
             )
             .await;
         }
-        (STALE_CONTEXT_CONFIRMATION_ID, "accept") => {
-            state.stale_context_rejections += 1;
-            respond_sse_error(
-                socket,
-                "household_context_conflict",
-                "Stale household context authority rejected; refresh the household snapshot.",
-            )
-            .await;
-        }
         _ => panic!("unexpected installed confirmation: {confirmation_id} {decision}"),
     }
-}
-
-fn assert_household_agent_context(body: &Value) {
-    assert_eq!(body["meal_context"]["active_member_id"], "maya-uuid");
-    assert_eq!(body["meal_context"]["active_member_name"], "Maya");
-    assert_eq!(body["meal_context"]["is_cook_mode"], false);
-    assert!(
-        body["dietary_context"]["restrictions"]
-            .as_array()
-            .is_some_and(|values| values.contains(&Value::String("low_fodmap".into()))),
-        "Maya low-FODMAP context must reach the conversational request"
-    );
-    assert!(
-        body["device_context"]["household"]["members"]
-            .as_array()
-            .is_some_and(|members| members.iter().any(|member| member["id"] == "maya-uuid")),
-        "authoritative household members must reach the conversational request"
-    );
 }
 
 async fn respond_confirmation(
@@ -1805,7 +1748,7 @@ async fn respond_confirmation(
                         "quantity": 1.0,
                         "unit": null,
                         "note": "For red lentil dahl",
-                        "intended_for": "maya-uuid",
+                        "intended_for": "_self",
                         "provenance": "recipe:dahl-001",
                         "sources": [{
                             "source_type": "recipe",
@@ -1816,7 +1759,7 @@ async fn respond_confirmation(
                             "basis": "ingredient",
                             "status": "risky",
                             "member_flags": [{
-                                "member_id": "maya-uuid",
+                                "member_id": "_self",
                                 "status": "risky",
                                 "reason": "Onion is high-FODMAP.",
                                 "substitutions": ["scallion greens"]
@@ -2169,7 +2112,6 @@ fn assert_fixture_summary(summary: &FixtureSummary) {
     assert_eq!(summary.ctrl_c_proposal_cancellations, 1);
     assert_eq!(summary.proposal_accepts, 1);
     assert_eq!(summary.stale_list_rejections, 1);
-    assert_eq!(summary.stale_context_rejections, 1);
     assert_eq!(summary.stream_cancellations, 1);
     assert_eq!(
         summary.list_version, 5,
@@ -2181,7 +2123,6 @@ fn assert_fixture_summary(summary: &FixtureSummary) {
         GROCERY_CANCEL_PROMPT,
         GROCERY_EDIT_PROMPT,
         GROCERY_STALE_LIST_PROMPT,
-        GROCERY_STALE_CONTEXT_PROMPT,
         GROCERY_CTRL_C_PROMPT,
         STREAM_CANCEL_PROMPT,
         UNCERTAIN_PROMPT,
@@ -2196,8 +2137,8 @@ fn assert_fixture_summary(summary: &FixtureSummary) {
     }
     assert_eq!(
         summary.prompt_counts.len(),
-        11,
-        "fixture must observe only the bounded core-matrix turns"
+        10,
+        "fixture must observe only the bounded non-household smoke turns"
     );
 }
 
@@ -2769,10 +2710,18 @@ fn installed_harness_inventory_matches_core_release_contract() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         observed,
-        CORE_MATRIX_GROUPS
+        CORE_RELEASE_CONTRACT_GROUPS
             .into_iter()
             .map(str::to_owned)
             .collect::<BTreeSet<_>>()
+    );
+    assert!(
+        !INSTALLED_PTY_SMOKE_GROUPS.contains(&"household-grocery"),
+        "installed PTY smoke must not claim automated household coverage"
+    );
+    assert!(
+        INSTALLED_PTY_SMOKE_GROUPS.contains(&"owner-grocery"),
+        "installed PTY smoke retains only self-scoped Grocery coverage"
     );
     assert_eq!(
         contract["explicit_non_gates"],

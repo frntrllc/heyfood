@@ -6,6 +6,10 @@ use serde_json::Value;
 
 const SCHEMA: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
+    "/../../schemas/v2/heyfood-agent-manifest.schema.json"
+));
+const V1_SCHEMA: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
     "/../../schemas/v1/heyfood-agent-manifest.schema.json"
 ));
 const GOLDEN: &str = include_str!(concat!(
@@ -649,30 +653,35 @@ fn validate_schema_instance(
 }
 
 #[test]
-fn golden_manifest_contains_every_required_nullable_and_surface_field() {
+fn closed_v1_golden_and_current_v2_manifest_freeze_the_complete_surface() {
     let schema: Value = serde_json::from_str(SCHEMA).expect("manifest schema JSON");
+    let v1_schema: Value = serde_json::from_str(V1_SCHEMA).expect("v1 manifest schema JSON");
+    let proposal_schema: Value =
+        serde_json::from_str(PROPOSAL_PRESENTATION_SCHEMA).expect("proposal schema JSON");
     let golden: Value = serde_json::from_str(GOLDEN).expect("golden manifest JSON");
     let mut runtime = heyfood_agent_contract::manifest();
     runtime["build"] = golden["build"].clone();
 
-    assert_required_object(&schema, "/required", &golden);
-    assert_required_object(&schema, "/$defs/build/required", &golden["build"]);
+    validate_schema_instance(&v1_schema, &proposal_schema, &v1_schema, &golden)
+        .expect("published v1 golden must retain the closed v1 contract");
+    assert_required_object(&v1_schema, "/required", &golden);
+    assert_required_object(&v1_schema, "/$defs/build/required", &golden["build"]);
     assert_required_object(
-        &schema,
+        &v1_schema,
         "/$defs/compatibility/required",
         &golden["compatibility"],
     );
     assert_required_object(
-        &schema,
+        &v1_schema,
         "/$defs/automation_surfaces/required",
         &golden["automation_surfaces"],
     );
-    assert_required_object(&schema, "/$defs/limits/required", &golden["limits"]);
+    assert_required_object(&v1_schema, "/$defs/limits/required", &golden["limits"]);
     for capability in golden["capabilities"].as_array().expect("capabilities") {
-        assert_required_object(&schema, "/$defs/capability/required", capability);
+        assert_required_object(&v1_schema, "/$defs/capability/required", capability);
     }
     for command in golden["commands"].as_array().expect("commands") {
-        assert_required_object(&schema, "/$defs/command/required", command);
+        assert_required_object(&v1_schema, "/$defs/command/required", command);
     }
 
     assert_eq!(golden["automation_surfaces"]["mcp_stdio"], "active");
@@ -680,9 +689,52 @@ fn golden_manifest_contains_every_required_nullable_and_surface_field() {
         golden["automation_surfaces"]["tui_automation"],
         "unsupported"
     );
+
+    let mut expected_v2 = golden;
+    expected_v2["schema_version"] = Value::from(2);
+    expected_v2.as_object_mut().unwrap().insert(
+        "native_state_compatibility".to_owned(),
+        serde_json::json!({
+            "binary_version": env!("CARGO_PKG_VERSION"),
+            "maximum_native_state_version": 2,
+            "native_state_capabilities": [
+                "household-account-slot-v1",
+                "household-lifecycle-lock-v1",
+                "household-migration-guard-v1",
+                "household-teardown-journal-v1"
+            ],
+            "schema_version": 1
+        }),
+    );
+    for command in expected_v2["commands"].as_array_mut().unwrap() {
+        match command["path"].as_str().unwrap() {
+            "agent" | "agent describe" => {
+                command["output_family"] = Value::from("heyfood_agent_manifest_v2");
+                command["output_schema_id"] =
+                    Value::from(heyfood_agent_contract::MANIFEST_SCHEMA_ID);
+                command["output_schema_sha256"] = Value::from(heyfood_agent_contract::sha256_hex(
+                    heyfood_agent_contract::MANIFEST_SCHEMA.as_bytes(),
+                ));
+            }
+            "agent doctor" => {
+                command["output_family"] = Value::from("agent_doctor_v2");
+                command["output_schema_id"] = Value::from(heyfood_agent_contract::DOCTOR_SCHEMA_ID);
+                command["output_schema_sha256"] = Value::from(heyfood_agent_contract::sha256_hex(
+                    heyfood_agent_contract::DOCTOR_SCHEMA.as_bytes(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    assert_required_object(&schema, "/required", &expected_v2);
+    assert_required_object(
+        &schema,
+        "/$defs/native_state_compatibility/required",
+        &expected_v2["native_state_compatibility"],
+    );
     assert_eq!(
-        runtime, golden,
-        "the golden fixture must contain the complete current semantic surface"
+        runtime, expected_v2,
+        "v2 must differ from the closed v1 golden only by the explicit versioned delta"
     );
 }
 

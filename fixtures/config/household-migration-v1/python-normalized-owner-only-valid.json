@@ -1,0 +1,31 @@
+{
+  "account_user_id": "acct-migration-owner",
+  "credential_store": "file",
+  "first_name": "Owner",
+  "household": {
+    "version": 1,
+    "owner_id": "_self",
+    "active_scope": "_self",
+    "members": [
+      {
+        "id": "_self",
+        "name": "Owner",
+        "relationship": "self",
+        "is_owner": true,
+        "archived": false,
+        "profile_synced": false,
+        "created_at": "2025-01-02T03:04:05.123456+00:00"
+      }
+    ],
+    "applied_mutation_ids": [],
+    "updated_at": "2026-07-29T10:11:12.987654Z"
+  },
+  "household_local_profiles": {
+    "_self": {
+      "restrictions": [
+        "peanut"
+      ]
+    }
+  },
+  "household_profile_outbox": {}
+}

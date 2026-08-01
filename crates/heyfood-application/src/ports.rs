@@ -5,10 +5,16 @@ use std::future::Future;
 use std::pin::Pin;
 
 use heyfood_core::{
-    AgentEvent, BrowserUrl, ClientConfig, CommitId, CredentialVersion, OperationId, RefreshOutcome,
-    RefreshRequest, SessionCredentials,
+    AccountId, AgentEvent, BrowserUrl, CanonicalDateV1, CanonicalTimestampV1, ClientConfig,
+    CommitId, CredentialVersion, MemberId, OperationId, RefreshOutcome, RefreshRequest,
+    SessionCredentials,
 };
 use tokio_util::sync::CancellationToken;
+
+use crate::household_repository::{
+    HouseholdCommit, HouseholdCommitOutcome, HouseholdErase, HouseholdEraseOutcome,
+    HouseholdInitialize, HouseholdLoad,
+};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub type BoxEventStream = Box<dyn EventStream>;
@@ -195,6 +201,75 @@ pub trait ClipboardPort: Send + Sync {
     fn read_text(&self, maximum_bytes: usize) -> BoxFuture<'_, Result<Option<String>, PortError>>;
 
     fn write_text(&self, text: String) -> BoxFuture<'_, Result<(), PortError>>;
+}
+
+/// Account-bound native household persistence.
+///
+/// Every method is explicitly cancellable and returns the exact object-safe
+/// boxed future shape required by D2. Platform adapters must check
+/// cancellation before lock acquisition, between bounded I/O/CAS steps, and
+/// before child dispatch while still completing an already-reached atomic
+/// commit or kill/reap obligation.
+pub trait HouseholdRepositoryPort: Send + Sync {
+    fn load<'a>(
+        &'a self,
+        account: &'a AccountId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<Option<HouseholdLoad>, PortError>>;
+
+    fn initialize<'a>(
+        &'a self,
+        command: HouseholdInitialize,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<HouseholdCommitOutcome, PortError>>;
+
+    fn commit<'a>(
+        &'a self,
+        command: HouseholdCommit,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<HouseholdCommitOutcome, PortError>>;
+
+    fn erase_account<'a>(
+        &'a self,
+        command: HouseholdErase,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<HouseholdEraseOutcome, PortError>>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HouseholdMutationPurposeV1 {
+    CreateMember,
+    SaveMemberProfile,
+    SelectScope,
+}
+
+/// One closed, locally allocated authority bundle for an exact household
+/// mutation. `Debug` intentionally exposes neither durable identities nor
+/// frozen time.
+#[derive(Clone, Eq, PartialEq)]
+pub struct HouseholdMutationAuthorityV1 {
+    pub commit_id: CommitId,
+    pub frozen_commit_timestamp: CanonicalTimestampV1,
+    pub frozen_evaluation_date: CanonicalDateV1,
+    pub member_id: Option<MemberId>,
+}
+
+impl fmt::Debug for HouseholdMutationAuthorityV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HouseholdMutationAuthorityV1")
+            .field("has_member_id", &self.member_id.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Synchronous, bounded local authority source. Implementations perform no
+/// repository, credential, terminal, or network work.
+pub trait HouseholdMutationAuthorityPort: Send + Sync {
+    fn allocate(
+        &self,
+        purpose: HouseholdMutationPurposeV1,
+    ) -> Result<HouseholdMutationAuthorityV1, PortError>;
 }
 
 #[cfg(test)]

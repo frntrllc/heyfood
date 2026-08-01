@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::io::{Cursor, ErrorKind, Read};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use heyfood_agent_runtime::{CliAuthContext, HttpDeadlines, HttpService};
@@ -9,12 +10,16 @@ use heyfood_application::{
     BoxFuture, ClockPort, CredentialCommit, CredentialPort, EnsureSession, EnsureSessionError,
     PortError,
 };
-use heyfood_bin::{OneShotError, OneShotExecutor, execute_qualified_one_shot};
+use heyfood_bin::{
+    OneShotError, OneShotExecutor, execute_qualified_one_shot, execute_qualified_prepared_log,
+    prepare_log_command, prepare_qualified_log,
+};
 use heyfood_cli::{CommandLine, OutputMode, render_agent_result, render_item_result};
 use heyfood_core::{
     AccountId, CredentialVersion, ImportedPythonState, NetworkPolicy, SensitiveString, ServiceUrl,
     SessionCredentials, SessionSnapshot,
 };
+use heyfood_platform::PythonStateImporter;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -87,6 +92,58 @@ fn imported_state(fields: impl IntoIterator<Item = (&'static str, Value)>) -> Im
             .map(|(key, value)| (key.to_owned(), value))
             .collect(),
     }
+}
+
+struct LogTempRoot(PathBuf);
+
+impl LogTempRoot {
+    fn new(name: &str) -> Self {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "heyfood-phase2-prepared-log-{name}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for LogTempRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn prepared_log_importer(
+    name: &str,
+    state: &ImportedPythonState,
+) -> (LogTempRoot, PythonStateImporter) {
+    let root = LogTempRoot::new(name);
+    let source = root.0.join("config.json");
+    let mut document = serde_json::Map::new();
+    document.insert(
+        "account_user_id".into(),
+        Value::String(
+            state
+                .account_user_id
+                .clone()
+                .expect("fixture state is account bound"),
+        ),
+    );
+    for (field, value) in &state.account_scoped {
+        document.insert(field.clone(), value.clone());
+    }
+    std::fs::write(
+        &source,
+        serde_json::to_vec(&Value::Object(document)).unwrap(),
+    )
+    .unwrap();
+    let importer = PythonStateImporter::under(&source, root.0.join("native"));
+    importer.import().unwrap();
+    (root, importer)
 }
 
 #[test]
@@ -648,11 +705,33 @@ async fn log_preserves_the_frozen_meal_prompt_and_type_semantics() {
         oracle["log"]["meal_input"].as_str().unwrap(),
     ])
     .unwrap();
-    let output = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
-        .with_imported_state(Some(&state))
-        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
-        .await
+    let Some(heyfood_cli::Command::Log(arguments)) = parsed.command else {
+        panic!("expected log command");
+    };
+    let (_root, importer) = prepared_log_importer("prompt-semantics", &state);
+    let prepared = prepare_log_command(arguments, &[], importer.preview_state().unwrap()).unwrap();
+    let verified = importer
+        .verify_after_review(prepared.source_preview())
         .unwrap();
+    let credentials = credentials();
+    let prepared = prepare_qualified_log(
+        &service,
+        &credentials,
+        prepared,
+        verified,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let output = execute_qualified_prepared_log(
+        &service,
+        credentials,
+        OutputMode::Json,
+        prepared,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(&output).unwrap()["message"],
         "Logged."
@@ -795,12 +874,13 @@ async fn item_nonnumeric_at_preserves_the_explicit_restaurant_like_python() {
 }
 
 #[tokio::test]
-async fn log_for_builds_consent_aware_household_context() {
+async fn prepared_log_omitted_for_dispatches_the_reviewed_member() {
     let state = imported_state([
         ("first_name", json!("Justin")),
         (
             "household",
             json!({
+                "active_scope": "member-sarah",
                 "members": [
                     {"id": "_self", "name": "Justin", "relationship": "self", "archived": false},
                     {"id": "member-sarah", "name": "Sarah", "relationship": "partner", "archived": false}
@@ -848,15 +928,492 @@ async fn log_for_builds_consent_aware_household_context() {
         )
         .await;
     });
+    let parsed = CommandLine::try_parse_from(["heyfood", "--json", "log", "oatmeal"]).unwrap();
+    let (_root, importer) = prepared_log_importer("household-context", &state);
+    let CommandLine {
+        command: Some(heyfood_cli::Command::Log(arguments)),
+        ..
+    } = parsed
+    else {
+        panic!("expected log command");
+    };
+    let preview = importer.preview_state().unwrap();
+    let prepared = prepare_log_command(arguments, &[], preview).unwrap();
+    assert!(
+        prepared
+            .review_document()
+            .contains("\"Sarah\" [member-id-utf8-hex=6d656d6265722d7361726168]")
+    );
+    let verified = importer
+        .verify_after_review(prepared.source_preview())
+        .unwrap();
+    let credentials = credentials();
+    let prepared = prepare_qualified_log(
+        &service,
+        &credentials,
+        prepared,
+        verified,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    execute_qualified_prepared_log(
+        &service,
+        credentials,
+        OutputMode::Json,
+        prepared,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn prepared_log_explicit_self_overrides_saved_member() {
+    let state = imported_state([
+        ("first_name", json!("Justin")),
+        (
+            "household",
+            json!({
+                "active_scope": "member-sarah",
+                "members": [
+                    {"id": "_self", "name": "Justin", "relationship": "self", "archived": false},
+                    {"id": "member-sarah", "name": "Sarah", "relationship": "partner", "archived": false}
+                ]
+            }),
+        ),
+        (
+            "household_profile_outbox",
+            json!({"_self": {"local_context": {"preferences": ["omnivore"]}}}),
+        ),
+    ]);
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        assert!(
+            read_request(&mut socket)
+                .await
+                .starts_with("GET /v1/profile/consent ")
+        );
+        respond(&mut socket, json!({"has_consent": true})).await;
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["meal_context"]["active_member_id"], "_self");
+        assert_eq!(body["meal_context"]["active_member_name"], "Me");
+        respond_stream(
+            &mut socket,
+            b"event: result\ndata: {\"message\":\"Logged.\"}\n\nevent: done\ndata: {}\n\n",
+        )
+        .await;
+    });
     let parsed =
-        CommandLine::try_parse_from(["heyfood", "--json", "log", "--for", "Sarah", "oatmeal"])
+        CommandLine::try_parse_from(["heyfood", "--json", "log", "--for", "self", "oatmeal"])
             .unwrap();
-    OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
-        .with_imported_state(Some(&state))
+    let Some(heyfood_cli::Command::Log(arguments)) = parsed.command else {
+        panic!("expected log command");
+    };
+    let (_root, importer) = prepared_log_importer("explicit-self", &state);
+    let prepared = prepare_log_command(arguments, &[], importer.preview_state().unwrap()).unwrap();
+    assert!(prepared.review_document().contains("\"Me\" [scope=_self]"));
+    let verified = importer
+        .verify_after_review(prepared.source_preview())
+        .unwrap();
+    let credentials = credentials();
+    let prepared = prepare_qualified_log(
+        &service,
+        &credentials,
+        prepared,
+        verified,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    execute_qualified_prepared_log(
+        &service,
+        credentials,
+        OutputMode::Json,
+        prepared,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn prepared_log_everyone_preserves_reviewed_cook_mode() {
+    let state = imported_state([
+        ("first_name", json!("Justin")),
+        (
+            "household",
+            json!({
+                "active_scope": "__everyone__",
+                "members": [
+                    {"id": "_self", "name": "Justin", "relationship": "self", "archived": false},
+                    {"id": "member-sarah", "name": "Sarah", "relationship": "partner", "archived": false}
+                ]
+            }),
+        ),
+        (
+            "household_profile_outbox",
+            json!({
+                "_self": {"local_context": {}},
+                "member-sarah": {"local_context": {}}
+            }),
+        ),
+    ]);
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        assert!(
+            read_request(&mut socket)
+                .await
+                .starts_with("GET /v1/profile/consent ")
+        );
+        respond(&mut socket, json!({"has_consent": true})).await;
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["meal_context"]["is_cook_mode"], true);
+        assert!(body["meal_context"].get("active_member_id").is_none());
+        assert_eq!(
+            body["dietary_context"]["members"].as_array().unwrap().len(),
+            2
+        );
+        respond_stream(
+            &mut socket,
+            b"event: result\ndata: {\"message\":\"Logged.\"}\n\nevent: done\ndata: {}\n\n",
+        )
+        .await;
+    });
+    let parsed = CommandLine::try_parse_from(["heyfood", "--json", "log", "oatmeal"]).unwrap();
+    let Some(heyfood_cli::Command::Log(arguments)) = parsed.command else {
+        panic!("expected log command");
+    };
+    let (_root, importer) = prepared_log_importer("everyone", &state);
+    let prepared = prepare_log_command(arguments, &[], importer.preview_state().unwrap()).unwrap();
+    assert!(
+        prepared
+            .review_document()
+            .contains("\"Everyone\" [scope=__everyone__]")
+    );
+    let verified = importer
+        .verify_after_review(prepared.source_preview())
+        .unwrap();
+    let credentials = credentials();
+    let prepared = prepare_qualified_log(
+        &service,
+        &credentials,
+        prepared,
+        verified,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    execute_qualified_prepared_log(
+        &service,
+        credentials,
+        OutputMode::Json,
+        prepared,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn prepared_log_account_mismatch_dispatches_no_profile_or_converse_request() {
+    let mut state = imported_state([(
+        "household",
+        json!({
+            "active_scope": "_self",
+            "members": [{"id": "_self", "name": "Justin", "archived": false}]
+        }),
+    )]);
+    state.account_user_id = Some("different-account".into());
+    let (listener, service) = fixture_service().await;
+    let parsed = CommandLine::try_parse_from(["heyfood", "--json", "log", "oatmeal"]).unwrap();
+    let Some(heyfood_cli::Command::Log(arguments)) = parsed.command else {
+        panic!("expected log command");
+    };
+    let (_root, importer) = prepared_log_importer("account-mismatch", &state);
+    let prepared = prepare_log_command(arguments, &[], importer.preview_state().unwrap()).unwrap();
+    let verified = importer
+        .verify_after_review(prepared.source_preview())
+        .unwrap();
+    let error = prepare_qualified_log(
+        &service,
+        &credentials(),
+        prepared,
+        verified,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "python_state_account_mismatch");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn prepared_log_malformed_consent_fails_before_profile_or_converse_dispatch() {
+    let state = imported_state([(
+        "household",
+        json!({
+            "active_scope": "member-sarah",
+            "members": [
+                {"id": "_self", "name": "Justin", "archived": false},
+                {"id": "member-sarah", "name": "Sarah", "archived": false}
+            ]
+        }),
+    )]);
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        assert!(
+            read_request(&mut socket)
+                .await
+                .starts_with("GET /v1/profile/consent ")
+        );
+        respond(&mut socket, json!({"has_consent": "yes"})).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), listener.accept())
+                .await
+                .is_err()
+        );
+    });
+    let parsed = CommandLine::try_parse_from(["heyfood", "--json", "log", "oatmeal"]).unwrap();
+    let Some(heyfood_cli::Command::Log(arguments)) = parsed.command else {
+        panic!("expected log command");
+    };
+    let (_root, importer) = prepared_log_importer("malformed-consent", &state);
+    let prepared = prepare_log_command(arguments, &[], importer.preview_state().unwrap()).unwrap();
+    let verified = importer
+        .verify_after_review(prepared.source_preview())
+        .unwrap();
+    let error = prepare_qualified_log(
+        &service,
+        &credentials(),
+        prepared,
+        verified,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "profile_consent_contract_invalid");
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn prepared_log_malformed_remote_member_profile_fails_before_converse_dispatch() {
+    let state = imported_state([(
+        "household",
+        json!({
+            "active_scope": "member-sarah",
+            "members": [
+                {"id": "_self", "name": "Justin", "archived": false},
+                {"id": "member-sarah", "name": "Sarah", "archived": false}
+            ]
+        }),
+    )]);
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        assert!(
+            read_request(&mut socket)
+                .await
+                .starts_with("GET /v1/profile/consent ")
+        );
+        respond(&mut socket, json!({"has_consent": true})).await;
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        assert!(
+            read_request(&mut socket)
+                .await
+                .starts_with("GET /v1/profile/sync?member_id=member-sarah ")
+        );
+        respond(&mut socket, json!({"profile_data": []})).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), listener.accept())
+                .await
+                .is_err()
+        );
+    });
+    let parsed = CommandLine::try_parse_from(["heyfood", "--json", "log", "oatmeal"]).unwrap();
+    let Some(heyfood_cli::Command::Log(arguments)) = parsed.command else {
+        panic!("expected log command");
+    };
+    let (_root, importer) = prepared_log_importer("malformed-member-profile", &state);
+    let prepared = prepare_log_command(arguments, &[], importer.preview_state().unwrap()).unwrap();
+    let verified = importer
+        .verify_after_review(prepared.source_preview())
+        .unwrap();
+    let error = prepare_qualified_log(
+        &service,
+        &credentials(),
+        prepared,
+        verified,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "household_profile_contract_invalid");
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn protected_invalid_roster_does_not_persist_snapshot_or_dispatch() {
+    let root = LogTempRoot::new("protected-invalid-roster");
+    let source = root.0.join("config.json");
+    std::fs::write(
+        &source,
+        serde_json::to_vec(&json!({
+            "account_user_id": "one-shot-account",
+            "household": {
+                "active_scope": "_self",
+                "members": [{"id": "_self"}]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let importer = PythonStateImporter::under(&source, root.0.join("native"));
+    let parsed =
+        CommandLine::try_parse_from(["heyfood", "--json", "log", "--for", "self", "oatmeal"])
+            .unwrap();
+    let Some(heyfood_cli::Command::Log(arguments)) = parsed.command else {
+        panic!("expected log command");
+    };
+    let prepared = prepare_log_command(arguments, &[], importer.preview_state().unwrap()).unwrap();
+    let verified = importer
+        .verify_after_review(prepared.source_preview())
+        .unwrap();
+    assert!(!importer.destination_path().exists());
+    let (listener, service) = fixture_service().await;
+    let error = prepare_qualified_log(
+        &service,
+        &credentials(),
+        prepared,
+        verified,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "household_state_invalid");
+    assert!(!importer.destination_path().exists());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn protected_account_mismatch_does_not_persist_snapshot_or_dispatch() {
+    let root = LogTempRoot::new("protected-account-mismatch");
+    let source = root.0.join("config.json");
+    std::fs::write(
+        &source,
+        serde_json::to_vec(&json!({
+            "account_user_id": "different-account",
+            "household": {
+                "active_scope": "_self",
+                "members": [{"id": "_self", "name": "Justin"}]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let importer = PythonStateImporter::under(&source, root.0.join("native"));
+    let parsed =
+        CommandLine::try_parse_from(["heyfood", "--json", "log", "--for", "self", "oatmeal"])
+            .unwrap();
+    let Some(heyfood_cli::Command::Log(arguments)) = parsed.command else {
+        panic!("expected log command");
+    };
+    let prepared = prepare_log_command(arguments, &[], importer.preview_state().unwrap()).unwrap();
+    let verified = importer
+        .verify_after_review(prepared.source_preview())
+        .unwrap();
+    assert!(!importer.destination_path().exists());
+    let (listener, service) = fixture_service().await;
+    let error = prepare_qualified_log(
+        &service,
+        &credentials(),
+        prepared,
+        verified,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "python_state_account_mismatch");
+    assert!(!importer.destination_path().exists());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn prepared_log_snapshot_prevents_active_scope_toctou() {
+    let state = imported_state([(
+        "household",
+        json!({
+            "active_scope": "member-sarah",
+            "members": [
+                {"id": "_self", "name": "Justin", "archived": false},
+                {"id": "member-sarah", "name": "Sarah", "archived": false}
+            ]
+        }),
+    )]);
+    let (root, importer) = prepared_log_importer("scope-toctou", &state);
+    let parsed = CommandLine::try_parse_from(["heyfood", "--json", "log", "oatmeal"]).unwrap();
+    let Some(heyfood_cli::Command::Log(arguments)) = parsed.command else {
+        panic!("expected log command");
+    };
+    let prepared = prepare_log_command(arguments, &[], importer.preview_state().unwrap()).unwrap();
+    std::fs::write(
+        root.0.join("config.json"),
+        serde_json::to_vec(&json!({
+            "account_user_id": "one-shot-account",
+            "household": {
+                "active_scope": "_self",
+                "members": [
+                    {"id": "_self", "name": "Justin", "archived": false},
+                    {"id": "member-sarah", "name": "Sarah", "archived": false}
+                ]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        importer
+            .verify_after_review(prepared.source_preview())
+            .unwrap_err()
+            .code,
+        "python_state_changed"
+    );
+}
+
+#[tokio::test]
+async fn raw_log_executor_requires_prepared_command() {
+    let (_listener, service) = fixture_service().await;
+    let parsed = CommandLine::try_parse_from(["heyfood", "--json", "log", "oatmeal"]).unwrap();
+    let error = OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
         .execute(parsed.command.unwrap(), &[], CancellationToken::new())
         .await
-        .unwrap();
-    server.await.unwrap();
+        .unwrap_err();
+    assert_eq!(error.code, "prepared_log_required");
 }
 
 #[tokio::test]
@@ -868,6 +1425,7 @@ async fn selected_household_outbox_uses_the_python_fallback_context_without_bloc
         (
             "household",
             json!({
+                "active_scope": "member-sarah",
                 "members": [
                     {"id": "_self", "name": "Justin", "relationship": "self", "archived": false},
                     {"id": "member-sarah", "name": "Sarah", "relationship": "partner", "archived": false}
@@ -906,11 +1464,34 @@ async fn selected_household_outbox_uses_the_python_fallback_context_without_bloc
         "oatmeal",
     ])
     .unwrap();
-    OneShotExecutor::new(&service, &credentials(), OutputMode::Json)
-        .with_imported_state(Some(&state))
-        .execute(parsed.command.unwrap(), &[], CancellationToken::new())
-        .await
+    let (_root, importer) = prepared_log_importer("outbox-context", &state);
+    let Some(heyfood_cli::Command::Log(arguments)) = parsed.command else {
+        panic!("expected log command");
+    };
+    let preview = importer.preview_state().unwrap();
+    let prepared = prepare_log_command(arguments, &[], preview).unwrap();
+    let verified = importer
+        .verify_after_review(prepared.source_preview())
         .unwrap();
+    let credentials = credentials();
+    let prepared = prepare_qualified_log(
+        &service,
+        &credentials,
+        prepared,
+        verified,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    execute_qualified_prepared_log(
+        &service,
+        credentials,
+        OutputMode::Json,
+        prepared,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     server.await.unwrap();
 }
 

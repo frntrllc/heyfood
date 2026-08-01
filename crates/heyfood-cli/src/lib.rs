@@ -908,6 +908,8 @@ pub fn render_logout_success(
 ) -> Result<String, serde_json::Error> {
     if machine {
         serde_json::to_string(document).map(|value| format!("{value}\n"))
+    } else if !document.local_credentials_cleared {
+        Ok("Logout is incomplete. Native household cleanup will resume automatically; some local credentials may remain until repair completes.\n".into())
     } else if document.remote_complete {
         Ok("Logged out.\n".into())
     } else {
@@ -1650,6 +1652,22 @@ mod registration_tests {
             render_logout_success(&LogoutOutcome::recovered_local_logout(), false)
                 .unwrap()
                 .starts_with("Logged out locally.")
+        );
+        let partial =
+            LogoutOutcome::recovered_local_teardown(heyfood_application::HouseholdEraseOutcome {
+                household_key_deleted: true,
+                household_ciphertext_deleted: true,
+                import_snapshot_deleted: true,
+                legacy_source_retained: true,
+                legacy_credentials_cleared: false,
+                legacy_credentials_retained: true,
+                local_credentials_cleared: false,
+                outcome_uncertain: true,
+            });
+        assert!(
+            render_logout_success(&partial, false)
+                .unwrap()
+                .starts_with("Logout is incomplete.")
         );
     }
 

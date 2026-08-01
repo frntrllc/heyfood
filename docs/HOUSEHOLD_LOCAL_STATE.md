@@ -1,0 +1,94 @@
+# Native household local state
+
+The native hey.food TUI keeps its household roster, selected scope, and
+declared dietary profiles in the account-bound encrypted household repository.
+It does not use the imported Python snapshot after native activation.
+
+## Supported human workflow
+
+In `NativeEnabled` mode, an attached human TUI supports:
+
+- `/household` for the live roster and current target;
+- `/household add` for one atomic member-plus-profile creation;
+- `/onboard --for <exact member ID or exact display name>` for an eligible
+  existing member;
+- `/for me`, `/for <exact member ID or exact display name>`, and
+  `/for everyone` for persistent context selection.
+
+The member questionnaire is the complete version-1 declared-profile
+questionnaire used by owner onboarding. New-member creation stores the member,
+revision-1 declared profile, and selected scope in one repository commit.
+Existing-member onboarding updates only that member and creates no remote-sync
+outbox entry. Duplicate display names require an explicit stable-ID-bound
+choice.
+
+Edit, archive, restore, and permanent member erasure are not yet available in
+the native TUI.
+
+## Privacy boundary
+
+Non-owner profiles stay on this device. Adding or onboarding a member does not
+grant profile-sync consent, create a remote member profile, or infer permission
+from account ownership or relationship.
+
+When a member or `Everyone` is selected, conversational and evaluation input
+fails locally with `household_hosted_context_not_authorized`. The preflight
+runs before session refresh, microphone capture, profile serialization, and
+HTTP dispatch. `/for me` restores the existing owner-hosted experience.
+
+For this slice, a member “dietary graph” means only their complete declared
+version-1 local profile. It does not include hosted evaluation, learned
+preferences, history, goals, health or fitness data, cross-device roster sync,
+or remote erasure.
+
+Household lifecycle mutation is human-TUI-only. It is absent from agent
+manifests, one-shot machine JSON, MCP tools, redirected stdin, and command-line
+profile arguments.
+
+## Account and continuity binding
+
+Every management operation is bound to:
+
+- the current authenticated account;
+- the live `HouseholdSession` account;
+- the repository state account;
+- a reducer mode generation and opaque account-binding digest;
+- the expected household revision; and
+- one reducer operation/correlation pair.
+
+A mismatch performs no new mutation and no network work. A successful local
+commit is not presented as success until the reducer accepts its exact event
+and the driver reloads the committed revision, clears old conversation and
+subject-bound continuity, and acknowledges the new context. Restart bootstrap
+loads the persisted scope from the encrypted repository.
+
+## Cancellation and recovery
+
+Cancellation before the repository boundary creates no commit. After dispatch,
+the application reconciles with the original internally allocated commit and
+member identities; it never allocates a compensating identity or second
+revision. An unprovable result is `OutcomeUncertain` and blocks further work
+until a fresh repository bootstrap reconciles visible state.
+
+Legacy compatibility mode has no native mutation authority. Rollback mode can
+render repository-backed management state but remains read-only. Repair,
+initialization, and teardown states fail closed rather than falling back to an
+imported roster.
+
+Logout uses the durable native teardown journal. It resumes interrupted local
+cleanup, scrubs known legacy credential locations while retaining
+noncredential legacy files, removes the account household key and encrypted
+artifacts, and clears local authentication state. Partial or uncertain cleanup
+is reported explicitly and remains resumable.
+
+## Diagnostic handling
+
+Household names, stable IDs, age evidence, profile answers, selectors, account
+digests, correlations, credentials, and vault data are excluded from Debug,
+logs, errors, panic diagnostics owned by this feature, and machine-readable
+history. The bounded text shown inside the user's attached TUI is the explicit
+presentation exception.
+
+Release qualification uses the content-free
+[native household TUI manual acceptance](HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md)
+checklist. Household lifecycle is not driven through an automated PTY.

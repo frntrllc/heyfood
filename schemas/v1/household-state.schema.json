@@ -1,0 +1,1042 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/household-state.schema.json",
+  "title": "hey.food native household state v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "account_binding",
+    "revision",
+    "owner",
+    "active_scope",
+    "members",
+    "profiles",
+    "outbox",
+    "bounded_applied_commits",
+    "imported_compatibility",
+    "migration_dispositions",
+    "migration_provenance",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "account_binding": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "x-heyfood-no-surrounding-whitespace": true
+    },
+    "revision": { "$ref": "#/$defs/revision" },
+    "owner": { "$ref": "#/$defs/owner" },
+    "active_scope": { "$ref": "#/$defs/scope" },
+    "members": {
+      "type": "array",
+      "maxItems": 256,
+      "x-heyfood-sort": "member_id_utf8_bytes",
+      "x-heyfood-unique": "member_id",
+      "items": { "$ref": "#/$defs/member" }
+    },
+    "profiles": {
+      "type": "array",
+      "maxItems": 257,
+      "x-heyfood-sort": "typed_subject_self_then_member_id_utf8_bytes",
+      "x-heyfood-unique": "subject",
+      "items": { "$ref": "#/$defs/profileRecord" }
+    },
+    "outbox": {
+      "type": "array",
+      "maxItems": 1024,
+      "x-heyfood-sort": "outbox_id_utf8_bytes",
+      "x-heyfood-unique": "outbox_id",
+      "items": { "$ref": "#/$defs/outboxRecord" }
+    },
+    "bounded_applied_commits": {
+      "type": "array",
+      "maxItems": 16384,
+      "x-heyfood-non-evicting": true,
+      "x-heyfood-sort": "commit_uuid_16_bytes",
+      "x-heyfood-unique": "commit_id",
+      "items": { "$ref": "#/$defs/appliedCommit" }
+    },
+    "imported_compatibility": { "$ref": "#/$defs/importedCompatibility" },
+    "migration_dispositions": { "$ref": "#/$defs/dispositionManifest" },
+    "migration_provenance": { "$ref": "#/$defs/migrationProvenance" },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "x-heyfood-canonical-byte-limit": 8388608,
+  "x-heyfood-no-identity-object-keys": true,
+  "$defs": {
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "u32": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "uuidV4": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "memberId": {
+      "type": "string",
+      "minLength": 1,
+      "x-heyfood-max-utf8-bytes": 128,
+      "not": {
+        "enum": ["_self", "__everyone__", ".", ".."]
+      },
+      "x-heyfood-no-normalization": true,
+      "x-heyfood-no-path-or-terminal-interpretation": true
+    },
+    "outboxId": {
+      "type": "string",
+      "minLength": 1,
+      "x-heyfood-max-utf8-bytes": 128,
+      "x-heyfood-owner-sync-pattern": "^owner-sync-v1:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "x-heyfood-no-normalization": true
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "x-heyfood-max-utf8-bytes": 320,
+      "x-heyfood-no-normalization": true,
+      "x-heyfood-no-surrounding-whitespace-or-controls": true
+    },
+    "subject": {
+      "oneOf": [
+        { "const": "self" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["member"],
+          "properties": {
+            "member": { "$ref": "#/$defs/memberId" }
+          }
+        }
+      ]
+    },
+    "scope": {
+      "oneOf": [
+        { "$ref": "#/$defs/subject" },
+        { "const": "everyone" }
+      ]
+    },
+    "relationship": {
+      "enum": [
+        "self",
+        "spouse",
+        "partner",
+        "parent",
+        "child",
+        "sibling",
+        "grandparent",
+        "friend",
+        "other"
+      ]
+    },
+    "profileState": {
+      "enum": ["incomplete", "local_only", "pending_sync", "synced", "conflicted"]
+    },
+    "owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "display_name",
+        "relationship",
+        "profile_state",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "display_name": { "$ref": "#/$defs/displayName" },
+        "relationship": { "const": "self" },
+        "profile_state": { "$ref": "#/$defs/profileState" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "updated_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "ageEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["date_of_birth", "age_band", "source"],
+      "properties": {
+        "date_of_birth": {
+          "oneOf": [
+            { "$ref": "#/$defs/date" },
+            { "type": "null" }
+          ]
+        },
+        "age_band": {
+          "oneOf": [
+            { "enum": ["under_13", "age_13_17", "age_18_plus"] },
+            { "type": "null" }
+          ]
+        },
+        "source": {
+          "enum": ["native_declared", "legacy_date_of_birth", "legacy_age_band"]
+        }
+      }
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "member_id",
+        "display_name",
+        "relationship",
+        "relationship_source",
+        "minor_status",
+        "age_evidence",
+        "minor_status_evaluated_on",
+        "lifecycle",
+        "profile_state",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "member_id": { "$ref": "#/$defs/memberId" },
+        "display_name": { "$ref": "#/$defs/displayName" },
+        "relationship": {
+          "allOf": [
+            { "$ref": "#/$defs/relationship" },
+            { "not": { "const": "self" } }
+          ]
+        },
+        "relationship_source": {
+          "enum": ["native_declared", "legacy_declared", "legacy_missing"]
+        },
+        "minor_status": { "enum": ["minor", "adult", "unknown"] },
+        "age_evidence": {
+          "oneOf": [
+            { "$ref": "#/$defs/ageEvidence" },
+            { "type": "null" }
+          ]
+        },
+        "minor_status_evaluated_on": { "$ref": "#/$defs/date" },
+        "lifecycle": { "enum": ["active", "archived"] },
+        "profile_state": { "$ref": "#/$defs/profileState" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "updated_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "profileRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "profile_revision", "document"],
+      "properties": {
+        "subject": { "$ref": "#/$defs/subject" },
+        "profile_revision": { "$ref": "#/$defs/revision" },
+        "document": {
+          "$ref": "household-profile-document.schema.json"
+        }
+      }
+    },
+    "remoteBase": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["existence", "version", "profile_digest"],
+          "properties": {
+            "existence": { "const": "absent" },
+            "version": { "type": "null" },
+            "profile_digest": { "type": "null" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["existence", "version", "profile_digest"],
+          "properties": {
+            "existence": { "const": "present" },
+            "version": { "$ref": "#/$defs/revision" },
+            "profile_digest": { "$ref": "#/$defs/digest" }
+          }
+        }
+      ]
+    },
+    "ownerSyncRequestBody": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["member_id", "profile_data"],
+          "properties": {
+            "member_id": { "const": "_self" },
+            "profile_data": {
+              "type": "object",
+              "maxProperties": 128,
+              "x-heyfood-max-json-depth": 8,
+              "x-heyfood-max-json-nodes": 65536
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["member_id", "profile_data", "expected_version"],
+          "properties": {
+            "member_id": { "const": "_self" },
+            "profile_data": {
+              "type": "object",
+              "maxProperties": 128,
+              "x-heyfood-max-json-depth": 8,
+              "x-heyfood-max-json-nodes": 65536
+            },
+            "expected_version": { "$ref": "#/$defs/revision" }
+          }
+        }
+      ],
+      "x-heyfood-canonical-byte-limit": 524288
+    },
+    "ownerSyncIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "intent_id",
+        "intent_revision",
+        "phase",
+        "subject",
+        "local_household_revision",
+        "local_profile_revision",
+        "local_profile_digest",
+        "remote_request_id",
+        "consent_version",
+        "remote_base",
+        "expected_remote_version",
+        "request_method",
+        "request_path",
+        "request_body",
+        "request_body_digest",
+        "attempt_count",
+        "last_definite_error",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "intent_id": { "$ref": "#/$defs/uuidV4" },
+        "intent_revision": { "$ref": "#/$defs/revision" },
+        "phase": {
+          "enum": [
+            "needs_consent_check",
+            "needs_remote_base",
+            "ready_to_dispatch",
+            "dispatching_outcome_unknown",
+            "outcome_uncertain",
+            "definite_failure",
+            "conflicted",
+            "local_only_no_consent"
+          ]
+        },
+        "subject": { "const": "self" },
+        "local_household_revision": { "$ref": "#/$defs/revision" },
+        "local_profile_revision": { "$ref": "#/$defs/revision" },
+        "local_profile_digest": { "$ref": "#/$defs/digest" },
+        "remote_request_id": { "$ref": "#/$defs/uuidV4" },
+        "consent_version": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+            { "type": "null" }
+          ]
+        },
+        "remote_base": {
+          "oneOf": [
+            { "$ref": "#/$defs/remoteBase" },
+            { "type": "null" }
+          ]
+        },
+        "expected_remote_version": {
+          "oneOf": [
+            { "$ref": "#/$defs/revision" },
+            { "type": "null" }
+          ]
+        },
+        "request_method": {
+          "oneOf": [
+            { "const": "PUT" },
+            { "type": "null" }
+          ]
+        },
+        "request_path": {
+          "oneOf": [
+            { "const": "/v1/profile/sync" },
+            { "type": "null" }
+          ]
+        },
+        "request_body": {
+          "oneOf": [
+            { "$ref": "#/$defs/ownerSyncRequestBody" },
+            { "type": "null" }
+          ]
+        },
+        "request_body_digest": {
+          "oneOf": [
+            { "$ref": "#/$defs/digest" },
+            { "type": "null" }
+          ]
+        },
+        "attempt_count": { "$ref": "#/$defs/u32" },
+        "last_definite_error": {
+          "oneOf": [
+            {
+              "enum": [
+                "consent_absent",
+                "unauthorized",
+                "forbidden",
+                "validation",
+                "version_conflict",
+                "not_found",
+                "predispatch_cancelled",
+                "consent_version_changed_requires_new_save",
+                "consent_revoked_regrant_required"
+              ]
+            },
+            { "type": "null" }
+          ]
+        },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "updated_at": { "$ref": "#/$defs/timestamp" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "phase": { "const": "needs_consent_check" } },
+            "required": ["phase"]
+          },
+          "then": {
+            "properties": {
+              "consent_version": { "type": "null" },
+              "remote_base": { "type": "null" },
+              "expected_remote_version": { "type": "null" },
+              "request_method": { "type": "null" },
+              "request_path": { "type": "null" },
+              "request_body": { "type": "null" },
+              "request_body_digest": { "type": "null" },
+              "attempt_count": { "const": 0 },
+              "last_definite_error": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "phase": { "const": "needs_remote_base" } },
+            "required": ["phase"]
+          },
+          "then": {
+            "properties": {
+              "consent_version": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "remote_base": { "type": "null" },
+              "expected_remote_version": { "type": "null" },
+              "request_method": { "type": "null" },
+              "request_path": { "type": "null" },
+              "request_body": { "type": "null" },
+              "request_body_digest": { "type": "null" },
+              "attempt_count": { "const": 0 },
+              "last_definite_error": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "phase": { "const": "ready_to_dispatch" } },
+            "required": ["phase"]
+          },
+          "then": {
+            "properties": {
+              "consent_version": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "remote_base": { "$ref": "#/$defs/remoteBase" },
+              "request_method": { "const": "PUT" },
+              "request_path": { "const": "/v1/profile/sync" },
+              "request_body": { "$ref": "#/$defs/ownerSyncRequestBody" },
+              "request_body_digest": { "$ref": "#/$defs/digest" }
+            },
+            "oneOf": [
+              {
+                "properties": {
+                  "attempt_count": { "const": 0 },
+                  "last_definite_error": { "type": "null" }
+                }
+              },
+              {
+                "properties": {
+                  "attempt_count": { "type": "integer", "minimum": 1 },
+                  "last_definite_error": {
+                    "oneOf": [
+                      { "const": "predispatch_cancelled" },
+                      { "type": "null" }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "phase": { "const": "dispatching_outcome_unknown" }
+            },
+            "required": ["phase"]
+          },
+          "then": {
+            "properties": {
+              "consent_version": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "remote_base": { "$ref": "#/$defs/remoteBase" },
+              "request_method": { "const": "PUT" },
+              "request_path": { "const": "/v1/profile/sync" },
+              "request_body": { "$ref": "#/$defs/ownerSyncRequestBody" },
+              "request_body_digest": { "$ref": "#/$defs/digest" },
+              "attempt_count": { "type": "integer", "minimum": 1 },
+              "last_definite_error": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "phase": { "const": "outcome_uncertain" } },
+            "required": ["phase"]
+          },
+          "then": {
+            "properties": {
+              "consent_version": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "remote_base": { "$ref": "#/$defs/remoteBase" },
+              "request_method": { "const": "PUT" },
+              "request_path": { "const": "/v1/profile/sync" },
+              "request_body": { "$ref": "#/$defs/ownerSyncRequestBody" },
+              "request_body_digest": { "$ref": "#/$defs/digest" },
+              "attempt_count": { "type": "integer", "minimum": 1 },
+              "last_definite_error": {
+                "oneOf": [
+                  { "const": "version_conflict" },
+                  { "type": "null" }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "phase": { "const": "definite_failure" } },
+            "required": ["phase"]
+          },
+          "then": {
+            "properties": {
+              "consent_version": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "remote_base": { "$ref": "#/$defs/remoteBase" },
+              "request_method": { "const": "PUT" },
+              "request_path": { "const": "/v1/profile/sync" },
+              "request_body": { "$ref": "#/$defs/ownerSyncRequestBody" },
+              "request_body_digest": { "$ref": "#/$defs/digest" }
+            },
+            "oneOf": [
+              {
+                "properties": {
+                  "attempt_count": { "type": "integer", "minimum": 1 },
+                  "last_definite_error": {
+                    "enum": [
+                      "unauthorized",
+                      "forbidden",
+                      "validation",
+                      "not_found"
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "last_definite_error": {
+                    "enum": [
+                      "consent_version_changed_requires_new_save",
+                      "consent_revoked_regrant_required"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": { "phase": { "const": "conflicted" } },
+            "required": ["phase"]
+          },
+          "then": {
+            "properties": {
+              "consent_version": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "remote_base": { "$ref": "#/$defs/remoteBase" },
+              "request_method": { "const": "PUT" },
+              "request_path": { "const": "/v1/profile/sync" },
+              "request_body": { "$ref": "#/$defs/ownerSyncRequestBody" },
+              "request_body_digest": { "$ref": "#/$defs/digest" },
+              "attempt_count": { "type": "integer", "minimum": 1 },
+              "last_definite_error": { "const": "version_conflict" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "phase": { "const": "local_only_no_consent" }
+            },
+            "required": ["phase"]
+          },
+          "then": {
+            "properties": {
+              "consent_version": { "type": "null" },
+              "remote_base": { "type": "null" },
+              "expected_remote_version": { "type": "null" },
+              "request_method": { "type": "null" },
+              "request_path": { "type": "null" },
+              "request_body": { "type": "null" },
+              "request_body_digest": { "type": "null" },
+              "attempt_count": { "const": 0 },
+              "last_definite_error": { "const": "consent_absent" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "remote_base": {
+                "type": "object",
+                "properties": { "existence": { "const": "absent" } },
+                "required": ["existence"]
+              }
+            },
+            "required": ["remote_base"]
+          },
+          "then": {
+            "properties": {
+              "expected_remote_version": { "type": "null" },
+              "request_body": {
+                "type": "object",
+                "not": { "required": ["expected_version"] }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "remote_base": {
+                "type": "object",
+                "properties": { "existence": { "const": "present" } },
+                "required": ["existence"]
+              }
+            },
+            "required": ["remote_base"]
+          },
+          "then": {
+            "properties": {
+              "expected_remote_version": { "$ref": "#/$defs/revision" },
+              "request_body": {
+                "type": "object",
+                "required": ["expected_version"]
+              }
+            },
+            "x-heyfood-expected-version-equals-remote-base-version": true
+          }
+        }
+      ],
+      "x-heyfood-intent-id-equals-remote-request-id": true,
+      "x-heyfood-closed-phase-nullability-table": true,
+      "x-heyfood-frozen-request-authority": true
+    },
+    "legacyOutbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "source_kind",
+        "source_key",
+        "source_digest",
+        "payload",
+        "payload_digest",
+        "phase",
+        "updated_at"
+      ],
+      "properties": {
+        "target": { "$ref": "#/$defs/subject" },
+        "source_kind": {
+          "enum": [
+            "python_subject_keyed_v1",
+            "rust_mutation_keyed_embedded_member_v0",
+            "rust_subject_keyed_local_context_v0",
+            "python_subject_keyed_patch_v0"
+          ]
+        },
+        "source_key": {
+          "type": "string",
+          "minLength": 1,
+          "x-heyfood-max-utf8-bytes": 128
+        },
+        "source_digest": { "$ref": "#/$defs/digest" },
+        "payload": {
+          "type": "object",
+          "maxProperties": 128,
+          "x-heyfood-canonical-byte-limit": 4194304,
+          "x-heyfood-max-json-depth": 8,
+          "x-heyfood-max-json-nodes": 65536,
+          "x-heyfood-max-object-properties": 128,
+          "x-heyfood-max-array-items": 256,
+          "x-heyfood-max-string-utf8-bytes": 2048,
+          "x-heyfood-recursive-number-domain": "safe_integer_or_finite_binary64"
+        },
+        "payload_digest": { "$ref": "#/$defs/digest" },
+        "phase": { "const": "policy_blocked_legacy" },
+        "updated_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "outboxEntry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "version", "target", "legacy"],
+          "properties": {
+            "kind": { "const": "legacy" },
+            "version": { "const": 1 },
+            "target": { "$ref": "#/$defs/subject" },
+            "legacy": { "$ref": "#/$defs/legacyOutbox" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "version", "target", "intent"],
+          "properties": {
+            "kind": { "const": "owner_sync" },
+            "version": { "const": 1 },
+            "target": { "const": "self" },
+            "intent": { "$ref": "#/$defs/ownerSyncIntent" }
+          }
+        }
+      ]
+    },
+    "outboxRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outbox_id", "outbox_revision", "entry"],
+      "properties": {
+        "outbox_id": { "$ref": "#/$defs/outboxId" },
+        "outbox_revision": { "$ref": "#/$defs/revision" },
+        "entry": { "$ref": "#/$defs/outboxEntry" }
+      },
+      "x-heyfood-entry-target-must-match-payload": true,
+      "x-heyfood-owner-sync-id-and-revision-binding": true
+    },
+    "appliedCommit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit_id",
+        "fingerprint",
+        "resulting_revision",
+        "outcome",
+        "committed_at"
+      ],
+      "properties": {
+        "commit_id": { "$ref": "#/$defs/uuidV4" },
+        "fingerprint": { "$ref": "#/$defs/digest" },
+        "resulting_revision": { "$ref": "#/$defs/revision" },
+        "outcome": { "enum": ["initialized", "committed"] },
+        "committed_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "compatibilityField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field_name", "value", "source_digest"],
+      "properties": {
+        "field_name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "value": {
+          "x-heyfood-max-json-depth": 8,
+          "x-heyfood-max-json-nodes": 65536,
+          "x-heyfood-max-object-properties": 128,
+          "x-heyfood-max-array-items": 256,
+          "x-heyfood-max-string-utf8-bytes": 2048,
+          "x-heyfood-recursive-number-domain": "safe_integer_or_finite_binary64"
+        },
+        "source_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "legacyRemoteProfileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "source_digest"],
+      "properties": {
+        "subject": { "$ref": "#/$defs/subject" },
+        "source_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "legacyTimestampProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "normalized",
+        "source_precision",
+        "truncated",
+        "original_sha256"
+      ],
+      "properties": {
+        "normalized": { "$ref": "#/$defs/timestamp" },
+        "source_precision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 6
+        },
+        "truncated": { "type": "boolean" },
+        "original_sha256": { "$ref": "#/$defs/digest" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source_precision": { "maximum": 3 }
+            },
+            "required": ["source_precision"]
+          },
+          "then": {
+            "properties": { "truncated": { "const": false } }
+          },
+          "else": {
+            "properties": { "truncated": { "const": true } }
+          }
+        }
+      ]
+    },
+    "legacyTimestampDisposition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "provenance"],
+          "properties": {
+            "kind": { "const": "normalized" },
+            "provenance": { "$ref": "#/$defs/legacyTimestampProvenance" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "normalized"],
+          "properties": {
+            "kind": { "const": "legacy_missing_time" },
+            "normalized": { "$ref": "#/$defs/timestamp" }
+          }
+        }
+      ]
+    },
+    "legacyTimestampRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field_path", "disposition"],
+      "properties": {
+        "field_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "x-heyfood-no-surrounding-whitespace-or-controls": true
+        },
+        "disposition": { "$ref": "#/$defs/legacyTimestampDisposition" }
+      }
+    },
+    "importedCompatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fields",
+        "legacy_python_applied_mutation_ids",
+        "legacy_python_applied_mutation_ids_digest",
+        "legacy_remote_profile_references",
+        "legacy_timestamp_provenance"
+      ],
+      "properties": {
+        "fields": {
+          "type": "array",
+          "maxItems": 128,
+          "x-heyfood-sort": "field_name_utf8_bytes",
+          "x-heyfood-unique": "field_name",
+          "items": { "$ref": "#/$defs/compatibilityField" }
+        },
+        "legacy_python_applied_mutation_ids": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "x-heyfood-max-utf8-bytes": 128
+          }
+        },
+        "legacy_python_applied_mutation_ids_digest": {
+          "oneOf": [
+            { "$ref": "#/$defs/digest" },
+            { "type": "null" }
+          ]
+        },
+        "legacy_remote_profile_references": {
+          "type": "array",
+          "maxItems": 257,
+          "x-heyfood-sort": "typed_subject_self_then_member_id_utf8_bytes",
+          "x-heyfood-unique": "subject",
+          "items": { "$ref": "#/$defs/legacyRemoteProfileReference" }
+        },
+        "legacy_timestamp_provenance": {
+          "type": "array",
+          "maxItems": 1539,
+          "x-heyfood-sort": "field_path_utf8_bytes",
+          "x-heyfood-unique": "field_path",
+          "items": { "$ref": "#/$defs/legacyTimestampRecord" }
+        }
+      }
+    },
+    "disposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field_name",
+        "disposition",
+        "destination_schema",
+        "source_digest",
+        "destination_digest"
+      ],
+      "properties": {
+        "field_name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "disposition": {
+          "enum": ["migrated", "retired", "reauthentication_required"]
+        },
+        "destination_schema": {
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 256 },
+            { "type": "null" }
+          ]
+        },
+        "source_digest": {
+          "oneOf": [
+            { "$ref": "#/$defs/digest" },
+            { "type": "null" }
+          ]
+        },
+        "destination_digest": {
+          "oneOf": [
+            { "$ref": "#/$defs/digest" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "dispositionManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dispositions"],
+      "properties": {
+        "dispositions": {
+          "type": "array",
+          "maxItems": 128,
+          "x-heyfood-sort": "field_name_utf8_bytes",
+          "x-heyfood-unique": "field_name",
+          "items": { "$ref": "#/$defs/disposition" }
+        }
+      }
+    },
+    "sourceIdentity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "source_kind", "source_digest"],
+          "properties": {
+            "kind": { "const": "present" },
+            "source_kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "source_digest": { "$ref": "#/$defs/digest" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "source_set_fingerprint"],
+          "properties": {
+            "kind": { "const": "no_source" },
+            "source_set_fingerprint": { "$ref": "#/$defs/digest" }
+          }
+        }
+      ]
+    },
+    "migrationProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_identity",
+        "legacy_python_snapshot",
+        "migration_id",
+        "initialization_id",
+        "initial_commit_id",
+        "migration_frozen_at"
+      ],
+      "properties": {
+        "source_identity": { "$ref": "#/$defs/sourceIdentity" },
+        "legacy_python_snapshot": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/legacyPythonSnapshotProvenance" }
+          ]
+        },
+        "migration_id": { "$ref": "#/$defs/uuidV4" },
+        "initialization_id": { "$ref": "#/$defs/uuidV4" },
+        "initial_commit_id": { "$ref": "#/$defs/uuidV4" },
+        "migration_frozen_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "legacyPythonSnapshotProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["locator_digest", "content_digest"],
+      "properties": {
+        "locator_digest": { "$ref": "#/$defs/digest" },
+        "content_digest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

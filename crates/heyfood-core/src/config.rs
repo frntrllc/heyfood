@@ -1,5 +1,7 @@
 //! Versioned native configuration captured by application operations.
 
+use std::ffi::OsStr;
+
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::ServiceUrl;
@@ -25,6 +27,31 @@ impl ConfigSchemaVersion {
 /// Schema 2 added explicit account binding; schema 3 bounds the durable replay
 /// window. The ordinary configuration document remains credential-free.
 pub const CURRENT_CONFIG_SCHEMA: ConfigSchemaVersion = ConfigSchemaVersion::new(3);
+
+/// Strict rollout switch for D2 native household state. This is a composition
+/// choice only; it never weakens authorization or encryption requirements.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum NativeHouseholdRolloutV1 {
+    #[default]
+    Disabled,
+    Enabled,
+}
+
+impl NativeHouseholdRolloutV1 {
+    pub fn parse_environment_value(value: Option<&OsStr>) -> Result<Self, &'static str> {
+        match value.and_then(OsStr::to_str) {
+            None if value.is_none() => Ok(Self::Disabled),
+            Some("0") => Ok(Self::Disabled),
+            Some("1") => Ok(Self::Enabled),
+            None | Some(_) => Err("HEYFOOD_NATIVE_HOUSEHOLD_V1 must be exactly 0 or 1"),
+        }
+    }
+
+    #[must_use]
+    pub const fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
 
 #[derive(
     Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
@@ -93,5 +120,44 @@ impl ClientConfig {
             return Err("active context must not contain control characters");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+
+    use super::NativeHouseholdRolloutV1;
+
+    #[test]
+    fn native_household_rollout_accepts_only_absent_zero_or_one() {
+        assert_eq!(
+            NativeHouseholdRolloutV1::parse_environment_value(None).unwrap(),
+            NativeHouseholdRolloutV1::Disabled
+        );
+        assert_eq!(
+            NativeHouseholdRolloutV1::parse_environment_value(Some(OsStr::new("0"))).unwrap(),
+            NativeHouseholdRolloutV1::Disabled
+        );
+        assert_eq!(
+            NativeHouseholdRolloutV1::parse_environment_value(Some(OsStr::new("1"))).unwrap(),
+            NativeHouseholdRolloutV1::Enabled
+        );
+        for invalid in ["", "true", "false", " 1", "1 ", "01", "2", "-1"] {
+            assert!(
+                NativeHouseholdRolloutV1::parse_environment_value(Some(OsStr::new(invalid)))
+                    .is_err(),
+                "{invalid:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_household_rollout_rejects_non_utf8() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let invalid = std::ffi::OsString::from_vec(vec![0xff]);
+        assert!(NativeHouseholdRolloutV1::parse_environment_value(Some(&invalid)).is_err());
     }
 }

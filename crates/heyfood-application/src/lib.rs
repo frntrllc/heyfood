@@ -6,7 +6,11 @@ pub mod capability;
 pub mod ensure_session;
 pub mod grocery;
 pub mod health;
+pub mod household_context;
 pub mod household_menu;
+pub mod household_profile_policy;
+pub mod household_repository;
+pub mod legacy_compatibility;
 pub mod logout;
 pub mod menu_watch;
 pub mod one_shot_turn;
@@ -31,7 +35,33 @@ pub use grocery::{
 pub use health::{
     HealthAuthorization, HealthConnection, HealthContext, HealthManagementOutcome, HealthPort,
 };
+pub use household_context::{
+    HouseholdContextErrorV1, HouseholdContextSnapshotV1, HouseholdSubjectContextV1,
+    PreparedHouseholdTargetV1, resolve_personalized_context_v1, validate_scope_eligibility_v1,
+};
 pub use household_menu::render_household_menu;
+pub use household_profile_policy::{
+    AuthoritativeConsentStateV1, HouseholdProfileEligibilityV1, HouseholdProfileIneligibilityV1,
+    HouseholdProfileOperationV1, OwnerProfileActionEligibilityV1, OwnerProfileRetryActionV1,
+    OwnerProfileRetryEligibilityV1, OwnerProfileRetryUnavailableReasonV1, OwnerSyncIntentHandleV1,
+    household_profile_eligibility_v1, owner_profile_action_eligibility_v1,
+    validate_d2_profile_policy_v1,
+};
+pub use household_repository::{
+    CreateMemberWithDeclaredProfileV1, CreatedMemberWithDeclaredProfileV1, HouseholdCommit,
+    HouseholdCommitOutcome, HouseholdErase, HouseholdEraseOutcome, HouseholdInitialize,
+    HouseholdLoad, HouseholdOpenOutcomeV1, HouseholdRepositoryResolutionV1, HouseholdSession,
+    NativeMemberAgeEvidenceV1, OpenHouseholdV1, OwnerSyncTransitionEventV1,
+    SaveMemberDeclaredProfileV1, SaveOwnerProfileAndSyncIntentV1, SavedMemberDeclaredProfileV1,
+    SavedOwnerProfileAndSyncIntentV1, SelectedHouseholdScopeV1, SelectedHouseholdTargetV1,
+    SelfOnlyHouseholdInitializationV1, TransitionOwnerSyncIntentV1, resolve_household_commit_v1,
+    resolve_household_initialize_v1,
+};
+pub use legacy_compatibility::{
+    NativeHouseholdCompletionModeV1, NativeHouseholdEvidenceV1,
+    NativeHouseholdInitializationPhaseV1, NativeHouseholdModeErrorV1, NativeHouseholdModeFactsV1,
+    NativeHouseholdModeV1, NativeHouseholdPostLogoutPolicyV1, resolve_native_household_mode_v1,
+};
 pub use logout::{
     Logout, LogoutLocalPort, LogoutOutcome, LogoutRemotePort, LogoutStep, LogoutTeardown,
 };
@@ -48,7 +78,8 @@ pub use one_shot_turn::{
 pub use ports::{
     AcceptedTurn, AudioCapture, AudioCapturePort, BoxEventStream, BoxFuture, BrowserPort,
     ClipboardPort, ClockPort, ConfigCommit, ConfigMutation, ConfigPort, CredentialCommit,
-    CredentialPort, EventStream, PortError, ServicePort,
+    CredentialPort, EventStream, HouseholdMutationAuthorityPort, HouseholdMutationAuthorityV1,
+    HouseholdMutationPurposeV1, HouseholdRepositoryPort, PortError, ServicePort,
 };
 pub use run_turn::{
     MAX_TURN_EVENTS, MAX_TURN_STREAM_BYTES, RefreshPolicy, RunTurn, RunTurnError, RunTurnOutcome,

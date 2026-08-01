@@ -33,6 +33,13 @@ The Linux archives do not require a platform code-signing identity. Their exact
 bytes and the canonical `SHA256SUMS` manifest are covered by GitHub artifact
 attestations and verified before execution.
 
+The immutable v0.6.2 asset set remains exactly the released four archives and
+checksum manifest. D2 source does not add assets to that release. The
+standalone verifier, declaration, and expanded future-release attestation
+contract are documented in
+[`NATIVE_STATE_COMPATIBILITY.md`](NATIVE_STATE_COMPATIBILITY.md); activation
+requires a separately reviewed next release version.
+
 ## Protected candidate qualification
 
 Ordinary pull-request CI includes Windows and builds unsigned platform fixtures

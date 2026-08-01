@@ -1,0 +1,26 @@
+{
+  "household.state": {
+    "members": [
+      {
+        "id": "keyring-member",
+        "name": "Keyring Member",
+        "relationship": "child"
+      }
+    ]
+  },
+  "household.local_profiles": {},
+  "household.profile_outbox": {
+    "keyring-member": {
+      "fields": {
+        "restrictions": [
+          "sesame"
+        ]
+      },
+      "local_context": {
+        "restrictions": [
+          "sesame"
+        ]
+      }
+    }
+  }
+}

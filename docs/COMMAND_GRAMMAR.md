@@ -102,8 +102,15 @@ terminal before credential access or network dispatch:
 
 The controlling terminal is opened independently from stdin and stdout.
 Arguments and redirected stdin carry data only; they never count as consent.
-The `log` review shows the meal, meal type, and exact `--for` household
-selector before `LOG` is accepted.
+The `log` review shows the meal, meal type, resolved canonical Household label,
+and reversible identity token before `LOG` is accepted. Member identities use
+`member-id-utf8-hex=<lowercase UTF-8 hex>`; self and Everyone use
+`scope=_self` and `scope=__everyone__`. An omitted selector resolves the
+strictly valid saved active scope exactly once from the credential-elided
+native snapshot, and the reviewed stable identity is the identity dispatched.
+If only an uninspected mixed legacy source is visible, or the native snapshot
+reports skipped Python keyring data, only explicit self can reach review;
+omitted, member, and Everyone targets fail closed before credential access.
 Consequently these commands fail with `human_terminal_required` in unattended
 processes even when an automation host allocates ordinary pipes. Agents must
 not drive the prompt through a PTY or use these human-only commands as a

@@ -22,6 +22,9 @@ pub use registration::{
     ReauthorizationStatus, RegistrationClient, RegistrationError, RegistrationOutcome,
     StagedReauthorization,
 };
+pub use service_api::{
+    MAX_JSON_RESPONSE_BYTES, OwnerSyncOutcomeUncertainReasonV1, OwnerSyncTransportResultV1,
+};
 pub use sse::SseEventStream;
 
 /// The package version shared by the native workspace.

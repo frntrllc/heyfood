@@ -27,11 +27,11 @@ mod windows {
     use windows_sys::Win32::Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateFileW, DELETE, FILE_ATTRIBUTE_DIRECTORY,
         FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
-        FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        FileAttributeTagInfo, FileRenameInfo, GetFileInformationByHandle,
-        GetFileInformationByHandleEx, OPEN_EXISTING, READ_CONTROL, SetFileInformationByHandle,
-        WRITE_DAC,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO,
+        FILE_READ_ATTRIBUTES, FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, FileAttributeTagInfo, FileIdInfo, FileRenameInfo,
+        GetFileInformationByHandle, GetFileInformationByHandleEx, OPEN_EXISTING, READ_CONTROL,
+        SetFileInformationByHandle, WRITE_DAC,
     };
 
     /// A newly created regular file whose DACL was protected and restricted to
@@ -89,6 +89,16 @@ mod windows {
         pub volume_serial_number: u32,
         pub file_index: u64,
         pub number_of_links: u32,
+    }
+
+    /// Exact modern Windows identity returned by `FileIdInfo`.
+    ///
+    /// This preserves all 16 opaque identifier bytes rather than collapsing
+    /// them into the legacy 64-bit file index.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct FileId128Identity {
+        pub volume_serial_number: u64,
+        pub file_id: [u8; 16],
     }
 
     /// Pins one direct directory identity while it is atomically renamed.
@@ -172,6 +182,59 @@ mod windows {
                 | u64::from(information.nFileIndexLow),
             number_of_links: information.nNumberOfLinks,
         })
+    }
+
+    /// Inspect the exact `FileIdInfo` identity of an already-open file.
+    #[allow(unsafe_code)]
+    pub fn file_id_128_identity(file: &File) -> io::Result<FileId128Identity> {
+        let mut information = FILE_ID_INFO::default();
+        // SAFETY: `information` is a live output buffer of the exact class
+        // size and `file` owns a valid handle for the duration of the call.
+        if unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                FileIdInfo,
+                ptr::addr_of_mut!(information).cast(),
+                u32::try_from(size_of::<FILE_ID_INFO>()).expect("FILE_ID_INFO size fits in u32"),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(FileId128Identity {
+            volume_serial_number: information.VolumeSerialNumber,
+            file_id: information.FileId.Identifier,
+        })
+    }
+
+    /// Open one existing direct regular file for attributes only, without
+    /// following a final reparse point, and return its exact modern identity.
+    #[allow(unsafe_code)]
+    pub fn open_regular_file_id_128(path: &Path) -> io::Result<FileId128Identity> {
+        let wide_path = nul_terminated_wide(path.as_os_str())?;
+        // SAFETY: `wide_path` is NUL-terminated and alive for the call.
+        // Attribute-only access cannot consume file contents, while
+        // OPEN_REPARSE_POINT prevents the final path component from redirecting
+        // this identity check.
+        let handle = unsafe {
+            CreateFileW(
+                wide_path.as_ptr(),
+                FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                ptr::null(),
+                OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT,
+                ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `handle` is a unique valid owned handle returned by
+        // CreateFileW and ownership transfers exactly once to `File`.
+        let file = unsafe { File::from_raw_handle(handle) };
+        verify_regular_file(&file)?;
+        file_id_128_identity(&file)
     }
 
     /// Open an existing directory without following its final reparse point
@@ -477,11 +540,35 @@ mod windows {
             drop(published);
             fs::remove_dir_all(root).unwrap();
         }
+
+        #[test]
+        fn exact_file_id_uses_all_sixteen_checked_api_bytes() {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "heyfood-windows-file-id-{}-{unique}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root).unwrap();
+            let path = root.join("identity");
+            fs::write(&path, b"identity").unwrap();
+
+            let from_path = open_regular_file_id_128(&path).unwrap();
+            let file = File::open(&path).unwrap();
+            let from_handle = file_id_128_identity(&file).unwrap();
+            assert_eq!(from_path, from_handle);
+            assert_ne!(from_path.file_id, [0; 16]);
+
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 }
 
 #[cfg(windows)]
 pub use windows::{
-    AtomicOwnerOnlyFile, DirectoryRenameHandle, FileIdentity, PublishedDirectory,
-    PublishedOwnerOnlyFile, file_identity, open_directory_identity,
+    AtomicOwnerOnlyFile, DirectoryRenameHandle, FileId128Identity, FileIdentity,
+    PublishedDirectory, PublishedOwnerOnlyFile, file_id_128_identity, file_identity,
+    open_directory_identity, open_regular_file_id_128,
 };

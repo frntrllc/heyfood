@@ -234,7 +234,7 @@ fn clean_profile_discovers_the_exact_protocol_and_gets_a_typed_auth_handoff() {
         json!({"name": "heyfood_get_manifest", "arguments": {}}),
     );
     let manifest = response(&receiver, 3, Duration::from_secs(5));
-    assert_eq!(manifest["result"]["structuredContent"]["schema_version"], 1);
+    assert_eq!(manifest["result"]["structuredContent"]["schema_version"], 2);
     assert_eq!(manifest["result"]["isError"], false);
 
     send_request(

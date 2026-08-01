@@ -48,6 +48,14 @@ jobs:
           version=$(cargo metadata --locked --no-deps --format-version 1 |
             jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
           test "$GITHUB_REF_NAME" = "v$version"
+          if [[ "$version" == "0.6.2" ]]; then
+            echo "v0.6.2 is immutable and predates native-state declaration/verifier assets; choose a new reviewed release version." >&2
+            exit 1
+          fi
+          grep -Fqx "readonly SUPPORTED_VERSION=\"$version\"" install.sh
+          grep -Fqx \
+            "readonly NATIVE_STATE_RELEASE_VERSION=\"$version\"" \
+            install.sh
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "A GitHub Release already exists for $GITHUB_REF_NAME; release assets are immutable." >&2
             exit 1
@@ -111,20 +119,34 @@ jobs:
           export CARGO_INCREMENTAL=0
           export SOURCE_DATE_EPOCH
           SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
-          cargo build --locked --release --package heyfood-bin --target "$TARGET"
+          cargo build --locked --release \
+            --package heyfood-bin \
+            --package heyfood-installer \
+            --target "$TARGET"
           binary="target/$TARGET/release/heyfood"
+          verifier="target/$TARGET/release/heyfood-installer"
           test "$($binary --version)" = "heyfood $VERSION"
+          test "$($verifier --version)" = "heyfood-installer $VERSION"
           "$binary" --help >/dev/null
           "$binary" register --help >/dev/null
           "$binary" logout --help >/dev/null
-          "$binary" agent describe |
-            jq -e \
-              --arg commit "$GITHUB_SHA" \
-              --arg tree "$(git rev-parse 'HEAD^{tree}')" \
-              '.build.distribution_channel == "release"
-               and .build.dirty == false
-               and .build.source_commit == $commit
-               and .build.source_tree == $tree'
+          "$binary" agent describe >candidate-agent-manifest.json
+          jq -e \
+            --arg commit "$GITHUB_SHA" \
+            --arg tree "$(git rev-parse 'HEAD^{tree}')" \
+            '.build.distribution_channel == "release"
+             and .build.dirty == false
+             and .build.source_commit == $commit
+             and .build.source_tree == $tree' \
+            candidate-agent-manifest.json
+          "$verifier" native-state-declaration "$VERSION" \
+            >candidate-native-state.json
+          "$verifier" verify-native-state \
+            "$VERSION" \
+            - \
+            - \
+            candidate-native-state.json \
+            candidate-agent-manifest.json
       - name: Install deterministic archive tooling
         if: runner.os == 'macOS'
         run: brew install gnu-tar
@@ -138,25 +160,40 @@ jobs:
           HEYFOOD_APPLE_ID: ${{ secrets.APPLE_NOTARY_ACCOUNT }}
           HEYFOOD_APPLE_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
           HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
-        run: packaging/macos/sign-and-notarize.sh "target/$TARGET/release/heyfood"
-      - name: Package the exact executable
+        run: |
+          packaging/macos/sign-and-notarize.sh "target/$TARGET/release/heyfood"
+          packaging/macos/sign-and-notarize.sh \
+            "target/$TARGET/release/heyfood-installer"
+      - name: Package the exact executables
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.validate.outputs.version }}
-        run: scripts/release/package.sh "target/$TARGET/release/heyfood" "$VERSION" "$TARGET" dist
-      - name: Smoke the packaged macOS or Linux executable
+        run: |
+          scripts/release/package.sh \
+            "target/$TARGET/release/heyfood" \
+            "$VERSION" \
+            "$TARGET" \
+            dist
+          scripts/release/package-installer.sh \
+            "target/$TARGET/release/heyfood-installer" \
+            "$VERSION" \
+            "$TARGET" \
+            dist
+      - name: Smoke and cross-check the final signed archive bytes
         shell: bash
         env:
           HEYFOOD_APPLE_TEAM_ID: ${{ vars.APPLE_DEVELOPER_TEAM_ID }}
           TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.validate.outputs.version }}
-        run: scripts/release/smoke-archive.sh dist "$VERSION" "$TARGET"
+        run: >-
+          scripts/release/smoke-archive.sh dist "$VERSION" "$TARGET"
+          --native-state
       - name: Upload the native archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-${{ matrix.target }}
-          path: dist/${{ matrix.archive }}
+          path: dist/*.tar.gz
           if-no-files-found: error
           retention-days: 14
 
@@ -179,20 +216,21 @@ jobs:
         env:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          scripts/release/checksums.sh dist "$VERSION"
-          scripts/release/verify-assets.sh dist "$VERSION"
+          scripts/release/checksums.sh dist "$VERSION" --native-state
+          scripts/release/verify-assets.sh dist "$VERSION" --native-state
       - name: Sign release assets with GitHub artifact attestations
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
             dist/*.tar.gz
+            dist/*.json
             dist/SHA256SUMS
       - name: Create the immutable GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          gh release create "v$VERSION" dist/*.tar.gz dist/SHA256SUMS \
+          gh release create "v$VERSION" dist/*.tar.gz dist/*.json dist/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "heyfood v$VERSION" \

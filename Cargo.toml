@@ -14,6 +14,7 @@ publish = false
 cargo_metadata = { version = "0.23", default-features = false }
 cap-std = { version = "=4.0.2", default-features = false }
 cap-fs-ext = { version = "=4.0.2", default-features = false, features = ["std"] }
+chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc", "getrandom", "zeroize"] }
 clap = { version = "4", default-features = false }
 clap_complete = { version = "4", default-features = false }
 cpal = { version = "0.16", default-features = false }
@@ -22,6 +23,7 @@ directories = { version = "6", default-features = false }
 eventsource-stream = { version = "0.2", default-features = false }
 fs2 = { version = "0.4", default-features = false }
 hound = { version = "3", default-features = false }
+hkdf = { version = "=0.12.4", default-features = false }
 insta = { version = "1", default-features = false }
 keyring = { version = "3", default-features = false }
 portable-pty = { version = "0.9", default-features = false }

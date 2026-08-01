@@ -77,3 +77,12 @@ schema discovery because it describes commit authority. The golden manifest
 fixture is `fixtures/agent/manifest-v1-golden.json`. Self-description does not
 by itself claim MCP support; Agent Skill setup is a separately versioned,
 opt-in, receipt-bound surface.
+
+The D2 source boundary does not modify that closed v1 manifest. A future
+D2-activated release uses
+`schemas/v2/heyfood-agent-manifest.schema.json` and
+`schemas/v2/heyfood-agent-doctor.schema.json` for current self-description;
+the v1 documents remain embedded as `manifest-v1` and `doctor-v1`. The v2
+manifest adds the exact top-level `native_state_compatibility` declaration.
+This source-ready contract does not change the currently supported public
+v0.6.2 asset or capability claim.

@@ -18,8 +18,8 @@ The following commands perform native product work:
 | `register` | Explicitly starts create-account device authorization, exchanges the approved grant, validates the response contract, and persists the complete native session. |
 | `login` | Connects an existing account on a fresh machine; on a connected machine, explicitly signs in again and atomically replaces the native grant with the canonical supported scope set. Refresh is never used to change authority. |
 | `logout` | Resolves and revokes the current channel link, revokes the current device, revokes the app session last, and then clears the exact account-bound local credential pair. Remote failures never prevent local teardown. |
-| `chat` | Opens the authenticated interactive Rust TUI. |
-| `onboard` | Opens the Rust TUI directly in guided dietary-profile onboarding. |
+| `chat` | Opens the authenticated interactive Rust TUI, including local native-household management when the account-bound encrypted repository is enabled. |
+| `onboard` | Opens the Rust TUI directly in guided owner dietary-profile onboarding. Member onboarding is available only inside the attached TUI. |
 | `ask` | Runs one hosted-agent turn. |
 | `reply` | Runs one hosted-agent turn and requires `--conversation-id`. |
 | `log` | Sends meal-log text through the hosted-agent turn endpoint. |
@@ -42,6 +42,33 @@ absent from the TUI command registry, and new grants do not request
 provider-neutral types, transports, and frozen fixtures are not a support claim
 and require no additional implementation or production canary for this release.
 
+Native household management is a human-attached-TUI surface. In
+`NativeEnabled` mode, `/household`, `/household add`,
+`/onboard --for <exact member ID or exact display name>`, `/for me`,
+`/for <exact member ID or exact display name>`, and `/for everyone` operate on
+the live account-bound encrypted repository. Adding a member atomically saves
+the roster entry, the complete version-1 declared dietary profile, and the
+selected member scope. Existing active members with an incomplete or local
+profile can complete the same questionnaire. Duplicate names require an
+explicit stable-ID-bound choice; archived, unknown, incomplete, conflicted, or
+otherwise ineligible targets fail closed.
+
+Member profiles and member/Everyone scope are local to this device. They create
+no member profile-sync consent, remote member profile, or non-owner outbox
+entry. A member or Everyone conversational/evaluation turn, including voice,
+fails locally with `household_hosted_context_not_authorized` before credential
+refresh, microphone capture, profile serialization, or HTTP. `/for me` returns
+to the existing owner-hosted experience. “Dietary graph” support in this slice
+means only the complete declared local profile; learned preferences, history,
+goals, health/fitness data, hosted member evaluation, cross-device roster sync,
+and remote member erasure remain unavailable.
+
+Legacy compatibility and rollback/repair modes remain read-only and never
+advertise an enabled add action. Household mutations are not exposed through
+one-shot JSON, agent manifests, MCP, redirected stdin, or process arguments.
+Edit, archive, restore, and permanent member erasure are not part of this
+slice.
+
 `ask`, `reply`, `log`, and `item` accept positional UTF-8 text, an optional
 `--conversation-id`, and optional paired `--latitude`/`--longitude` values. If
 positional text is omitted and stdin is not a terminal, the command reads the
@@ -58,11 +85,24 @@ proposal data, and JSON stdout remains exactly one value; neither channel
 supplies semantic authority. The direct CLI routes are not agent-safe
 fallbacks. `--no-input` rejects these routes before opening a terminal.
 The review is the submitted intent, not a summary: meal logging includes the
-meal, type, and `--for` household selector; Menu Watch creation includes every
-schedule/source/notification field and `--confirm-menu-url`; Grocery
+meal, type, resolved canonical Household label, and a reversible stable-ID
+token. An omitted `--for` uses the strictly validated saved active scope from
+the credential-elided native import snapshot; execution consumes that frozen
+identity and does not resolve the selector again. Menu Watch creation includes
+every schedule/source/notification field and `--confirm-menu-url`; Grocery
 confirmation includes confirmation ID, operation, expiry, the complete
 structured preview, and every frozen precondition. Confirmation tokens and
 idempotency authority remain hidden.
+
+Before `LOG`, the executable may stat the known mixed Python configuration
+locators but never opens, hashes, or parses their bytes. If a mixed source is
+visible without a complete credential-elided native snapshot, or the snapshot
+reports that Python keyring data was not read, Household state is protected:
+only an explicit self selector may be reviewed. Omitted, member, and Everyone
+targets fail locally until authenticated migration can reconcile that source.
+Malformed or duplicate roster identity and a missing, unknown, aliased, or
+archived active scope fail closed rather than being dropped, rewritten, or
+changed to self.
 
 Existing credentials missing a command's required scope fail locally with
 `authorization_scope_upgrade_required` and direct the user to `heyfood login`.
