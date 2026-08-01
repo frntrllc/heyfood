@@ -686,7 +686,6 @@ async fn run_installed_archive_core_release_matrix() {
     let household_human_text =
         std::str::from_utf8(&household_human_stdout).expect("household human stdout is UTF-8");
     for expected in [
-        "Here is the synthetic household result.",
         "Household evaluation at Bistro One",
         "Jordan: Generally safer",
         "Maya: Avoid",
@@ -697,6 +696,7 @@ async fn run_installed_archive_core_release_matrix() {
         );
     }
     for forbidden in [
+        "Here is the synthetic household result.",
         "3f1c9c2e-2f5a-4a5b-8f1e-9d2b7c6a4e01",
         "54aa3228a67d4e262d383d0cfba6be4f4c0c94f21f5d095f3127d00928586bcb",
         "stub-model-1",
@@ -758,7 +758,6 @@ async fn run_installed_archive_core_release_matrix() {
     let selected_member_human_text = std::str::from_utf8(&selected_member_human_stdout)
         .expect("selected-member human stdout is UTF-8");
     for expected in [
-        "Here is Maya's evaluated menu.",
         "Top picks at Bistro One",
         "For Maya",
         "1. Rice Bowl  $14.00  [generally safer] · Top pick",
@@ -769,6 +768,7 @@ async fn run_installed_archive_core_release_matrix() {
         );
     }
     for forbidden in [
+        "Here is Maya's evaluated menu.",
         "9d9bd8d8-1111-2222-3333-444455556666",
         "member_id",
         "item_id",
@@ -1039,6 +1039,7 @@ async fn run_installed_archive_core_release_matrix() {
                     "noninteractive_read_only_canary",
                     "complete_json_household_annotations_preserved",
                     "human_member_labels_and_worst_case_result_rendered",
+                    "human_output_suppresses_untrusted_model_prose",
                     "human_output_omits_ids_hashes_producer_metadata_and_raw_json",
                     "household_tui_lifecycle_not_automated"
                 ],
@@ -1053,6 +1054,7 @@ async fn run_installed_archive_core_release_matrix() {
                     "deployed_conversation_envelope_shape",
                     "selected_member_identity_preserved_in_json",
                     "selected_member_label_rendered_without_stable_id",
+                    "human_output_suppresses_untrusted_model_prose",
                     "household_tui_lifecycle_not_automated"
                 ],
                 "json_stdout_sha256": sha256_bytes(&selected_member_json_stdout),
