@@ -1249,10 +1249,15 @@ fn run_active_turn_pty_child() {
                 writer.flush().expect("flush cursor position reply");
                 replied_to_cursor_query = true;
             }
+            // Household-sensitive prose is buffered until the terminal
+            // document can be classified. The controlled peer emits this
+            // marker only after writing the accepted partial, so cancellation
+            // still crosses the live SSE boundary without requiring the raw
+            // model text to appear on screen.
             if !active_reported
                 && bytes
-                    .windows(b"ACTIVE42".len())
-                    .any(|window| window == b"ACTIVE42")
+                    .windows(b"QUALIFICATION_ACTIVE".len())
+                    .any(|window| window == b"QUALIFICATION_ACTIVE")
             {
                 let _ = active_sender.send(());
                 active_reported = true;
@@ -1279,7 +1284,7 @@ fn run_active_turn_pty_child() {
     }
     active_receiver
         .recv_timeout(Duration::from_secs(5))
-        .expect("accepted SSE content must be rendered before cancellation");
+        .expect("accepted SSE partial must reach the live cancellation boundary");
     {
         let mut writer = writer.lock().expect("lock active-turn cancel writer");
         writer.write_all(&[3]).expect("send active-turn Ctrl+C");
@@ -1312,6 +1317,10 @@ fn run_active_turn_pty_child() {
     ] {
         assert!(output.contains(marker), "missing {marker}: {output:?}");
     }
+    assert!(
+        !output.contains("ACTIVE42"),
+        "unclassified SSE prose must remain buffered: {output:?}"
+    );
     assert!(
         output.contains("\u{1b}[?1049l"),
         "alternate screen was not left: {output:?}"

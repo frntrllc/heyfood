@@ -44,7 +44,7 @@ use heyfood_core::{
     GroceryItemInputWire, GroceryListVersion, GroceryMutationConfirmRequestWire,
     HouseholdDeclaredProfileV1, HouseholdLifecycleV1, HouseholdProfileDocumentV1,
     HouseholdProfileOutboxEntryV1, HouseholdProfileRecordV1, HouseholdProfileStateV1,
-    HouseholdRevision, HouseholdScope, HouseholdSubjectId, ImportedPythonState,
+    HouseholdRevision, HouseholdScope, HouseholdStateV1, HouseholdSubjectId, ImportedPythonState,
     LastDefiniteOwnerSyncErrorV1, MAX_OWNER_SYNC_REQUEST_BODY_BYTES, MenuWatchId,
     OnboardingProfileInput, OperationId, OwnerSyncIntentPhaseV1, OwnerSyncIntentV1,
     ProfileRevision, RelationshipV1, RemoteProfileBaseV1, RemoteProfileExistenceV1,
@@ -1805,6 +1805,63 @@ pub struct PreparedLogCommand<State> {
     _not_clone: PhantomData<fn() -> State>,
 }
 
+/// Exact native household meal intent retained under a repository read lease
+/// from local target resolution through human review.
+pub struct PreparedNativeLogCommand {
+    meal: String,
+    meal_type: Option<MealType>,
+    prompt: String,
+    target: ResolvedLogTarget,
+    authorized_context: AuthorizedHostedContextV1,
+}
+
+impl fmt::Debug for PreparedNativeLogCommand {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedNativeLogCommand")
+            .field("meal_present", &!self.meal.is_empty())
+            .field("meal_type_present", &self.meal_type.is_some())
+            .field("prompt_present", &!self.prompt.is_empty())
+            .field("target_mode", &self.target.mode)
+            .field(
+                "household_revision",
+                &self.authorized_context.snapshot().household_revision,
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl PreparedNativeLogCommand {
+    #[must_use]
+    pub fn review_document(&self) -> String {
+        // The native request projection deliberately names the owner `Me` on
+        // the wire. Review that exact attribution rather than substituting the
+        // private account display name.
+        log_review_document(&self.meal, self.meal_type, &self.target, "Me")
+    }
+}
+
+/// Native meal request frozen after account binding and local profile
+/// projection. The retained authorized context is deliberately carried until
+/// the first hosted dispatch completes.
+pub struct QualifiedNativeLogCommand {
+    request: TurnRequest,
+    authorized_context: AuthorizedHostedContextV1,
+}
+
+impl fmt::Debug for QualifiedNativeLogCommand {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedNativeLogCommand")
+            .field("prompt_present", &!self.request.prompt.is_empty())
+            .field(
+                "household_revision",
+                &self.authorized_context.snapshot().household_revision,
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 impl<State> fmt::Debug for PreparedLogCommand<State> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1834,24 +1891,14 @@ impl PreparedLogCommand<ReviewReady> {
 
     #[must_use]
     pub fn review_document(&self) -> String {
-        let attribution = if self.target.mode == LogTargetMode::Everyone {
-            let owner_label = self
-                .household_snapshot
+        log_review_document(
+            &self.meal,
+            self.meal_type,
+            &self.target,
+            self.household_snapshot
                 .active_member("_self")
-                .map(|owner| ascii_json_string(&owner.name))
-                .unwrap_or_else(|| "\"Me\"".to_owned());
-            format!("\nMeal write: one meal for owner {owner_label}")
-        } else {
-            String::new()
-        };
-        format!(
-            "Mutation: log meal memory\nMeal: {}\nMeal type: {}\nHousehold target: {}{}",
-            terminal_safe_text(&self.meal),
-            self.meal_type
-                .map(MealType::as_str)
-                .unwrap_or("unspecified"),
-            self.target.display.escaped_label,
-            attribution,
+                .map(|owner| owner.name.as_str())
+                .unwrap_or("Me"),
         )
     }
 
@@ -1913,6 +1960,29 @@ impl PreparedLogCommand<ReviewReady> {
     }
 }
 
+fn log_review_document(
+    meal: &str,
+    meal_type: Option<MealType>,
+    target: &ResolvedLogTarget,
+    owner_label: &str,
+) -> String {
+    let attribution = if target.mode == LogTargetMode::Everyone {
+        format!(
+            "\nMeal write: one meal for owner {}",
+            ascii_json_string(owner_label)
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "Mutation: log meal memory\nMeal: {}\nMeal type: {}\nHousehold target: {}{}",
+        terminal_safe_text(meal),
+        meal_type.map(MealType::as_str).unwrap_or("unspecified"),
+        target.display.escaped_label,
+        attribution,
+    )
+}
+
 impl PreparedLogCommand<DispatchReady> {
     fn into_request(self) -> TurnRequest {
         self.state.request
@@ -1939,28 +2009,7 @@ pub fn prepare_log_command(
     stdin: &[u8],
     preview: PythonStatePreview,
 ) -> Result<PreparedLogCommand<ReviewReady>, OneShotError> {
-    let meal = if arguments.meal.is_empty() {
-        if stdin.is_empty() || stdin.len() > MAX_CONFIRMATION_STDIN_BYTES {
-            return Err(OneShotError::new(
-                "invalid_meal",
-                "meal text or at most 1 MiB of UTF-8 stdin is required",
-            ));
-        }
-        std::str::from_utf8(stdin)
-            .map_err(|_| OneShotError::new("invalid_meal", "meal stdin is not UTF-8"))?
-            .trim_end_matches(['\r', '\n'])
-            .to_owned()
-    } else {
-        arguments.meal_text()
-    };
-    let meal = required_text(meal, 500, "meal")?;
-    let mut prompt = format!("Log this meal: {meal}");
-    if let Some(meal_type) = arguments.meal_type {
-        prompt.push_str(". Meal type: ");
-        prompt.push_str(meal_type.as_str());
-        prompt.push('.');
-    }
-    let prompt = required_text(prompt, 500, "query")?;
+    let (meal, prompt) = prepare_log_input(&arguments, stdin)?;
 
     let (household_snapshot, target) = match &preview {
         PythonStatePreview::SafeSnapshot { state, .. } => {
@@ -2006,6 +2055,32 @@ pub fn prepare_log_command(
         state: ReviewReady,
         _not_clone: PhantomData,
     })
+}
+
+fn prepare_log_input(arguments: &LogArgs, stdin: &[u8]) -> Result<(String, String), OneShotError> {
+    let meal = if arguments.meal.is_empty() {
+        if stdin.is_empty() || stdin.len() > MAX_CONFIRMATION_STDIN_BYTES {
+            return Err(OneShotError::new(
+                "invalid_meal",
+                "meal text or at most 1 MiB of UTF-8 stdin is required",
+            ));
+        }
+        std::str::from_utf8(stdin)
+            .map_err(|_| OneShotError::new("invalid_meal", "meal stdin is not UTF-8"))?
+            .trim_end_matches(['\r', '\n'])
+            .to_owned()
+    } else {
+        arguments.meal_text()
+    };
+    let meal = required_text(meal, 500, "meal")?;
+    let mut prompt = format!("Log this meal: {meal}");
+    if let Some(meal_type) = arguments.meal_type {
+        prompt.push_str(". Meal type: ");
+        prompt.push_str(meal_type.as_str());
+        prompt.push('.');
+    }
+    let prompt = required_text(prompt, 500, "query")?;
+    Ok((meal, prompt))
 }
 
 /// Bind the reviewed command to the authenticated account, perform read-only
@@ -2061,6 +2136,112 @@ pub async fn execute_qualified_prepared_log(
         cancellation,
     )
     .await?;
+    Ok(render_agent_result(&result.document, output_mode))
+}
+
+/// Resolve one native Household meal target, acquire its exact revision under
+/// a read lease, and freeze the human review document. This function has no
+/// service/provider parameter and performs no hosted work.
+pub async fn prepare_native_log_command(
+    arguments: LogArgs,
+    stdin: &[u8],
+    household: &HouseholdSession,
+    cancellation: CancellationToken,
+) -> Result<PreparedNativeLogCommand, OneShotError> {
+    let (meal, prompt) = prepare_log_input(&arguments, stdin)?;
+    if cancellation.is_cancelled() {
+        return Err(OneShotError::new(
+            "household_hosted_context_cancelled",
+            "native Household target qualification was cancelled",
+        ));
+    }
+    let load = household
+        .load_required(cancellation.child_token())
+        .await
+        .map_err(OneShotError::from)?;
+    let (scope, target) =
+        resolve_native_log_target(&load.state, arguments.checking_for.as_deref())?;
+    let authorized_context = household
+        .acquire_authorized_hosted_context_for_scope(
+            load.state.revision,
+            scope,
+            cancellation.child_token(),
+        )
+        .await
+        .map_err(OneShotError::from)?;
+    let context = native_household_turn_context(&authorized_context).map_err(OneShotError::from)?;
+    validate_native_log_target_context(&context, &authorized_context, &target)?;
+    if cancellation.is_cancelled() {
+        return Err(OneShotError::new(
+            "household_hosted_context_cancelled",
+            "native Household target qualification was cancelled",
+        ));
+    }
+    Ok(PreparedNativeLogCommand {
+        meal,
+        meal_type: arguments.meal_type,
+        prompt,
+        target,
+        authorized_context,
+    })
+}
+
+/// Bind the reviewed native command to the post-review authenticated account
+/// and freeze the exact request without re-resolving its target.
+pub fn prepare_qualified_native_log(
+    credentials: &SessionCredentials,
+    prepared: PreparedNativeLogCommand,
+) -> Result<QualifiedNativeLogCommand, OneShotError> {
+    if credentials.account_id.as_str()
+        != prepared
+            .authorized_context
+            .load()
+            .state
+            .account_binding
+            .as_str()
+    {
+        return Err(OneShotError::new(
+            "household_account_mismatch",
+            "reviewed native Household target belongs to another account",
+        ));
+    }
+    let context =
+        native_household_turn_context(&prepared.authorized_context).map_err(OneShotError::from)?;
+    validate_native_log_target_context(&context, &prepared.authorized_context, &prepared.target)?;
+    Ok(QualifiedNativeLogCommand {
+        request: TurnRequest {
+            prompt: prepared.prompt,
+            conversation_id: None,
+            context,
+            refresh: RefreshPolicy::Never,
+        },
+        authorized_context: prepared.authorized_context,
+    })
+}
+
+/// Dispatch one already-reviewed native meal intent while retaining its exact
+/// Household revision through completion of the first hosted operation.
+pub async fn execute_qualified_native_log(
+    service: &HttpService,
+    credentials: SessionCredentials,
+    output_mode: OutputMode,
+    prepared: QualifiedNativeLogCommand,
+    cancellation: CancellationToken,
+) -> Result<String, OneShotError> {
+    let QualifiedNativeLogCommand {
+        request,
+        authorized_context,
+    } = prepared;
+    let result = execute_one_shot_turn(
+        service,
+        request,
+        credentials,
+        OperationId::new(),
+        cancellation,
+    )
+    .await;
+    drop(authorized_context);
+    let result = result?;
     Ok(render_agent_result(&result.document, output_mode))
 }
 
@@ -3190,11 +3371,207 @@ fn resolve_log_target(
             "household_target_unknown",
             "the Household target is unknown",
         )),
-        _ => Err(OneShotError::new(
-            "household_target_ambiguous",
-            "more than one active Household member has that name; use a stable member ID",
-        )),
+        _ => Err(ambiguous_log_target_error()),
     }
+}
+
+fn ambiguous_log_target_error() -> OneShotError {
+    OneShotError::new(
+        "household_target_ambiguous",
+        "more than one active Household member has that name; give members unique names in Household management, then retry",
+    )
+}
+
+fn resolve_native_log_target(
+    state: &HouseholdStateV1,
+    selector: Option<&str>,
+) -> Result<(HouseholdScope, ResolvedLogTarget), OneShotError> {
+    state.validate().map_err(|_| {
+        OneShotError::new(
+            "household_state_invalid",
+            "native Household state is invalid; repair it before logging",
+        )
+    })?;
+    let scope = match selector {
+        None => state.active_scope.clone(),
+        Some(selector) => {
+            let selector = validate_selector(selector)?;
+            if is_self_alias(selector) {
+                HouseholdScope::Subject(HouseholdSubjectId::self_())
+            } else if is_everyone_alias(selector) {
+                HouseholdScope::Everyone
+            } else if let Some(member) = state
+                .members
+                .iter()
+                .find(|member| member.member_id.as_str() == selector)
+            {
+                if member.lifecycle != HouseholdLifecycleV1::Active {
+                    return Err(OneShotError::new(
+                        "household_target_archived",
+                        "the selected Household member is archived",
+                    ));
+                }
+                HouseholdScope::Subject(HouseholdSubjectId::member(member.member_id.clone()))
+            } else {
+                let folded = selector.to_lowercase();
+                let matches = state
+                    .members
+                    .iter()
+                    .filter(|member| member.lifecycle == HouseholdLifecycleV1::Active)
+                    .filter(|member| member.display_name.as_str().to_lowercase() == folded)
+                    .collect::<Vec<_>>();
+                match matches.as_slice() {
+                    [member] => HouseholdScope::Subject(HouseholdSubjectId::member(
+                        member.member_id.clone(),
+                    )),
+                    [] => {
+                        return Err(OneShotError::new(
+                            "household_target_unknown",
+                            "the Household target is unknown",
+                        ));
+                    }
+                    _ => {
+                        return Err(ambiguous_log_target_error());
+                    }
+                }
+            }
+        }
+    };
+    let target = native_log_target_for_scope(state, &scope)?;
+    Ok((scope, target))
+}
+
+fn native_log_target_for_scope(
+    state: &HouseholdStateV1,
+    scope: &HouseholdScope,
+) -> Result<ResolvedLogTarget, OneShotError> {
+    match scope {
+        HouseholdScope::Subject(HouseholdSubjectId::Self_) => Ok(resolved_log_target(
+            LogTargetMode::SelfSubject,
+            "_self",
+            "Me",
+        )),
+        HouseholdScope::Subject(HouseholdSubjectId::Member(member_id)) => {
+            let member = state
+                .members
+                .iter()
+                .find(|member| &member.member_id == member_id)
+                .ok_or_else(|| {
+                    OneShotError::new(
+                        "household_target_unknown",
+                        "the selected Household member is unknown",
+                    )
+                })?;
+            if member.lifecycle != HouseholdLifecycleV1::Active {
+                return Err(OneShotError::new(
+                    "household_target_archived",
+                    "the selected Household member is archived",
+                ));
+            }
+            Ok(resolved_log_target(
+                LogTargetMode::Member,
+                member.member_id.as_str(),
+                member.display_name.as_str(),
+            ))
+        }
+        HouseholdScope::Everyone => {
+            if !state
+                .members
+                .iter()
+                .any(|member| member.lifecycle == HouseholdLifecycleV1::Active)
+            {
+                return Err(OneShotError::new(
+                    "household_target_unknown",
+                    "Everyone requires at least one active non-self Household member",
+                ));
+            }
+            Ok(resolved_log_target(
+                LogTargetMode::Everyone,
+                "__everyone__",
+                "Everyone",
+            ))
+        }
+    }
+}
+
+fn validate_native_log_target_context(
+    context: &TurnContext,
+    authorized: &AuthorizedHostedContextV1,
+    target: &ResolvedLogTarget,
+) -> Result<(), OneShotError> {
+    if context.household_scope.is_some() {
+        return Err(OneShotError::new(
+            "prepared_log_context_invalid",
+            "prepared native log unexpectedly contained a server-resolved Household scope",
+        ));
+    }
+    let scope_matches = match (&authorized.snapshot().scope, target.mode) {
+        (HouseholdScope::Subject(HouseholdSubjectId::Self_), LogTargetMode::SelfSubject) => {
+            target.raw_id == "_self"
+        }
+        (HouseholdScope::Subject(HouseholdSubjectId::Member(member_id)), LogTargetMode::Member) => {
+            member_id.as_str() == target.raw_id
+        }
+        (HouseholdScope::Everyone, LogTargetMode::Everyone) => true,
+        _ => false,
+    };
+    if !scope_matches {
+        return Err(OneShotError::new(
+            "prepared_log_context_invalid",
+            "prepared native log target does not match its retained Household scope",
+        ));
+    }
+    let meal = context
+        .meal
+        .as_ref()
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            OneShotError::new(
+                "prepared_log_context_invalid",
+                "prepared native log has no frozen meal target context",
+            )
+        })?;
+    let (expected_id, expected_label) = match target.mode {
+        LogTargetMode::SelfSubject | LogTargetMode::Everyone => ("_self", "Me"),
+        LogTargetMode::Member => (target.raw_id.as_str(), target.raw_label.as_str()),
+    };
+    if meal.get("active_member_id").and_then(Value::as_str) != Some(expected_id)
+        || meal.get("active_member_name").and_then(Value::as_str) != Some(expected_label)
+        || meal.get("is_cook_mode").and_then(Value::as_bool) != Some(false)
+    {
+        return Err(OneShotError::new(
+            "prepared_log_context_invalid",
+            if target.mode == LogTargetMode::Everyone {
+                "prepared Everyone target did not preserve one owner-attributed meal"
+            } else {
+                "prepared native log target did not preserve its reviewed identity"
+            },
+        ));
+    }
+    if target.mode == LogTargetMode::Everyone {
+        let members = context
+            .dietary
+            .as_ref()
+            .and_then(|value| value.get("members"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                OneShotError::new(
+                    "prepared_log_context_invalid",
+                    "prepared Everyone log has no exact Household profile projection",
+                )
+            })?;
+        if members.len() != authorized.snapshot().subjects.len()
+            || !members
+                .iter()
+                .any(|member| member.get("member_id").and_then(Value::as_str) == Some("_self"))
+        {
+            return Err(OneShotError::new(
+                "prepared_log_context_invalid",
+                "prepared Everyone log did not preserve every retained Household subject",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn resolve_exact_frozen_scope(
@@ -7144,7 +7521,7 @@ fn native_household_turn_context(
 ) -> Result<TurnContext, PortError> {
     let snapshot = authorized.snapshot();
     let state = &authorized.load().state;
-    if snapshot.household_revision != state.revision || snapshot.scope != state.active_scope {
+    if snapshot.household_revision != state.revision {
         return Err(PortError::new(
             "household_hosted_context_invalid",
             "the authorized native context is detached from its retained Household generation",
@@ -8898,12 +9275,11 @@ mod tests {
             ]
         });
         let (_root, preview) = safe_log_preview("duplicate-name", household.clone());
-        assert_eq!(
-            prepare_log_command(log_arguments(Some("sam"), &["oatmeal"]), &[], preview)
-                .unwrap_err()
-                .code,
-            "household_target_ambiguous"
-        );
+        let error = prepare_log_command(log_arguments(Some("sam"), &["oatmeal"]), &[], preview)
+            .unwrap_err();
+        assert_eq!(error.code, "household_target_ambiguous");
+        assert!(error.message.contains("give members unique names"));
+        assert!(!error.message.contains("ID"));
         let (_root, preview) = safe_log_preview("exact-id", household);
         let prepared =
             prepare_log_command(log_arguments(Some("member-b"), &["oatmeal"]), &[], preview)

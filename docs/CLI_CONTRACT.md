@@ -90,24 +90,36 @@ positional text is omitted and stdin is not a terminal, the command reads the
 prompt from stdin. `reply` fails locally when `--conversation-id` is absent.
 
 Direct one-shot `log`, Grocery proposal preparation/confirmation, and Menu
-Watch creation/removal are human-terminal-only commands. Before credentials
-are read or a network request is dispatched, the executable opens the
-controlling terminal independently of stdin/stdout, renders terminal-safe
-review details, and requires the command-specific phrase `LOG`, `PREPARE`,
-`ACCEPT`, `CANCEL`, `CREATE`, or `REMOVE`. Missing terminal, EOF, an I/O error,
-or any other response fails closed. Redirected stdin may carry meal or Grocery
-proposal data, and JSON stdout remains exactly one value; neither channel
-supplies semantic authority. The direct CLI routes are not agent-safe
-fallbacks. `--no-input` rejects these routes before opening a terminal.
+Watch creation/removal are human-terminal-only commands. Before a network
+request or mutation, the executable opens the controlling terminal
+independently of stdin/stdout, renders terminal-safe review details, and
+requires the command-specific phrase `LOG`, `PREPARE`, `ACCEPT`, `CANCEL`,
+`CREATE`, or `REMOVE`. Except for the local-only native Household target
+qualification described below, review also precedes credential access. Missing
+terminal, EOF, an I/O error, or any other response fails closed. Redirected
+stdin may carry meal or Grocery proposal data, and JSON stdout remains exactly
+one value; neither channel supplies semantic authority. The direct CLI routes
+are not agent-safe fallbacks. `--no-input` rejects these routes before opening a
+terminal.
 The review is the submitted intent, not a summary: meal logging includes the
-meal, type, resolved canonical Household label, and a reversible stable-ID
-token. An omitted `--for` uses the strictly validated saved active scope from
-the credential-elided native import snapshot; execution consumes that frozen
-identity and does not resolve the selector again. Menu Watch creation includes
+meal, type, and privacy-safe resolved canonical Household label. Stable member
+IDs and reversible identity tokens remain hidden from human output. For an
+`Everyone` target, the review also states that the single meal is filed to the
+owner using the owner's canonical label. In native Household mode, an omitted
+`--for` uses the strictly validated active scope from the exact retained native
+Household revision; execution consumes that frozen identity after `LOG` and
+does not resolve the selector again. Menu Watch creation includes
 every schedule/source/notification field and `--confirm-menu-url`; Grocery
 confirmation includes confirmation ID, operation, expiry, the complete
 structured preview, and every frozen precondition. Confirmation tokens and
 idempotency authority remain hidden.
+
+Native Household target qualification may perform a local-only read of the
+account-bound authorization and key material needed to unlock the encrypted
+vault and retain the exact revision under a read lock. It performs no provider
+or network request and no mutation before `LOG`; the credentials are dropped
+before the review prompt and reloaded only after approval. The legacy
+compatibility preview remains credential-free before review.
 
 Before `LOG`, the executable may stat the known mixed Python configuration
 locators but never opens, hashes, or parses their bytes. If a mixed source is

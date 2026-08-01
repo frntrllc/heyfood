@@ -8,9 +8,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use heyfood_application::household_evaluation::contains_private_household_identifier;
 use heyfood_application::{
     GroceryDisplayList, GroceryExclusions, LogoutOutcome, MenuWatchList, MenuWatchSnapshot,
-    UNRENDERABLE_AGENT_RESULT_MESSAGE, render_household_evaluation, render_household_menu,
+    UNRENDERABLE_AGENT_RESULT_MESSAGE, household_evaluation_document, render_household_evaluation,
+    render_household_menu,
 };
 use heyfood_core::{
     GroceryDecisionWire, GroceryItemStateWire, GroceryMutationProposalWire, GrocerySafetyStatus,
@@ -1372,29 +1374,35 @@ pub fn render_agent_result(document: &Value, mode: OutputMode) -> String {
     if mode == OutputMode::Json {
         return render_json(document).expect("agent result is serializable JSON");
     }
+    let household_evaluation_candidate = household_evaluation_document(document).is_some();
     let household_evaluation = match render_household_evaluation(document) {
         Ok(evaluation) => evaluation,
         Err(error) => return format!("{error}\n"),
     };
+    let household_menu = render_household_menu(document);
+    let has_structured_household_presentation =
+        household_evaluation.is_some() || household_menu.is_some();
     let mut output = String::new();
-    if let Some(message) = ["message", "text", "response"]
-        .into_iter()
-        .find_map(|key| document.get(key).and_then(Value::as_str))
+    if !has_structured_household_presentation
+        && let Some(message) = ["message", "text", "response"]
+            .into_iter()
+            .find_map(|key| document.get(key).and_then(Value::as_str))
     {
+        if household_evaluation_candidate && contains_private_household_identifier(message) {
+            return format!(
+                "{}\n",
+                heyfood_application::UNPRESENTABLE_HOUSEHOLD_EVALUATION_MESSAGE
+            );
+        }
         let _ = writeln!(output, "{}", terminal_safe_text(message));
     }
     if let Some(evaluation) = household_evaluation {
-        if !output.is_empty() {
-            output.push('\n');
-        }
         output.push_str(&evaluation);
-    } else if let Some(menu) = render_household_menu(document) {
-        if !output.is_empty() {
-            output.push('\n');
-        }
+    } else if let Some(menu) = household_menu {
         output.push_str(&menu);
     }
-    if let Some(choice_document) = document.get("choices").and_then(Value::as_object)
+    if !has_structured_household_presentation
+        && let Some(choice_document) = document.get("choices").and_then(Value::as_object)
         && let Some(choices) = choice_document.get("choices").and_then(Value::as_array)
         && !choices.is_empty()
     {
@@ -1828,7 +1836,10 @@ mod registration_tests {
         });
 
         let rendered = render_agent_result(&document, OutputMode::HumanPlain);
-        assert_eq!(rendered.trim_end(), UNRENDERABLE_AGENT_RESULT_MESSAGE);
+        assert_eq!(
+            rendered.trim_end(),
+            heyfood_application::household_menu::UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE
+        );
         for protocol_fragment in ["item_id", "\"safety\"", "_self", "{", "}"] {
             assert!(!rendered.contains(protocol_fragment), "{rendered}");
         }
@@ -1846,13 +1857,12 @@ mod registration_tests {
         )))
         .unwrap();
         let document = json!({
-            "text": "Here is the household result.",
+            "text": "Unfiltered prose for 3f1c9c2e-2f5a-4a5b-8f1e-9d2b7c6a4e01.",
             "structured_content": fixture["result"].clone()
         });
 
         let human = render_agent_result(&document, OutputMode::HumanPlain);
         for expected in [
-            "Here is the household result.",
             "Household evaluation at Bistro One",
             "Jordan: Generally safer",
             "Maya: Avoid",
@@ -1867,6 +1877,7 @@ mod registration_tests {
             "member_annotations",
             "context_hash",
             "{\"",
+            "Unfiltered prose",
         ] {
             assert!(!human.contains(forbidden), "{human}");
         }
@@ -1906,6 +1917,79 @@ mod registration_tests {
 
         let machine = render_agent_result(&document, OutputMode::Json);
         assert_eq!(serde_json::from_str::<Value>(&machine).unwrap(), document);
+    }
+
+    #[test]
+    fn partial_household_evaluation_with_a_missing_required_field_fails_closed() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/contracts/household-backend/v1/fixtures/household_evaluation/founding_scenario_maya_menu.json"
+        )))
+        .unwrap();
+        let mut result = fixture["result"].clone();
+        result.as_object_mut().unwrap().remove("restaurant_name");
+        let document = json!({
+            "text": "Raw fallback for 3f1c9c2e-2f5a-4a5b-8f1e-9d2b7c6a4e01.",
+            "structured_content": result
+        });
+
+        let human = render_agent_result(&document, OutputMode::HumanPlain);
+        assert_eq!(
+            human.trim_end(),
+            heyfood_application::UNPRESENTABLE_HOUSEHOLD_EVALUATION_MESSAGE
+        );
+        assert!(!human.contains("Raw fallback"));
+        assert!(!human.contains("3f1c9c2e"));
+    }
+
+    #[test]
+    fn household_only_truncation_never_falls_back_to_model_prose() {
+        let document = json!({
+            "text": "Raw household fallback.",
+            "structured_content": {
+                "household": {
+                    "member_count": 2
+                }
+            }
+        });
+
+        let human = render_agent_result(&document, OutputMode::HumanPlain);
+        assert_eq!(
+            human.trim_end(),
+            heyfood_application::UNPRESENTABLE_HOUSEHOLD_EVALUATION_MESSAGE
+        );
+        assert!(!human.contains("Raw household fallback"));
+    }
+
+    #[test]
+    fn owner_only_null_labels_preserve_legacy_human_output() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/contracts/household-backend/v1/fixtures/household_evaluation/founding_scenario_maya_menu.json"
+        )))
+        .unwrap();
+        let mut result = fixture["result"].clone();
+        result["items"][0]["status"] = json!("generally_safer");
+        result["items"][0]["confidence"] = json!(0.95);
+        result["items"][0]["summary"] = json!("No concerns.");
+        for item in result["items"].as_array_mut().unwrap() {
+            item["member_annotations"] = Value::Array(vec![item["member_annotations"][0].clone()]);
+            item["member_annotations"][0]["label"] = Value::Null;
+        }
+        result["generally_safer"] = json!(["Garlic Noodles", "Steamed Jasmine Rice"]);
+        result["avoid"] = json!([]);
+        result["household"]["members"] =
+            Value::Array(vec![result["household"]["members"][0].clone()]);
+        result["household"]["member_count"] = json!(1);
+        let document = json!({
+            "text": "Legacy owner guidance.",
+            "structured_content": result
+        });
+
+        assert_eq!(
+            render_agent_result(&document, OutputMode::HumanPlain),
+            "Legacy owner guidance.\n"
+        );
     }
 
     #[test]
@@ -1954,7 +2038,8 @@ mod registration_tests {
             OutputMode::HumanPlain,
         );
 
-        assert!(rendered.starts_with("Here are the current options.\n\n"));
+        assert!(rendered.starts_with("Current menu at Abby Jane Bakeshop\n"));
+        assert!(!rendered.contains("Here are the current options."));
         for expected in [
             "Current menu at Abby Jane Bakeshop",
             "Source: https://example.test/abby-jane",
@@ -2015,7 +2100,6 @@ mod registration_tests {
         );
 
         for expected in [
-            "I found several options that fit.",
             "Top picks at Harbor Cafe",
             "For you",
             "1. Grilled Fish  $24.00  [generally safer] · Top pick",
@@ -2024,7 +2108,40 @@ mod registration_tests {
         ] {
             assert!(rendered.lines().any(|line| line == expected));
         }
+        assert!(!rendered.contains("I found several options that fit."));
         assert!(!rendered.contains("_self"));
+    }
+
+    #[test]
+    fn malformed_household_menu_never_falls_back_to_model_prose() {
+        let member_id = "3f1c9c2e-2f5a-4a5b-8f1e-9d2b7c6a4e01";
+        let document = json!({
+            "text": format!("Unreviewed menu prose for {member_id}."),
+            "structured": {
+                "presentation": "full_menu",
+                "sections": [{
+                    "name": "Dinner",
+                    "items": [{
+                        "name": "Soup",
+                        "composite_level": "avoid",
+                        "safety": {
+                            (member_id): {
+                                "level": "future_status",
+                                "reason": "Unreviewed reason."
+                            }
+                        }
+                    }]
+                }]
+            }
+        });
+
+        let human = render_agent_result(&document, OutputMode::HumanPlain);
+        assert_eq!(
+            human.trim_end(),
+            heyfood_application::household_menu::UNPRESENTABLE_HOUSEHOLD_MENU_MESSAGE
+        );
+        assert!(!human.contains("Unreviewed menu prose"));
+        assert!(!human.contains(member_id));
     }
 
     #[test]

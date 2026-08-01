@@ -20,8 +20,10 @@ use heyfood_application::{
 };
 use heyfood_bin::{
     InteractiveSessionPreparation, InteractiveSessionProvider, InteractiveTurnDriver, OneShotError,
-    QualifiedTurnDriver,
+    QualifiedTurnDriver, execute_qualified_native_log, prepare_native_log_command,
+    prepare_qualified_native_log,
 };
+use heyfood_cli::{LogArgs, MealType, OutputMode};
 use heyfood_core::{
     AccountId, AgeEvidenceSourceV1, AgeEvidenceV1, CanonicalDateV1, CanonicalDigestV1,
     CanonicalTimestampV1, CommitId, CredentialVersion, DateOfBirthV1, DisplayName,
@@ -156,6 +158,15 @@ struct MemoryHouseholdRepository {
     commit_calls: AtomicUsize,
     fail_commit_at: AtomicUsize,
     read_lease_barrier: StdMutex<Option<Arc<Barrier>>>,
+    active_read_leases: Arc<AtomicUsize>,
+}
+
+struct MemoryHouseholdReadLeaseGuard(Arc<AtomicUsize>);
+
+impl Drop for MemoryHouseholdReadLeaseGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl MemoryHouseholdRepository {
@@ -166,6 +177,7 @@ impl MemoryHouseholdRepository {
             commit_calls: AtomicUsize::new(0),
             fail_commit_at: AtomicUsize::new(0),
             read_lease_barrier: StdMutex::new(None),
+            active_read_leases: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -178,7 +190,16 @@ impl MemoryHouseholdRepository {
     }
 
     fn mutate_state(&self, update: impl FnOnce(&mut HouseholdStateV1)) {
+        assert_eq!(
+            self.active_read_leases.load(Ordering::SeqCst),
+            0,
+            "fixture mutation attempted while a retained read lease was active"
+        );
         update(self.state.lock().unwrap().as_mut().unwrap());
+    }
+
+    fn active_read_leases(&self) -> usize {
+        self.active_read_leases.load(Ordering::SeqCst)
     }
 
     fn pause_next_read_lease_at_barrier(&self, barrier: Arc<Barrier>) {
@@ -229,7 +250,13 @@ impl HouseholdRepositoryPort for MemoryHouseholdRepository {
                 .load(account, cancellation)
                 .await?
                 .ok_or_else(|| PortError::new("household_not_initialized", "missing state"))?;
-            Ok(HouseholdReadLeaseV1::new(load, Box::new(())))
+            self.active_read_leases.fetch_add(1, Ordering::SeqCst);
+            Ok(HouseholdReadLeaseV1::new(
+                load,
+                Box::new(MemoryHouseholdReadLeaseGuard(Arc::clone(
+                    &self.active_read_leases,
+                ))),
+            ))
         })
     }
 
@@ -709,6 +736,38 @@ fn credentials_for(account: AccountId) -> SessionCredentials {
     .unwrap()
 }
 
+fn native_household_session(repository: Arc<MemoryHouseholdRepository>) -> HouseholdSession {
+    let repository: Arc<dyn HouseholdRepositoryPort> = repository;
+    HouseholdSession::new(
+        native_account(),
+        repository,
+        Arc::new(NativeHouseholdMutationAuthorityV1::new()),
+    )
+}
+
+fn native_http_service(address: std::net::SocketAddr) -> HttpService {
+    let service_url =
+        ServiceUrl::parse(&format!("http://{address}"), NetworkPolicy::DEVELOPMENT).unwrap();
+    HttpService::new(service_url, NetworkPolicy::DEVELOPMENT, Default::default())
+        .unwrap()
+        .with_cli_auth(
+            CliAuthContext::new(
+                "native-log-device",
+                SensitiveString::new("native-log-channel-access"),
+                None,
+            )
+            .unwrap(),
+        )
+}
+
+fn native_log_arguments(selector: Option<&str>) -> LogArgs {
+    LogArgs {
+        meal: vec!["oatmeal".into()],
+        meal_type: Some(MealType::Breakfast),
+        checking_for: selector.map(str::to_owned),
+    }
+}
+
 fn native_driver(
     repository: Arc<MemoryHouseholdRepository>,
     address: std::net::SocketAddr,
@@ -1177,6 +1236,267 @@ fn native_everyone_turn_dispatches_all_local_profiles_and_one_owner_attribution(
         .shutdown_and_join(std::time::Duration::from_secs(2))
         .unwrap();
     server.join().unwrap();
+}
+
+#[tokio::test]
+async fn native_me_member_and_everyone_logs_freeze_reviewed_scope_and_dispatch_exact_context() {
+    for target in ["me", "member", "everyone"] {
+        let mut state = selectable_everyone_native_household();
+        let member_id = state.members[0].member_id.clone();
+        state.active_scope = HouseholdScope::Subject(HouseholdSubjectId::self_());
+        state.validate().unwrap();
+        let repository = Arc::new(MemoryHouseholdRepository::with_state(state));
+        let household = native_household_session(repository.clone());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let selector = match target {
+            "me" => None,
+            // An explicit stable ID must select this member without exposing
+            // the ID in human review or mutating the persisted active scope.
+            "member" => Some(member_id.as_str()),
+            "everyone" => Some("everyone"),
+            _ => unreachable!(),
+        };
+
+        let prepared = prepare_native_log_command(
+            native_log_arguments(selector),
+            &[],
+            &household,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(repository.active_read_leases(), 1);
+        let review = prepared.review_document();
+        assert!(review.contains("Meal: oatmeal"));
+        assert!(review.contains("Meal type: breakfast"));
+        assert!(!review.contains("member-id-utf8-hex"));
+        assert!(!review.contains(member_id.as_str()));
+        match target {
+            "me" => assert!(review.contains("Household target: \"Me\"")),
+            "member" => {
+                assert!(review.contains("Household target: \"member-context-canary\""));
+            }
+            "everyone" => {
+                assert!(review.contains("Household target: \"Everyone\""));
+                assert!(review.contains("Meal write: one meal for owner \"Me\""));
+            }
+            _ => unreachable!(),
+        }
+        assert!(matches!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        ));
+        listener.set_nonblocking(false).unwrap();
+
+        let expected_member_id = member_id.as_str().to_owned();
+        let expected_target = target.to_owned();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let request = read_sync_request(&mut socket);
+            assert!(request.starts_with("POST /v1/agent/converse "));
+            let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1)
+                .expect("native log request body");
+            assert_eq!(
+                body["query"],
+                "Log this meal: oatmeal. Meal type: breakfast."
+            );
+            assert!(body.get("household_scope").is_none());
+            match expected_target.as_str() {
+                "me" => {
+                    assert_eq!(body["dietary_context"]["name"], "Me");
+                    assert_eq!(body["dietary_context"]["diet_style_ids"], json!(["vegan"]));
+                    assert_eq!(body["meal_context"]["active_member_id"], "_self");
+                    assert_eq!(body["meal_context"]["active_member_name"], "Me");
+                }
+                "member" => {
+                    assert_eq!(body["dietary_context"]["name"], "member-context-canary");
+                    assert_eq!(body["dietary_context"]["relationship"], "partner");
+                    assert_eq!(body["dietary_context"]["diet_style_ids"], json!(["vegan"]));
+                    assert_eq!(body["meal_context"]["active_member_id"], expected_member_id);
+                    assert_eq!(
+                        body["meal_context"]["active_member_name"],
+                        "member-context-canary"
+                    );
+                }
+                "everyone" => {
+                    assert_eq!(body["dietary_context"]["mode"], "household");
+                    assert_eq!(
+                        body["dietary_context"]["members"].as_array().unwrap().len(),
+                        2
+                    );
+                    let members = body["dietary_context"]["members"].as_array().unwrap();
+                    let owner = members
+                        .iter()
+                        .find(|member| member["member_id"] == "_self")
+                        .unwrap();
+                    assert_eq!(owner["label"], "Me");
+                    assert_eq!(owner["diet_style_ids"], json!(["vegan"]));
+                    let member = members
+                        .iter()
+                        .find(|member| member["member_id"] == expected_member_id)
+                        .unwrap();
+                    assert_eq!(member["label"], "member-context-canary");
+                    assert_eq!(member["relationship"], "partner");
+                    assert_eq!(member["diet_style_ids"], json!(["vegan"]));
+                    assert_eq!(body["meal_context"]["active_member_id"], "_self");
+                    assert_eq!(body["meal_context"]["active_member_name"], "Me");
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(body["meal_context"]["is_cook_mode"], false);
+            respond_sync_sse(&mut socket);
+        });
+
+        let credentials = fixture_credentials();
+        let qualified = prepare_qualified_native_log(&credentials, prepared).unwrap();
+        let rendered = execute_qualified_native_log(
+            &native_http_service(address),
+            credentials,
+            OutputMode::HumanPlain,
+            qualified,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(rendered.contains("done"));
+        assert_eq!(repository.active_read_leases(), 0);
+        server.join().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn cancelled_native_log_target_qualification_fails_without_lease_or_dispatch() {
+    let repository = Arc::new(MemoryHouseholdRepository::with_state(
+        selectable_everyone_native_household(),
+    ));
+    let household = native_household_session(repository.clone());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+
+    let error =
+        prepare_native_log_command(native_log_arguments(None), &[], &household, cancellation)
+            .await
+            .unwrap_err();
+
+    assert_eq!(error.code, "household_hosted_context_cancelled");
+    assert_eq!(repository.active_read_leases(), 0);
+    assert!(matches!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_log_revision_change_before_lease_is_stale_and_never_dispatches() {
+    let repository = Arc::new(MemoryHouseholdRepository::with_state(
+        selectable_everyone_native_household(),
+    ));
+    let barrier = Arc::new(Barrier::new(2));
+    repository.pause_next_read_lease_at_barrier(barrier.clone());
+    let household = native_household_session(repository.clone());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let preparing = tokio::spawn(async move {
+        prepare_native_log_command(
+            native_log_arguments(None),
+            &[],
+            &household,
+            CancellationToken::new(),
+        )
+        .await
+    });
+
+    barrier.wait();
+    repository.mutate_state(|state| {
+        state.revision = state.revision.checked_next().unwrap();
+        state.active_scope = HouseholdScope::Everyone;
+        state.validate().unwrap();
+    });
+    barrier.wait();
+    let error = preparing.await.unwrap().unwrap_err();
+
+    assert_eq!(error.code, "household_revision_stale");
+    assert_eq!(repository.active_read_leases(), 0);
+    assert!(matches!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    ));
+}
+
+#[tokio::test]
+async fn native_log_account_change_after_review_fails_closed_without_dispatch() {
+    let repository = Arc::new(MemoryHouseholdRepository::with_state(
+        selectable_everyone_native_household(),
+    ));
+    let household = native_household_session(repository.clone());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let prepared = prepare_native_log_command(
+        native_log_arguments(None),
+        &[],
+        &household,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(repository.active_read_leases(), 1);
+
+    let error = prepare_qualified_native_log(
+        &credentials_for(AccountId::parse("changed-native-log-account").unwrap()),
+        prepared,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code, "household_account_mismatch");
+    assert_eq!(repository.active_read_leases(), 0);
+    assert!(matches!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    ));
+}
+
+#[tokio::test]
+async fn native_log_cancellation_after_review_stops_before_network_dispatch() {
+    let repository = Arc::new(MemoryHouseholdRepository::with_state(
+        selectable_everyone_native_household(),
+    ));
+    let household = native_household_session(repository.clone());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let credentials = fixture_credentials();
+    let prepared = prepare_native_log_command(
+        native_log_arguments(None),
+        &[],
+        &household,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let qualified = prepare_qualified_native_log(&credentials, prepared).unwrap();
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+
+    let error = execute_qualified_native_log(
+        &native_http_service(address),
+        credentials,
+        OutputMode::HumanPlain,
+        qualified,
+        cancellation,
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error.code, "converse_cancelled_before_dispatch");
+    assert_eq!(repository.active_read_leases(), 0);
+    assert!(matches!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    ));
 }
 
 #[test]

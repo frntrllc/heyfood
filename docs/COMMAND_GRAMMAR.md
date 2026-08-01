@@ -95,7 +95,9 @@ heyfood ask --lat 35.28 --lng -120.66 "What can I order nearby?"
 ## Human-only mutation authority
 
 These direct CLI routes require a fresh decision on an attached controlling
-terminal before credential access or network dispatch:
+terminal before network dispatch or mutation. Except for local-only native
+Household target qualification for `log`, review also precedes credential
+access:
 
 | Command family | Required phrase |
 |---|---|
@@ -108,12 +110,18 @@ terminal before credential access or network dispatch:
 
 The controlling terminal is opened independently from stdin and stdout.
 Arguments and redirected stdin carry data only; they never count as consent.
-The `log` review shows the meal, meal type, resolved canonical Household label,
-and reversible identity token before `LOG` is accepted. Member identities use
-`member-id-utf8-hex=<lowercase UTF-8 hex>`; self and Everyone use
-`scope=_self` and `scope=__everyone__`. An omitted selector resolves the
-strictly valid saved active scope exactly once from the credential-elided
-native snapshot, and the reviewed stable identity is the identity dispatched.
+The `log` review shows the meal, meal type, and privacy-safe resolved canonical
+Household label before `LOG` is accepted. Stable member IDs and reversible
+identity tokens remain hidden from human output. For an `Everyone` target, the
+review also states that the single meal is filed to the owner using the owner's
+canonical label. An omitted selector resolves the strictly valid saved active
+scope exactly once from the retained native Household revision, and the frozen
+resolved identity is dispatched after review without resolving the selector
+again. Native target qualification may read account-bound authorization and key
+material locally to unlock the encrypted vault and retain that exact revision
+under a read lock. It performs no provider or network request and no mutation
+before `LOG`; credentials are dropped before the prompt and reloaded only after
+approval. Legacy compatibility preview remains credential-free before review.
 If only an uninspected mixed legacy source is visible, or the native snapshot
 reports skipped Python keyring data, only explicit self can reach review;
 omitted, member, and Everyone targets fail closed before credential access.

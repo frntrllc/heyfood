@@ -167,6 +167,66 @@ pub async fn compose_native_household_v1(
     }
 }
 
+/// Open only an already-committed native household for exact human review.
+///
+/// Unlike startup composition, this seam never publishes the compatibility
+/// floor, runs migration, resumes initialization, retires legacy artifacts, or
+/// performs hosted work. It is used by direct human-approved commands that must
+/// read the encrypted target locally before showing the authorization prompt.
+pub async fn open_existing_native_household_for_review_v1(
+    paths: &NativePaths,
+    account: AccountId,
+    rollout: NativeHouseholdRolloutV1,
+    cancellation: CancellationToken,
+) -> Result<NativeHouseholdCompositionV1, PortError> {
+    check_cancelled(&cancellation)?;
+    let root_present = native_root_present(paths.data_dir())?;
+    if !root_present {
+        return Ok(NativeHouseholdCompositionV1::LifecycleRequired(
+            NativeHouseholdLifecycleRequiredV1 {
+                mode: NativeHouseholdModeV1::NativeEnable,
+            },
+        ));
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    if root_present {
+        return Err(PortError::new(
+            "household_secure_store_unavailable",
+            "native household root identity is unavailable on this platform",
+        ));
+    }
+    require_native_credentials_feature()?;
+    let vault = HouseholdVault::from_native_paths(paths, account.clone())?;
+    let floor = NativeStateFloorStore::open(
+        paths.data_dir(),
+        vault.account_slot().native_root_instance_digest(),
+    )?;
+    if floor.load(cancellation.child_token()).await?.is_none() {
+        return Ok(NativeHouseholdCompositionV1::LifecycleRequired(
+            NativeHouseholdLifecycleRequiredV1 {
+                mode: NativeHouseholdModeV1::NativeEnable,
+            },
+        ));
+    }
+    let secure_store = open_secure_store(paths)?;
+    #[cfg(feature = "native-credentials")]
+    {
+        compose_verified_native_household_v1(
+            vault,
+            account,
+            rollout,
+            secure_store.store,
+            cancellation,
+        )
+        .await
+    }
+    #[cfg(not(feature = "native-credentials"))]
+    {
+        let _ = (vault, account, rollout, secure_store, cancellation);
+        Err(secure_store_unavailable())
+    }
+}
+
 /// Compose after the immutable floor and secure-store capability have already
 /// been verified. This injection seam keeps production and deterministic
 /// fake-store tests on the same lock-bound evidence classifier.
@@ -479,5 +539,39 @@ mod tests {
                 NativeHouseholdInitializationExecutionV1::AuthenticatedArtifacts
             );
         }
+    }
+
+    #[tokio::test]
+    async fn review_open_requires_existing_native_state_without_creating_it() {
+        let root = std::env::temp_dir().join(format!(
+            "heyfood-native-review-open-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        assert!(!root.exists());
+        let paths = NativePaths::under(root.clone());
+
+        let result = open_existing_native_household_for_review_v1(
+            &paths,
+            AccountId::parse("native-review-open-account").unwrap(),
+            NativeHouseholdRolloutV1::Enabled,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            result,
+            NativeHouseholdCompositionV1::LifecycleRequired(NativeHouseholdLifecycleRequiredV1 {
+                mode: NativeHouseholdModeV1::NativeEnable
+            })
+        ));
+        assert!(
+            !root.exists(),
+            "review qualification must not create native Household state"
+        );
     }
 }

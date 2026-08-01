@@ -1300,6 +1300,61 @@ impl HouseholdSession {
         })
     }
 
+    /// Acquire one explicitly selected context from an exact previously loaded
+    /// generation while retaining the repository's cross-process read lock.
+    ///
+    /// Human-reviewed one-shot operations use this seam when an explicit target
+    /// may differ from the persisted active scope. The target is never resolved
+    /// again after review: a change between the caller's load and lease
+    /// acquisition is a typed stale-revision refusal, and the returned value
+    /// keeps that exact generation locked through the first hosted dispatch.
+    pub async fn acquire_authorized_hosted_context_for_scope(
+        &self,
+        expected_revision: HouseholdRevision,
+        scope: HouseholdScope,
+        cancellation: CancellationToken,
+    ) -> Result<AuthorizedHostedContextV1, PortError> {
+        check_cancelled(&cancellation, "household_hosted_context_cancelled")?;
+        let read_lease = self
+            .repository
+            .acquire_read_lease(&self.account, cancellation)
+            .await?;
+        let load = read_lease.load();
+        if load.state.account_binding != self.account {
+            return Err(repository_error(
+                "household_account_mismatch",
+                "household repository returned another account",
+            ));
+        }
+        if load.state.revision != expected_revision {
+            return Err(repository_error(
+                "household_revision_stale",
+                "household context revision changed before authorization",
+            ));
+        }
+        let prepared = PreparedHouseholdTargetV1::for_scope(
+            &load.state,
+            scope,
+            HouseholdProfileOperationV1::PersonalizedContext,
+        )
+        .map_err(context_port_error)?;
+        let snapshot =
+            resolve_personalized_context_v1(&load.state, &prepared).map_err(context_port_error)?;
+        if snapshot.household_revision != load.state.revision
+            || snapshot.scope != prepared.scope
+            || snapshot.subjects.is_empty()
+        {
+            return Err(repository_error(
+                "household_hosted_context_invalid",
+                "the authorized household context did not match the retained generation",
+            ));
+        }
+        Ok(AuthorizedHostedContextV1 {
+            snapshot,
+            _read_lease: read_lease,
+        })
+    }
+
     /// Acquire the exact live owner context while retaining the repository's
     /// cross-process read lock. This compatibility wrapper intentionally
     /// rejects member and everyone scopes.

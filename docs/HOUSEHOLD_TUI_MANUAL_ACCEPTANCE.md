@@ -126,13 +126,19 @@ or TUI is involved.
 5. Exit normally, relaunch the exact executable for the same account, and run
    `/household`. Confirm roster, completed member profile state, and selected
    member scope survived restart.
-6. Submit an ordinary turn while the member is selected. Confirm it fails
-   locally with the hosted-context limitation and does not refresh credentials,
-   prompt for consent, begin microphone capture, serialize a profile, or make a
-   hosted request.
+6. Submit an ordinary food or menu turn while the member is selected. Confirm
+   it follows the hosted flow using that member's complete local declared
+   profile, the result reflects that member's restrictions, and human output
+   uses the display label without a stable member ID, context hash,
+   model/rules version, tool name, or raw protocol JSON. Confirm no remote
+   member profile or profile-sync consent is created and microphone capture
+   does not begin.
 7. Run `/for everyone`. Confirm panel and chrome show `Everyone`, restart the
-   TUI, and confirm that scope persists. Submit an ordinary turn and confirm the
-   same pre-credential, pre-network failure.
+   TUI, and confirm that scope persists. Submit the same ordinary turn and
+   confirm it follows the hosted flow for the owner and every eligible active
+   member, the household headline reflects the worst-member result, every
+   member has a named explanation, and `unable_to_evaluate` is not promoted to
+   `avoid`. Confirm no remote member profile or profile-sync consent is created.
 8. Run `/for me`. Confirm panel and chrome return to owner context and an
    ordinary owner turn follows the existing hosted flow.
 9. Run `/onboard --for` the eligible existing-member fixture, complete the same

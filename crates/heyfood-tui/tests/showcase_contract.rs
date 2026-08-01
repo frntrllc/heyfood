@@ -132,10 +132,19 @@ fn member(
     label: &str,
     readiness: HouseholdProfileStateV1,
 ) -> HouseholdMemberPresentationV1 {
+    member_with_relationship(id, label, RelationshipV1::Child, readiness)
+}
+
+fn member_with_relationship(
+    id: &str,
+    label: &str,
+    relationship: RelationshipV1,
+    readiness: HouseholdProfileStateV1,
+) -> HouseholdMemberPresentationV1 {
     HouseholdMemberPresentationV1::new(
         HouseholdSubjectId::member(MemberId::parse_preserved(id).unwrap()),
         label,
-        RelationshipV1::Child,
+        relationship,
         HouseholdLifecycleV1::Active,
         readiness,
         (readiness != HouseholdProfileStateV1::Incomplete)
@@ -301,7 +310,7 @@ fn native_add_reuses_the_full_profile_flow_and_waits_for_context_apply() {
 }
 
 #[test]
-fn duplicate_member_selection_is_numbered_and_stable_subject_bound() {
+fn indistinguishable_duplicate_members_fail_closed_without_subject_selection() {
     let mut model = AppModel::default();
     let first = member(
         "member-one",
@@ -337,15 +346,63 @@ fn duplicate_member_selection_is_numbered_and_stable_subject_bound() {
         )
         .is_empty()
     );
+    let copy = &model.scrollback.entries().back().unwrap().text;
+    assert!(copy.contains("can’t distinguish them safely"), "{copy}");
+    assert!(copy.contains("Make their labels unique"), "{copy}");
+    assert!(!copy.contains("member-one"), "{copy}");
+    assert!(!copy.contains("member-two"), "{copy}");
+    let selected = submit_text(&mut model, "2");
     assert!(
-        model
-            .scrollback
-            .entries()
-            .back()
-            .unwrap()
-            .text
-            .contains("Choose one")
+        selected
+            .iter()
+            .all(|effect| !matches!(effect, Effect::SelectHouseholdScopeV1 { .. }))
     );
+}
+
+#[test]
+fn duplicate_labels_with_distinct_relationships_are_stable_subject_bound() {
+    let mut model = AppModel::default();
+    let first = member_with_relationship(
+        "member-one",
+        "Duplicate",
+        RelationshipV1::Child,
+        HouseholdProfileStateV1::LocalOnly,
+    );
+    let second = member_with_relationship(
+        "member-two",
+        "Duplicate",
+        RelationshipV1::Friend,
+        HouseholdProfileStateV1::LocalOnly,
+    );
+    bootstrap(
+        &mut model,
+        HouseholdPresentationModeV1::NativeEnabled,
+        vec![owner(), first.clone(), second.clone()],
+        HouseholdScope::Subject(HouseholdSubjectId::self_()),
+    );
+    let load = submit_text(&mut model, "/for Duplicate");
+    let evidence = load_evidence(&load[0]);
+    assert!(
+        dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::HouseholdManagementLoadedV1 {
+                operation_id: evidence.operation_id,
+                session_mode_generation: evidence.generation,
+                reducer_correlation: evidence.correlation,
+                purpose: evidence.purpose,
+                account_binding_digest: evidence.digest,
+                household_revision: HouseholdRevision::new(1).unwrap(),
+                active_scope: HouseholdScope::Subject(HouseholdSubjectId::self_()),
+                members: vec![owner(), first, second.clone()],
+            })
+        )
+        .is_empty()
+    );
+    let copy = &model.scrollback.entries().back().unwrap().text;
+    assert!(copy.contains("1. Duplicate (child)"), "{copy}");
+    assert!(copy.contains("2. Duplicate (friend)"), "{copy}");
+    assert!(!copy.contains("member-one"), "{copy}");
+    assert!(!copy.contains("member-two"), "{copy}");
     let selected = submit_text(&mut model, "2");
     let Effect::SelectHouseholdScopeV1 {
         binding,

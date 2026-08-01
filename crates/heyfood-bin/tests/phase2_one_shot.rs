@@ -572,7 +572,6 @@ async fn exact_abby_jane_ask_renders_the_complete_current_menu_in_human_output()
         .unwrap();
 
     for expected in [
-        "I found the current menu.",
         "Current menu at Abby Jane Bakeshop",
         "Source: https://www.abbyjanebakes.com/menu",
         "Menu source: Restaurant ordering page",
@@ -594,6 +593,10 @@ async fn exact_abby_jane_ask_renders_the_complete_current_menu_in_human_output()
         );
     }
     assert_eq!(output.matches("• ").count(), 3);
+    assert!(
+        !output.contains("I found the current menu."),
+        "unclassified model prose must not precede the typed household menu: {output}"
+    );
     assert!(!output.contains('\u{1b}'));
     server.await.unwrap();
 }

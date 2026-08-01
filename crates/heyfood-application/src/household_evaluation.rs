@@ -10,9 +10,10 @@
 use std::fmt;
 
 use heyfood_core::{
-    AnnotationDisposition, EvaluateMenuResponse, MemberAnnotation, SafetyStatus, terminal_safe_text,
+    AnnotationDisposition, EvaluateMenuResponse, EvaluationMemberId, EvaluationScope,
+    MemberAnnotation, SafetyStatus, terminal_safe_text,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 const DEFAULT_PRESENTATION_WIDTH: usize = 80;
 const MIN_PRESENTATION_WIDTH: usize = 20;
@@ -60,13 +61,32 @@ pub fn render_household_evaluation_at_width(
     let Some(candidate) = household_evaluation_document(document) else {
         return Ok(None);
     };
-    let evaluation = EvaluateMenuResponse::parse_value(candidate.clone())
+    let mut typed_candidate = candidate.clone();
+    normalize_owner_only_missing_labels(&mut typed_candidate);
+    let evaluation = EvaluateMenuResponse::parse_value(typed_candidate)
         .map_err(|_| HouseholdEvaluationPresentationError)?;
     let Some(household) = evaluation.household.as_ref() else {
         return Ok(None);
     };
-    if household.member_count <= 1 {
+    if household.member_count == 1
+        && household.members[0].member_id.is_self()
+        && matches!(
+            household.effective_scope,
+            EvaluationScope::Self_ | EvaluationScope::Everyone
+        )
+    {
         return Ok(None);
+    }
+    if evaluation.items.iter().any(|item| {
+        item.member_annotations.iter().any(|annotation| {
+            private_identifier_shaped(annotation.label.as_str())
+                || household
+                    .members
+                    .iter()
+                    .any(|member| annotation.label.as_str() == member.member_id.as_str())
+        })
+    }) {
+        return Err(HouseholdEvaluationPresentationError);
     }
 
     let width = width.max(MIN_PRESENTATION_WIDTH);
@@ -89,7 +109,10 @@ pub fn render_household_evaluation_at_width(
             "No menu items were available to evaluate for this household.",
             width,
         );
-        return Ok(Some(output.trim_end().to_owned()));
+        let output = output.trim_end().to_owned();
+        return (household_output_is_private_safe(household, &output))
+            .then_some(Some(output))
+            .ok_or(HouseholdEvaluationPresentationError);
     }
 
     for item in &evaluation.items {
@@ -116,7 +139,11 @@ pub fn render_household_evaluation_at_width(
         }
     }
 
-    Ok(Some(output.trim_end().to_owned()))
+    let output = output.trim_end().to_owned();
+    if !household_output_is_private_safe(household, &output) {
+        return Err(HouseholdEvaluationPresentationError);
+    }
+    Ok(Some(output))
 }
 
 /// Select a household-evaluation response from deployed agent result envelopes
@@ -154,7 +181,7 @@ fn looks_like_evaluate_menu(document: &Value) -> bool {
     let Some(object) = document.as_object() else {
         return false;
     };
-    [
+    let complete = [
         "restaurant_id",
         "restaurant_name",
         "items",
@@ -165,7 +192,100 @@ fn looks_like_evaluate_menu(document: &Value) -> bool {
         "household",
     ]
     .into_iter()
-    .all(|field| object.contains_key(field))
+    .all(|field| object.contains_key(field));
+    if complete {
+        return true;
+    }
+
+    object.contains_key("household")
+        || object
+            .get("items")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item.get("member_annotations").is_some())
+            })
+}
+
+fn normalize_owner_only_missing_labels(candidate: &mut Value) {
+    let owner_only = candidate
+        .get("household")
+        .and_then(Value::as_object)
+        .is_some_and(|household| {
+            household.get("member_count").and_then(Value::as_u64) == Some(1)
+                && matches!(
+                    household.get("effective_scope").and_then(Value::as_str),
+                    Some("_self" | "everyone")
+                )
+                && household
+                    .get("members")
+                    .and_then(Value::as_array)
+                    .is_some_and(|members| {
+                        members.len() == 1
+                            && members[0].get("member_id").and_then(Value::as_str) == Some("_self")
+                    })
+        });
+    if !owner_only {
+        return;
+    }
+    let Some(items) = candidate.get_mut("items").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for annotation in items
+        .iter_mut()
+        .filter_map(|item| item.get_mut("member_annotations"))
+        .filter_map(Value::as_array_mut)
+        .flatten()
+    {
+        if annotation.get("member_id").and_then(Value::as_str) == Some("_self")
+            && annotation.get("label").is_none_or(Value::is_null)
+        {
+            annotation["label"] = json!("you");
+        }
+    }
+}
+
+fn private_identifier_shaped(value: &str) -> bool {
+    contains_private_household_identifier(value)
+        || EvaluationMemberId::parse(value.trim().to_owned()).is_ok()
+}
+
+fn household_output_is_private_safe(
+    household: &heyfood_core::HouseholdContext,
+    output: &str,
+) -> bool {
+    !contains_private_household_identifier(output)
+        && !household
+            .members
+            .iter()
+            .any(|member| output.contains(member.member_id.as_str()))
+}
+
+/// Detect stable household identifiers and snapshot hashes in untrusted human
+/// prose. This is deliberately token-based: ordinary hyphenated words remain
+/// displayable, while UUIDs, `_self`, and 64-hex fingerprints are rejected.
+#[must_use]
+pub fn contains_private_household_identifier(value: &str) -> bool {
+    value
+        .split(|character: char| {
+            !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        })
+        .filter(|token| !token.is_empty())
+        .any(|token| {
+            token == "_self"
+                || is_uuid_shaped(token)
+                || (token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        })
+}
+
+fn is_uuid_shaped(value: &str) -> bool {
+    let mut parts = value.split('-');
+    [8_usize, 4, 4, 4, 12].into_iter().all(|expected| {
+        parts.next().is_some_and(|part| {
+            part.len() == expected && part.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    }) && parts.next().is_none()
 }
 
 fn append_member_annotation(output: &mut String, annotation: &MemberAnnotation, width: usize) {
@@ -414,12 +534,9 @@ mod tests {
             assert!(household_evaluation_document(&document).is_some());
             assert!(render_household_evaluation(&document).unwrap().is_some());
         }
-        assert!(
-            household_evaluation_document(&json!({
-                "result": {"items": [], "household": {}}
-            }))
-            .is_none()
-        );
+        let partial = json!({"result": {"items": [], "household": {}}});
+        assert!(household_evaluation_document(&partial).is_some());
+        assert!(render_household_evaluation(&partial).is_err());
     }
 
     #[test]
@@ -511,6 +628,76 @@ mod tests {
     }
 
     #[test]
+    fn partial_household_evaluation_is_still_a_fail_closed_candidate() {
+        let mut result = founding_result();
+        result.as_object_mut().unwrap().remove("restaurant_name");
+        assert!(household_evaluation_document(&result).is_some());
+        assert_eq!(
+            render_household_evaluation(&json!({
+                "text": "Unreviewed household prose.",
+                "structured_content": result
+            }))
+            .unwrap_err()
+            .to_string(),
+            UNPRESENTABLE_HOUSEHOLD_EVALUATION_MESSAGE
+        );
+    }
+
+    #[test]
+    fn household_only_truncation_is_still_a_fail_closed_candidate() {
+        let document = json!({
+            "text": "Unreviewed household prose.",
+            "structured_content": {
+                "household": {
+                    "member_count": 2
+                }
+            }
+        });
+
+        assert!(household_evaluation_document(&document).is_some());
+        assert_eq!(
+            render_household_evaluation(&document)
+                .unwrap_err()
+                .to_string(),
+            UNPRESENTABLE_HOUSEHOLD_EVALUATION_MESSAGE
+        );
+    }
+
+    #[test]
+    fn identifier_shaped_member_labels_fail_closed() {
+        let mut result = founding_result();
+        let member_id = result["household"]["members"][1]["member_id"].clone();
+        for item in result["items"].as_array_mut().unwrap() {
+            item["member_annotations"][1]["label"] = member_id.clone();
+        }
+        assert_eq!(
+            render_household_evaluation(&result)
+                .unwrap_err()
+                .to_string(),
+            UNPRESENTABLE_HOUSEHOLD_EVALUATION_MESSAGE
+        );
+    }
+
+    #[test]
+    fn stable_member_ids_in_model_prose_fail_closed() {
+        let mut result = founding_result();
+        let member_id = result["household"]["members"][1]["member_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let summary = format!("This prose names {member_id}.");
+        result["items"][0]["summary"] = json!(summary);
+        result["items"][0]["member_annotations"][1]["summary"] = json!(summary);
+
+        assert_eq!(
+            render_household_evaluation(&result)
+                .unwrap_err()
+                .to_string(),
+            UNPRESENTABLE_HOUSEHOLD_EVALUATION_MESSAGE
+        );
+    }
+
+    #[test]
     fn presentation_never_contains_identifiers_hashes_producer_metadata_or_json_keys() {
         let rendered = render_household_evaluation(&founding_result())
             .unwrap()
@@ -534,13 +721,14 @@ mod tests {
     }
 
     #[test]
-    fn valid_single_member_result_preserves_the_preexisting_presentation() {
+    fn valid_owner_only_result_with_null_labels_preserves_the_preexisting_presentation() {
         let mut result = founding_result();
         result["items"][0]["status"] = json!("generally_safer");
         result["items"][0]["confidence"] = json!(0.95);
         result["items"][0]["summary"] = json!("No concerns.");
         for item in result["items"].as_array_mut().unwrap() {
             item["member_annotations"] = Value::Array(vec![item["member_annotations"][0].clone()]);
+            item["member_annotations"][0]["label"] = Value::Null;
         }
         result["generally_safer"] = json!(["Garlic Noodles", "Steamed Jasmine Rice"]);
         result["avoid"] = json!([]);
@@ -549,6 +737,28 @@ mod tests {
         result["household"]["member_count"] = json!(1);
 
         assert_eq!(render_household_evaluation(&result).unwrap(), None);
+    }
+
+    #[test]
+    fn selected_single_member_result_renders_named_attribution() {
+        let mut result = founding_result();
+        let member_id = result["household"]["members"][1]["member_id"].clone();
+        result["household"]["effective_scope"] = member_id;
+        result["household"]["members"] =
+            Value::Array(vec![result["household"]["members"][1].clone()]);
+        result["household"]["member_count"] = json!(1);
+        for item in result["items"].as_array_mut().unwrap() {
+            item["member_annotations"] = Value::Array(vec![item["member_annotations"][1].clone()]);
+            item["status"] = item["member_annotations"][0]["status"].clone();
+            item["confidence"] = item["member_annotations"][0]["confidence"].clone();
+            item["summary"] = item["member_annotations"][0]["summary"].clone();
+            item["conflicts"] = item["member_annotations"][0]["conflicts"].clone();
+        }
+
+        let rendered = render_household_evaluation(&result).unwrap().unwrap();
+        assert!(rendered.contains("Maya: Avoid"));
+        assert!(rendered.contains("Maya: Generally safer"));
+        assert!(!rendered.contains("3f1c9c2e"));
     }
 
     #[test]
