@@ -10,7 +10,9 @@ mod input;
 mod loop_driver;
 mod model;
 mod render;
+mod startup;
 mod terminal;
+mod theme;
 
 pub use input::action_from_key;
 pub use loop_driver::{TuiError, run_terminal};
