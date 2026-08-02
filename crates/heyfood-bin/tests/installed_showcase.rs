@@ -118,6 +118,13 @@ impl ShowcaseCredentialBackend {
     }
 }
 
+fn showcase_native_household_enabled(
+    credential_backend: ShowcaseCredentialBackend,
+    windows: bool,
+) -> bool {
+    credential_backend == ShowcaseCredentialBackend::Native && !windows
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct InstalledPtyOptions {
     columns: u16,
@@ -2200,6 +2207,13 @@ async fn run_installed_cli(
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if !showcase_native_household_enabled(credential_backend, cfg!(windows)) {
+            // The ordinary Windows archive retains native Credential Manager
+            // qualification, but Windows Household and distribution are both
+            // deferred. Keep that platform on the explicit pre-floor hold;
+            // protected macOS/Linux native candidates leave default-on active.
+            command.env("HEYFOOD_NATIVE_HOUSEHOLD_V1", "0");
+        }
         if credential_backend == ShowcaseCredentialBackend::IsolatedFile {
             command
                 // The hermetic compatibility harness deliberately uses the
@@ -2207,7 +2221,6 @@ async fn run_installed_cli(
                 // native Household secure-store contract. The dedicated
                 // no-override process matrix covers default activation; final
                 // signed candidates use the real native backend below.
-                .env("HEYFOOD_NATIVE_HOUSEHOLD_V1", "0")
                 .env("HOME", &user_root)
                 .env("USERPROFILE", &user_root)
                 .env("APPDATA", user_root.join("appdata"))
@@ -2298,10 +2311,13 @@ fn run_installed_pty_blocking(
     // identity and its browser profile while isolating every heyfood path with
     // HEYFOOD_STATE_DIR. Otherwise a detached Windows browser can retain a
     // handle under the synthetic profile after the installed client exits.
-    if options.credential_backend == ShowcaseCredentialBackend::IsolatedFile {
-        // Keep the file-backed archive harness on the explicit pre-floor hold;
-        // native signed-candidate qualification exercises the default-on path.
+    if !showcase_native_household_enabled(options.credential_backend, cfg!(windows)) {
+        // Keep file-backed and ordinary Windows archive qualification on the
+        // explicit pre-floor hold. Protected macOS/Linux native candidates
+        // exercise the default-on Household path.
         command.env("HEYFOOD_NATIVE_HOUSEHOLD_V1", "0");
+    }
+    if options.credential_backend == ShowcaseCredentialBackend::IsolatedFile {
         command.env("HOME", user_root);
         command.env("USERPROFILE", user_root);
         command.env("APPDATA", user_root.join("appdata"));
@@ -3062,4 +3078,16 @@ fn installed_harness_inventory_matches_core_release_contract() {
         contract["canary_or_defer"],
         json!(["menu_watch_management"])
     );
+    assert!(showcase_native_household_enabled(
+        ShowcaseCredentialBackend::Native,
+        false,
+    ));
+    assert!(!showcase_native_household_enabled(
+        ShowcaseCredentialBackend::Native,
+        true,
+    ));
+    assert!(!showcase_native_household_enabled(
+        ShowcaseCredentialBackend::IsolatedFile,
+        false,
+    ));
 }
