@@ -196,7 +196,28 @@ fn bootstrap(
 
 fn answer_complete_profile(model: &mut AppModel) {
     for answer in ["none", "none", "1", "2", "none", "none", "none", "none"] {
+        assert_human_household_onboarding_copy(model);
         assert!(submit_text(model, answer).is_empty());
+    }
+    assert_human_household_onboarding_copy(model);
+}
+
+fn assert_human_household_onboarding_copy(model: &AppModel) {
+    let text = &model.scrollback.entries().back().unwrap().text;
+    for forbidden in [
+        "under_13",
+        "age_13_17",
+        "age_18_plus",
+        "range, ID",
+        "canonical ID",
+        "declared dietary profile",
+        "profile-sync consent",
+        "remote member sync",
+    ] {
+        assert!(
+            !text.contains(forbidden),
+            "human onboarding copy exposed {forbidden:?}: {text}"
+        );
     }
 }
 
@@ -255,7 +276,14 @@ fn native_add_reuses_the_full_profile_flow_and_waits_for_context_apply() {
     assert!(submit_text(&mut model, "4").is_empty());
     let secret_label = "D3-CANARY-MEMBER-7Q";
     assert!(submit_text(&mut model, secret_label).is_empty());
-    assert!(submit_text(&mut model, "age_18_plus").is_empty());
+    let age_prompt = &model.scrollback.entries().back().unwrap().text;
+    assert!(age_prompt.contains("age group"));
+    assert!(age_prompt.contains("1. Under 13"));
+    assert!(age_prompt.contains("2. 13–17"));
+    assert!(age_prompt.contains("3. 18 or older"));
+    assert!(age_prompt.contains("4. Not sure"));
+    assert_human_household_onboarding_copy(&model);
+    assert!(submit_text(&mut model, "18 or older").is_empty());
     answer_complete_profile(&mut model);
     let create = submit_text(&mut model, "save");
     assert_eq!(create.len(), 1);
@@ -322,6 +350,8 @@ fn native_add_reuses_the_full_profile_flow_and_waits_for_context_apply() {
     );
     let applied = &model.scrollback.entries().back().unwrap().text;
     assert!(applied.contains(&format!("For: {secret_label}")));
+    assert!(applied.contains("Their food profile is saved on this device"));
+    assert!(!applied.contains("declared dietary profile"));
     assert!(!applied.contains("Hosted guidance"));
 }
 

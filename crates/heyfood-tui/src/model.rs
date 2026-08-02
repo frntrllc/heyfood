@@ -689,14 +689,14 @@ pub const SLASH_COMMAND_REGISTRY: &[SlashCommandSpec] = &[
         name: "/household",
         aliases: &[],
         usage: "/household [add]",
-        description: "Open or add to the native household",
+        description: "See your household or add someone",
         kind: SlashCommandKind::Household,
     },
     SlashCommandSpec {
         name: "/for",
         aliases: &[],
         usage: "/for me|MEMBER|everyone",
-        description: "Target future turns to a household scope",
+        description: "Choose who food guidance is for",
         kind: SlashCommandKind::For,
     },
     SlashCommandSpec {
@@ -710,7 +710,7 @@ pub const SLASH_COMMAND_REGISTRY: &[SlashCommandSpec] = &[
         name: "/onboard",
         aliases: &[],
         usage: "/onboard [--for MEMBER]",
-        description: "Build a declared dietary profile",
+        description: "Set up a dietary profile",
         kind: SlashCommandKind::Onboard,
     },
     SlashCommandSpec {
@@ -2677,15 +2677,18 @@ fn parse_household_relationship(answer: &str) -> Result<RelationshipV1, String> 
 }
 
 fn parse_household_age_evidence(answer: &str) -> Result<HouseholdAgeEvidenceInputV1, String> {
-    match answer.trim().to_ascii_lowercase().as_str() {
-        "1" | "under_13" => Ok(HouseholdAgeEvidenceInputV1::Under13),
-        "2" | "age_13_17" => Ok(HouseholdAgeEvidenceInputV1::Age13To17),
-        "3" | "age_18_plus" => Ok(HouseholdAgeEvidenceInputV1::Age18Plus),
-        "4" | "unknown" => Ok(HouseholdAgeEvidenceInputV1::Unknown),
-        _ => Err(
-            "Choose age evidence by number or one of under_13, age_13_17, age_18_plus, unknown."
-                .into(),
-        ),
+    match normalize_choice(answer).as_str() {
+        "1" | "under13" | "youngerthan13" => Ok(HouseholdAgeEvidenceInputV1::Under13),
+        "2" | "1317" | "13to17" | "age1317" | "ages13to17" => {
+            Ok(HouseholdAgeEvidenceInputV1::Age13To17)
+        }
+        "3" | "18orolder" | "18plus" | "age18plus" | "adult" => {
+            Ok(HouseholdAgeEvidenceInputV1::Age18Plus)
+        }
+        "4" | "notsure" | "unknown" | "prefernottosay" => Ok(HouseholdAgeEvidenceInputV1::Unknown),
+        _ => {
+            Err("Choose `1` (Under 13), `2` (13–17), `3` (18 or older), or `4` (Not sure).".into())
+        }
     }
 }
 
@@ -2820,7 +2823,7 @@ fn parse_single_option(
     }
     resolve_onboarding_option(answer.trim(), options)
         .map(|option| Some(option.id.clone()))
-        .ok_or_else(|| "Choose an activity by number, exact label, or canonical ID.".into())
+        .ok_or_else(|| "Choose an activity level by number or name, or type `none`.".into())
 }
 
 fn resolve_onboarding_option<'a>(
@@ -2903,44 +2906,44 @@ fn push_onboarding_prompt(model: &mut AppModel) {
 
 fn onboarding_prompt(flow: &OnboardingFlow) -> String {
     let prompt = match flow.step {
-        OnboardingStep::MemberRelationship => "New household member · relationship\nChoose how this person is related to you.\n\n 1. Spouse\n 2. Partner\n 3. Parent\n 4. Child\n 5. Sibling\n 6. Grandparent\n 7. Friend\n 8. Other\n\nType a number from `1` to `8` or the relationship name, then press Enter.\nType `cancel` to discard household member setup.".into(),
-        OnboardingStep::MemberName => "New household member · display name\nEnter the name you want shown in this household (80 characters maximum).\n\nType `back` to revisit relationship or `cancel` to discard household member setup.".into(),
+        OnboardingStep::MemberRelationship => "Add a household member · relationship\nWho is this person to you?\n\n 1. Spouse\n 2. Partner\n 3. Parent\n 4. Child\n 5. Sibling\n 6. Grandparent\n 7. Friend\n 8. Other\n\nType a number from `1` to `8` or the relationship name, then press Enter.\nType `cancel` to discard household member setup.".into(),
+        OnboardingStep::MemberName => "Add a household member · name\nWhat name should hey.food use for this person? (80 characters maximum.)\n\nType `back` to revisit the relationship or `cancel` to discard household member setup.".into(),
         OnboardingStep::MemberAgeEvidence => format!(
-            "{} · age evidence\nChoose the one available age band. A date of birth is not requested.\n\n 1. under_13\n 2. age_13_17\n 3. age_18_plus\n 4. unknown\n\nType `back` to edit the display name or `cancel` to discard household member setup.",
+            "{} · age group\nChoose the age group that applies. We don't need their exact date of birth.\n\n 1. Under 13\n 2. 13–17\n 3. 18 or older\n 4. Not sure\n\nType a number from `1` to `4` or the age group, then press Enter.\nType `back` to edit the name or `cancel` to discard household member setup.",
             flow.display_label().unwrap_or("New household member")
         ),
         OnboardingStep::Diets => option_prompt(
             "Diet styles · 1/8",
-            "Choose any that apply by number, range, ID, label, or custom text. Separate choices with commas; type `none` for no restrictions.",
+            "Choose any that apply. Enter numbers separated by commas (for example, `1, 3`), a range such as `1-3`, or another diet in your own words. Type `none` if none apply.",
             diet_options(),
         ),
         OnboardingStep::Allergies => option_prompt(
             "Allergies & restrictions · 2/8",
-            "Choose every option that must be avoided by number, range, ID, label, or custom text; type `none` if there are none.",
+            "Choose everything this person must avoid. Enter numbers separated by commas, a range such as `1-3`, or another restriction in your own words. Type `none` if there are none.",
             allergy_options(),
         ),
         OnboardingStep::Conditions => option_prompt(
             "Health conditions · 3/8",
-            "Choose conditions by number, range, ID, label, or custom text; type `none` if there are none.",
+            "Choose any that apply. Enter numbers separated by commas, a range such as `1-3`, or another condition in your own words. Type `none` if there are none.",
             condition_options(),
         ),
         OnboardingStep::Severity => {
-            "Condition severity · 4/8\nChoose a shared severity from 1 (mild) to 5 (critical).".into()
+            "Condition severity · 4/8\nHow much do these conditions affect food choices? Enter one number from 1 (mild) to 5 (critical).".into()
         }
-        OnboardingStep::AvoidIngredients => "Ingredients to avoid · 5/8\nEnter up to 20 ingredients separated by commas, or type `none`.".into(),
+        OnboardingStep::AvoidIngredients => "Ingredients to avoid · 5/8\nList up to 20 ingredients, separated by commas. Type `none` if there are none.".into(),
         OnboardingStep::Activity => option_prompt(
             "Activity level · 6/8",
-            "Choose one option by number, ID, or label; type `none` to leave it unset.",
+            "Choose one by number or name, then press Enter. Type `none` to skip this question.",
             activity_options(),
         ),
         OnboardingStep::Cuisines => option_prompt(
             "Cuisines you love · 7/8",
-            "Choose favorites by number, range, ID, label, or custom text; type `none` to skip.",
+            "Choose any favorites. Enter numbers separated by commas, a range such as `1-3`, or another cuisine in your own words. Type `none` to skip this question.",
             cuisine_options(),
         ),
-        OnboardingStep::Notes => "Additional notes · 8/8\nAdd anything else the food guide should know (280 characters maximum), or type `none`.".into(),
+        OnboardingStep::Notes => "Anything else? · 8/8\nShare anything else hey.food should know (280 characters maximum), or type `none`.".into(),
         OnboardingStep::Review => onboarding_review(flow),
-        OnboardingStep::Saving => "Saving the declared dietary profile…".into(),
+        OnboardingStep::Saving => "Saving food profile…".into(),
     };
     if matches!(
         flow.step,
@@ -2955,7 +2958,7 @@ fn onboarding_prompt(flow: &OnboardingFlow) -> String {
     ) && !matches!(flow.target, OnboardingTargetV1::Owner)
     {
         format!(
-            "Declared dietary profile for {}\n\n{prompt}",
+            "Food profile for {}\n\n{prompt}",
             flow.display_label().unwrap_or("household member")
         )
     } else {
@@ -2969,7 +2972,7 @@ fn option_prompt(title: &str, instructions: &str, options: &[OnboardingOption]) 
         let _ = writeln!(output, "{:>2}. {}", index + 1, option.label);
     }
     output
-        .push_str("\nType `back` to revisit the previous step or `cancel` to discard onboarding.");
+        .push_str("\nType `back` for the previous question or `cancel` to discard these answers.");
     output
 }
 
@@ -2990,26 +2993,23 @@ fn onboarding_review(flow: &OnboardingFlow) -> String {
             bounded_draft: Some(draft),
             ..
         } => (
+            format!("Review food profile for {}", draft.display_name()),
             format!(
-                "Review declared dietary profile for {}",
-                draft.display_name()
-            ),
-            format!(
-                "Add {} to this household and save this declared dietary profile on this device? No profile-sync consent or remote member sync will be created.\n\nType `save` to continue, `back` to edit, or `cancel` to discard it.",
+                "Add {} to this household and save this food profile? The profile stays on this device and is not synced.\n\nType `save` to continue, `back` to edit, or `cancel` to discard it.",
                 draft.display_name()
             ),
         ),
         OnboardingTargetV1::ExistingMember { display_label, .. } => (
-            format!("Review declared dietary profile for {display_label}"),
+            format!("Review food profile for {display_label}"),
             format!(
-                "Save {display_label}'s declared dietary profile on this device? No profile-sync consent or remote member sync will be created.\n\nType `save` to continue, `back` to edit, or `cancel` to discard it."
+                "Save {display_label}'s food profile? The profile stays on this device and is not synced.\n\nType `save` to continue, `back` to edit, or `cancel` to discard it."
             ),
         ),
         OnboardingTargetV1::NewMember {
             bounded_draft: None,
             ..
         } => (
-            "Review declared dietary profile for household member".into(),
+            "Review food profile for household member".into(),
             "Household member setup is incomplete. Type `back` to finish it or `cancel` to discard it.".into(),
         ),
     };
@@ -4278,7 +4278,7 @@ fn dispatch_member_onboarding_save(
     );
     model.scrollback.push(SemanticEntry {
         speaker: Speaker::User,
-        text: format!("Save declared dietary profile for {label}"),
+        text: format!("Save food profile for {label}"),
         streaming: false,
     });
     model.scrollback.push(SemanticEntry {
@@ -4287,7 +4287,7 @@ fn dispatch_member_onboarding_save(
         streaming: true,
     });
     model.operation = OperationState::Running(operation_id.get());
-    model.activity = Some("Saving the local household profile…".into());
+    model.activity = Some(format!("Saving food profile for {label}…"));
     model.idle_exit_armed = false;
     follow_tail(model);
     match target {
@@ -4620,7 +4620,7 @@ fn handle_household_context_applied(
     clear_subject_bound_transients(model);
     let copy = match pending.kind {
         HouseholdMutationKindV1::CreateMember => format!(
-            "Added {bounded_active_label}. Their declared dietary profile is saved on this device. For: {bounded_active_label}"
+            "Added {bounded_active_label}. Their food profile is saved on this device. For: {bounded_active_label}"
         ),
         HouseholdMutationKindV1::SaveMemberProfile => {
             let affected_label = pending
@@ -4628,7 +4628,7 @@ fn handle_household_context_applied(
                 .as_deref()
                 .unwrap_or("household member");
             format!(
-                "Saved {affected_label}'s declared dietary profile on this device. For: {bounded_active_label}"
+                "Saved {affected_label}'s food profile on this device. For: {bounded_active_label}"
             )
         }
         HouseholdMutationKindV1::SelectScope => {
@@ -7656,6 +7656,23 @@ mod tests {
             .expect("valid range and custom diet");
         assert_eq!(selected.ids, ["gluten_free", "dairy_free", "vegetarian"]);
         assert_eq!(selected.custom, ["family recipe diet"]);
+    }
+
+    #[test]
+    fn household_age_group_accepts_human_labels_without_exposing_wire_values() {
+        for (answer, expected) in [
+            ("Under 13", HouseholdAgeEvidenceInputV1::Under13),
+            ("13–17", HouseholdAgeEvidenceInputV1::Age13To17),
+            ("18 or older", HouseholdAgeEvidenceInputV1::Age18Plus),
+            ("Not sure", HouseholdAgeEvidenceInputV1::Unknown),
+        ] {
+            assert_eq!(parse_household_age_evidence(answer), Ok(expected));
+        }
+        let error = parse_household_age_evidence("old enough").unwrap_err();
+        assert!(!error.contains("under_13"));
+        assert!(!error.contains("age_13_17"));
+        assert!(!error.contains("age_18_plus"));
+        assert!(error.contains("18 or older"));
     }
 
     #[test]
