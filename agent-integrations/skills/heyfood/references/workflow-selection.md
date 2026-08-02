@@ -111,6 +111,57 @@ convert a status into your own phrasing. Never state that a food is "safe".
 
 **Cold menus** are covered below. Treat them as coverage, not safety.
 
+### Households — read this before answering for anyone
+
+hello.food is built for people who decide what someone *else* eats. Getting the
+scope wrong does not produce a vague answer; it produces a confident answer
+about the wrong person.
+
+**The default is household-wide, not you.** On an account with synced members,
+a call that passes no scope is evaluated for the WHOLE household. Do not assume
+an unscoped call means the account owner.
+
+`household_scope` accepts exactly three things:
+
+| Value | Means |
+|---|---|
+| `"_self"` | the account owner alone |
+| `"everyone"` | all members |
+| a member id | that member alone |
+
+**`member_id="_self"` does NOT mean "just me".** It is the argument's default
+and carries no scope at all, so it falls through to default resolution — which
+on a member-having account is household-wide. To mean the owner alone you must
+send `household_scope="_self"` explicitly. `member_id` is a legacy alias kept
+for deployed clients: an explicit `household_scope` always wins, and any
+`member_id` other than `_self` means that member.
+
+**Never infer scope from phrasing.** "Can my daughter eat this" does not
+license guessing a member. Resolve the member, or ask. The service honours the
+scope you send authoritatively and never reads intent from wording — so an
+unscoped call for a named person is a wrong answer, not an approximate one.
+
+**Read the aggregate correctly.** In `evaluate_menu`, each item is assessed
+once per member in scope. **The headline status on an item is the household
+AGGREGATE — worst status wins** — and the additive `member_annotations` say
+WHO. Reporting the headline alone tells a caregiver "avoid" without saying it
+is avoid *for one member*, or lets them read a household verdict as being about
+themselves. Always carry the per-member annotations through with the headline.
+
+Flags on an item are informational; these tools never drop an item from the
+result. Absence of a warning is not a clearance.
+
+**Scope rejections are answers, not retry conditions:**
+
+- **422** — the scope was malformed, or needs an account capability this one
+  does not have.
+- **404** — a well-formed member id that is not a synced member of THIS
+  account.
+
+Neither is ever degraded into a different evaluation set, and you must not
+degrade it either. Do not retry unscoped, do not substitute `_self`, and do not
+fall back to the owner. Report which member was not found and stop.
+
 ### Recipes
 
 Three tools, three different jobs — picking the wrong one gives the user
