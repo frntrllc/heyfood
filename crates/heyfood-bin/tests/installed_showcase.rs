@@ -595,7 +595,7 @@ async fn run_installed_archive_core_release_matrix() {
             PtyAction::Submit("none".into()),
             PtyAction::Wait("Georgian".into()),
             PtyAction::Submit("none".into()),
-            PtyAction::Wait("Additional notes".into()),
+            PtyAction::Wait("Anything else?".into()),
             PtyAction::Submit("none".into()),
             PtyAction::Wait("Review dietary profile".into()),
             PtyAction::Submit("save".into()),
