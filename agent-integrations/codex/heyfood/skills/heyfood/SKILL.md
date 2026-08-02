@@ -32,6 +32,7 @@ it with the other surface's tools.
 |---|---|---|
 | Grocery list, Grocery exclusions | ✅ | ❌ **Not available** |
 | Menu Watch reads | ✅ | ❌ **Not available** |
+| Household-scoped evaluation | ❌ **Human TUI only** | ✅ |
 | Installed-contract, status, capability discovery | ✅ | ❌ |
 | Restaurant lookup and search | ❌ | ✅ |
 | Menu safety evaluation, dish explanation | ❌ | ✅ |
@@ -94,6 +95,24 @@ When a tool reports missing authentication or scopes, give the user the typed
 handoff. Do not request or display tokens. Read
 [references/authentication-and-capabilities.md](references/authentication-and-capabilities.md)
 for capability and scope handling on both surfaces.
+
+## Answer for the right person
+
+This product exists for people deciding what someone *else* eats. **Establish
+who an answer is for before giving it.**
+
+On an account with household members, an unscoped call is evaluated
+**household-wide** — it does not mean the account owner. Passing
+`member_id="_self"` does not narrow it either; only an explicit
+`household_scope="_self"` does.
+
+Never infer who from how a question is phrased. Resolve the member, or ask. And
+when a result carries per-member detail, carry it through: a headline status on
+a household-scoped result is the worst case across members, not a statement
+about the person asking.
+
+Full rules, accepted values, and what the rejections mean:
+[references/workflow-selection.md](references/workflow-selection.md).
 
 ## Preserve food safety context
 
