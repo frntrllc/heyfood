@@ -51,23 +51,77 @@ Use these in order:
 
 There is no command fallback on this surface. If no tool matches, stop.
 
-### Supported read intents
+### Tool inventory
 
-When present, prefer:
-
-- `lookup_restaurant` and `search_restaurants` to identify a restaurant;
-- `get_menu_status` to check whether a menu has been captured;
-- `evaluate_menu` to assess menu items against the user's dietary profile;
-- `explain_item` for a single dish, with its reasons and conflicts;
-- `recommend_items` for fitting choices, and `draft_order_message` to phrase an
-  order request;
-- `ask_dietary_question` for general dietary knowledge;
-- `describe_dietary_graph`, `get_food_preferences`, and `get_meal_history` for
-  profile-derived context; and
-- `search_recipes`, `list_saved_recipes`, and `suggest_recipes` for recipes.
+- `lookup_restaurant`, `search_restaurants` — identify a restaurant
+- `get_menu_status` — whether a menu has been captured
+- `evaluate_menu`, `explain_item`, `recommend_items` — dietary assessment
+- `draft_order_message` — phrase an order request
+- `search_recipes`, `list_saved_recipes`, `suggest_recipes` — recipes
+- `ask_dietary_question` — general dietary knowledge
+- `describe_dietary_graph`, `get_food_preferences`, `get_meal_history` —
+  profile-derived context
 
 A hosted deployment may expose a subset. Absent tools are unavailable
 capabilities, not tools to be reached another way.
+
+### Restaurants and menus
+
+**Resolve the restaurant before assessing anything.** Most assessment tools key
+on `restaurant_id`, which you do not have from a user's words. Get it first:
+
+- `lookup_restaurant(name)` when the user named a specific place.
+- `search_restaurants(query, location_query, radius_miles, limit)` when they
+  described one, or asked what is nearby.
+
+If resolution is ambiguous, ask. Never assess a guess — two branches of a chain
+can carry different menus, and a confident answer about the wrong location is
+worse than a question.
+
+**One asymmetry to know.** `explain_item(item_name, restaurant_name)` takes
+plain names, while `evaluate_menu`, `recommend_items`, and
+`draft_order_message` take `restaurant_id`. So a single-dish question can be
+answered without resolution, but anything menu-wide cannot.
+
+**Then choose by the shape of the question:**
+
+| The user asks | Use |
+|---|---|
+| "Can I eat X here?" | `explain_item` — one dish, with reasons and conflicts |
+| "What's safe on this menu?" | `evaluate_menu(restaurant_id, item_names)` |
+| "What should I order?" | `recommend_items(restaurant_id, query, …)` |
+| "Ask them to leave out the X" | `draft_order_message` |
+
+`evaluate_menu` takes explicit `item_names`. It assesses what you give it — it
+does not fetch a menu for you to browse. If the user has not named items, either
+ask which dishes they are considering, or use `recommend_items` instead.
+
+**Preserve the verdict.** Carry the service's own safety wording, reasons,
+conflicts, allergen detail, alternatives, and any freshness or provenance
+markers through to the user unchanged. Do not re-rank, re-summarize, soften, or
+convert a status into your own phrasing. Never state that a food is "safe".
+
+**Cold menus** are covered below. Treat them as coverage, not safety.
+
+### Recipes
+
+Three tools, three different jobs — picking the wrong one gives the user
+something that looks like an answer and is not:
+
+- `search_recipes(query, cuisine, meal_type, max_ready_time, limit)` — find
+  existing recipes matching a request.
+- `suggest_recipes(recipe_title, ingredients, constraints, servings)` — adapt a
+  specific recipe the user already has in mind, for their constraints. Pass
+  their actual constraints; do not restate them into your own words.
+- `list_saved_recipes(limit)` — what the user already saved. Use it before
+  suggesting something new when they refer to "my" recipes.
+
+Recipe results carry dietary reasoning for the same reason menu results do.
+Preserve it. A substitution offered by the service is part of the answer, not a
+detail to compress away.
+
+**Saving is a mutation** and is not available here. If a user asks to save a
+recipe, say so plainly rather than implying it was kept.
 
 ### Not available remotely
 
