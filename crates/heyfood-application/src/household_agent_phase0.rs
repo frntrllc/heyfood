@@ -84,6 +84,7 @@ impl fmt::Debug for AuthorizedAgentHouseholdPrepareV1 {
 /// bound to the exact returned proposal.
 #[derive(Clone, Eq, PartialEq)]
 pub struct PreparedAgentHouseholdDisclosureV1 {
+    proposal_ref: AgentHouseholdProposalIdV1,
     account: AccountId,
     purpose: AgentDisclosurePurposeV1,
     generation: GenerationId,
@@ -118,6 +119,7 @@ impl PreparedAgentHouseholdDisclosureV1 {
         subjects.sort();
         subjects.dedup();
         Self {
+            proposal_ref: AgentHouseholdProposalIdV1::new(),
             account,
             purpose,
             generation: grants.generation(),
@@ -129,12 +131,13 @@ impl PreparedAgentHouseholdDisclosureV1 {
     }
 
     #[must_use]
-    pub fn bind_to_proposal(
-        &self,
-        proposal_ref: AgentHouseholdProposalIdV1,
-    ) -> FrozenAgentHouseholdDisclosureV1 {
+    pub const fn proposal_ref(&self) -> AgentHouseholdProposalIdV1 {
+        self.proposal_ref
+    }
+
+    #[must_use]
+    pub fn freeze(&self) -> FrozenAgentHouseholdDisclosureV1 {
         FrozenAgentHouseholdDisclosureV1 {
-            proposal_ref,
             prepared: self.clone(),
         }
     }
@@ -144,7 +147,6 @@ impl PreparedAgentHouseholdDisclosureV1 {
 /// local proposal journal. Agent-visible proposal documents never contain it.
 #[derive(Clone, Eq, PartialEq)]
 pub struct FrozenAgentHouseholdDisclosureV1 {
-    proposal_ref: AgentHouseholdProposalIdV1,
     prepared: PreparedAgentHouseholdDisclosureV1,
 }
 
@@ -164,7 +166,7 @@ impl fmt::Debug for FrozenAgentHouseholdDisclosureV1 {
 impl FrozenAgentHouseholdDisclosureV1 {
     #[must_use]
     pub const fn proposal_ref(&self) -> AgentHouseholdProposalIdV1 {
-        self.proposal_ref
+        self.prepared.proposal_ref
     }
 
     #[must_use]
@@ -355,7 +357,8 @@ impl HouseholdAgentPhase0Proof {
         ensure_account(&account, &result.account)?;
         validate_returned_proposal(&request, &result.presentation)?;
         if result.frozen_disclosure.prepared != authorized.prepared_disclosure
-            || result.frozen_disclosure.proposal_ref != result.presentation.proposal_ref
+            || result.frozen_disclosure.proposal_ref() != result.presentation.proposal_ref
+            || authorized.prepared_disclosure.proposal_ref() != result.presentation.proposal_ref
             || result.frozen_disclosure.prepared.operation != result.presentation.operation
         {
             return Err(phase0_error(
@@ -391,9 +394,11 @@ impl HouseholdAgentPhase0Proof {
                 current_disclosure.grants.maximum_projection_for(&subjects),
             )
         };
+        let disclosure_invalidated = disclosure_changed
+            || projection_rank(current_maximum) < projection_rank(maximum_projection);
         let mut presentation = result.presentation.filtered_to(current_maximum);
         presentation.disclosure_generation = current_disclosure.grants.generation();
-        if disclosure_changed {
+        if disclosure_invalidated {
             presentation.state = AgentHouseholdProposalStateV1::Stale;
             presentation.human_status = presentation.state.human_status().to_owned();
         }
@@ -755,7 +760,7 @@ fn validate_status_subject_binding(
     presentation: &AgentHouseholdProposalPresentationV1,
     frozen: &FrozenAgentHouseholdDisclosureV1,
 ) -> Result<(), PortError> {
-    if frozen.proposal_ref != presentation.proposal_ref
+    if frozen.proposal_ref() != presentation.proposal_ref
         || frozen.prepared.operation != presentation.operation
     {
         return Err(phase0_error(

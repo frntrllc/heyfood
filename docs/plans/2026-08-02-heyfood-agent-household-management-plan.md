@@ -493,7 +493,13 @@ Every compare-and-swap token is also bound to the journal's account, proposal
 reference, and reducer commit ID in addition to its revision, state,
 generation, and frozen digest. A token from one proposal can never advance or
 cancel another proposal even when both journals are otherwise at identical
-states.
+states. The application allocates the proposal identity before the prepared
+authority crosses the outbound port; the port can freeze only that identity
+and has no operation that rebinds the authority to an arbitrary proposal.
+Durable journal construction accepts only the initial `prepared` or
+`awaiting_local_input` states. All later transitions are private journal CAS
+operations, so callers cannot transition a bare authority and wrap it after
+the fact.
 
 An `awaiting_local_input` record preallocates identities but does not claim a
 final proposal digest or effect fingerprint. Completing local intake validates
@@ -508,7 +514,9 @@ frozen proposal.
 The default proposal review lifetime is ten minutes. Any account replacement,
 logout, repository repair, lifecycle generation change, disclosure revocation,
 conflicting commit, profile edit, scope change, or expiry makes the proposal
-stale or cancelled.
+stale or cancelled. A same-generation, same-digest disclosure that expires
+during adapter work is still an authority reduction and returns a stale,
+content-free proposal rather than a pending one.
 
 ### Trusted human review — local TUI only in `v0.8.0`
 
@@ -574,7 +582,11 @@ repository transaction.
 After readback, the external receipt is derived from the co-committed marker.
 A crash after repository publication but before proposal-status persistence is
 reconciled from that ledger using the same identities; it never allocates a
-second member or commit. The legal transition table is:
+second member or commit. Reconciliation accepts an opaque proof constructed
+only from the exact account-bound committed ledger record and verifies its
+account, commit ID, effect fingerprint, and exact successor household
+revision; it does not accept caller-supplied bare commit/fingerprint pairs.
+The legal transition table is:
 
 ```text
 prepared -> awaiting_local_input | awaiting_local_review

@@ -8,7 +8,6 @@ use heyfood_application::{
     BoundAgentHouseholdOutcomeReceiptV1, BoundAgentHouseholdProposalV1, BoundAgentHouseholdReadV1,
     BoundAgentHouseholdRosterAuthorityV1, BoxFuture, FrozenAgentHouseholdDisclosureV1,
     HouseholdAgentPhase0Port, HouseholdAgentPhase0Proof, PortError,
-    PreparedAgentHouseholdDisclosureV1,
 };
 use heyfood_core::{
     AGENT_HOUSEHOLD_CONTRACT_VERSION, AccountId, AgentDisclosureDataClassV1,
@@ -27,19 +26,18 @@ use heyfood_core::{
 };
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 const PROOF_MANIFEST: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/release-evidence/agent-household-phase0/phase0-proof-manifest.json"
 ));
 const PROOF_MANIFEST_SHA256: &str =
-    "415d9bf8ac6627c353060cebb3c5c71afc73f6d3a66fe0e36763bb8caff6261e";
+    "c9beca387e62c4da3e83ab540c5b106cbf156d87d2e4ede1ecd03e7e51aac48d";
 
 struct FixtureHouseholdAgentPort {
     account: AccountId,
     member: MemberId,
-    proposal_ref: AgentHouseholdProposalIdV1,
+    proposal_ref: Mutex<Option<AgentHouseholdProposalIdV1>>,
     household_revision: AtomicU64,
     disclosure_generation: AtomicU64,
     disclosure_revoked: AtomicBool,
@@ -49,11 +47,12 @@ struct FixtureHouseholdAgentPort {
     rotate_disclosure_after_first: AtomicBool,
     disclosure_wrong_account: AtomicBool,
     disclosure_observed_after_expiry: AtomicBool,
+    expire_disclosure_after_first: AtomicBool,
     returned_member_override: Mutex<Option<MemberId>>,
     active_scope_override: Mutex<Option<HouseholdScope>>,
     authoritative_members: Mutex<Vec<MemberId>>,
     proposal_member_override: Mutex<Option<MemberId>>,
-    status_frozen_override: Mutex<Option<FrozenAgentHouseholdDisclosureV1>>,
+    status_accepts_any_requested_ref: AtomicBool,
     invalid_read_wire: AtomicBool,
     invalid_read_count_wire: AtomicBool,
     eligible_count_override: AtomicU64,
@@ -64,7 +63,6 @@ struct FixtureHouseholdAgentPort {
 #[derive(Clone)]
 struct StoredFixtureProposal {
     presentation: AgentHouseholdProposalPresentationV1,
-    prepared_disclosure: PreparedAgentHouseholdDisclosureV1,
     frozen_disclosure: FrozenAgentHouseholdDisclosureV1,
 }
 
@@ -74,9 +72,7 @@ impl FixtureHouseholdAgentPort {
             account: account(),
             member: MemberId::parse_preserved("10000000-0000-4000-8000-000000000001")
                 .expect("member"),
-            proposal_ref: AgentHouseholdProposalIdV1::from_uuid(
-                Uuid::parse_str("20000000-0000-4000-8000-000000000001").expect("proposal"),
-            ),
+            proposal_ref: Mutex::new(None),
             household_revision: AtomicU64::new(7),
             disclosure_generation: AtomicU64::new(3),
             disclosure_revoked: AtomicBool::new(false),
@@ -86,13 +82,14 @@ impl FixtureHouseholdAgentPort {
             rotate_disclosure_after_first: AtomicBool::new(false),
             disclosure_wrong_account: AtomicBool::new(false),
             disclosure_observed_after_expiry: AtomicBool::new(false),
+            expire_disclosure_after_first: AtomicBool::new(false),
             returned_member_override: Mutex::new(None),
             active_scope_override: Mutex::new(None),
             authoritative_members: Mutex::new(vec![
                 MemberId::parse_preserved("10000000-0000-4000-8000-000000000001").expect("member"),
             ]),
             proposal_member_override: Mutex::new(None),
-            status_frozen_override: Mutex::new(None),
+            status_accepts_any_requested_ref: AtomicBool::new(false),
             invalid_read_wire: AtomicBool::new(false),
             invalid_read_count_wire: AtomicBool::new(false),
             eligible_count_override: AtomicU64::new(0),
@@ -110,13 +107,21 @@ impl FixtureHouseholdAgentPort {
         GenerationId::new(self.disclosure_generation.load(Ordering::SeqCst))
     }
 
+    fn current_proposal_ref(&self) -> AgentHouseholdProposalIdV1 {
+        self.proposal_ref
+            .lock()
+            .expect("proposal ref lock")
+            .expect("prepared proposal ref")
+    }
+
     fn presentation(
         &self,
         request: &AgentHouseholdPrepareRequestV1,
+        proposal_ref: AgentHouseholdProposalIdV1,
     ) -> AgentHouseholdProposalPresentationV1 {
         AgentHouseholdProposalPresentationV1 {
             schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
-            proposal_ref: self.proposal_ref,
+            proposal_ref,
             operation: request.operation,
             state: AgentHouseholdProposalStateV1::AwaitingLocalInput,
             projection: request.requested_projection,
@@ -227,7 +232,9 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
                         AgentDisclosureGrantingAuthorityV1::AuthorizedGuardianRosterOnly,
                     ),
                 };
-            let observed_at = if self.disclosure_observed_after_expiry.load(Ordering::SeqCst) {
+            let observed_at = if self.disclosure_observed_after_expiry.load(Ordering::SeqCst)
+                || (self.expire_disclosure_after_first.load(Ordering::SeqCst) && call > 0)
+            {
                 timestamp("2026-08-02T12:21:00.000Z")
             } else {
                 timestamp("2026-08-02T12:05:00.000Z")
@@ -378,17 +385,16 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
                     "household revision changed",
                 ));
             }
-            let mut presentation = self.presentation(&request.request);
+            let proposal_ref = request.prepared_disclosure.proposal_ref();
+            *self.proposal_ref.lock().expect("proposal ref lock") = Some(proposal_ref);
+            let mut presentation = self.presentation(&request.request, proposal_ref);
             if self.invalid_proposal_wire.load(Ordering::SeqCst) {
                 presentation.changes[0].after = vec!["line\nfeed".to_owned()];
             }
             presentation = presentation.filtered_to(request.maximum_projection);
-            let frozen_disclosure = request
-                .prepared_disclosure
-                .bind_to_proposal(presentation.proposal_ref);
+            let frozen_disclosure = request.prepared_disclosure.freeze();
             *self.proposal.lock().expect("proposal lock") = Some(StoredFixtureProposal {
                 presentation: presentation.clone(),
-                prepared_disclosure: request.prepared_disclosure,
                 frozen_disclosure: frozen_disclosure.clone(),
             });
             Ok(BoundAgentHouseholdProposalV1 {
@@ -406,7 +412,15 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
         _cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<BoundAgentHouseholdProposalV1, PortError>> {
         Box::pin(async move {
-            if account != self.account || proposal_ref != self.proposal_ref {
+            if account != self.account
+                || (!self.status_accepts_any_requested_ref.load(Ordering::SeqCst)
+                    && self
+                        .proposal_ref
+                        .lock()
+                        .expect("proposal ref lock")
+                        .as_ref()
+                        != Some(&proposal_ref))
+            {
                 return Err(PortError::new(
                     "household_account_mismatch",
                     "fixture status is not account bound",
@@ -423,12 +437,7 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
             Ok(BoundAgentHouseholdProposalV1 {
                 account: self.account.clone(),
                 presentation: stored.presentation,
-                frozen_disclosure: self
-                    .status_frozen_override
-                    .lock()
-                    .expect("status frozen override lock")
-                    .clone()
-                    .unwrap_or(stored.frozen_disclosure),
+                frozen_disclosure: stored.frozen_disclosure,
             })
         })
     }
@@ -440,7 +449,14 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
         _cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<BoundAgentHouseholdOutcomeReceiptV1, PortError>> {
         Box::pin(async move {
-            if account != self.account || proposal_ref != self.proposal_ref {
+            if account != self.account
+                || self
+                    .proposal_ref
+                    .lock()
+                    .expect("proposal ref lock")
+                    .as_ref()
+                    != Some(&proposal_ref)
+            {
                 return Err(PortError::new(
                     "household_account_mismatch",
                     "fixture cancellation is not account bound",
@@ -640,7 +656,11 @@ async fn bin_composes_read_prepare_revocation_safe_status_and_non_mutating_cance
     port.disclosure_revoked.store(true, Ordering::SeqCst);
     port.disclosure_generation.store(4, Ordering::SeqCst);
     let status = controller
-        .status(account(), port.proposal_ref, CancellationToken::new())
+        .status(
+            account(),
+            port.current_proposal_ref(),
+            CancellationToken::new(),
+        )
         .await
         .expect("content-free status after revocation");
     assert_eq!(status.projection, AgentHouseholdProjectionV1::ContentFree);
@@ -650,7 +670,11 @@ async fn bin_composes_read_prepare_revocation_safe_status_and_non_mutating_cance
     assert!(status.changes.is_empty());
 
     let receipt = controller
-        .cancel(account(), port.proposal_ref, CancellationToken::new())
+        .cancel(
+            account(),
+            port.current_proposal_ref(),
+            CancellationToken::new(),
+        )
         .await
         .expect("pre-dispatch cancel");
     assert!(receipt.known_no_household_mutation());
@@ -774,19 +798,26 @@ async fn application_enforces_revoked_minor_unknown_and_cross_account_disclosure
 
 #[tokio::test]
 async fn prepare_revalidates_the_exact_disclosure_revision_set_after_adapter_work() {
-    let port = Arc::new(FixtureHouseholdAgentPort::new());
-    port.rotate_disclosure_after_first
-        .store(true, Ordering::SeqCst);
-    let result = HouseholdAgentPhase0Proof::new(port)
-        .prepare(account(), edit_prepare_request(), CancellationToken::new())
-        .await
-        .expect("revision rotation returns a stale content-free proposal");
-    assert_eq!(result.state, AgentHouseholdProposalStateV1::Stale);
-    assert_eq!(result.projection, AgentHouseholdProjectionV1::ContentFree);
-    assert!(result.affected_member_ref.is_none());
-    assert!(result.affected_member_label.is_none());
-    assert!(result.changes.is_empty());
-    assert!(result.consequences.is_empty());
+    for expires_without_digest_change in [false, true] {
+        let port = Arc::new(FixtureHouseholdAgentPort::new());
+        if expires_without_digest_change {
+            port.expire_disclosure_after_first
+                .store(true, Ordering::SeqCst);
+        } else {
+            port.rotate_disclosure_after_first
+                .store(true, Ordering::SeqCst);
+        }
+        let result = HouseholdAgentPhase0Proof::new(port)
+            .prepare(account(), edit_prepare_request(), CancellationToken::new())
+            .await
+            .expect("authority reduction returns a stale content-free proposal");
+        assert_eq!(result.state, AgentHouseholdProposalStateV1::Stale);
+        assert_eq!(result.projection, AgentHouseholdProjectionV1::ContentFree);
+        assert!(result.affected_member_ref.is_none());
+        assert!(result.affected_member_label.is_none());
+        assert!(result.changes.is_empty());
+        assert!(result.consequences.is_empty());
+    }
 }
 
 #[tokio::test]
@@ -958,7 +989,11 @@ async fn status_invalidates_same_generation_revision_rotation_and_natural_expiry
             port.disclosure_revision.fetch_add(1, Ordering::SeqCst);
         }
         let status = controller
-            .status(account(), port.proposal_ref, CancellationToken::new())
+            .status(
+                account(),
+                port.current_proposal_ref(),
+                CancellationToken::new(),
+            )
             .await
             .expect("stale content-free status");
         assert_eq!(status.state, AgentHouseholdProposalStateV1::Stale);
@@ -976,29 +1011,20 @@ async fn status_rejects_cross_proposal_and_cross_operation_frozen_authority() {
         .prepare(account(), edit_prepare_request(), CancellationToken::new())
         .await
         .expect("prepare proposal A");
-    let other_proposal = AgentHouseholdProposalIdV1::from_uuid(
-        Uuid::parse_str("20000000-0000-4000-8000-000000000002").expect("proposal B"),
-    );
-    let swapped = proposal_port
-        .proposal
-        .lock()
-        .expect("proposal lock")
-        .as_ref()
-        .expect("stored proposal")
-        .prepared_disclosure
-        .bind_to_proposal(other_proposal);
-    *proposal_port
-        .status_frozen_override
-        .lock()
-        .expect("status frozen override lock") = Some(swapped);
-    let error = proposal_controller
-        .status(
-            account(),
-            proposal_port.proposal_ref,
-            CancellationToken::new(),
-        )
+    let proposal_a = proposal_port.current_proposal_ref();
+    proposal_controller
+        .prepare(account(), edit_prepare_request(), CancellationToken::new())
         .await
-        .expect_err("proposal B authority cannot authorize proposal A status");
+        .expect("prepare proposal B");
+    let proposal_b = proposal_port.current_proposal_ref();
+    assert_ne!(proposal_a, proposal_b);
+    proposal_port
+        .status_accepts_any_requested_ref
+        .store(true, Ordering::SeqCst);
+    let error = proposal_controller
+        .status(account(), proposal_a, CancellationToken::new())
+        .await
+        .expect_err("consistent proposal B result cannot authorize proposal A status");
     assert_eq!(error.code, "household_agent_proposal_mismatch");
 
     let operation_port = Arc::new(FixtureHouseholdAgentPort::new());
@@ -1007,14 +1033,7 @@ async fn status_rejects_cross_proposal_and_cross_operation_frozen_authority() {
         .prepare(account(), edit_prepare_request(), CancellationToken::new())
         .await
         .expect("prepare edit");
-    let edit_presentation = operation_port
-        .proposal
-        .lock()
-        .expect("proposal lock")
-        .as_ref()
-        .expect("stored edit")
-        .presentation
-        .clone();
+    let edit_proposal = operation_port.current_proposal_ref();
     let mut archive_request = edit_prepare_request();
     archive_request.operation = AgentHouseholdOperationV1::Archive;
     operation_controller
@@ -1022,20 +1041,12 @@ async fn status_rejects_cross_proposal_and_cross_operation_frozen_authority() {
         .await
         .expect("prepare archive");
     operation_port
-        .proposal
-        .lock()
-        .expect("proposal lock")
-        .as_mut()
-        .expect("stored archive")
-        .presentation = edit_presentation;
+        .status_accepts_any_requested_ref
+        .store(true, Ordering::SeqCst);
     let error = operation_controller
-        .status(
-            account(),
-            operation_port.proposal_ref,
-            CancellationToken::new(),
-        )
+        .status(account(), edit_proposal, CancellationToken::new())
         .await
-        .expect_err("archive authority cannot authorize edit status");
+        .expect_err("consistent archive result cannot authorize edit proposal status");
     assert_eq!(error.code, "household_agent_proposal_mismatch");
 }
 

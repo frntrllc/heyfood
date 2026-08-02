@@ -2496,7 +2496,8 @@ fn phase0_agent_effects_execute_all_five_exact_once_repository_paths() {
     );
     let mut journal = LocalHouseholdProposalJournalV1::new(
         LocalHouseholdProposalAuthorityV1::awaiting_local_input(binding),
-    );
+    )
+    .expect("initial proposal journal");
     let intake_token = journal.cas_token();
     journal
         .freeze_for_review(&intake_token, &current_authority, frozen)
@@ -2526,15 +2527,14 @@ fn phase0_agent_effects_execute_all_five_exact_once_repository_paths() {
         applied.fingerprint,
         add_command.claimed_effect_fingerprint.as_digest()
     );
+    let applied_proof = after_add
+        .applied_household_commit_proof_v1(add_commit_id)
+        .expect("opaque applied-commit proof");
     let mut recovered =
         LocalHouseholdProposalJournalV1::restore(&crash_journal).expect("journal restart");
     let committing_token = recovered.cas_token();
     recovered
-        .reconcile_applied_commit(
-            &committing_token,
-            applied.commit_id,
-            heyfood_core::HouseholdEffectFingerprintV1::from_digest(applied.fingerprint),
-        )
+        .reconcile_applied_commit(&committing_token, &applied_proof)
         .expect("exact reviewed fingerprint reconciles after crash");
     assert_eq!(
         recovered.state(),
