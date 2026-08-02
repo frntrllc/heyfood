@@ -47,7 +47,7 @@
     "schema_version": 2,
     "declaration_schema": {
       "id": "https://hey.food/schemas/v1/agent-household-native-state.schema.json",
-      "sha256": "58bd59a236fb508a5a2287e03c2f821afc75be40e1fe23516258956ee8d01917"
+      "sha256": "aecf2943c137b91f5995dc4355029b41a04a23e5c386655205ab1563d9e15667"
     }
   },
   "limits": {
@@ -142,7 +142,7 @@
     "proposal_presentation": { "id": "https://hey.food/schemas/v1/agent-household-proposal-presentation.schema.json", "sha256": "9488244a01f7aef1b9116cd7c4a77e0fe017ccb6aadd1fe3099dc6b25aecd7ba" },
     "disclosure": { "id": "https://hey.food/schemas/v1/household-agent-disclosure.schema.json", "sha256": "c9acedd06068eba99fdb19c58300a3ed1c86fe023d83d9c78272bd3d8bd7cc36" },
     "local_approval": { "id": "https://hey.food/schemas/v1/local-household-approval-protocol.schema.json", "sha256": "64433ae9a5471308d7dce51c4b43e3f72a5903311953c02e1161c63c3200b5b3" },
-    "native_state": { "id": "https://hey.food/schemas/v1/agent-household-native-state.schema.json", "sha256": "58bd59a236fb508a5a2287e03c2f821afc75be40e1fe23516258956ee8d01917" },
+    "native_state": { "id": "https://hey.food/schemas/v1/agent-household-native-state.schema.json", "sha256": "aecf2943c137b91f5995dc4355029b41a04a23e5c386655205ab1563d9e15667" },
     "operations": ["add", "edit", "archive", "restore", "scope"],
     "agent_confirm_tool": false,
     "permanent_erasure": false

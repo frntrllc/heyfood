@@ -520,11 +520,19 @@ version 2 inside native-state version 3. A v1 bundle derives the evidence root
 once from its authenticated active key during migration; every later rewrite
 and finalization preserves that root independently of the rotating encryption
 key. The same bounded, account-bound document stores content-free evidence
-records for exact proposal/commit reservations. Under the vault lease,
-authoritative absence atomically converts the matching reservation to a deny
-record before an unapplied proof is issued. Every later dispatch of that exact
-commit ID fails closed. If dispatch wins the lease first, absence proof fails
-and reconciliation must consume the applied-commit ledger instead.
+records for exact proposal/commit reservations using only a domain-separated
+proposal-reference hash, commit ID, state, and bounded expiry. A pre-dispatch
+cancel, reject, or expiry releases its exact reservation after authoritative
+absence is rechecked under the vault lease. Applied reservations are retired
+from this auxiliary ledger on the next proposal because the authenticated
+applied-commit ledger remains authoritative. Orphaned and denied records expire
+after at most 30 days and are pruned before capacity is evaluated; the compact
+wire must remain below the credential-broker document ceiling at its maximum
+cardinality. Under the vault lease, authoritative absence atomically converts
+the matching reservation to a deny record before an unapplied proof is issued.
+Until that bounded fence expires, every later dispatch of the exact commit ID
+fails closed. If dispatch wins the lease first, absence proof fails and
+reconciliation must consume the applied-commit ledger instead.
 
 An `awaiting_local_input` record preallocates identities but does not claim a
 final proposal digest or effect fingerprint. Completing local intake validates
@@ -954,6 +962,14 @@ and timestamps for at most 30 days. It contains no label, member reference,
 profile value, account identifier, repository path, or approval content and is
 pruned on startup and before new proposal creation.
 
+The native commit-evidence ledger follows the same 30-day ceiling. It never
+stores the raw proposal reference. Pre-dispatch terminal cleanup removes a
+reservation immediately; crash-orphaned reservations and denied delayed-
+dispatch fences are pruned before later reservation capacity is evaluated;
+and applied reservations are compacted once the authenticated applied-commit
+ledger can replace them. Capacity exhaustion is an explicit fail-closed error,
+never an overwrite of unresolved evidence.
+
 Account replacement and logout invalidate every disclosure grant and proposal,
 destroy intake/session bindings, purge payloads and tombstones with the exact
 account household key/vault teardown, and leave no remote household approval
@@ -1036,6 +1052,9 @@ Exit gate:
   repository reservation must predate dispatch, authoritative absence must
   atomically fence the exact commit before issuing proof, and a proposal-layer
   verifier plus synthesized state cannot replace repository authority;
+- raw proposal references never enter native evidence records; pre-dispatch
+  terminal cleanup, applied-ledger compaction, 30-day orphan/deny pruning,
+  capacity recovery, and maximum-cardinality broker size all pass;
 - local-intake completion, digest/fingerprint freeze, generation advance, and
   transition to review are atomic across crash/cancel/revocation races;
 - the TUI grammar, attached-human checklist, and renderer rules are frozen;

@@ -5,7 +5,11 @@
 //! retains the lifecycle and vault leases in the required order, and delegates
 //! semantic replay/conflict resolution to `heyfood-application`.
 
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use heyfood_application::{
     BoxFuture, HouseholdCommit, HouseholdCommitEvidenceRepositoryPort, HouseholdCommitOutcome,
@@ -147,7 +151,19 @@ impl NativeHouseholdRepository {
             proposal_ref,
             commit_id,
         )?;
-        let replacement = key.reserve_commit_evidence(proposal_ref.as_uuid(), commit_id)?;
+        let now_unix_seconds = commit_evidence_now_unix_seconds()?;
+        let applied_commit_ids = loaded
+            .state
+            .bounded_applied_commits
+            .iter()
+            .map(|record| record.commit_id)
+            .collect::<Vec<_>>();
+        let replacement = key.reserve_commit_evidence(
+            proposal_ref.as_uuid(),
+            commit_id,
+            now_unix_seconds,
+            &applied_commit_ids,
+        )?;
         if replacement != key {
             self.replace_commit_evidence_key_bundle(
                 &mut vault_lease,
@@ -163,6 +179,59 @@ impl NativeHouseholdRepository {
             commit_id,
             &secret,
         ))
+    }
+
+    /// Remove an exact reservation after the durable proposal journal has
+    /// terminally established that dispatch never began. The repository
+    /// rechecks authoritative absence under the same vault lease before
+    /// releasing the content-free record.
+    pub async fn release_undispatched_agent_commit_evidence(
+        &self,
+        binding: &HouseholdCommitEvidenceBindingV1,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+        cancellation: CancellationToken,
+    ) -> Result<(), PortError> {
+        check_cancelled(&cancellation)?;
+        let mut vault_lease = self
+            .acquire_vault_lease(HouseholdVaultLeaseModeV1::RequireExisting, &cancellation)
+            .await?;
+        let (guard, key) = self
+            .reread_guard_and_key(&vault_lease, &cancellation)
+            .await?;
+        let loaded = self
+            .load_committed_under_lease(&mut vault_lease, &guard, &key, cancellation.clone())
+            .await?;
+        let now_unix_seconds = commit_evidence_now_unix_seconds()?;
+        if loaded
+            .state
+            .bounded_applied_commits
+            .iter()
+            .any(|record| record.commit_id == commit_id)
+            || key.commit_evidence_record(proposal_ref.as_uuid(), commit_id, now_unix_seconds)
+                != Some(HouseholdCommitEvidenceStateV1::Reserved)
+        {
+            return Err(commit_evidence_mismatch_error());
+        }
+        let secret = derive_commit_evidence_secret(
+            key.commit_evidence_key(),
+            &self.account,
+            proposal_ref,
+            commit_id,
+        )?;
+        let expected_binding = HouseholdCommitEvidenceBindingV1::from_repository_secret(
+            self.account.clone(),
+            proposal_ref,
+            commit_id,
+            &secret,
+        );
+        if &expected_binding != binding {
+            return Err(commit_evidence_mismatch_error());
+        }
+        let replacement =
+            key.release_reserved_commit(proposal_ref.as_uuid(), commit_id, now_unix_seconds)?;
+        self.replace_commit_evidence_key_bundle(&mut vault_lease, &key, &replacement, cancellation)
+            .await
     }
 
     /// Reopen the authoritative repository and prove that the exact commit is
@@ -185,7 +254,8 @@ impl NativeHouseholdRepository {
         let loaded = self
             .load_committed_under_lease(&mut vault_lease, &guard, &key, cancellation)
             .await?;
-        if key.commit_evidence_record(proposal_ref.as_uuid(), commit_id)
+        let now_unix_seconds = commit_evidence_now_unix_seconds()?;
+        if key.commit_evidence_record(proposal_ref.as_uuid(), commit_id, now_unix_seconds)
             != Some(HouseholdCommitEvidenceStateV1::Reserved)
         {
             return Err(commit_evidence_mismatch_error());
@@ -242,8 +312,9 @@ impl NativeHouseholdRepository {
         let loaded = self
             .load_committed_under_lease(&mut vault_lease, &guard, &key, cancellation.clone())
             .await?;
+        let now_unix_seconds = commit_evidence_now_unix_seconds()?;
         if key
-            .commit_evidence_record(proposal_ref.as_uuid(), commit_id)
+            .commit_evidence_record(proposal_ref.as_uuid(), commit_id, now_unix_seconds)
             .is_none()
         {
             return Err(commit_evidence_mismatch_error());
@@ -270,7 +341,8 @@ impl NativeHouseholdRepository {
         {
             return Err(commit_evidence_mismatch_error());
         }
-        let replacement = key.deny_reserved_commit(proposal_ref.as_uuid(), commit_id)?;
+        let replacement =
+            key.deny_reserved_commit(proposal_ref.as_uuid(), commit_id, now_unix_seconds)?;
         if replacement != key {
             self.replace_commit_evidence_key_bundle(
                 &mut vault_lease,
@@ -1125,7 +1197,7 @@ impl NativeHouseholdRepository {
         let (guard, key) = self
             .reread_guard_and_key(&vault_lease, &cancellation)
             .await?;
-        if key.denies_commit(command.commit_id) {
+        if key.denies_commit(command.commit_id, commit_evidence_now_unix_seconds()?) {
             return Err(PortError::new(
                 "household_commit_permanently_denied",
                 "household commit was permanently denied after authoritative reconciliation",
@@ -1317,6 +1389,24 @@ impl HouseholdCommitEvidenceRepositoryPort for NativeHouseholdRepository {
         ))
     }
 
+    fn release_undispatched_agent_commit_evidence<'a>(
+        &'a self,
+        binding: &'a HouseholdCommitEvidenceBindingV1,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<(), PortError>> {
+        Box::pin(
+            NativeHouseholdRepository::release_undispatched_agent_commit_evidence(
+                self,
+                binding,
+                proposal_ref,
+                commit_id,
+                cancellation,
+            ),
+        )
+    }
+
     fn prove_applied_agent_commit<'a>(
         &'a self,
         binding: &'a HouseholdCommitEvidenceBindingV1,
@@ -1350,6 +1440,18 @@ impl HouseholdCommitEvidenceRepositoryPort for NativeHouseholdRepository {
             cancellation,
         ))
     }
+}
+
+fn commit_evidence_now_unix_seconds() -> Result<u64, PortError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| {
+            PortError::new(
+                "household_commit_evidence_clock",
+                "household commit evidence clock is unavailable",
+            )
+        })
 }
 
 fn require_committed_guard(guard: &HouseholdMigrationGuardDocument) -> Result<(), PortError> {

@@ -1100,6 +1100,50 @@ async fn commit_dispatch_and_unapplied_proof_have_one_linearizable_winner() {
 }
 
 #[tokio::test]
+async fn undispatched_cancellation_releases_reservations_without_capacity_leak() {
+    let prepared = prepare_repository("commit-evidence-release").await;
+    let repository = repository(&prepared, NativeHouseholdModeV1::NativeEnabled);
+    repository
+        .initialize(prepared.command.clone(), CancellationToken::new())
+        .await
+        .expect("initialize repository");
+    let loaded = repository
+        .load(&prepared.account, CancellationToken::new())
+        .await
+        .expect("load repository")
+        .expect("initialized state");
+
+    for _ in 0..80 {
+        let proposal_ref = AgentHouseholdProposalIdV1::new();
+        let commit_id = CommitId::new();
+        let binding = repository
+            .reserve_agent_commit_evidence(proposal_ref, commit_id, CancellationToken::new())
+            .await
+            .expect("reserve pre-dispatch evidence");
+        repository
+            .release_undispatched_agent_commit_evidence(
+                &binding,
+                proposal_ref,
+                commit_id,
+                CancellationToken::new(),
+            )
+            .await
+            .expect("release cancelled pre-dispatch evidence");
+        let released = repository
+            .prove_unapplied_agent_commit(
+                &binding,
+                proposal_ref,
+                commit_id,
+                loaded.state.revision,
+                CancellationToken::new(),
+            )
+            .await
+            .expect_err("released reservation cannot issue a later proof");
+        assert_eq!(released.code, "household_commit_evidence_mismatch");
+    }
+}
+
+#[tokio::test]
 async fn retained_read_lease_blocks_cross_process_style_scope_commits_until_dispatch_releases_it() {
     let prepared = prepare_repository("retained-read-lease").await;
     let repository = repository(&prepared, NativeHouseholdModeV1::NativeEnabled);

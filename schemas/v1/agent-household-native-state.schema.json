@@ -91,6 +91,7 @@
               "upgrade_key_bundle_v1",
               "prove_applied_after_key_rotation",
               "prove_unapplied_and_fence_after_key_rotation",
+              "prune_bounded_evidence",
               "purge_on_account_replacement",
               "preserve_unrelated_state"
             ]

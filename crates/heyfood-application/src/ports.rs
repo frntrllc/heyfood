@@ -264,6 +264,17 @@ pub trait HouseholdCommitEvidenceRepositoryPort: Send + Sync {
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<HouseholdCommitEvidenceBindingV1, PortError>>;
 
+    /// Release an exact reservation only while proposal orchestration still
+    /// proves that dispatch never began. Once dispatch can be uncertain, the
+    /// reservation must be reconciled rather than released.
+    fn release_undispatched_agent_commit_evidence<'a>(
+        &'a self,
+        binding: &'a HouseholdCommitEvidenceBindingV1,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<(), PortError>>;
+
     fn prove_applied_agent_commit<'a>(
         &'a self,
         binding: &'a HouseholdCommitEvidenceBindingV1,

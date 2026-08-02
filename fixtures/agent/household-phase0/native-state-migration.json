@@ -37,6 +37,7 @@
     { "id": "legacy_key_bundle", "expected": "upgrade_key_bundle_v1" },
     { "id": "reserved_commit_then_key_rotation", "expected": "prove_applied_after_key_rotation" },
     { "id": "reserved_absence_then_key_rotation", "expected": "prove_unapplied_and_fence_after_key_rotation" },
+    { "id": "expired_or_terminal_evidence", "expected": "prune_bounded_evidence" },
     { "id": "account_replacement", "expected": "purge_on_account_replacement" },
     { "id": "unrelated_state", "expected": "preserve_unrelated_state" }
   ]
