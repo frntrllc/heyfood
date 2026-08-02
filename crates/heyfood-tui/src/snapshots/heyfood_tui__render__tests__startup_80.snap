@@ -16,7 +16,7 @@ expression: rendered
 │                Scroll history           pgup/pgdn                            │
 │                Quit                        ctrl+d                            │
 │                                                                              │
-│                heyfood 0.7.0 is here!                                        │
+│                heyfood 0.7.1 is here!                                        │
 │                Ask about food, meals, restaurants, or recipes.               │
 │                                                                              │
 │                                                                              │
@@ -25,4 +25,4 @@ expression: rendered
 │ │› Ask about food, a meal, a restaurant, or a recipe…                      │ │
 │ ╰──────────────────────────────────────────────────────── hey.food (ready) ╯ │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-                                                        heyfood  0.7.0 [stable]
+                                                        heyfood  0.7.1 [stable]

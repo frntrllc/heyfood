@@ -7,7 +7,7 @@ body:
     id: version
     attributes:
       label: Installed version
-      placeholder: heyfood 0.7.0
+      placeholder: heyfood 0.7.1
     validations:
       required: true
   - type: dropdown

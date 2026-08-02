@@ -1399,7 +1399,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "heyfood-agent-contract"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "jsonschema",
  "serde",
@@ -1409,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-agent-runtime"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "eventsource-stream",
  "heyfood-application",
@@ -1426,7 +1426,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-agent-setup"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "cap-fs-ext",
  "cap-std",
@@ -1442,7 +1442,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-application"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "heyfood-core",
  "proptest",
@@ -1455,7 +1455,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-bin"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "clap",
  "heyfood-agent-contract",
@@ -1481,7 +1481,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-cli"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1495,7 +1495,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "insta",
  "proptest",
@@ -1511,7 +1511,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-installer"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1519,7 +1519,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-mcp"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "heyfood-agent-contract",
  "heyfood-application",
@@ -1535,7 +1535,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-platform"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "cap-fs-ext",
  "cap-std",
@@ -1563,7 +1563,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-tui"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "crossterm",
  "heyfood-application",
@@ -1579,7 +1579,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-voice"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "cpal",
  "heyfood-application",
@@ -1595,7 +1595,7 @@ dependencies = [
 
 [[package]]
 name = "heyfood-windows-file"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "windows-sys 0.61.2",
 ]
@@ -4787,7 +4787,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "cargo_metadata",
  "serde_json",

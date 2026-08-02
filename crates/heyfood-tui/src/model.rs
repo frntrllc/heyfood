@@ -3545,7 +3545,7 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
     if name == "/health" {
         push_notice(
             model,
-            "Health integrations are deferred from the supported heyfood v0.7.0 contract.",
+            "Health integrations are deferred from the supported heyfood v0.7.1 contract.",
         );
         return Vec::new();
     }
@@ -11339,7 +11339,7 @@ mod tests {
         assert_eq!(model.operation, OperationState::Idle);
         assert_eq!(
             model.scrollback.entries().back().unwrap().text,
-            "Health integrations are deferred from the supported heyfood v0.7.0 contract."
+            "Health integrations are deferred from the supported heyfood v0.7.1 contract."
         );
     }
 

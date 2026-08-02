@@ -9,9 +9,9 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-heyfood-agent-contract = { version = "=0.7.0", path = "../heyfood-agent-contract" }
-heyfood-application = { version = "=0.7.0", path = "../heyfood-application" }
-heyfood-core = { version = "=0.7.0", path = "../heyfood-core" }
+heyfood-agent-contract = { version = "=0.7.1", path = "../heyfood-agent-contract" }
+heyfood-application = { version = "=0.7.1", path = "../heyfood-application" }
+heyfood-core = { version = "=0.7.1", path = "../heyfood-core" }
 jsonschema = { version = "=0.49.2", default-features = false }
 rmcp = { workspace = true, features = ["server"] }
 serde = { workspace = true, features = ["derive", "std"] }

@@ -8,7 +8,7 @@ invocation opens the same native TUI as `heyfood chat`.
 Human rendering may improve between compatible releases; machine-facing changes
 follow the compatibility policy below.
 
-The supported `v0.7.0` contract includes local native household roster
+The supported `v0.7.1` contract includes local native household roster
 management and complete declared-profile onboarding for members. Persistent Me/member/Everyone scope selection
 is stored in an account-bound encrypted repository.
 
@@ -41,10 +41,10 @@ prints a user-specific executable or configuration path.
 Bare `agent`, `agent describe`, and `agent doctor` retain their closed schema-v1
 outputs for compatibility with Agent Skills installed by v0.6.2. The explicit
 `agent describe --schema-version 2` and `agent doctor --schema-version 2`
-forms expose the v0.7.0 native-state-aware contracts. Unsupported schema
+forms expose the v0.7.1 native-state-aware contracts. Unsupported schema
 versions fail during argument parsing before credentials or network access.
 
-Health integrations are deferred from the supported `v0.7.0` contract.
+Health integrations are deferred from the supported `v0.7.1` contract.
 `health` is hidden from root help and generated shell completion, `/health` is
 absent from the TUI command registry, and new grants do not request
 `health:read` or `integrations:manage`. The retained top-level spelling returns
