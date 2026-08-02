@@ -8,9 +8,12 @@ use std::{fmt, sync::Arc};
 
 use heyfood_core::{
     AGENT_HOUSEHOLD_CONTRACT_VERSION, AGENT_HOUSEHOLD_MAX_MEMBERS_PER_PAGE, AccountId,
-    AgentHouseholdOutcomeReceiptV1, AgentHouseholdPrepareRequestV1, AgentHouseholdProjectionV1,
-    AgentHouseholdProposalIdV1, AgentHouseholdProposalPresentationV1,
-    AgentHouseholdProposalStateV1, AgentHouseholdReadRequestV1, AgentHouseholdReadSnapshotV1,
+    AgentDisclosureGrantSetV1, AgentDisclosureGrantSubjectV1, AgentDisclosurePurposeV1,
+    AgentHouseholdOutcomeReceiptV1, AgentHouseholdPrepareRequestKindV1,
+    AgentHouseholdPrepareRequestV1, AgentHouseholdProjectionV1, AgentHouseholdProposalIdV1,
+    AgentHouseholdProposalPresentationV1, AgentHouseholdProposalStateV1,
+    AgentHouseholdReadRequestKindV1, AgentHouseholdReadRequestV1, AgentHouseholdReadResultKindV1,
+    AgentHouseholdReadSnapshotV1, AgentHouseholdSubjectV1, CanonicalDigestV1,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -20,6 +23,38 @@ use crate::{HouseholdAgentPhase0Port, PortError};
 pub struct BoundAgentHouseholdReadV1 {
     pub account: AccountId,
     pub snapshot: AgentHouseholdReadSnapshotV1,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct BoundAgentHouseholdDisclosureV1 {
+    pub account: AccountId,
+    pub grants: AgentDisclosureGrantSetV1,
+}
+
+impl fmt::Debug for BoundAgentHouseholdDisclosureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BoundAgentHouseholdDisclosureV1")
+            .field("grants", &self.grants)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct AuthorizedAgentHouseholdPrepareV1 {
+    pub request: AgentHouseholdPrepareRequestV1,
+    pub maximum_projection: AgentHouseholdProjectionV1,
+    pub disclosure_grant_set_digest: CanonicalDigestV1,
+}
+
+impl fmt::Debug for AuthorizedAgentHouseholdPrepareV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthorizedAgentHouseholdPrepareV1")
+            .field("request", &self.request)
+            .field("maximum_projection", &self.maximum_projection)
+            .finish_non_exhaustive()
+    }
 }
 
 impl fmt::Debug for BoundAgentHouseholdReadV1 {
@@ -46,10 +81,19 @@ impl fmt::Debug for BoundAgentHouseholdProposalV1 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct BoundAgentHouseholdOutcomeReceiptV1 {
     pub account: AccountId,
     pub receipt: AgentHouseholdOutcomeReceiptV1,
+}
+
+impl fmt::Debug for BoundAgentHouseholdOutcomeReceiptV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BoundAgentHouseholdOutcomeReceiptV1")
+            .field("receipt", &self.receipt)
+            .finish_non_exhaustive()
+    }
 }
 
 pub struct HouseholdAgentPhase0Proof {
@@ -69,19 +113,49 @@ impl HouseholdAgentPhase0Proof {
         cancellation: CancellationToken,
     ) -> Result<AgentHouseholdReadSnapshotV1, PortError> {
         check_cancelled(&cancellation)?;
-        if request.limit == 0 || request.limit > AGENT_HOUSEHOLD_MAX_MEMBERS_PER_PAGE {
+        if request.schema_version != AGENT_HOUSEHOLD_CONTRACT_VERSION
+            || request.kind != AgentHouseholdReadRequestKindV1::HouseholdReadRequest
+            || request.limit == 0
+            || request.limit > AGENT_HOUSEHOLD_MAX_MEMBERS_PER_PAGE
+        {
             return Err(phase0_error(
-                "household_agent_read_limit",
-                "household agent read limit is outside the closed contract",
+                "household_agent_read_contract",
+                "household agent read request is outside the closed contract",
             ));
         }
         let result = self
             .port
-            .read(account.clone(), request.clone(), cancellation)
+            .read(account.clone(), request.clone(), cancellation.clone())
             .await?;
         ensure_account(&account, &result.account)?;
-        validate_read(&request, &result.snapshot)?;
-        Ok(result.snapshot)
+        validate_raw_read(&request, &result.snapshot)?;
+        let subjects = disclosure_subjects_for_read(&result.snapshot)?;
+        let disclosure = self
+            .port
+            .disclosure(
+                account.clone(),
+                AgentDisclosurePurposeV1::HouseholdAgentRead,
+                cancellation,
+            )
+            .await?;
+        ensure_account(&account, &disclosure.account)?;
+        validate_disclosure(
+            &account,
+            AgentDisclosurePurposeV1::HouseholdAgentRead,
+            &disclosure.grants,
+        )?;
+        ensure_expected_disclosure_generation(
+            request.expected_disclosure_generation,
+            &disclosure.grants,
+        )?;
+        let allowed = minimum_projection(
+            request.requested_projection,
+            disclosure.grants.maximum_projection_for(&subjects),
+        );
+        let mut snapshot = result.snapshot.filtered_to(allowed);
+        snapshot.disclosure_generation = disclosure.grants.generation();
+        validate_filtered_read(&request, &snapshot)?;
+        Ok(snapshot)
     }
 
     pub async fn prepare(
@@ -91,23 +165,92 @@ impl HouseholdAgentPhase0Proof {
         cancellation: CancellationToken,
     ) -> Result<AgentHouseholdProposalPresentationV1, PortError> {
         check_cancelled(&cancellation)?;
+        if request.schema_version != AGENT_HOUSEHOLD_CONTRACT_VERSION
+            || request.kind != AgentHouseholdPrepareRequestKindV1::PrepareHouseholdChange
+        {
+            return Err(phase0_error(
+                "household_agent_prepare_contract",
+                "household agent prepare request is outside the closed contract",
+            ));
+        }
         request.validate_shape().map_err(|_| {
             phase0_error(
                 "household_agent_operation_shape",
                 "household agent proposal operation shape is invalid",
             )
         })?;
+        let subjects = request
+            .affected_member_ref
+            .clone()
+            .map(AgentDisclosureGrantSubjectV1::Member)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let initial_disclosure = self
+            .port
+            .disclosure(
+                account.clone(),
+                AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
+                cancellation.clone(),
+            )
+            .await?;
+        ensure_account(&account, &initial_disclosure.account)?;
+        validate_disclosure(
+            &account,
+            AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
+            &initial_disclosure.grants,
+        )?;
+        ensure_expected_disclosure_generation(
+            request.expected_disclosure_generation,
+            &initial_disclosure.grants,
+        )?;
+        let maximum_projection = minimum_projection(
+            request.requested_projection,
+            initial_disclosure.grants.maximum_projection_for(&subjects),
+        );
+        let authorized = AuthorizedAgentHouseholdPrepareV1 {
+            request: request.clone(),
+            maximum_projection,
+            disclosure_grant_set_digest: initial_disclosure.grants.revision_set_digest(),
+        };
         let result = self
             .port
-            .prepare(account.clone(), request.clone(), cancellation)
+            .prepare(account.clone(), authorized, cancellation.clone())
             .await?;
         ensure_account(&account, &result.account)?;
-        validate_presentation(
-            &result.presentation,
-            request.requested_projection,
-            Some(request.expected_disclosure_generation),
+        let current_disclosure = self
+            .port
+            .disclosure(
+                account.clone(),
+                AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
+                cancellation,
+            )
+            .await?;
+        ensure_account(&account, &current_disclosure.account)?;
+        validate_disclosure(
+            &account,
+            AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
+            &current_disclosure.grants,
         )?;
-        Ok(result.presentation)
+        let disclosure_changed = current_disclosure.grants.generation()
+            != initial_disclosure.grants.generation()
+            || current_disclosure.grants.revision_set_digest()
+                != initial_disclosure.grants.revision_set_digest();
+        let current_maximum = if disclosure_changed {
+            AgentHouseholdProjectionV1::ContentFree
+        } else {
+            minimum_projection(
+                request.requested_projection,
+                current_disclosure.grants.maximum_projection_for(&subjects),
+            )
+        };
+        let mut presentation = result.presentation.filtered_to(current_maximum);
+        presentation.disclosure_generation = current_disclosure.grants.generation();
+        if disclosure_changed {
+            presentation.state = AgentHouseholdProposalStateV1::Stale;
+            presentation.human_status = presentation.state.human_status().to_owned();
+        }
+        validate_presentation(&presentation, current_maximum, None)?;
+        Ok(presentation)
     }
 
     pub async fn status(
@@ -119,7 +262,7 @@ impl HouseholdAgentPhase0Proof {
         check_cancelled(&cancellation)?;
         let result = self
             .port
-            .status(account.clone(), proposal_ref, cancellation)
+            .status(account.clone(), proposal_ref, cancellation.clone())
             .await?;
         ensure_account(&account, &result.account)?;
         if result.presentation.proposal_ref != proposal_ref {
@@ -128,8 +271,32 @@ impl HouseholdAgentPhase0Proof {
                 "household agent proposal reference changed across status",
             ));
         }
-        validate_presentation(&result.presentation, result.presentation.projection, None)?;
-        Ok(result.presentation)
+        let subjects = result
+            .presentation
+            .affected_member_ref
+            .clone()
+            .map(AgentDisclosureGrantSubjectV1::Member)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let disclosure = self
+            .port
+            .disclosure(
+                account.clone(),
+                AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
+                cancellation,
+            )
+            .await?;
+        ensure_account(&account, &disclosure.account)?;
+        validate_disclosure(
+            &account,
+            AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
+            &disclosure.grants,
+        )?;
+        let maximum = disclosure.grants.maximum_projection_for(&subjects);
+        let mut presentation = result.presentation.filtered_to(maximum);
+        presentation.disclosure_generation = disclosure.grants.generation();
+        validate_presentation(&presentation, maximum, None)?;
+        Ok(presentation)
     }
 
     pub async fn cancel(
@@ -144,11 +311,9 @@ impl HouseholdAgentPhase0Proof {
             .cancel(account.clone(), proposal_ref, cancellation)
             .await?;
         ensure_account(&account, &receipt.account)?;
-        if receipt.receipt.proposal_ref != proposal_ref
-            || receipt.receipt.state != AgentHouseholdProposalStateV1::Cancelled
-            || !receipt.receipt.known_no_household_mutation
-            || receipt.receipt.household_revision_after
-                != Some(receipt.receipt.household_revision_before)
+        if receipt.receipt.proposal_ref() != proposal_ref
+            || receipt.receipt.state() != AgentHouseholdProposalStateV1::Cancelled
+            || !receipt.receipt.is_valid()
         {
             return Err(phase0_error(
                 "household_agent_cancel_unproven",
@@ -159,22 +324,16 @@ impl HouseholdAgentPhase0Proof {
     }
 }
 
-fn validate_read(
+fn validate_raw_read(
     request: &AgentHouseholdReadRequestV1,
     snapshot: &AgentHouseholdReadSnapshotV1,
 ) -> Result<(), PortError> {
     if snapshot.schema_version != AGENT_HOUSEHOLD_CONTRACT_VERSION
-        || snapshot.disclosure_generation != request.expected_disclosure_generation
+        || snapshot.kind != AgentHouseholdReadResultKindV1::HouseholdReadResult
     {
         return Err(phase0_error(
-            "household_agent_read_generation",
-            "household agent read contract or disclosure generation changed",
-        ));
-    }
-    if projection_rank(snapshot.projection) > projection_rank(request.requested_projection) {
-        return Err(phase0_error(
-            "household_agent_projection_escalation",
-            "household agent read exceeded the authorized projection",
+            "household_agent_read_contract",
+            "household agent read result is outside the closed contract",
         ));
     }
     if request.subject.is_none() != snapshot.resolved_from_active_scope {
@@ -184,19 +343,11 @@ fn validate_read(
         ));
     }
     if let Some(subject) = request.subject.as_ref()
-        && subject != &snapshot.resolved_subject
+        && snapshot.resolved_subject.as_ref() != Some(subject)
     {
         return Err(phase0_error(
             "household_agent_subject_resolution",
             "household agent read resolved a different subject",
-        ));
-    }
-    if snapshot.projection == AgentHouseholdProjectionV1::ContentFree
-        && !snapshot.members.is_empty()
-    {
-        return Err(phase0_error(
-            "household_agent_projection_leak",
-            "content-free household projection included member data",
         ));
     }
     if snapshot.members.len() > usize::from(request.limit) {
@@ -208,6 +359,104 @@ fn validate_read(
     Ok(())
 }
 
+fn validate_filtered_read(
+    request: &AgentHouseholdReadRequestV1,
+    snapshot: &AgentHouseholdReadSnapshotV1,
+) -> Result<(), PortError> {
+    if projection_rank(snapshot.projection) > projection_rank(request.requested_projection) {
+        return Err(phase0_error(
+            "household_agent_projection_escalation",
+            "household agent read exceeded the authorized projection",
+        ));
+    }
+    match snapshot.projection {
+        AgentHouseholdProjectionV1::ContentFree
+            if snapshot.resolved_subject.is_some()
+                || snapshot.active_scope.is_some()
+                || !snapshot.members.is_empty()
+                || snapshot.next_cursor.is_some() =>
+        {
+            Err(phase0_error(
+                "household_agent_projection_leak",
+                "content-free household result included identifying data",
+            ))
+        }
+        AgentHouseholdProjectionV1::Roster
+            if snapshot
+                .members
+                .iter()
+                .any(|member| member.minimized_declared_profile.is_some()) =>
+        {
+            Err(phase0_error(
+                "household_agent_projection_leak",
+                "roster-only household result included profile data",
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn disclosure_subjects_for_read(
+    snapshot: &AgentHouseholdReadSnapshotV1,
+) -> Result<Vec<AgentDisclosureGrantSubjectV1>, PortError> {
+    let Some(subject) = snapshot.resolved_subject.as_ref() else {
+        return Ok(Vec::new());
+    };
+    match subject {
+        AgentHouseholdSubjectV1::Self_ => Ok(vec![AgentDisclosureGrantSubjectV1::Self_]),
+        AgentHouseholdSubjectV1::Member(member) => {
+            Ok(vec![AgentDisclosureGrantSubjectV1::Member(member.clone())])
+        }
+        AgentHouseholdSubjectV1::Everyone => {
+            if snapshot.next_cursor.is_some()
+                || usize::from(snapshot.eligible_member_count)
+                    != snapshot.members.len().saturating_add(1)
+            {
+                return Err(phase0_error(
+                    "household_agent_everyone_incomplete",
+                    "everyone disclosure requires the complete eligible roster",
+                ));
+            }
+            let mut subjects = vec![AgentDisclosureGrantSubjectV1::Self_];
+            subjects.extend(
+                snapshot
+                    .members
+                    .iter()
+                    .map(|member| AgentDisclosureGrantSubjectV1::Member(member.member_ref.clone())),
+            );
+            Ok(subjects)
+        }
+    }
+}
+
+fn validate_disclosure(
+    account: &AccountId,
+    purpose: AgentDisclosurePurposeV1,
+    grants: &AgentDisclosureGrantSetV1,
+) -> Result<(), PortError> {
+    if !grants.account_matches(account) || grants.purpose() != purpose {
+        return Err(phase0_error(
+            "household_agent_disclosure_binding",
+            "household disclosure authority is not account and purpose bound",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_expected_disclosure_generation(
+    expected: heyfood_core::GenerationId,
+    grants: &AgentDisclosureGrantSetV1,
+) -> Result<(), PortError> {
+    if grants.generation() == expected {
+        Ok(())
+    } else {
+        Err(phase0_error(
+            "household_agent_disclosure_generation_stale",
+            "household disclosure generation changed; request fresh authority",
+        ))
+    }
+}
+
 fn validate_presentation(
     presentation: &AgentHouseholdProposalPresentationV1,
     maximum_projection: AgentHouseholdProjectionV1,
@@ -215,6 +464,7 @@ fn validate_presentation(
 ) -> Result<(), PortError> {
     if presentation.schema_version != AGENT_HOUSEHOLD_CONTRACT_VERSION
         || expected_generation.is_some_and(|value| value != presentation.disclosure_generation)
+        || !presentation.has_canonical_copy()
     {
         return Err(phase0_error(
             "household_agent_proposal_generation",
@@ -231,20 +481,37 @@ fn validate_presentation(
         AgentHouseholdProjectionV1::ContentFree
             if presentation.affected_member_ref.is_some()
                 || presentation.affected_member_label.is_some()
-                || presentation.profile_change_count.is_some() =>
+                || !presentation.changes.is_empty()
+                || !presentation.consequences.is_empty() =>
         {
             Err(phase0_error(
                 "household_agent_projection_leak",
                 "content-free proposal status included household content",
             ))
         }
-        AgentHouseholdProjectionV1::Roster if presentation.profile_change_count.is_some() => {
+        AgentHouseholdProjectionV1::Roster
+            if presentation
+                .changes
+                .iter()
+                .any(|change| change.field.is_profile()) =>
+        {
             Err(phase0_error(
                 "household_agent_projection_leak",
                 "roster-only proposal status included profile content",
             ))
         }
         _ => Ok(()),
+    }
+}
+
+const fn minimum_projection(
+    requested: AgentHouseholdProjectionV1,
+    allowed: AgentHouseholdProjectionV1,
+) -> AgentHouseholdProjectionV1 {
+    if projection_rank(requested) <= projection_rank(allowed) {
+        requested
+    } else {
+        allowed
     }
 }
 

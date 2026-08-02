@@ -40,6 +40,7 @@ heyfood-platform = { version = "=0.7.1", path = "../heyfood-platform", features 
 
 [dev-dependencies]
 clap = { workspace = true, features = ["derive", "std"] }
+jsonschema = { version = "=0.49.2", default-features = false }
 portable-pty.workspace = true
 ratatui = { workspace = true, features = ["crossterm"] }
 serde_json = { workspace = true, features = ["std"] }

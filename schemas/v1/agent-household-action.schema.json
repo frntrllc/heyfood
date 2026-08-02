@@ -1,12 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://hey.food/schemas/v1/agent-household-action.schema.json",
-  "title": "heyfood agent household action request v1",
-  "description": "Closed non-sensitive prepare/status/cancel/reconcile request contract. No variant can approve or commit.",
-  "oneOf": [
-    { "$ref": "#/$defs/prepare" },
-    { "$ref": "#/$defs/proposal_lookup" }
-  ],
+  "title": "heyfood prepare household change input v1",
+  "description": "Closed prepare-only request contract. It cannot approve or commit.",
+  "$ref": "#/$defs/prepare",
   "$defs": {
     "member_ref": {
       "type": "string",
@@ -104,16 +101,6 @@
           }
         }
       ]
-    },
-    "proposal_lookup": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["schema_version", "kind", "proposal_ref"],
-      "properties": {
-        "schema_version": { "const": 1 },
-        "kind": { "enum": ["get_household_change", "cancel_household_change", "reconcile_household_change"] },
-        "proposal_ref": { "$ref": "#/$defs/proposal_ref" }
-      }
     }
   }
 }

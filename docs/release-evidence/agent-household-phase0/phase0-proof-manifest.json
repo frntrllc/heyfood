@@ -7,8 +7,10 @@
   "public_manifest_changed": false,
   "paths": [
     "account_bound_read",
+    "application_enforced_disclosure_projection",
     "non_mutating_prepare",
     "disclosure_filtered_status",
-    "pre_dispatch_cancel"
+    "pre_dispatch_cancel",
+    "five_effect_exact_once_repository_replay"
   ]
 }

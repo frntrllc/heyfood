@@ -12,7 +12,8 @@
     "grant_surface",
     "data_classes",
     "rules",
-    "scenarios"
+    "scenarios",
+    "adversarial_cases"
   ],
   "properties": {
     "schema_version": { "const": 1 },
@@ -37,6 +38,12 @@
         "minor_profile_disclosure",
         "unknown_age_profile_disclosure",
         "everyone_is_all_or_nothing",
+        "grants_are_per_exact_subject",
+        "everyone_grant_type_exists",
+        "exact_account_binding",
+        "exact_purpose_binding",
+        "exact_revision_set_digest_binding",
+        "authority_age_pairs_enforced",
         "revocation_advances_generation",
         "revocation_cannot_recall_prior_copies"
       ],
@@ -45,6 +52,12 @@
         "minor_profile_disclosure": { "const": false },
         "unknown_age_profile_disclosure": { "const": false },
         "everyone_is_all_or_nothing": { "const": true },
+        "grants_are_per_exact_subject": { "const": true },
+        "everyone_grant_type_exists": { "const": false },
+        "exact_account_binding": { "const": true },
+        "exact_purpose_binding": { "const": true },
+        "exact_revision_set_digest_binding": { "const": true },
+        "authority_age_pairs_enforced": { "const": true },
         "revocation_advances_generation": { "const": true },
         "revocation_cannot_recall_prior_copies": { "const": true }
       }
@@ -79,6 +92,34 @@
               "household_agent_disclosure_revoked"
             ]
           }
+        }
+      }
+    },
+    "adversarial_cases": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "condition", "expected_projection"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,95}$" },
+          "condition": {
+            "enum": [
+              "missing_exact_subject_grant",
+              "minor_profile_with_guardian_authority",
+              "unknown_age_profile_with_guardian_authority",
+              "revoked_grant",
+              "wrong_account",
+              "wrong_purpose",
+              "stale_revision_set",
+              "invalid_authority_age_pair",
+              "partial_everyone_grant_set"
+            ]
+          },
+          "expected_projection": { "const": "content_free" }
         }
       }
     }

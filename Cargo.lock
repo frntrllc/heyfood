@@ -1468,6 +1468,7 @@ dependencies = [
  "heyfood-platform",
  "heyfood-tui",
  "heyfood-voice",
+ "jsonschema",
  "portable-pty",
  "ratatui",
  "serde_json",

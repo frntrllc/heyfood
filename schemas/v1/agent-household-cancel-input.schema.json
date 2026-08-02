@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/agent-household-cancel-input.schema.json",
+  "title": "heyfood cancel household change input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "proposal_ref"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "cancel_household_change" },
+    "proposal_ref": { "type": "string", "format": "uuid" }
+  }
+}

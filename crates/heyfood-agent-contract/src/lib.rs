@@ -1333,8 +1333,18 @@ mod household_phase0_contract_tests {
     }
 
     const READ_SCHEMA: &str = include_str!("../../../schemas/v1/agent-household-read.schema.json");
+    const CONTEXT_INPUT_SCHEMA: &str =
+        include_str!("../../../schemas/v1/agent-household-context-input.schema.json");
+    const MEMBER_INPUT_SCHEMA: &str =
+        include_str!("../../../schemas/v1/agent-household-member-input.schema.json");
     const ACTION_SCHEMA: &str =
         include_str!("../../../schemas/v1/agent-household-action.schema.json");
+    const GET_CHANGE_INPUT_SCHEMA: &str =
+        include_str!("../../../schemas/v1/agent-household-get-change-input.schema.json");
+    const CANCEL_INPUT_SCHEMA: &str =
+        include_str!("../../../schemas/v1/agent-household-cancel-input.schema.json");
+    const RECONCILE_INPUT_SCHEMA: &str =
+        include_str!("../../../schemas/v1/agent-household-reconcile-input.schema.json");
     const PRESENTATION_SCHEMA: &str =
         include_str!("../../../schemas/v1/agent-household-proposal-presentation.schema.json");
     const OUTCOME_SCHEMA: &str =
@@ -1350,8 +1360,10 @@ mod household_phase0_contract_tests {
     const MANIFEST_V3_SCHEMA: &str =
         include_str!("../../../schemas/v3/heyfood-agent-manifest.schema.json");
 
-    const READ_REQUEST: &str =
-        include_str!("../../../fixtures/agent/household-phase0/read-request.json");
+    const CONTEXT_INPUT: &str =
+        include_str!("../../../fixtures/agent/household-phase0/context-input.json");
+    const MEMBER_INPUT: &str =
+        include_str!("../../../fixtures/agent/household-phase0/member-input.json");
     const READ_PROFILE: &str =
         include_str!("../../../fixtures/agent/household-phase0/read-result-profile.json");
     const READ_CONTENT_FREE: &str =
@@ -1360,6 +1372,10 @@ mod household_phase0_contract_tests {
         include_str!("../../../fixtures/agent/household-phase0/prepare-request.json");
     const CANCEL_REQUEST: &str =
         include_str!("../../../fixtures/agent/household-phase0/cancel-request.json");
+    const GET_CHANGE_INPUT: &str =
+        include_str!("../../../fixtures/agent/household-phase0/get-change-input.json");
+    const RECONCILE_INPUT: &str =
+        include_str!("../../../fixtures/agent/household-phase0/reconcile-input.json");
     const PROPOSAL_CONTENT_FREE: &str =
         include_str!("../../../fixtures/agent/household-phase0/proposal-content-free.json");
     const PROPOSAL_ROSTER: &str =
@@ -1394,18 +1410,163 @@ mod household_phase0_contract_tests {
         serde_json::from_str(value).expect("phase0 contract JSON")
     }
 
+    fn complete_manifest_v3_contract() -> Value {
+        let overlay = parse(MANIFEST_V3);
+        assert_eq!(overlay["fixture_kind"], "manifest_v3_additions_overlay");
+        let v2 = manifest_v2();
+        let mut v3 = v2.clone();
+        v3["schema_version"] = serde_json::json!(3);
+        v3["binary_version"] = overlay["binary_version"].clone();
+        v3["build"] = overlay["build"].clone();
+        v3["compatibility"] = overlay["compatibility"].clone();
+        v3["native_state_compatibility"] = overlay["native_state_compatibility"].clone();
+        v3["limits"]["proposal_lifetime_seconds"] = serde_json::json!(600);
+        v3["mcp_inventory"] = overlay["mcp_inventory"].clone();
+        v3["household_contracts"] = overlay["household_contracts"].clone();
+        v3["frozen_compatibility_views"] = overlay["frozen_compatibility_views"].clone();
+
+        let commands = v3["commands"].as_array_mut().expect("v3 commands");
+        for command in commands.iter_mut() {
+            command["input_schema_id"] = Value::Null;
+            command["input_schema_sha256"] = Value::Null;
+            match command["path"].as_str().expect("preserved command path") {
+                "agent" => {
+                    command["output_family"] = Value::from("heyfood_agent_manifest_v3");
+                    command["output_schema_id"] = Value::from(
+                        "https://hey.food/schemas/v3/heyfood-agent-manifest.schema.json",
+                    );
+                    command["output_schema_sha256"] =
+                        Value::from(sha256_hex(MANIFEST_V3_SCHEMA.as_bytes()));
+                }
+                "agent describe" => {
+                    command["purpose"] = Value::from(
+                        "Describe the exact installed agent contract using v3 by default or an explicitly requested frozen compatibility view.",
+                    );
+                    command["output_family"] = Value::from("heyfood_agent_manifest_v1_v2_or_v3");
+                    command["examples"] = serde_json::json!([
+                        "heyfood agent describe",
+                        "heyfood agent describe --schema-version 1",
+                        "heyfood agent describe --schema-version 2",
+                        "heyfood agent describe --schema-version 3"
+                    ]);
+                }
+                "agent doctor" => {
+                    command["purpose"] = Value::from(
+                        "Inspect the local integration using v3 by default or an explicitly requested frozen compatibility view.",
+                    );
+                    command["output_family"] = Value::from("agent_doctor_v1_v2_or_v3");
+                    command["examples"] = serde_json::json!([
+                        "heyfood agent doctor",
+                        "heyfood agent doctor --schema-version 1",
+                        "heyfood agent doctor --schema-version 2",
+                        "heyfood agent doctor --schema-version 3"
+                    ]);
+                }
+                _ => {}
+            }
+        }
+        let base = commands
+            .iter()
+            .find(|command| command["path"] == "agent guide")
+            .expect("local-read command template")
+            .clone();
+        for addition in overlay["command_additions"]
+            .as_array()
+            .expect("command additions")
+        {
+            let path = addition["path"].as_str().expect("future command path");
+            let (purpose, family, example) = match path {
+                "agent compatibility" => (
+                    "Diagnose installed Agent Skill compatibility without network, credentials, or product-state access.",
+                    "heyfood_agent_compatibility_v1",
+                    "heyfood agent compatibility --json --no-input",
+                ),
+                "household show" => (
+                    "Read the locally authorized household context using stable subjects.",
+                    "agent_household_read_result_v1",
+                    "heyfood household show --json --no-input",
+                ),
+                "household member" => (
+                    "Read one locally authorized household member using a stable member reference.",
+                    "agent_household_read_result_v1",
+                    "heyfood household member --member-ref MEMBER_REF --json --no-input",
+                ),
+                other => panic!("unexpected future command {other}"),
+            };
+            let mut command = base.clone();
+            command["path"] = Value::from(path);
+            command["purpose"] = Value::from(purpose);
+            command["input_channel"] = Value::from("arguments");
+            command["input_schema_id"] = addition["input_schema"]["id"].clone();
+            command["input_schema_sha256"] = addition["input_schema"]["sha256"].clone();
+            command["output_family"] = Value::from(family);
+            command["output_schema_id"] = addition["result_schema"]["id"].clone();
+            command["output_schema_sha256"] = addition["result_schema"]["sha256"].clone();
+            command["retry_class"] = Value::from("safe_read");
+            command["examples"] = serde_json::json!([example]);
+            commands.push(command);
+        }
+
+        v3["capabilities"]
+            .as_array_mut()
+            .expect("v3 capabilities")
+            .extend(
+                overlay["capability_additions"]
+                    .as_array()
+                    .expect("capability additions")
+                    .iter()
+                    .cloned(),
+            );
+        let agent_mcp = v3["capabilities"]
+            .as_array_mut()
+            .expect("v3 capabilities")
+            .iter_mut()
+            .find(|capability| capability["id"] == "agent-mcp")
+            .expect("agent MCP capability");
+        agent_mcp["summary"] = Value::from(
+            "Twelve bounded discovery, read, and household preparation/status tools are available over local stdio with native account credentials.",
+        );
+        agent_mcp["contract_version"] = Value::from("v2");
+        v3
+    }
+
     #[test]
     fn closed_phase0_schemas_validate_their_fixtures() {
         let cases = [
             ContractCase {
-                name: "household read",
-                schema: READ_SCHEMA,
-                fixtures: &[READ_REQUEST, READ_PROFILE, READ_CONTENT_FREE],
+                name: "household context input",
+                schema: CONTEXT_INPUT_SCHEMA,
+                fixtures: &[CONTEXT_INPUT],
             },
             ContractCase {
-                name: "household action",
+                name: "household member input",
+                schema: MEMBER_INPUT_SCHEMA,
+                fixtures: &[MEMBER_INPUT],
+            },
+            ContractCase {
+                name: "household read result",
+                schema: READ_SCHEMA,
+                fixtures: &[READ_PROFILE, READ_CONTENT_FREE],
+            },
+            ContractCase {
+                name: "household prepare input",
                 schema: ACTION_SCHEMA,
-                fixtures: &[PREPARE_REQUEST, CANCEL_REQUEST],
+                fixtures: &[PREPARE_REQUEST],
+            },
+            ContractCase {
+                name: "household get-change input",
+                schema: GET_CHANGE_INPUT_SCHEMA,
+                fixtures: &[GET_CHANGE_INPUT],
+            },
+            ContractCase {
+                name: "household cancel input",
+                schema: CANCEL_INPUT_SCHEMA,
+                fixtures: &[CANCEL_REQUEST],
+            },
+            ContractCase {
+                name: "household reconcile input",
+                schema: RECONCILE_INPUT_SCHEMA,
+                fixtures: &[RECONCILE_INPUT],
             },
             ContractCase {
                 name: "proposal presentation",
@@ -1437,11 +1598,6 @@ mod household_phase0_contract_tests {
                 schema: NATIVE_STATE_SCHEMA,
                 fixtures: &[NATIVE_STATE],
             },
-            ContractCase {
-                name: "manifest v3",
-                schema: MANIFEST_V3_SCHEMA,
-                fixtures: &[MANIFEST_V3],
-            },
         ];
 
         for case in cases {
@@ -1454,6 +1610,11 @@ mod household_phase0_contract_tests {
                     .unwrap_or_else(|error| panic!("{} fixture: {error}", case.name));
             }
         }
+        let schema = parse(MANIFEST_V3_SCHEMA);
+        jsonschema::draft202012::meta::validate(&schema)
+            .unwrap_or_else(|error| panic!("manifest v3 meta-schema: {error}"));
+        jsonschema::draft202012::validate(&schema, &complete_manifest_v3_contract())
+            .unwrap_or_else(|error| panic!("complete manifest v3: {error}"));
     }
 
     #[test]
@@ -1479,7 +1640,7 @@ mod household_phase0_contract_tests {
                 value
             },
             {
-                let mut value = parse(CANCEL_REQUEST);
+                let mut value = valid.clone();
                 value["kind"] = serde_json::json!("confirm_household_change");
                 value
             },
@@ -1493,14 +1654,169 @@ mod household_phase0_contract_tests {
     }
 
     #[test]
+    fn every_household_surface_rejects_other_surface_inputs_and_results() {
+        let surfaces = [
+            (CONTEXT_INPUT_SCHEMA, CONTEXT_INPUT),
+            (MEMBER_INPUT_SCHEMA, MEMBER_INPUT),
+            (ACTION_SCHEMA, PREPARE_REQUEST),
+            (GET_CHANGE_INPUT_SCHEMA, GET_CHANGE_INPUT),
+            (CANCEL_INPUT_SCHEMA, CANCEL_REQUEST),
+            (RECONCILE_INPUT_SCHEMA, RECONCILE_INPUT),
+        ];
+        for (index, (schema_source, own_fixture)) in surfaces.iter().enumerate() {
+            let schema = parse(schema_source);
+            jsonschema::draft202012::validate(&schema, &parse(own_fixture))
+                .expect("own surface fixture");
+            for (other_index, (_, other_fixture)) in surfaces.iter().enumerate() {
+                if index != other_index {
+                    assert!(
+                        jsonschema::draft202012::validate(&schema, &parse(other_fixture)).is_err(),
+                        "surface {index} accepted input for surface {other_index}"
+                    );
+                }
+            }
+            for output in [READ_PROFILE, PROPOSAL_PROFILE, CANCEL_OUTCOME] {
+                assert!(jsonschema::draft202012::validate(&schema, &parse(output)).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn compatibility_success_requires_verified_identity_range_and_exact_host_remediation() {
+        let schema = parse(COMPATIBILITY_SCHEMA);
+        let known = parse(COMPATIBILITY_KNOWN);
+        let unknown = parse(COMPATIBILITY_UNKNOWN);
+        for invalid in [
+            {
+                let mut value = unknown.clone();
+                value["compatible"] = Value::Bool(true);
+                value
+            },
+            {
+                let mut value = known.clone();
+                value["installations"][0]["receipt_state"] = serde_json::json!("missing");
+                value
+            },
+            {
+                let mut value = known.clone();
+                value["installations"][0]["skill_sha256"] = Value::Null;
+                value
+            },
+            {
+                let mut value = known.clone();
+                value["installations"][0]["supported_manifest_maximum"] = Value::Null;
+                value
+            },
+            {
+                let mut value = known.clone();
+                value["installations"][0]["remediation"]["arguments"][3] =
+                    serde_json::json!("openclaw");
+                value
+            },
+            {
+                let mut value = known.clone();
+                value["compatible"] = Value::Bool(false);
+                value
+            },
+        ] {
+            assert!(
+                jsonschema::draft202012::validate(&schema, &invalid).is_err(),
+                "contradictory compatibility result was accepted: {}",
+                canonical_json(&invalid)
+            );
+        }
+    }
+
+    #[test]
     fn phase0_keeps_v1_v2_and_public_routes_frozen() {
         let v1 = manifest();
         let v2 = manifest_v2();
+        let v3 = complete_manifest_v3_contract();
         assert_eq!(v1["schema_version"], 1);
         assert_eq!(v2["schema_version"], 2);
         assert_eq!(v1["commands"].as_array().map(Vec::len), Some(30));
         assert_eq!(v2["commands"].as_array().map(Vec::len), Some(30));
         assert_eq!(PUBLIC_SCHEMAS.len(), 11);
+
+        let v2_commands = v2["commands"].as_array().expect("v2 commands");
+        let v3_commands = v3["commands"].as_array().expect("v3 commands");
+        assert_eq!(v3_commands.len(), 33);
+        for (legacy, successor) in v2_commands.iter().zip(v3_commands.iter()) {
+            let mut successor = successor.clone();
+            successor
+                .as_object_mut()
+                .expect("successor command")
+                .remove("input_schema_id");
+            successor
+                .as_object_mut()
+                .expect("successor command")
+                .remove("input_schema_sha256");
+            let path = legacy["path"].as_str().expect("legacy path");
+            if matches!(path, "agent" | "agent describe" | "agent doctor") {
+                let mut legacy = legacy.clone();
+                for field in [
+                    "purpose",
+                    "output_family",
+                    "output_schema_id",
+                    "output_schema_sha256",
+                    "examples",
+                ] {
+                    successor
+                        .as_object_mut()
+                        .expect("successor command")
+                        .remove(field);
+                    legacy
+                        .as_object_mut()
+                        .expect("legacy command")
+                        .remove(field);
+                }
+                assert_eq!(
+                    successor, legacy,
+                    "v3 changed a non-descriptive command field"
+                );
+            } else {
+                assert_eq!(&successor, legacy, "v3 changed a preserved command row");
+            }
+        }
+        let v2_capabilities = v2["capabilities"].as_array().expect("v2 capabilities");
+        let v3_capabilities = v3["capabilities"].as_array().expect("v3 capabilities");
+        for (legacy, successor) in v2_capabilities.iter().zip(v3_capabilities.iter()) {
+            if legacy["id"] == "agent-mcp" {
+                let mut legacy = legacy.clone();
+                let mut successor = successor.clone();
+                for field in ["summary", "contract_version"] {
+                    legacy
+                        .as_object_mut()
+                        .expect("legacy capability")
+                        .remove(field);
+                    successor
+                        .as_object_mut()
+                        .expect("successor capability")
+                        .remove(field);
+                }
+                assert_eq!(successor, legacy);
+            } else {
+                assert_eq!(successor, legacy);
+            }
+        }
+        let v2_paths = v2_commands
+            .iter()
+            .map(|command| command["path"].as_str().expect("v2 path"))
+            .collect::<BTreeSet<_>>();
+        let v3_paths = v3_commands
+            .iter()
+            .map(|command| command["path"].as_str().expect("v3 path"))
+            .collect::<BTreeSet<_>>();
+        let expected_paths = v2_paths
+            .into_iter()
+            .chain(["agent compatibility", "household show", "household member"])
+            .collect::<BTreeSet<_>>();
+        assert_eq!(v3_paths, expected_paths);
+        assert_eq!(v3["capabilities"].as_array().map(Vec::len), Some(11));
+        assert_eq!(
+            v3["mcp_inventory"]["tools"].as_array().map(Vec::len),
+            Some(12)
+        );
 
         for encoded in [canonical_json(&v1), canonical_json(&v2)] {
             for forbidden in [
@@ -1560,20 +1876,40 @@ mod household_phase0_contract_tests {
     fn matrix_and_policy_fixtures_freeze_the_phase0_boundary() {
         for (schema, expected) in [
             (
+                CONTEXT_INPUT_SCHEMA,
+                "e832c0e64e13bf3d91e59a339d795c03b1c9b45f5b2e4d6f03fe00d8dbaf8342",
+            ),
+            (
+                MEMBER_INPUT_SCHEMA,
+                "c9f4d347345f9dad7d308ad0c14a42abd4287a79156f43a42b5dbef2a058ecc8",
+            ),
+            (
                 READ_SCHEMA,
-                "b70db3f02dc3c68333bbf79c3ff92c415715d5ce7d07a99af445adefced4e8e2",
+                "9ab5a881284a18ca73346dbb5bacefb155230e8931eea87698bda722e0759618",
             ),
             (
                 ACTION_SCHEMA,
-                "e8f717da7b16102483c72fa79f001487284c7fca939867c6dd869ec9376550b2",
+                "eeec44e7cbb790c7de66e86821371e0c287b7b2b59597f140194b548eb0ca55b",
+            ),
+            (
+                GET_CHANGE_INPUT_SCHEMA,
+                "28601c8d46c80e440523d50632b307bf9710243fd33185cd7169731d5c8c7da4",
+            ),
+            (
+                CANCEL_INPUT_SCHEMA,
+                "6470d8f6ca6b97c01c080f9138bb43e920181eebd971db003dd2e507b3ba21be",
+            ),
+            (
+                RECONCILE_INPUT_SCHEMA,
+                "9d6caa7514e1308db3ce7b2f318c6b69eb03d504def7626b9e048f0c72c6b008",
             ),
             (
                 PRESENTATION_SCHEMA,
-                "8d308f78910d3f822bd14f3bf3da3b10ff08c66399277e0bdd973695e8c8b25a",
+                "6c43b331da204d413ba79399df6a5ae4ffc8e42829d8a4937cf2f093caf77189",
             ),
             (
                 OUTCOME_SCHEMA,
-                "5a41f2021d3be5a030250d3695ff1e8b4625e7596ea351b1870f0f6d25355582",
+                "64df217e4ba7e1563df3b70da97c6c4a21c3ecbcdc03659da431440db0d9ddb0",
             ),
             (
                 LOCAL_APPROVAL_SCHEMA,
@@ -1581,11 +1917,11 @@ mod household_phase0_contract_tests {
             ),
             (
                 DISCLOSURE_SCHEMA,
-                "43b2c08ffb58ce97d2fc80dbd483715ae3172c1a9c2a375df1563bfc5f34bb2b",
+                "c9acedd06068eba99fdb19c58300a3ed1c86fe023d83d9c78272bd3d8bd7cc36",
             ),
             (
                 COMPATIBILITY_SCHEMA,
-                "8011a2a51300ea6f10d12b24f537e8fa47b28cd48a793f9158f6775154d900d9",
+                "c2fccf908a221fdce96131fbf675705b2a222a26d64cfe954d4c177785b2ae97",
             ),
             (
                 NATIVE_STATE_SCHEMA,
@@ -1593,7 +1929,7 @@ mod household_phase0_contract_tests {
             ),
             (
                 MANIFEST_V3_SCHEMA,
-                "d72d3aec9ac7923f2198567fe25109da2a2c3c24373918222bf6e53a9486933b",
+                "0f9f078b541c34cd0159cd90390b44643e26f4a5961776e854a265edef048d2b",
             ),
         ] {
             assert_eq!(sha256_hex(schema.as_bytes()), expected);
@@ -1629,6 +1965,26 @@ mod household_phase0_contract_tests {
         assert_eq!(tui["help_completion_registry_must_match"], true);
 
         let ledger = parse(APPLIED_COMMIT_PROOF);
+        assert_eq!(
+            ledger["executable_repository_test"]["name"],
+            "phase0_agent_effects_execute_all_five_exact_once_repository_paths"
+        );
+        assert_eq!(
+            ledger["executable_repository_test"]["resolves_before_persistence"],
+            true
+        );
+        assert_eq!(
+            ledger["executable_repository_test"]["co_committed_ledger_readback"],
+            true
+        );
+        assert_eq!(
+            ledger["executable_repository_test"]["exact_replay_after_persistence"],
+            true
+        );
+        assert_eq!(
+            ledger["executable_repository_test"]["conflicting_fingerprint_rejected"],
+            true
+        );
         assert_eq!(ledger["operations"].as_array().map(Vec::len), Some(5));
         assert!(
             ledger["operations"]

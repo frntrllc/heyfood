@@ -44,31 +44,41 @@
       "enum": ["none", "open_attached_tui", "observe_status", "reconcile", "prepare_fresh"]
     }
   },
-  "allOf": [
+  "oneOf": [
     {
-      "if": {
-        "properties": { "known_no_household_mutation": { "const": true } },
-        "required": ["known_no_household_mutation"]
-      },
-      "then": {
-        "properties": {
-          "state": { "enum": ["cancelled", "expired", "stale", "rejected", "proven_uncommitted"] },
-          "household_revision_after": { "type": "integer", "minimum": 1 }
-        }
+      "properties": {
+        "state": { "const": "committed" },
+        "household_revision_after": { "type": "integer", "minimum": 1 },
+        "known_no_household_mutation": { "const": false },
+        "retry_class": { "const": "not_applicable" },
+        "next_action": { "const": "none" }
       }
     },
     {
-      "if": {
-        "properties": { "state": { "const": "reconciliation_required" } },
-        "required": ["state"]
-      },
-      "then": {
-        "properties": {
-          "household_revision_after": { "type": "null" },
-          "known_no_household_mutation": { "const": false },
-          "retry_class": { "const": "reconcile_before_retry" },
-          "next_action": { "const": "reconcile" }
-        }
+      "properties": {
+        "state": { "const": "cancelled" },
+        "household_revision_after": { "type": "integer", "minimum": 1 },
+        "known_no_household_mutation": { "const": true },
+        "retry_class": { "const": "not_applicable" },
+        "next_action": { "const": "none" }
+      }
+    },
+    {
+      "properties": {
+        "state": { "enum": ["expired", "stale", "rejected", "proven_uncommitted"] },
+        "household_revision_after": { "type": "integer", "minimum": 1 },
+        "known_no_household_mutation": { "const": true },
+        "retry_class": { "const": "not_applicable" },
+        "next_action": { "const": "prepare_fresh" }
+      }
+    },
+    {
+      "properties": {
+        "state": { "const": "reconciliation_required" },
+        "household_revision_after": { "type": "null" },
+        "known_no_household_mutation": { "const": false },
+        "retry_class": { "const": "reconcile_before_retry" },
+        "next_action": { "const": "reconcile" }
       }
     }
   ]

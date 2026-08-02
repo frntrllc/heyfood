@@ -6,13 +6,14 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use unicode_width::UnicodeWidthChar;
 use uuid::Uuid;
 
 use crate::{
     AccountId, CanonicalDigestV1, CanonicalTimestampV1, CommitId, DisplayName, GenerationId,
-    HouseholdEffectFingerprintV1, HouseholdRevision, HouseholdScope, MemberId, MinorStatusV1,
-    ProfileRevision,
+    HouseholdEffectFingerprintV1, HouseholdLifecycleV1, HouseholdProfileStateV1, HouseholdRevision,
+    HouseholdScope, MemberId, MinorStatusV1, ProfileRevision, RelationshipV1,
 };
 
 pub const AGENT_HOUSEHOLD_CONTRACT_VERSION: u16 = 1;
@@ -89,19 +90,68 @@ pub enum AgentDisclosureGrantingAuthorityV1 {
     AuthorizedGuardianRosterOnly,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum AgentDisclosurePurposeV1 {
+    HouseholdAgentRead,
+    HouseholdAgentProposalStatus,
+}
+
+/// A disclosure grant is always scoped to one exact person. `Everyone` is a
+/// request-time aggregation that must prove a grant for every included person.
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+pub enum AgentDisclosureGrantSubjectV1 {
+    Self_,
+    Member(MemberId),
+}
+
+impl fmt::Debug for AgentDisclosureGrantSubjectV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Self_ => formatter.write_str("AgentDisclosureGrantSubjectV1::Self_"),
+            Self::Member(_) => {
+                formatter.write_str("AgentDisclosureGrantSubjectV1::Member([REDACTED])")
+            }
+        }
+    }
+}
+
+impl AgentDisclosureGrantSubjectV1 {
+    #[must_use]
+    pub fn from_agent_subject(subject: &AgentHouseholdSubjectV1) -> Option<Self> {
+        match subject {
+            AgentHouseholdSubjectV1::Self_ => Some(Self::Self_),
+            AgentHouseholdSubjectV1::Member(member) => Some(Self::Member(member.clone())),
+            AgentHouseholdSubjectV1::Everyone => None,
+        }
+    }
+
+    fn digest_bytes(&self) -> Vec<u8> {
+        match self {
+            Self::Self_ => b"self".to_vec(),
+            Self::Member(member) => {
+                let mut bytes = b"member\0".to_vec();
+                bytes.extend_from_slice(member.as_str().as_bytes());
+                bytes
+            }
+        }
+    }
+}
+
 /// Encrypted local authority record. It is intentionally not serializable:
 /// account binding and grant authority never become an agent result.
 #[derive(Clone, Eq, PartialEq)]
 pub struct AgentDisclosureGrantV1 {
-    pub account: AccountId,
-    pub subject: AgentHouseholdSubjectV1,
-    pub subject_minor_status: MinorStatusV1,
-    pub data_classes: Vec<AgentDisclosureDataClassV1>,
-    pub granting_authority: AgentDisclosureGrantingAuthorityV1,
-    pub revision: u64,
-    pub generation: GenerationId,
-    pub state: AgentDisclosureGrantStateV1,
-    pub expires_at: Option<CanonicalTimestampV1>,
+    account: AccountId,
+    subject: AgentDisclosureGrantSubjectV1,
+    subject_minor_status: MinorStatusV1,
+    data_classes: Vec<AgentDisclosureDataClassV1>,
+    purpose: AgentDisclosurePurposeV1,
+    granting_authority: AgentDisclosureGrantingAuthorityV1,
+    revision: u64,
+    generation: GenerationId,
+    state: AgentDisclosureGrantStateV1,
+    issued_at: CanonicalTimestampV1,
+    expires_at: Option<CanonicalTimestampV1>,
 }
 
 impl fmt::Debug for AgentDisclosureGrantV1 {
@@ -110,6 +160,7 @@ impl fmt::Debug for AgentDisclosureGrantV1 {
             .debug_struct("AgentDisclosureGrantV1")
             .field("subject_minor_status", &self.subject_minor_status)
             .field("data_classes", &self.data_classes)
+            .field("purpose", &self.purpose)
             .field("granting_authority", &self.granting_authority)
             .field("revision", &self.revision)
             .field("generation", &self.generation)
@@ -120,18 +171,85 @@ impl fmt::Debug for AgentDisclosureGrantV1 {
 }
 
 impl AgentDisclosureGrantV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        account: AccountId,
+        subject: AgentDisclosureGrantSubjectV1,
+        subject_minor_status: MinorStatusV1,
+        data_classes: Vec<AgentDisclosureDataClassV1>,
+        purpose: AgentDisclosurePurposeV1,
+        granting_authority: AgentDisclosureGrantingAuthorityV1,
+        revision: u64,
+        generation: GenerationId,
+        state: AgentDisclosureGrantStateV1,
+        issued_at: CanonicalTimestampV1,
+        expires_at: Option<CanonicalTimestampV1>,
+    ) -> Result<Self, AgentHouseholdContractErrorV1> {
+        let valid_classes = matches!(
+            data_classes.as_slice(),
+            [AgentDisclosureDataClassV1::Roster]
+                | [
+                    AgentDisclosureDataClassV1::Roster,
+                    AgentDisclosureDataClassV1::MinimizedDeclaredProfile
+                ]
+        );
+        let valid_authority = match granting_authority {
+            AgentDisclosureGrantingAuthorityV1::AccountOwnerAdultAuthorization => {
+                subject_minor_status == MinorStatusV1::Adult
+            }
+            AgentDisclosureGrantingAuthorityV1::AuthorizedGuardianRosterOnly => {
+                subject_minor_status != MinorStatusV1::Adult
+                    && data_classes.as_slice() == [AgentDisclosureDataClassV1::Roster]
+            }
+        };
+        if revision == 0
+            || !valid_classes
+            || !valid_authority
+            || expires_at
+                .as_ref()
+                .is_some_and(|expiry| expiry <= &issued_at)
+        {
+            return Err(AgentHouseholdContractErrorV1::InvalidDisclosureGrant);
+        }
+        Ok(Self {
+            account,
+            subject,
+            subject_minor_status,
+            data_classes,
+            purpose,
+            granting_authority,
+            revision,
+            generation,
+            state,
+            issued_at,
+            expires_at,
+        })
+    }
+
+    #[must_use]
+    pub fn subject(&self) -> &AgentDisclosureGrantSubjectV1 {
+        &self.subject
+    }
+
+    #[must_use]
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
     #[must_use]
     pub fn permits_for(
         &self,
         account: &AccountId,
-        subject: &AgentHouseholdSubjectV1,
+        subject: &AgentDisclosureGrantSubjectV1,
         generation: GenerationId,
+        purpose: AgentDisclosurePurposeV1,
         data_class: AgentDisclosureDataClassV1,
         observed_at: &CanonicalTimestampV1,
     ) -> bool {
         if &self.account != account
             || &self.subject != subject
             || self.generation != generation
+            || self.purpose != purpose
             || self.state != AgentDisclosureGrantStateV1::Active
             || self.revision == 0
             || self
@@ -153,6 +271,121 @@ impl AgentDisclosureGrantV1 {
                 || self
                     .data_classes
                     .contains(&AgentDisclosureDataClassV1::Roster))
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct AgentDisclosureGrantSetV1 {
+    account: AccountId,
+    generation: GenerationId,
+    purpose: AgentDisclosurePurposeV1,
+    observed_at: CanonicalTimestampV1,
+    grants: Vec<AgentDisclosureGrantV1>,
+    revision_set_digest: CanonicalDigestV1,
+}
+
+impl fmt::Debug for AgentDisclosureGrantSetV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AgentDisclosureGrantSetV1")
+            .field("generation", &self.generation)
+            .field("purpose", &self.purpose)
+            .field("grant_count", &self.grants.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl AgentDisclosureGrantSetV1 {
+    pub fn new(
+        account: AccountId,
+        generation: GenerationId,
+        purpose: AgentDisclosurePurposeV1,
+        observed_at: CanonicalTimestampV1,
+        mut grants: Vec<AgentDisclosureGrantV1>,
+    ) -> Result<Self, AgentHouseholdContractErrorV1> {
+        grants.sort_by(|left, right| left.subject.cmp(&right.subject));
+        if grants
+            .windows(2)
+            .any(|pair| pair[0].subject == pair[1].subject)
+            || grants.iter().any(|grant| {
+                grant.account != account
+                    || grant.generation != generation
+                    || grant.purpose != purpose
+            })
+        {
+            return Err(AgentHouseholdContractErrorV1::InvalidDisclosureGrantSet);
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(b"heyfood.agent.disclosure.revision-set.v1\0");
+        hasher.update(generation.get().to_be_bytes());
+        hasher.update([purpose as u8]);
+        for grant in &grants {
+            let subject = grant.subject.digest_bytes();
+            hasher.update((subject.len() as u64).to_be_bytes());
+            hasher.update(subject);
+            hasher.update(grant.revision.to_be_bytes());
+        }
+        let revision_set_digest = CanonicalDigestV1::from_bytes(hasher.finalize().into());
+        Ok(Self {
+            account,
+            generation,
+            purpose,
+            observed_at,
+            grants,
+            revision_set_digest,
+        })
+    }
+
+    #[must_use]
+    pub const fn generation(&self) -> GenerationId {
+        self.generation
+    }
+
+    #[must_use]
+    pub const fn purpose(&self) -> AgentDisclosurePurposeV1 {
+        self.purpose
+    }
+
+    #[must_use]
+    pub const fn revision_set_digest(&self) -> CanonicalDigestV1 {
+        self.revision_set_digest
+    }
+
+    #[must_use]
+    pub fn account_matches(&self, account: &AccountId) -> bool {
+        &self.account == account
+    }
+
+    #[must_use]
+    pub fn maximum_projection_for(
+        &self,
+        subjects: &[AgentDisclosureGrantSubjectV1],
+    ) -> AgentHouseholdProjectionV1 {
+        if subjects.is_empty() {
+            return AgentHouseholdProjectionV1::ContentFree;
+        }
+        let permits_every = |data_class| {
+            subjects.iter().all(|subject| {
+                self.grants.iter().any(|grant| {
+                    grant.subject == *subject
+                        && grant.permits_for(
+                            &self.account,
+                            subject,
+                            self.generation,
+                            self.purpose,
+                            data_class,
+                            &self.observed_at,
+                        )
+                })
+            })
+        };
+        if permits_every(AgentDisclosureDataClassV1::MinimizedDeclaredProfile) {
+            AgentHouseholdProjectionV1::Profile
+        } else if permits_every(AgentDisclosureDataClassV1::Roster) {
+            AgentHouseholdProjectionV1::Roster
+        } else {
+            AgentHouseholdProjectionV1::ContentFree
+        }
     }
 }
 
@@ -241,17 +474,49 @@ impl AgentHouseholdProposalStateV1 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentHouseholdMemberProjectionV1 {
-    pub member_ref: MemberId,
-    pub display_label: DisplayName,
-    pub profile_revision: Option<ProfileRevision>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHouseholdReadRequestKindV1 {
+    HouseholdReadRequest,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHouseholdReadResultKindV1 {
+    HouseholdReadResult,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHouseholdPrepareRequestKindV1 {
+    PrepareHouseholdChange,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHouseholdContextInputKindV1 {
+    GetHouseholdContext,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHouseholdMemberInputKindV1 {
+    GetHouseholdMember,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHouseholdProposalRefInputKindV1 {
+    GetHouseholdChange,
+    CancelHouseholdChange,
+    ReconcileHouseholdChange,
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AgentHouseholdReadRequestV1 {
+pub struct AgentHouseholdContextInputV1 {
+    pub schema_version: u16,
+    pub kind: AgentHouseholdContextInputKindV1,
     pub subject: Option<AgentHouseholdSubjectV1>,
     pub requested_projection: AgentHouseholdProjectionV1,
     pub expected_disclosure_generation: GenerationId,
@@ -259,14 +524,197 @@ pub struct AgentHouseholdReadRequestV1 {
     pub limit: u16,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+impl fmt::Debug for AgentHouseholdContextInputV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AgentHouseholdContextInputV1")
+            .field("schema_version", &self.schema_version)
+            .field("kind", &self.kind)
+            .field(
+                "subject_kind",
+                &self.subject.as_ref().map(agent_subject_kind),
+            )
+            .field("requested_projection", &self.requested_projection)
+            .field(
+                "expected_disclosure_generation",
+                &self.expected_disclosure_generation,
+            )
+            .field("has_cursor", &self.cursor.is_some())
+            .field("limit", &self.limit)
+            .finish()
+    }
+}
+
+impl AgentHouseholdContextInputV1 {
+    #[must_use]
+    pub fn into_request(self) -> AgentHouseholdReadRequestV1 {
+        AgentHouseholdReadRequestV1 {
+            schema_version: self.schema_version,
+            kind: AgentHouseholdReadRequestKindV1::HouseholdReadRequest,
+            subject: self.subject,
+            requested_projection: self.requested_projection,
+            expected_disclosure_generation: self.expected_disclosure_generation,
+            cursor: self.cursor,
+            limit: self.limit,
+        }
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentHouseholdMemberInputV1 {
+    pub schema_version: u16,
+    pub kind: AgentHouseholdMemberInputKindV1,
+    pub member_ref: MemberId,
+    pub requested_projection: AgentHouseholdProjectionV1,
+    pub expected_disclosure_generation: GenerationId,
+}
+
+impl fmt::Debug for AgentHouseholdMemberInputV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AgentHouseholdMemberInputV1")
+            .field("schema_version", &self.schema_version)
+            .field("kind", &self.kind)
+            .field("requested_projection", &self.requested_projection)
+            .field(
+                "expected_disclosure_generation",
+                &self.expected_disclosure_generation,
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl AgentHouseholdMemberInputV1 {
+    #[must_use]
+    pub fn into_request(self) -> AgentHouseholdReadRequestV1 {
+        AgentHouseholdReadRequestV1 {
+            schema_version: self.schema_version,
+            kind: AgentHouseholdReadRequestKindV1::HouseholdReadRequest,
+            subject: Some(AgentHouseholdSubjectV1::Member(self.member_ref)),
+            requested_projection: self.requested_projection,
+            expected_disclosure_generation: self.expected_disclosure_generation,
+            cursor: None,
+            limit: 1,
+        }
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentHouseholdProposalRefInputV1 {
+    pub schema_version: u16,
+    pub kind: AgentHouseholdProposalRefInputKindV1,
+    pub proposal_ref: AgentHouseholdProposalIdV1,
+}
+
+impl fmt::Debug for AgentHouseholdProposalRefInputV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AgentHouseholdProposalRefInputV1")
+            .field("schema_version", &self.schema_version)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentHouseholdMemberProjectionV1 {
+    pub member_ref: MemberId,
+    pub display_label: DisplayName,
+    pub relationship: RelationshipV1,
+    pub lifecycle: HouseholdLifecycleV1,
+    pub profile_state: HouseholdProfileStateV1,
+    pub profile_schema_version: Option<u16>,
+    pub profile_revision: Option<ProfileRevision>,
+    pub profile_complete: bool,
+    pub minimized_declared_profile: Option<AgentMinimizedDeclaredProfileV1>,
+}
+
+impl fmt::Debug for AgentHouseholdMemberProjectionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AgentHouseholdMemberProjectionV1")
+            .field("relationship", &self.relationship)
+            .field("lifecycle", &self.lifecycle)
+            .field("profile_state", &self.profile_state)
+            .field("profile_schema_version", &self.profile_schema_version)
+            .field("profile_revision", &self.profile_revision)
+            .field("profile_complete", &self.profile_complete)
+            .field(
+                "has_minimized_declared_profile",
+                &self.minimized_declared_profile.is_some(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentMinimizedDeclaredProfileV1 {
+    pub diet_styles: Vec<String>,
+    pub allergies: Vec<String>,
+    pub restrictions: Vec<String>,
+    pub health_conditions: Vec<String>,
+    pub avoid_ingredients: Vec<String>,
+}
+
+impl fmt::Debug for AgentMinimizedDeclaredProfileV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AgentMinimizedDeclaredProfileV1")
+            .field("diet_style_count", &self.diet_styles.len())
+            .field("allergy_count", &self.allergies.len())
+            .field("restriction_count", &self.restrictions.len())
+            .field("health_condition_count", &self.health_conditions.len())
+            .field("avoid_ingredient_count", &self.avoid_ingredients.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentHouseholdReadRequestV1 {
+    pub schema_version: u16,
+    pub kind: AgentHouseholdReadRequestKindV1,
+    pub subject: Option<AgentHouseholdSubjectV1>,
+    pub requested_projection: AgentHouseholdProjectionV1,
+    pub expected_disclosure_generation: GenerationId,
+    pub cursor: Option<String>,
+    pub limit: u16,
+}
+
+impl fmt::Debug for AgentHouseholdReadRequestV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AgentHouseholdReadRequestV1")
+            .field("schema_version", &self.schema_version)
+            .field("kind", &self.kind)
+            .field(
+                "subject_kind",
+                &self.subject.as_ref().map(agent_subject_kind),
+            )
+            .field("requested_projection", &self.requested_projection)
+            .field(
+                "expected_disclosure_generation",
+                &self.expected_disclosure_generation,
+            )
+            .field("has_cursor", &self.cursor.is_some())
+            .field("limit", &self.limit)
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentHouseholdReadSnapshotV1 {
     pub schema_version: u16,
+    pub kind: AgentHouseholdReadResultKindV1,
     pub projection: AgentHouseholdProjectionV1,
-    pub resolved_subject: AgentHouseholdSubjectV1,
+    pub resolved_subject: Option<AgentHouseholdSubjectV1>,
     pub resolved_from_active_scope: bool,
-    pub active_scope: HouseholdScope,
+    pub active_scope: Option<HouseholdScope>,
     pub household_revision: HouseholdRevision,
     pub disclosure_generation: GenerationId,
     pub eligible_member_count: u16,
@@ -275,15 +723,90 @@ pub struct AgentHouseholdReadSnapshotV1 {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+impl fmt::Debug for AgentHouseholdReadSnapshotV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AgentHouseholdReadSnapshotV1")
+            .field("schema_version", &self.schema_version)
+            .field("kind", &self.kind)
+            .field("projection", &self.projection)
+            .field(
+                "resolved_subject_kind",
+                &self.resolved_subject.as_ref().map(agent_subject_kind),
+            )
+            .field(
+                "resolved_from_active_scope",
+                &self.resolved_from_active_scope,
+            )
+            .field(
+                "active_scope_kind",
+                &self.active_scope.as_ref().map(scope_kind),
+            )
+            .field("household_revision", &self.household_revision)
+            .field("disclosure_generation", &self.disclosure_generation)
+            .field("eligible_member_count", &self.eligible_member_count)
+            .field("restricted_member_count", &self.restricted_member_count)
+            .field("member_count", &self.members.len())
+            .field("has_next_cursor", &self.next_cursor.is_some())
+            .finish()
+    }
+}
+
+impl AgentHouseholdReadSnapshotV1 {
+    #[must_use]
+    pub fn filtered_to(mut self, projection: AgentHouseholdProjectionV1) -> Self {
+        self.projection = projection;
+        match projection {
+            AgentHouseholdProjectionV1::ContentFree => {
+                self.resolved_subject = None;
+                self.active_scope = None;
+                self.members.clear();
+                self.next_cursor = None;
+            }
+            AgentHouseholdProjectionV1::Roster => {
+                for member in &mut self.members {
+                    member.minimized_declared_profile = None;
+                }
+            }
+            AgentHouseholdProjectionV1::Profile => {}
+        }
+        self
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentHouseholdPrepareRequestV1 {
+    pub schema_version: u16,
+    pub kind: AgentHouseholdPrepareRequestKindV1,
     pub operation: AgentHouseholdOperationV1,
     pub requested_projection: AgentHouseholdProjectionV1,
     pub expected_disclosure_generation: GenerationId,
     pub expected_household_revision: HouseholdRevision,
     pub affected_member_ref: Option<MemberId>,
     pub bundled_scope: Option<HouseholdScope>,
+}
+
+impl fmt::Debug for AgentHouseholdPrepareRequestV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AgentHouseholdPrepareRequestV1")
+            .field("schema_version", &self.schema_version)
+            .field("kind", &self.kind)
+            .field("operation", &self.operation)
+            .field("requested_projection", &self.requested_projection)
+            .field(
+                "expected_disclosure_generation",
+                &self.expected_disclosure_generation,
+            )
+            .field(
+                "expected_household_revision",
+                &self.expected_household_revision,
+            )
+            .field("has_affected_member", &self.affected_member_ref.is_some())
+            .field("bundles_scope", &self.bundled_scope.is_some())
+            .finish()
+    }
 }
 
 impl AgentHouseholdPrepareRequestV1 {
@@ -306,6 +829,70 @@ impl AgentHouseholdPrepareRequestV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHouseholdChangeFieldV1 {
+    DisplayLabel,
+    Relationship,
+    Lifecycle,
+    DietStyles,
+    Allergies,
+    Restrictions,
+    HealthConditions,
+    AvoidIngredients,
+    ActiveScope,
+}
+
+impl AgentHouseholdChangeFieldV1 {
+    #[must_use]
+    pub const fn is_profile(self) -> bool {
+        matches!(
+            self,
+            Self::DietStyles
+                | Self::Allergies
+                | Self::Restrictions
+                | Self::HealthConditions
+                | Self::AvoidIngredients
+        )
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentHouseholdChangeV1 {
+    pub field: AgentHouseholdChangeFieldV1,
+    pub before: Vec<String>,
+    pub after: Vec<String>,
+}
+
+impl fmt::Debug for AgentHouseholdChangeV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AgentHouseholdChangeV1")
+            .field("field", &self.field)
+            .field("before_count", &self.before.len())
+            .field("after_count", &self.after.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHouseholdConsequenceV1 {
+    ConversationContinuityReset,
+    ActiveScopeChanged,
+    MemberArchived,
+    MemberRestored,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHouseholdRecoverabilityV1 {
+    EditableBeforeSave,
+    ReversibleArchive,
+    NewProposalRequiredAfterSave,
+}
+
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentHouseholdProposalPresentationV1 {
@@ -317,7 +904,9 @@ pub struct AgentHouseholdProposalPresentationV1 {
     pub disclosure_generation: GenerationId,
     pub affected_member_ref: Option<MemberId>,
     pub affected_member_label: Option<DisplayName>,
-    pub profile_change_count: Option<u16>,
+    pub changes: Vec<AgentHouseholdChangeV1>,
+    pub consequences: Vec<AgentHouseholdConsequenceV1>,
+    pub recoverability: AgentHouseholdRecoverabilityV1,
     pub created_at: CanonicalTimestampV1,
     pub expires_at: CanonicalTimestampV1,
     pub human_status: String,
@@ -334,7 +923,9 @@ impl fmt::Debug for AgentHouseholdProposalPresentationV1 {
             .field("projection", &self.projection)
             .field("disclosure_generation", &self.disclosure_generation)
             .field("has_member_identity", &self.affected_member_ref.is_some())
-            .field("has_profile_changes", &self.profile_change_count.is_some())
+            .field("change_count", &self.changes.len())
+            .field("consequence_count", &self.consequences.len())
+            .field("recoverability", &self.recoverability)
             .finish_non_exhaustive()
     }
 }
@@ -358,7 +949,9 @@ impl AgentHouseholdProposalPresentationV1 {
             disclosure_generation,
             affected_member_ref: None,
             affected_member_label: None,
-            profile_change_count: None,
+            changes: Vec::new(),
+            consequences: Vec::new(),
+            recoverability: AgentHouseholdRecoverabilityV1::NewProposalRequiredAfterSave,
             created_at,
             expires_at,
             human_status: state.human_status().to_owned(),
@@ -381,25 +974,76 @@ impl AgentHouseholdProposalPresentationV1 {
             ),
             AgentHouseholdProjectionV1::Roster => Self {
                 projection,
-                profile_change_count: None,
+                changes: self
+                    .changes
+                    .into_iter()
+                    .filter(|change| !change.field.is_profile())
+                    .collect(),
                 ..self
             },
             AgentHouseholdProjectionV1::Profile => Self { projection, ..self },
         }
     }
+
+    #[must_use]
+    pub fn has_canonical_copy(&self) -> bool {
+        self.human_status == self.state.human_status()
+            && self.handoff_command == "heyfood"
+            && self.handoff_instruction
+                == "Open `/household changes` to review this change locally."
+    }
 }
 
-#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentHouseholdOutcomeReceiptV1 {
-    pub schema_version: u16,
-    pub proposal_ref: AgentHouseholdProposalIdV1,
-    pub state: AgentHouseholdProposalStateV1,
-    pub household_revision_before: HouseholdRevision,
-    pub household_revision_after: Option<HouseholdRevision>,
-    pub known_no_household_mutation: bool,
-    pub retry_class: AgentHouseholdRetryClassV1,
-    pub next_action: AgentHouseholdNextActionV1,
+    schema_version: u16,
+    proposal_ref: AgentHouseholdProposalIdV1,
+    state: AgentHouseholdProposalStateV1,
+    household_revision_before: HouseholdRevision,
+    household_revision_after: Option<HouseholdRevision>,
+    known_no_household_mutation: bool,
+    retry_class: AgentHouseholdRetryClassV1,
+    next_action: AgentHouseholdNextActionV1,
+}
+
+impl<'de> Deserialize<'de> for AgentHouseholdOutcomeReceiptV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            schema_version: u16,
+            proposal_ref: AgentHouseholdProposalIdV1,
+            state: AgentHouseholdProposalStateV1,
+            household_revision_before: HouseholdRevision,
+            household_revision_after: Option<HouseholdRevision>,
+            known_no_household_mutation: bool,
+            retry_class: AgentHouseholdRetryClassV1,
+            next_action: AgentHouseholdNextActionV1,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: wire.schema_version,
+            proposal_ref: wire.proposal_ref,
+            state: wire.state,
+            household_revision_before: wire.household_revision_before,
+            household_revision_after: wire.household_revision_after,
+            known_no_household_mutation: wire.known_no_household_mutation,
+            retry_class: wire.retry_class,
+            next_action: wire.next_action,
+        };
+        if value.schema_version == AGENT_HOUSEHOLD_CONTRACT_VERSION && value.is_valid() {
+            Ok(value)
+        } else {
+            Err(serde::de::Error::custom(
+                "invalid household outcome receipt invariant",
+            ))
+        }
+    }
 }
 
 impl fmt::Debug for AgentHouseholdOutcomeReceiptV1 {
@@ -417,12 +1061,220 @@ impl fmt::Debug for AgentHouseholdOutcomeReceiptV1 {
     }
 }
 
+impl AgentHouseholdOutcomeReceiptV1 {
+    pub fn committed(
+        proposal_ref: AgentHouseholdProposalIdV1,
+        before: HouseholdRevision,
+        after: HouseholdRevision,
+    ) -> Result<Self, AgentHouseholdContractErrorV1> {
+        if before.checked_next().ok() != Some(after) {
+            return Err(AgentHouseholdContractErrorV1::InvalidOutcomeReceipt);
+        }
+        Ok(Self::fixed(
+            proposal_ref,
+            AgentHouseholdProposalStateV1::Committed,
+            before,
+            Some(after),
+            false,
+            AgentHouseholdRetryClassV1::NotApplicable,
+            AgentHouseholdNextActionV1::None,
+        ))
+    }
+
+    #[must_use]
+    pub fn cancelled(
+        proposal_ref: AgentHouseholdProposalIdV1,
+        revision: HouseholdRevision,
+    ) -> Self {
+        Self::no_mutation(
+            proposal_ref,
+            AgentHouseholdProposalStateV1::Cancelled,
+            revision,
+            AgentHouseholdNextActionV1::None,
+        )
+    }
+
+    #[must_use]
+    pub fn expired(proposal_ref: AgentHouseholdProposalIdV1, revision: HouseholdRevision) -> Self {
+        Self::no_mutation(
+            proposal_ref,
+            AgentHouseholdProposalStateV1::Expired,
+            revision,
+            AgentHouseholdNextActionV1::PrepareFresh,
+        )
+    }
+
+    #[must_use]
+    pub fn stale(proposal_ref: AgentHouseholdProposalIdV1, revision: HouseholdRevision) -> Self {
+        Self::no_mutation(
+            proposal_ref,
+            AgentHouseholdProposalStateV1::Stale,
+            revision,
+            AgentHouseholdNextActionV1::PrepareFresh,
+        )
+    }
+
+    #[must_use]
+    pub fn rejected(proposal_ref: AgentHouseholdProposalIdV1, revision: HouseholdRevision) -> Self {
+        Self::no_mutation(
+            proposal_ref,
+            AgentHouseholdProposalStateV1::Rejected,
+            revision,
+            AgentHouseholdNextActionV1::PrepareFresh,
+        )
+    }
+
+    #[must_use]
+    pub fn proven_uncommitted(
+        proposal_ref: AgentHouseholdProposalIdV1,
+        revision: HouseholdRevision,
+    ) -> Self {
+        Self::no_mutation(
+            proposal_ref,
+            AgentHouseholdProposalStateV1::ProvenUncommitted,
+            revision,
+            AgentHouseholdNextActionV1::PrepareFresh,
+        )
+    }
+
+    #[must_use]
+    pub fn reconciliation_required(
+        proposal_ref: AgentHouseholdProposalIdV1,
+        before: HouseholdRevision,
+    ) -> Self {
+        Self::fixed(
+            proposal_ref,
+            AgentHouseholdProposalStateV1::ReconciliationRequired,
+            before,
+            None,
+            false,
+            AgentHouseholdRetryClassV1::ReconcileBeforeRetry,
+            AgentHouseholdNextActionV1::Reconcile,
+        )
+    }
+
+    #[must_use]
+    pub const fn proposal_ref(&self) -> AgentHouseholdProposalIdV1 {
+        self.proposal_ref
+    }
+
+    #[must_use]
+    pub const fn state(&self) -> AgentHouseholdProposalStateV1 {
+        self.state
+    }
+
+    #[must_use]
+    pub const fn household_revision_before(&self) -> HouseholdRevision {
+        self.household_revision_before
+    }
+
+    #[must_use]
+    pub const fn household_revision_after(&self) -> Option<HouseholdRevision> {
+        self.household_revision_after
+    }
+
+    #[must_use]
+    pub const fn known_no_household_mutation(&self) -> bool {
+        self.known_no_household_mutation
+    }
+
+    #[must_use]
+    pub const fn retry_class(&self) -> AgentHouseholdRetryClassV1 {
+        self.retry_class
+    }
+
+    #[must_use]
+    pub const fn next_action(&self) -> AgentHouseholdNextActionV1 {
+        self.next_action
+    }
+
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        match self.state {
+            AgentHouseholdProposalStateV1::Committed => self
+                .household_revision_before
+                .checked_next()
+                .ok()
+                .is_some_and(|next| {
+                    self.household_revision_after == Some(next)
+                        && !self.known_no_household_mutation
+                        && self.retry_class == AgentHouseholdRetryClassV1::NotApplicable
+                        && self.next_action == AgentHouseholdNextActionV1::None
+                }),
+            AgentHouseholdProposalStateV1::Cancelled => {
+                self.valid_no_mutation(AgentHouseholdNextActionV1::None)
+            }
+            AgentHouseholdProposalStateV1::Expired
+            | AgentHouseholdProposalStateV1::Stale
+            | AgentHouseholdProposalStateV1::Rejected
+            | AgentHouseholdProposalStateV1::ProvenUncommitted => {
+                self.valid_no_mutation(AgentHouseholdNextActionV1::PrepareFresh)
+            }
+            AgentHouseholdProposalStateV1::ReconciliationRequired => {
+                self.household_revision_after.is_none()
+                    && !self.known_no_household_mutation
+                    && self.retry_class == AgentHouseholdRetryClassV1::ReconcileBeforeRetry
+                    && self.next_action == AgentHouseholdNextActionV1::Reconcile
+            }
+            _ => false,
+        }
+    }
+
+    fn no_mutation(
+        proposal_ref: AgentHouseholdProposalIdV1,
+        state: AgentHouseholdProposalStateV1,
+        revision: HouseholdRevision,
+        next_action: AgentHouseholdNextActionV1,
+    ) -> Self {
+        Self::fixed(
+            proposal_ref,
+            state,
+            revision,
+            Some(revision),
+            true,
+            AgentHouseholdRetryClassV1::NotApplicable,
+            next_action,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fixed(
+        proposal_ref: AgentHouseholdProposalIdV1,
+        state: AgentHouseholdProposalStateV1,
+        household_revision_before: HouseholdRevision,
+        household_revision_after: Option<HouseholdRevision>,
+        known_no_household_mutation: bool,
+        retry_class: AgentHouseholdRetryClassV1,
+        next_action: AgentHouseholdNextActionV1,
+    ) -> Self {
+        Self {
+            schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
+            proposal_ref,
+            state,
+            household_revision_before,
+            household_revision_after,
+            known_no_household_mutation,
+            retry_class,
+            next_action,
+        }
+    }
+
+    fn valid_no_mutation(&self, next_action: AgentHouseholdNextActionV1) -> bool {
+        self.household_revision_after == Some(self.household_revision_before)
+            && self.known_no_household_mutation
+            && self.retry_class == AgentHouseholdRetryClassV1::NotApplicable
+            && self.next_action == next_action
+    }
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct LocalHouseholdProposalBindingV1 {
     pub account: AccountId,
     pub proposal_ref: AgentHouseholdProposalIdV1,
     pub operation: AgentHouseholdOperationV1,
     pub disclosure_generation: GenerationId,
+    pub disclosure_grant_set_digest: CanonicalDigestV1,
+    pub disclosure_purpose: AgentDisclosurePurposeV1,
     pub lifecycle_generation: GenerationId,
     pub projection: AgentHouseholdProjectionV1,
     pub expected_household_revision: HouseholdRevision,
@@ -442,6 +1294,7 @@ impl fmt::Debug for LocalHouseholdProposalBindingV1 {
             .debug_struct("LocalHouseholdProposalBindingV1")
             .field("operation", &self.operation)
             .field("disclosure_generation", &self.disclosure_generation)
+            .field("disclosure_purpose", &self.disclosure_purpose)
             .field("lifecycle_generation", &self.lifecycle_generation)
             .field("projection", &self.projection)
             .field(
@@ -484,6 +1337,8 @@ impl fmt::Debug for LocalHouseholdFrozenCandidateV1 {
 pub struct LocalHouseholdAuthoritySnapshotV1 {
     pub account: AccountId,
     pub disclosure_generation: GenerationId,
+    pub disclosure_grant_set_digest: CanonicalDigestV1,
+    pub disclosure_purpose: AgentDisclosurePurposeV1,
     pub lifecycle_generation: GenerationId,
     pub household_revision: HouseholdRevision,
     pub profile_revision: Option<ProfileRevision>,
@@ -495,6 +1350,7 @@ impl fmt::Debug for LocalHouseholdAuthoritySnapshotV1 {
         formatter
             .debug_struct("LocalHouseholdAuthoritySnapshotV1")
             .field("disclosure_generation", &self.disclosure_generation)
+            .field("disclosure_purpose", &self.disclosure_purpose)
             .field("lifecycle_generation", &self.lifecycle_generation)
             .field("household_revision", &self.household_revision)
             .field("has_profile_revision", &self.profile_revision.is_some())
@@ -665,6 +1521,11 @@ impl LocalHouseholdProposalAuthorityV1 {
         if self.binding.disclosure_generation != current.disclosure_generation {
             return Err(AgentHouseholdContractErrorV1::DisclosureGenerationChanged);
         }
+        if self.binding.disclosure_grant_set_digest != current.disclosure_grant_set_digest
+            || self.binding.disclosure_purpose != current.disclosure_purpose
+        {
+            return Err(AgentHouseholdContractErrorV1::DisclosureGrantChanged);
+        }
         if self.binding.lifecycle_generation != current.lifecycle_generation {
             return Err(AgentHouseholdContractErrorV1::LifecycleGenerationChanged);
         }
@@ -685,8 +1546,12 @@ impl LocalHouseholdProposalAuthorityV1 {
 pub enum AgentHouseholdContractErrorV1 {
     InvalidTransition,
     InvalidOperationShape,
+    InvalidDisclosureGrant,
+    InvalidDisclosureGrantSet,
+    InvalidOutcomeReceipt,
     AccountChanged,
     DisclosureGenerationChanged,
+    DisclosureGrantChanged,
     LifecycleGenerationChanged,
     HouseholdRevisionChanged,
     ProfileRevisionChanged,
@@ -703,8 +1568,12 @@ impl fmt::Display for AgentHouseholdContractErrorV1 {
         formatter.write_str(match self {
             Self::InvalidTransition => "household proposal transition is invalid",
             Self::InvalidOperationShape => "household proposal operation shape is invalid",
+            Self::InvalidDisclosureGrant => "household disclosure grant is invalid",
+            Self::InvalidDisclosureGrantSet => "household disclosure grant set is invalid",
+            Self::InvalidOutcomeReceipt => "household outcome receipt is invalid",
             Self::AccountChanged => "household proposal account changed",
             Self::DisclosureGenerationChanged => "household agent disclosure generation changed",
+            Self::DisclosureGrantChanged => "household disclosure grant authority changed",
             Self::LifecycleGenerationChanged => "household lifecycle generation changed",
             Self::HouseholdRevisionChanged => "household revision changed",
             Self::ProfileRevisionChanged => "household profile revision changed",
@@ -726,21 +1595,49 @@ impl std::error::Error for AgentHouseholdContractErrorV1 {}
 /// are shown explicitly. No content is truncated.
 #[must_use]
 pub fn household_review_safe_text_v1(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
+    let mut output = String::with_capacity(value.len().saturating_add(2));
+    output.push('"');
     for character in value.chars() {
-        let codepoint = character as u32;
-        let visible_escape = character.is_control()
-            || matches!(codepoint, 0x0080..=0x009f)
-            || matches!(codepoint, 0x061c | 0x200b..=0x200f | 0x2028..=0x202e)
-            || matches!(codepoint, 0x2060 | 0x2066..=0x2069 | 0xfeff);
-        if visible_escape {
-            use std::fmt::Write as _;
-            let _ = write!(output, "<U+{codepoint:04X}>");
-        } else {
-            output.push(character);
+        match character {
+            'a'..='z'
+            | 'A'..='Z'
+            | '0'..='9'
+            | ' '
+            | '-'
+            | '_'
+            | '.'
+            | ','
+            | '\''
+            | '('
+            | ')'
+            | '['
+            | ']' => output.push(character),
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            _ => {
+                use std::fmt::Write as _;
+                let _ = write!(output, "\\u{{{:04X}}}", character as u32);
+            }
         }
     }
+    output.push('"');
     output
+}
+
+fn agent_subject_kind(subject: &AgentHouseholdSubjectV1) -> &'static str {
+    match subject {
+        AgentHouseholdSubjectV1::Self_ => "self",
+        AgentHouseholdSubjectV1::Member(_) => "member",
+        AgentHouseholdSubjectV1::Everyone => "everyone",
+    }
+}
+
+fn scope_kind(scope: &HouseholdScope) -> &'static str {
+    match scope {
+        HouseholdScope::Subject(crate::HouseholdSubjectId::Self_) => "self",
+        HouseholdScope::Subject(crate::HouseholdSubjectId::Member(_)) => "member",
+        HouseholdScope::Everyone => "everyone",
+    }
 }
 
 /// Wrap an escaped value without dropping any data.
@@ -804,6 +1701,8 @@ mod tests {
             proposal_ref: AgentHouseholdProposalIdV1::new(),
             operation,
             disclosure_generation,
+            disclosure_grant_set_digest: CanonicalDigestV1::from_bytes([8; 32]),
+            disclosure_purpose: AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
             lifecycle_generation: GenerationId::new(11),
             projection: AgentHouseholdProjectionV1::Profile,
             expected_household_revision: revision(),
@@ -825,6 +1724,8 @@ mod tests {
         LocalHouseholdAuthoritySnapshotV1 {
             account: AccountId::parse("phase0-proposal-account").expect("account"),
             disclosure_generation,
+            disclosure_grant_set_digest: CanonicalDigestV1::from_bytes([8; 32]),
+            disclosure_purpose: AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
             lifecycle_generation: GenerationId::new(11),
             household_revision: revision(),
             profile_revision,
@@ -969,6 +1870,8 @@ mod tests {
         let expired = LocalHouseholdAuthoritySnapshotV1 {
             account: AccountId::parse("phase0-proposal-account").expect("account"),
             disclosure_generation: GenerationId::new(2),
+            disclosure_grant_set_digest: CanonicalDigestV1::from_bytes([8; 32]),
+            disclosure_purpose: AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
             lifecycle_generation: GenerationId::new(11),
             household_revision: revision(),
             profile_revision: None,
@@ -1000,7 +1903,13 @@ mod tests {
             disclosure_generation: GenerationId::new(9),
             affected_member_ref: Some(MemberId::new()),
             affected_member_label: Some(DisplayName::parse("Fixture").expect("label")),
-            profile_change_count: Some(3),
+            changes: vec![AgentHouseholdChangeV1 {
+                field: AgentHouseholdChangeFieldV1::Allergies,
+                before: vec!["milk".to_owned()],
+                after: vec!["milk".to_owned(), "egg".to_owned()],
+            }],
+            consequences: vec![AgentHouseholdConsequenceV1::ConversationContinuityReset],
+            recoverability: AgentHouseholdRecoverabilityV1::EditableBeforeSave,
             created_at: timestamp(),
             expires_at: CanonicalTimestampV1::parse("2026-08-02T12:10:00.000Z").expect("expiry"),
             human_status: "Ready for your review".to_owned(),
@@ -1011,123 +1920,182 @@ mod tests {
         let filtered = presentation.filtered_to(AgentHouseholdProjectionV1::ContentFree);
         assert!(filtered.affected_member_ref.is_none());
         assert!(filtered.affected_member_label.is_none());
-        assert!(filtered.profile_change_count.is_none());
+        assert!(filtered.changes.is_empty());
         assert_eq!(filtered.handoff_command, "heyfood");
     }
 
     #[test]
     fn disclosure_grants_keep_roster_and_profile_authority_separate() {
         let account = AccountId::parse("phase0-disclosure-account").expect("account");
-        let member = AgentHouseholdSubjectV1::Member(MemberId::new());
+        let adult_subject = AgentDisclosureGrantSubjectV1::Self_;
+        let minor_subject = AgentDisclosureGrantSubjectV1::Member(MemberId::new());
         let observed_at = timestamp();
-        let adult = AgentDisclosureGrantV1 {
-            account: account.clone(),
-            subject: member.clone(),
-            subject_minor_status: MinorStatusV1::Adult,
-            data_classes: vec![
+        let purpose = AgentDisclosurePurposeV1::HouseholdAgentRead;
+        let adult = AgentDisclosureGrantV1::new(
+            account.clone(),
+            adult_subject.clone(),
+            MinorStatusV1::Adult,
+            vec![
                 AgentDisclosureDataClassV1::Roster,
                 AgentDisclosureDataClassV1::MinimizedDeclaredProfile,
             ],
-            granting_authority: AgentDisclosureGrantingAuthorityV1::AccountOwnerAdultAuthorization,
-            revision: 1,
-            generation: GenerationId::new(3),
-            state: AgentDisclosureGrantStateV1::Active,
-            expires_at: None,
-        };
+            purpose,
+            AgentDisclosureGrantingAuthorityV1::AccountOwnerAdultAuthorization,
+            1,
+            GenerationId::new(3),
+            AgentDisclosureGrantStateV1::Active,
+            timestamp(),
+            None,
+        )
+        .expect("adult grant");
         assert!(adult.permits_for(
             &account,
-            &member,
+            &adult_subject,
             GenerationId::new(3),
+            purpose,
             AgentDisclosureDataClassV1::Roster,
             &observed_at,
         ));
         assert!(adult.permits_for(
             &account,
-            &member,
+            &adult_subject,
             GenerationId::new(3),
+            purpose,
             AgentDisclosureDataClassV1::MinimizedDeclaredProfile,
             &observed_at,
         ));
 
-        let minor = AgentDisclosureGrantV1 {
-            subject: member,
-            subject_minor_status: MinorStatusV1::Minor,
-            granting_authority: AgentDisclosureGrantingAuthorityV1::AuthorizedGuardianRosterOnly,
-            ..adult.clone()
-        };
+        let minor = AgentDisclosureGrantV1::new(
+            account.clone(),
+            minor_subject,
+            MinorStatusV1::Minor,
+            vec![AgentDisclosureDataClassV1::Roster],
+            purpose,
+            AgentDisclosureGrantingAuthorityV1::AuthorizedGuardianRosterOnly,
+            2,
+            GenerationId::new(3),
+            AgentDisclosureGrantStateV1::Active,
+            timestamp(),
+            None,
+        )
+        .expect("minor roster grant");
         assert!(minor.permits_for(
             &account,
-            &minor.subject,
+            minor.subject(),
             GenerationId::new(3),
+            purpose,
             AgentDisclosureDataClassV1::Roster,
             &observed_at,
         ));
         assert!(!minor.permits_for(
             &account,
-            &minor.subject,
+            minor.subject(),
             GenerationId::new(3),
+            purpose,
             AgentDisclosureDataClassV1::MinimizedDeclaredProfile,
             &observed_at,
         ));
 
         let revoked = AgentDisclosureGrantV1 {
             state: AgentDisclosureGrantStateV1::Revoked,
-            ..adult
+            ..adult.clone()
         };
         assert!(!revoked.permits_for(
             &account,
-            &revoked.subject,
+            revoked.subject(),
             GenerationId::new(3),
+            purpose,
             AgentDisclosureDataClassV1::Roster,
             &observed_at,
         ));
         assert!(!revoked.permits_for(
             &account,
-            &revoked.subject,
+            revoked.subject(),
             GenerationId::new(3),
+            purpose,
             AgentDisclosureDataClassV1::MinimizedDeclaredProfile,
             &observed_at,
         ));
         let other_account = AccountId::parse("other-disclosure-account").expect("account");
         assert!(!minor.permits_for(
             &other_account,
-            &minor.subject,
+            minor.subject(),
             GenerationId::new(3),
+            purpose,
             AgentDisclosureDataClassV1::Roster,
             &observed_at,
         ));
 
-        let guardian_profile = AgentDisclosureGrantV1 {
-            state: AgentDisclosureGrantStateV1::Active,
-            subject_minor_status: MinorStatusV1::Adult,
-            granting_authority: AgentDisclosureGrantingAuthorityV1::AuthorizedGuardianRosterOnly,
-            ..minor.clone()
-        };
-        assert!(!guardian_profile.permits_for(
-            &account,
-            &guardian_profile.subject,
-            GenerationId::new(3),
-            AgentDisclosureDataClassV1::MinimizedDeclaredProfile,
-            &observed_at,
-        ));
+        assert_eq!(
+            AgentDisclosureGrantV1::new(
+                account.clone(),
+                AgentDisclosureGrantSubjectV1::Self_,
+                MinorStatusV1::Adult,
+                vec![AgentDisclosureDataClassV1::Roster],
+                purpose,
+                AgentDisclosureGrantingAuthorityV1::AuthorizedGuardianRosterOnly,
+                1,
+                GenerationId::new(3),
+                AgentDisclosureGrantStateV1::Active,
+                timestamp(),
+                None,
+            ),
+            Err(AgentHouseholdContractErrorV1::InvalidDisclosureGrant)
+        );
 
         let expired = AgentDisclosureGrantV1 {
-            expires_at: Some(observed_at.clone()),
-            ..minor
+            expires_at: Some(
+                CanonicalTimestampV1::parse("2026-08-02T12:01:00.000Z").expect("expiry"),
+            ),
+            ..minor.clone()
         };
+        let after_expiry =
+            CanonicalTimestampV1::parse("2026-08-02T12:01:00.000Z").expect("observation");
         assert!(!expired.permits_for(
             &account,
-            &expired.subject,
+            expired.subject(),
             GenerationId::new(3),
+            purpose,
             AgentDisclosureDataClassV1::Roster,
-            &observed_at,
+            &after_expiry,
         ));
+
+        let set = AgentDisclosureGrantSetV1::new(
+            account,
+            GenerationId::new(3),
+            purpose,
+            observed_at,
+            vec![adult, minor],
+        )
+        .expect("grant set");
+        assert_eq!(
+            set.maximum_projection_for(&[
+                AgentDisclosureGrantSubjectV1::Self_,
+                set.grants[1].subject().clone(),
+            ]),
+            AgentHouseholdProjectionV1::Roster
+        );
+        assert_eq!(
+            set.maximum_projection_for(&[
+                AgentDisclosureGrantSubjectV1::Self_,
+                AgentDisclosureGrantSubjectV1::Member(MemberId::new()),
+            ]),
+            AgentHouseholdProjectionV1::ContentFree
+        );
     }
 
     #[test]
     fn review_text_makes_control_and_directional_characters_visible() {
         let rendered = household_review_safe_text_v1("Julie\n\u{1b}[31m\u{202e}x\u{200b}");
-        assert_eq!(rendered, "Julie<U+000A><U+001B>[31m<U+202E>x<U+200B>");
+        assert_eq!(
+            rendered,
+            "\"Julie\\u{000A}\\u{001B}[31m\\u{202E}x\\u{200B}\""
+        );
+        assert_ne!(
+            household_review_safe_text_v1("<U+001B>"),
+            household_review_safe_text_v1("\u{1b}")
+        );
+        assert!(!household_review_safe_text_v1("https://example.invalid").contains("https://"));
     }
 
     #[test]
@@ -1177,21 +2145,43 @@ mod tests {
         );
 
         let revision = revision();
-        let receipt = AgentHouseholdOutcomeReceiptV1 {
-            schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
-            proposal_ref: AgentHouseholdProposalIdV1::from_uuid(
+        let receipt = AgentHouseholdOutcomeReceiptV1::cancelled(
+            AgentHouseholdProposalIdV1::from_uuid(
                 Uuid::parse_str("20000000-0000-4000-8000-000000000001").expect("proposal"),
             ),
-            state: AgentHouseholdProposalStateV1::Cancelled,
-            household_revision_before: revision,
-            household_revision_after: Some(revision),
-            known_no_household_mutation: true,
-            retry_class: AgentHouseholdRetryClassV1::NotApplicable,
-            next_action: AgentHouseholdNextActionV1::None,
-        };
+            revision,
+        );
         let encoded = serde_json::to_string(&receipt).expect("receipt");
         assert!(!encoded.contains("account"));
         assert!(!encoded.contains("commit"));
         assert!(!encoded.contains("fingerprint"));
+
+        for invalid in [
+            json!({
+                "schema_version": 1,
+                "proposal_ref": "20000000-0000-4000-8000-000000000001",
+                "state": "cancelled",
+                "household_revision_before": 7,
+                "household_revision_after": 8,
+                "known_no_household_mutation": true,
+                "retry_class": "not_applicable",
+                "next_action": "none"
+            }),
+            json!({
+                "schema_version": 1,
+                "proposal_ref": "20000000-0000-4000-8000-000000000001",
+                "state": "reconciliation_required",
+                "household_revision_before": 7,
+                "household_revision_after": null,
+                "known_no_household_mutation": true,
+                "retry_class": "safe_read",
+                "next_action": "none"
+            }),
+        ] {
+            assert!(
+                serde_json::from_value::<AgentHouseholdOutcomeReceiptV1>(invalid).is_err(),
+                "invalid outcome invariant was accepted"
+            );
+        }
     }
 }

@@ -1,4 +1,5 @@
 {
+  "fixture_kind": "manifest_v3_additions_overlay",
   "schema_version": 3,
   "product": "heyfood",
   "binary_version": "0.8.0",
@@ -21,7 +22,7 @@
     "bootstrap_command": "heyfood agent compatibility --json --no-input",
     "bootstrap_result_schema": {
       "id": "https://hey.food/schemas/v1/heyfood-agent-compatibility.schema.json",
-      "sha256": "8011a2a51300ea6f10d12b24f537e8fa47b28cd48a793f9158f6775154d900d9"
+      "sha256": "c2fccf908a221fdce96131fbf675705b2a222a26d64cfe954d4c177785b2ae97"
     }
   },
   "automation_surfaces": {
@@ -58,13 +59,13 @@
     "page_records": 100,
     "proposal_lifetime_seconds": 600
   },
-  "capabilities": [
-    { "id": "household-roster", "status": "active", "contract_version": "v1", "authority": "read_only", "disclosure": "per_subject_roster" },
-    { "id": "household-profile", "status": "active", "contract_version": "v1", "authority": "read_only", "disclosure": "per_subject_profile" },
-    { "id": "household-lifecycle", "status": "active", "contract_version": "v1", "authority": "prepare_only", "disclosure": "local_status_only" },
-    { "id": "household-local-review", "status": "active", "contract_version": "v1", "authority": "human_terminal_only", "disclosure": "local_status_only" }
+  "capability_additions": [
+    { "id": "household-roster", "status": "active", "summary": "Agents may read only roster fields covered by current per-subject grants.", "contract_version": "v1", "authority": "read_only", "disclosure": "per_subject_roster" },
+    { "id": "household-profile", "status": "active", "summary": "Agents may read only minimized adult profile fields covered by current per-subject grants.", "contract_version": "v1", "authority": "read_only", "disclosure": "per_subject_profile" },
+    { "id": "household-lifecycle", "status": "active", "summary": "Agents may prepare and observe changes but cannot approve or commit them.", "contract_version": "v1", "authority": "prepare_only", "disclosure": "local_status_only" },
+    { "id": "household-local-review", "status": "active", "summary": "Only the person using the attached heyfood TUI may approve and commit a household change.", "contract_version": "v1", "authority": "human_terminal_only", "disclosure": "local_status_only" }
   ],
-  "commands": [
+  "command_additions": [
     {
       "path": "agent compatibility",
       "status": "active",
@@ -75,7 +76,7 @@
       "input_schema": null,
       "result_schema": {
         "id": "https://hey.food/schemas/v1/heyfood-agent-compatibility.schema.json",
-        "sha256": "8011a2a51300ea6f10d12b24f537e8fa47b28cd48a793f9158f6775154d900d9"
+        "sha256": "c2fccf908a221fdce96131fbf675705b2a222a26d64cfe954d4c177785b2ae97"
       },
       "retry_class": "safe_read",
       "approval": "none"
@@ -88,12 +89,12 @@
       "network": false,
       "product_state_mutation": false,
       "input_schema": {
-        "id": "https://hey.food/schemas/v1/agent-household-read.schema.json",
-        "sha256": "b70db3f02dc3c68333bbf79c3ff92c415715d5ce7d07a99af445adefced4e8e2"
+        "id": "https://hey.food/schemas/v1/agent-household-context-input.schema.json",
+        "sha256": "e832c0e64e13bf3d91e59a339d795c03b1c9b45f5b2e4d6f03fe00d8dbaf8342"
       },
       "result_schema": {
         "id": "https://hey.food/schemas/v1/agent-household-read.schema.json",
-        "sha256": "b70db3f02dc3c68333bbf79c3ff92c415715d5ce7d07a99af445adefced4e8e2"
+        "sha256": "9ab5a881284a18ca73346dbb5bacefb155230e8931eea87698bda722e0759618"
       },
       "retry_class": "safe_read",
       "approval": "none"
@@ -106,12 +107,12 @@
       "network": false,
       "product_state_mutation": false,
       "input_schema": {
-        "id": "https://hey.food/schemas/v1/agent-household-read.schema.json",
-        "sha256": "b70db3f02dc3c68333bbf79c3ff92c415715d5ce7d07a99af445adefced4e8e2"
+        "id": "https://hey.food/schemas/v1/agent-household-member-input.schema.json",
+        "sha256": "c9f4d347345f9dad7d308ad0c14a42abd4287a79156f43a42b5dbef2a058ecc8"
       },
       "result_schema": {
         "id": "https://hey.food/schemas/v1/agent-household-read.schema.json",
-        "sha256": "b70db3f02dc3c68333bbf79c3ff92c415715d5ce7d07a99af445adefced4e8e2"
+        "sha256": "9ab5a881284a18ca73346dbb5bacefb155230e8931eea87698bda722e0759618"
       },
       "retry_class": "safe_read",
       "approval": "none"
@@ -127,18 +128,18 @@
       { "name": "heyfood_get_grocery_list", "status": "active", "operation_class": "local_read", "authority": "read_only", "approval": "none", "input_schema": { "id": "urn:heyfood:mcp:v1:get-grocery-list:input", "sha256": "5125c1a7d77fb5a748f1008689b52612a94bf6d3c64264d15c0a6edb7f6e596b" }, "result_schema": { "id": "urn:heyfood:mcp:v1:get-grocery-list:result", "sha256": "e2198ddbc3fd192b19b45509ed67224e7caee4462c78b623eb5fd195c1d0d81f" }, "read_only_hint": false, "destructive_hint": false, "idempotent_hint": true },
       { "name": "heyfood_get_grocery_exclusions", "status": "active", "operation_class": "local_read", "authority": "read_only", "approval": "none", "input_schema": { "id": "urn:heyfood:mcp:v1:get-grocery-exclusions:input", "sha256": "5125c1a7d77fb5a748f1008689b52612a94bf6d3c64264d15c0a6edb7f6e596b" }, "result_schema": { "id": "urn:heyfood:mcp:v1:get-grocery-exclusions:result", "sha256": "2ff5349b4c6e5641c6617f6d9484014dc361344e3f8a1a61682f28053387ca0b" }, "read_only_hint": false, "destructive_hint": false, "idempotent_hint": true },
       { "name": "heyfood_list_menu_watches", "status": "active", "operation_class": "local_read", "authority": "read_only", "approval": "none", "input_schema": { "id": "urn:heyfood:mcp:v1:list-menu-watches:input", "sha256": "5125c1a7d77fb5a748f1008689b52612a94bf6d3c64264d15c0a6edb7f6e596b" }, "result_schema": { "id": "urn:heyfood:mcp:v1:list-menu-watches:result", "sha256": "a610b384b5a3a95acf59a5c0912ccf48853bb4923717790083b7514c1c91de93" }, "read_only_hint": false, "destructive_hint": false, "idempotent_hint": true },
-      { "name": "heyfood_get_household_context", "status": "active", "operation_class": "local_read", "authority": "read_only", "approval": "none", "input_schema": { "id": "https://hey.food/schemas/v1/agent-household-read.schema.json", "sha256": "b70db3f02dc3c68333bbf79c3ff92c415715d5ce7d07a99af445adefced4e8e2" }, "result_schema": { "id": "https://hey.food/schemas/v1/agent-household-read.schema.json", "sha256": "b70db3f02dc3c68333bbf79c3ff92c415715d5ce7d07a99af445adefced4e8e2" }, "read_only_hint": true, "destructive_hint": false, "idempotent_hint": true },
-      { "name": "heyfood_get_household_member", "status": "active", "operation_class": "local_read", "authority": "read_only", "approval": "none", "input_schema": { "id": "https://hey.food/schemas/v1/agent-household-read.schema.json", "sha256": "b70db3f02dc3c68333bbf79c3ff92c415715d5ce7d07a99af445adefced4e8e2" }, "result_schema": { "id": "https://hey.food/schemas/v1/agent-household-read.schema.json", "sha256": "b70db3f02dc3c68333bbf79c3ff92c415715d5ce7d07a99af445adefced4e8e2" }, "read_only_hint": true, "destructive_hint": false, "idempotent_hint": true },
-      { "name": "heyfood_prepare_household_change", "status": "active", "operation_class": "prepare", "authority": "prepare_only", "approval": "attached_heyfood_tui", "input_schema": { "id": "https://hey.food/schemas/v1/agent-household-action.schema.json", "sha256": "e8f717da7b16102483c72fa79f001487284c7fca939867c6dd869ec9376550b2" }, "result_schema": { "id": "https://hey.food/schemas/v1/agent-household-proposal-presentation.schema.json", "sha256": "8d308f78910d3f822bd14f3bf3da3b10ff08c66399277e0bdd973695e8c8b25a" }, "read_only_hint": false, "destructive_hint": false, "idempotent_hint": false },
-      { "name": "heyfood_get_household_change", "status": "active", "operation_class": "status", "authority": "read_only", "approval": "attached_heyfood_tui", "input_schema": { "id": "https://hey.food/schemas/v1/agent-household-action.schema.json", "sha256": "e8f717da7b16102483c72fa79f001487284c7fca939867c6dd869ec9376550b2" }, "result_schema": { "id": "https://hey.food/schemas/v1/agent-household-proposal-presentation.schema.json", "sha256": "8d308f78910d3f822bd14f3bf3da3b10ff08c66399277e0bdd973695e8c8b25a" }, "read_only_hint": true, "destructive_hint": false, "idempotent_hint": true },
-      { "name": "heyfood_cancel_household_change", "status": "active", "operation_class": "cancel", "authority": "cancel_before_dispatch", "approval": "attached_heyfood_tui", "input_schema": { "id": "https://hey.food/schemas/v1/agent-household-action.schema.json", "sha256": "e8f717da7b16102483c72fa79f001487284c7fca939867c6dd869ec9376550b2" }, "result_schema": { "id": "https://hey.food/schemas/v1/agent-household-outcome.schema.json", "sha256": "5a41f2021d3be5a030250d3695ff1e8b4625e7596ea351b1870f0f6d25355582" }, "read_only_hint": false, "destructive_hint": false, "idempotent_hint": true },
-      { "name": "heyfood_reconcile_household_change", "status": "active", "operation_class": "reconcile", "authority": "reconcile_only", "approval": "attached_heyfood_tui", "input_schema": { "id": "https://hey.food/schemas/v1/agent-household-action.schema.json", "sha256": "e8f717da7b16102483c72fa79f001487284c7fca939867c6dd869ec9376550b2" }, "result_schema": { "id": "https://hey.food/schemas/v1/agent-household-outcome.schema.json", "sha256": "5a41f2021d3be5a030250d3695ff1e8b4625e7596ea351b1870f0f6d25355582" }, "read_only_hint": false, "destructive_hint": false, "idempotent_hint": true }
+      { "name": "heyfood_get_household_context", "status": "active", "operation_class": "local_read", "authority": "read_only", "approval": "none", "input_schema": { "id": "https://hey.food/schemas/v1/agent-household-context-input.schema.json", "sha256": "e832c0e64e13bf3d91e59a339d795c03b1c9b45f5b2e4d6f03fe00d8dbaf8342" }, "result_schema": { "id": "https://hey.food/schemas/v1/agent-household-read.schema.json", "sha256": "9ab5a881284a18ca73346dbb5bacefb155230e8931eea87698bda722e0759618" }, "read_only_hint": true, "destructive_hint": false, "idempotent_hint": true },
+      { "name": "heyfood_get_household_member", "status": "active", "operation_class": "local_read", "authority": "read_only", "approval": "none", "input_schema": { "id": "https://hey.food/schemas/v1/agent-household-member-input.schema.json", "sha256": "c9f4d347345f9dad7d308ad0c14a42abd4287a79156f43a42b5dbef2a058ecc8" }, "result_schema": { "id": "https://hey.food/schemas/v1/agent-household-read.schema.json", "sha256": "9ab5a881284a18ca73346dbb5bacefb155230e8931eea87698bda722e0759618" }, "read_only_hint": true, "destructive_hint": false, "idempotent_hint": true },
+      { "name": "heyfood_prepare_household_change", "status": "active", "operation_class": "prepare", "authority": "prepare_only", "approval": "attached_heyfood_tui", "input_schema": { "id": "https://hey.food/schemas/v1/agent-household-action.schema.json", "sha256": "eeec44e7cbb790c7de66e86821371e0c287b7b2b59597f140194b548eb0ca55b" }, "result_schema": { "id": "https://hey.food/schemas/v1/agent-household-proposal-presentation.schema.json", "sha256": "6c43b331da204d413ba79399df6a5ae4ffc8e42829d8a4937cf2f093caf77189" }, "read_only_hint": false, "destructive_hint": false, "idempotent_hint": false },
+      { "name": "heyfood_get_household_change", "status": "active", "operation_class": "status", "authority": "read_only", "approval": "attached_heyfood_tui", "input_schema": { "id": "https://hey.food/schemas/v1/agent-household-get-change-input.schema.json", "sha256": "28601c8d46c80e440523d50632b307bf9710243fd33185cd7169731d5c8c7da4" }, "result_schema": { "id": "https://hey.food/schemas/v1/agent-household-proposal-presentation.schema.json", "sha256": "6c43b331da204d413ba79399df6a5ae4ffc8e42829d8a4937cf2f093caf77189" }, "read_only_hint": true, "destructive_hint": false, "idempotent_hint": true },
+      { "name": "heyfood_cancel_household_change", "status": "active", "operation_class": "cancel", "authority": "cancel_before_dispatch", "approval": "attached_heyfood_tui", "input_schema": { "id": "https://hey.food/schemas/v1/agent-household-cancel-input.schema.json", "sha256": "6470d8f6ca6b97c01c080f9138bb43e920181eebd971db003dd2e507b3ba21be" }, "result_schema": { "id": "https://hey.food/schemas/v1/agent-household-outcome.schema.json", "sha256": "64df217e4ba7e1563df3b70da97c6c4a21c3ecbcdc03659da431440db0d9ddb0" }, "read_only_hint": false, "destructive_hint": false, "idempotent_hint": true },
+      { "name": "heyfood_reconcile_household_change", "status": "active", "operation_class": "reconcile", "authority": "reconcile_only", "approval": "attached_heyfood_tui", "input_schema": { "id": "https://hey.food/schemas/v1/agent-household-reconcile-input.schema.json", "sha256": "9d6caa7514e1308db3ce7b2f318c6b69eb03d504def7626b9e048f0c72c6b008" }, "result_schema": { "id": "https://hey.food/schemas/v1/agent-household-outcome.schema.json", "sha256": "64df217e4ba7e1563df3b70da97c6c4a21c3ecbcdc03659da431440db0d9ddb0" }, "read_only_hint": false, "destructive_hint": false, "idempotent_hint": true }
     ]
   },
   "household_contracts": {
-    "read": { "id": "https://hey.food/schemas/v1/agent-household-read.schema.json", "sha256": "b70db3f02dc3c68333bbf79c3ff92c415715d5ce7d07a99af445adefced4e8e2" },
-    "proposal_presentation": { "id": "https://hey.food/schemas/v1/agent-household-proposal-presentation.schema.json", "sha256": "8d308f78910d3f822bd14f3bf3da3b10ff08c66399277e0bdd973695e8c8b25a" },
-    "disclosure": { "id": "https://hey.food/schemas/v1/household-agent-disclosure.schema.json", "sha256": "43b2c08ffb58ce97d2fc80dbd483715ae3172c1a9c2a375df1563bfc5f34bb2b" },
+    "read": { "id": "https://hey.food/schemas/v1/agent-household-read.schema.json", "sha256": "9ab5a881284a18ca73346dbb5bacefb155230e8931eea87698bda722e0759618" },
+    "proposal_presentation": { "id": "https://hey.food/schemas/v1/agent-household-proposal-presentation.schema.json", "sha256": "6c43b331da204d413ba79399df6a5ae4ffc8e42829d8a4937cf2f093caf77189" },
+    "disclosure": { "id": "https://hey.food/schemas/v1/household-agent-disclosure.schema.json", "sha256": "c9acedd06068eba99fdb19c58300a3ed1c86fe023d83d9c78272bd3d8bd7cc36" },
     "local_approval": { "id": "https://hey.food/schemas/v1/local-household-approval-protocol.schema.json", "sha256": "c3bcbcb045f1bc5691579a1392e9adc2ee2920a4b91ff7460811f71c2b4c2946" },
     "native_state": { "id": "https://hey.food/schemas/v1/agent-household-native-state.schema.json", "sha256": "690c3480c9b4719482063665a49f6d70969ece2eb5e0ee29ee88cc8e1a494403" },
     "operations": ["add", "edit", "archive", "restore", "scope"],

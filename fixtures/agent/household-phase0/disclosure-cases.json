@@ -9,6 +9,12 @@
     "minor_profile_disclosure": false,
     "unknown_age_profile_disclosure": false,
     "everyone_is_all_or_nothing": true,
+    "grants_are_per_exact_subject": true,
+    "everyone_grant_type_exists": false,
+    "exact_account_binding": true,
+    "exact_purpose_binding": true,
+    "exact_revision_set_digest_binding": true,
+    "authority_age_pairs_enforced": true,
     "revocation_advances_generation": true,
     "revocation_cannot_recall_prior_copies": true
   },
@@ -22,5 +28,16 @@
     { "id": "revoked_status_downgrade", "age_status": "adult", "roster_grant": "revoked", "profile_grant": "revoked", "requested_projection": "profile", "result": "content_free" },
     { "id": "everyone_partial_denied", "age_status": "adult", "roster_grant": "missing", "profile_grant": "missing", "requested_projection": "everyone", "result": "household_agent_disclosure_required" },
     { "id": "expired_grant_denied", "age_status": "adult", "roster_grant": "expired", "profile_grant": "expired", "requested_projection": "profile", "result": "household_agent_disclosure_required" }
+  ],
+  "adversarial_cases": [
+    { "id": "missing_subject", "condition": "missing_exact_subject_grant", "expected_projection": "content_free" },
+    { "id": "minor_profile", "condition": "minor_profile_with_guardian_authority", "expected_projection": "content_free" },
+    { "id": "unknown_profile", "condition": "unknown_age_profile_with_guardian_authority", "expected_projection": "content_free" },
+    { "id": "revoked", "condition": "revoked_grant", "expected_projection": "content_free" },
+    { "id": "wrong_account", "condition": "wrong_account", "expected_projection": "content_free" },
+    { "id": "wrong_purpose", "condition": "wrong_purpose", "expected_projection": "content_free" },
+    { "id": "stale_revision", "condition": "stale_revision_set", "expected_projection": "content_free" },
+    { "id": "invalid_authority", "condition": "invalid_authority_age_pair", "expected_projection": "content_free" },
+    { "id": "everyone_partial", "condition": "partial_everyone_grant_set", "expected_projection": "content_free" }
   ]
 }

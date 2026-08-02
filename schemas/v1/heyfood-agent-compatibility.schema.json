@@ -29,6 +29,30 @@
     "credentials_accessed": { "const": false },
     "product_state_mutated": { "const": false }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "compatible": { "const": true } }, "required": ["compatible"] },
+      "then": {
+        "properties": {
+          "installations": {
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/compatible_installation" }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "installations": {
+            "contains": {
+              "properties": { "status": { "enum": ["incompatible", "skill_identity_unknown"] } },
+              "required": ["status"]
+            },
+            "minContains": 1
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "installation": {
@@ -79,21 +103,97 @@
             "receipt_invalid"
           ]
         },
-        "remediation": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["program", "arguments"],
+        "remediation": { "$ref": "#/$defs/remediation" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "host": { "const": "codex" } }, "required": ["host"] },
+          "then": { "properties": { "remediation": { "$ref": "#/$defs/codex_remediation" } } }
+        },
+        {
+          "if": { "properties": { "host": { "const": "claude-code" } }, "required": ["host"] },
+          "then": { "properties": { "remediation": { "$ref": "#/$defs/claude_remediation" } } }
+        },
+        {
+          "if": { "properties": { "host": { "const": "openclaw" } }, "required": ["host"] },
+          "then": { "properties": { "remediation": { "$ref": "#/$defs/openclaw_remediation" } } }
+        }
+      ]
+    },
+    "compatible_installation": {
+      "allOf": [
+        { "$ref": "#/$defs/installation" },
+        {
           "properties": {
-            "program": { "const": "heyfood" },
-            "arguments": {
-              "type": "array",
-              "minItems": 5,
-              "maxItems": 16,
-              "items": { "type": "string", "minLength": 1, "maxLength": 256 }
-            }
+            "host_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "receipt_state": { "const": "verified" },
+            "skill_package_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "skill_sha256": { "$ref": "#/$defs/sha256" },
+            "supported_manifest_minimum": { "type": "integer", "minimum": 1 },
+            "supported_manifest_maximum": { "type": "integer", "minimum": 1 },
+            "status": { "const": "compatible" },
+            "reason": { "const": "supported_manifest_range" }
           }
         }
+      ]
+    },
+    "remediation": {
+      "oneOf": [
+        { "$ref": "#/$defs/codex_remediation" },
+        { "$ref": "#/$defs/claude_remediation" },
+        { "$ref": "#/$defs/openclaw_remediation" }
+      ]
+    },
+    "codex_remediation": {
+      "$ref": "#/$defs/remediation_base",
+      "properties": { "arguments": { "$ref": "#/$defs/codex_arguments" } }
+    },
+    "claude_remediation": {
+      "$ref": "#/$defs/remediation_base",
+      "properties": { "arguments": { "$ref": "#/$defs/claude_arguments" } }
+    },
+    "openclaw_remediation": {
+      "$ref": "#/$defs/remediation_base",
+      "properties": { "arguments": { "$ref": "#/$defs/openclaw_arguments" } }
+    },
+    "remediation_base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["program", "arguments"],
+      "properties": {
+        "program": { "const": "heyfood" },
+        "arguments": { "type": "array" }
       }
+    },
+    "codex_arguments": {
+      "type": "array",
+      "prefixItems": [
+        { "const": "agent" }, { "const": "setup" }, { "const": "--target" },
+        { "const": "codex" }, { "const": "--scope" }, { "const": "user" }, { "const": "--apply" }
+      ],
+      "items": false,
+      "minItems": 7,
+      "maxItems": 7
+    },
+    "claude_arguments": {
+      "type": "array",
+      "prefixItems": [
+        { "const": "agent" }, { "const": "setup" }, { "const": "--target" },
+        { "const": "claude-code" }, { "const": "--scope" }, { "const": "user" }, { "const": "--apply" }
+      ],
+      "items": false,
+      "minItems": 7,
+      "maxItems": 7
+    },
+    "openclaw_arguments": {
+      "type": "array",
+      "prefixItems": [
+        { "const": "agent" }, { "const": "setup" }, { "const": "--target" },
+        { "const": "openclaw" }, { "const": "--scope" }, { "const": "user" }, { "const": "--apply" }
+      ],
+      "items": false,
+      "minItems": 7,
+      "maxItems": 7
     }
   }
 }

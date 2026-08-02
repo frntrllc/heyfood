@@ -38,6 +38,7 @@ pub use health::{
     HealthAuthorization, HealthConnection, HealthContext, HealthManagementOutcome, HealthPort,
 };
 pub use household_agent_phase0::{
+    AuthorizedAgentHouseholdPrepareV1, BoundAgentHouseholdDisclosureV1,
     BoundAgentHouseholdOutcomeReceiptV1, BoundAgentHouseholdProposalV1, BoundAgentHouseholdReadV1,
     HouseholdAgentPhase0Proof,
 };

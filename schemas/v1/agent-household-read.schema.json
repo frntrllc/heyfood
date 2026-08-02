@@ -1,12 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://hey.food/schemas/v1/agent-household-read.schema.json",
-  "title": "heyfood agent household read v1",
-  "description": "Closed request and disclosure-filtered result contract for local household reads.",
-  "oneOf": [
-    { "$ref": "#/$defs/request" },
-    { "$ref": "#/$defs/result" }
-  ],
+  "title": "heyfood agent household read result v1",
+  "description": "Closed disclosure-filtered result contract shared by the two local household read surfaces.",
+  "$ref": "#/$defs/result",
   "$defs": {
     "member_ref": {
       "type": "string",
@@ -51,41 +48,20 @@
         }
       ]
     },
-    "request": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "schema_version",
-        "kind",
-        "subject",
-        "requested_projection",
-        "expected_disclosure_generation",
-        "cursor",
-        "limit"
-      ],
-      "properties": {
-        "schema_version": { "const": 1 },
-        "kind": { "const": "household_read_request" },
-        "subject": {
-          "oneOf": [
-            { "$ref": "#/$defs/subject" },
-            { "type": "null" }
-          ]
-        },
-        "requested_projection": { "enum": ["content_free", "roster", "profile"] },
-        "expected_disclosure_generation": { "type": "integer", "minimum": 0 },
-        "cursor": {
-          "type": ["string", "null"],
-          "minLength": 1,
-          "maxLength": 512
-        },
-        "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
-      }
-    },
     "member": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["member_ref", "display_label", "profile_revision"],
+      "required": [
+        "member_ref",
+        "display_label",
+        "relationship",
+        "lifecycle",
+        "profile_state",
+        "profile_schema_version",
+        "profile_revision",
+        "profile_complete",
+        "minimized_declared_profile"
+      ],
       "properties": {
         "member_ref": { "$ref": "#/$defs/member_ref" },
         "display_label": {
@@ -94,12 +70,53 @@
           "maxLength": 320,
           "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
         },
+        "relationship": {
+          "enum": ["spouse", "partner", "parent", "child", "sibling", "grandparent", "friend", "other"]
+        },
+        "lifecycle": { "enum": ["active", "archived"] },
+        "profile_state": { "enum": ["incomplete", "local_only", "pending_sync", "synced", "conflicted"] },
+        "profile_schema_version": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        },
         "profile_revision": {
           "oneOf": [
             { "type": "integer", "minimum": 1 },
             { "type": "null" }
           ]
+        },
+        "profile_complete": { "type": "boolean" },
+        "minimized_declared_profile": {
+          "oneOf": [
+            { "$ref": "#/$defs/minimized_profile" },
+            { "type": "null" }
+          ]
         }
+      }
+    },
+    "bounded_values": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+      }
+    },
+    "minimized_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["diet_styles", "allergies", "restrictions", "health_conditions", "avoid_ingredients"],
+      "properties": {
+        "diet_styles": { "$ref": "#/$defs/bounded_values" },
+        "allergies": { "$ref": "#/$defs/bounded_values" },
+        "restrictions": { "$ref": "#/$defs/bounded_values" },
+        "health_conditions": { "$ref": "#/$defs/bounded_values" },
+        "avoid_ingredients": { "$ref": "#/$defs/bounded_values" }
       }
     },
     "result": {
@@ -123,9 +140,19 @@
         "schema_version": { "const": 1 },
         "kind": { "const": "household_read_result" },
         "projection": { "enum": ["content_free", "roster", "profile"] },
-        "resolved_subject": { "$ref": "#/$defs/subject" },
+        "resolved_subject": {
+          "oneOf": [
+            { "$ref": "#/$defs/subject" },
+            { "type": "null" }
+          ]
+        },
         "resolved_from_active_scope": { "type": "boolean" },
-        "active_scope": { "$ref": "#/$defs/scope" },
+        "active_scope": {
+          "oneOf": [
+            { "$ref": "#/$defs/scope" },
+            { "type": "null" }
+          ]
+        },
         "household_revision": { "type": "integer", "minimum": 1 },
         "disclosure_generation": { "type": "integer", "minimum": 0 },
         "eligible_member_count": { "type": "integer", "minimum": 0, "maximum": 100 },
@@ -148,7 +175,34 @@
             "required": ["projection"]
           },
           "then": {
-            "properties": { "members": { "maxItems": 0 } }
+            "properties": {
+              "resolved_subject": { "type": "null" },
+              "active_scope": { "type": "null" },
+              "members": { "maxItems": 0 },
+              "next_cursor": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "projection": { "const": "roster" } },
+            "required": ["projection"]
+          },
+          "then": {
+            "properties": {
+              "members": {
+                "items": {
+                  "allOf": [
+                    { "$ref": "#/$defs/member" },
+                    {
+                      "properties": {
+                        "minimized_declared_profile": { "type": "null" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
           }
         }
       ]

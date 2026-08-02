@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/agent-household-member-input.schema.json",
+  "title": "heyfood household member input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "member_ref", "requested_projection", "expected_disclosure_generation"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "get_household_member" },
+    "member_ref": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000-\\u001f\\u007f]+$" },
+    "requested_projection": { "enum": ["content_free", "roster", "profile"] },
+    "expected_disclosure_generation": { "type": "integer", "minimum": 0 }
+  }
+}

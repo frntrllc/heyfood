@@ -261,8 +261,10 @@ switchable scopes for:
 - roster identity and relationship metadata;
 - minimized profile reads.
 
-The grant is bound to the exact account, stable subject reference, disclosure
-purpose, allowed data classes, local OS-user/account boundary, grant revision,
+Every grant is bound to one exact self/member subject; there is no `Everyone`
+grant type. The authoritative grant set is bound to the exact account,
+disclosure purpose, allowed data classes, local OS-user/account boundary,
+per-subject grant revisions, deterministic revision-set digest, generation,
 granting authority, and expiry or revocation state. `v0.8.0` does not claim to
 authenticate one coding-agent host against another on a one-shot process call.
 A grant therefore authorizes every local caller running with the same OS-user
@@ -290,6 +292,14 @@ may receive only a content-free restricted-member count and a TUI handoff. A
 profile read requires both roster and profile-read grants. `Everyone` fails
 closed unless every included subject has the required current grant; heyfood
 does not return a partial household while presenting it as Everyone.
+
+Adapters are not policy authorities. The application layer loads the
+authoritative grant set, derives the exact subjects in the returned snapshot,
+computes the maximum projection, filters the adapter result, and repeats the
+account, purpose, generation, and revision-set check after proposal work. A
+malicious or stale adapter returning profile content cannot bypass this
+filtering. Minor or unknown-age guardian authority is roster-only; owner-adult
+profile authority is invalid for a non-adult subject.
 
 Revocation takes effect before the next read or proposal transition, advances
 the disclosure generation, invalidates affected pending proposals and cached
@@ -435,7 +445,8 @@ Every variant may report `prepared`, `awaiting_local_input`,
 `awaiting_local_review`, `committing`, `committed`, `cancelled`, `expired`,
 `stale`, `rejected`, `proven_uncommitted`, or `reconciliation_required`.
 Immediately before every serialization, heyfood revalidates the account,
-projection class, disclosure-grant revision, and disclosure generation. A
+projection class, disclosure-purpose-bound grant-set digest, every included
+per-subject grant revision, and disclosure generation. A
 revocation downgrades all later status and reconciliation results to the
 content-free variant; cached or previously serialized profile content is never
 repeated.
@@ -453,7 +464,7 @@ Internally, heyfood binds the proposal to:
 - encrypted repository account;
 - expected household revision;
 - exact target member and profile revision, when applicable;
-- exact disclosure-grant revision and disclosure generation;
+- exact disclosure purpose, per-subject revision-set digest, and disclosure generation;
 - exact agent presentation projection class;
 - operation and canonical before/after document hashes;
 - scope and conversation-continuity consequences;
@@ -611,10 +622,10 @@ implementation. At minimum:
 
 | Surface | Input | Result evidence | I/O and retry class |
 |---|---|---|---|
-| `household show` | Optional exact `subject`; cursor/limit only if the frozen schema needs pagination | Resolved subject, whether it came from active scope, household/disclosure revisions, eligible/restricted counts, and only granted roster/profile projections | Local read; one JSON stdout value; diagnostics on stderr; no retry after state-generation conflict without a fresh read |
-| `household member` | Required stable `member_ref`; optional bounded projection selector if frozen | Exact resolved member reference, grant state, profile readiness/revision, and only granted minimized fields | Local read; same stream/exit contract; no display-name resolution |
-| `heyfood_get_household_context` | The same optional subject and pagination fields | Semantically identical data and typed errors to `household show` | Local bounded MCP read; cursor snapshot-bound |
-| `heyfood_get_household_member` | The same exact member reference/projection fields | Semantically identical data and typed errors to `household member` | Local bounded MCP read |
+| `household show` | Closed context-input schema with optional exact `subject`, bounded cursor, and limit | Closed read-result schema: resolved subject, whether it came from active scope, household/disclosure revisions, eligible/restricted counts, and only granted roster/profile projections | Local read; one JSON stdout value; diagnostics on stderr; no retry after state-generation conflict without a fresh read |
+| `household member` | Separate closed member-input schema requiring stable `member_ref`; no context selector or cursor | The same closed read-result schema with exact resolved member reference, grant state, profile readiness/revision, and only granted minimized fields | Local read; same stream/exit contract; no display-name resolution |
+| `heyfood_get_household_context` | Exact context-input schema only | Semantically identical data and typed errors to `household show` | Local bounded MCP read; cursor snapshot-bound |
+| `heyfood_get_household_member` | Exact member-input schema only | Semantically identical data and typed errors to `household member` | Local bounded MCP read |
 
 The matrix also freezes maximum input/output sizes, stable ordering, cursor
 rules, unknown/archived/incomplete/ambiguous/cross-account handling, disclosure
@@ -842,17 +853,16 @@ backend error bodies.
 ## Canonical values and hostile-content rendering
 
 Proposal digests and repository effect fingerprints bind the exact validated
-canonical source values, not terminal-wrapped or escaped display text. Every
-renderer derives a context-safe presentation from those values:
+canonical source values, not terminal-wrapped or escaped display text. The
+Phase-0 terminal renderer uses one reversible quoted-ASCII encoding. Safe ASCII
+is preserved except that quote and backslash are escaped; every non-ASCII,
+control, bidi, zero-width, invisible, line-separator, and confusable code point
+is emitted as its exact `\u{XXXX}` scalar value. The renderer performs no
+Unicode normalization and never substitutes a lookalike. Delimiter characters
+that could form a URL or terminal instruction are escaped, so user data cannot
+create headings, instructions, keys, URLs, or approval controls. Literal text
+such as `<U+001B>` remains distinguishable from an actual escape byte.
 
-- terminal control bytes and escape sequences are rejected or visibly escaped;
-- bidi controls, zero-width/invisible code points, and line-separator tricks
-  are visibly annotated or replaced without changing the canonical value;
-- Unicode normalization and confusable-label checks occur during validation,
-  while the review preserves an unambiguous representation of what will be
-  stored;
-- user values never create headings, instructions, keys, URLs, or approval
-  controls;
 - changed and cleared safety fields are never truncated away; compact layouts
   paginate or scroll while preserving the complete focused value; and
 - any future HTML surface requires a separately reviewed context-specific
@@ -929,17 +939,22 @@ Deliverables:
 5. Freeze and prototype the attached-TUI inbox grammar, local household
    approval protocol v1, CAS transition table, safe renderer, and direct human
    edit/archive/restore/scope flows. Hosted approval remains out of scope.
-6. Prove one fake-port read and one non-mutating prepare/status/cancel path from
-   the binary composition root through the application layer.
+6. Prove adversarial fake-port read and non-mutating prepare/status/cancel paths
+   from the binary composition root through the application layer, including
+   malicious profile replay, wrong-account authority, minor/unknown-age
+   downgrade, revocation, and disclosure revision rotation.
 7. Produce a DG-R2-style dispatch/retry row for every repository mutation
    boundary.
 8. Freeze manifest schema v3, the version-invariant compatibility bootstrap,
    skill identity receipts, and the exact v1/v2 compatibility views.
 9. Freeze the native-state schema/capability version, migration, compatibility-
    floor, downgrade, rollback-read-only, repair, and unresolved-journal rules.
-10. Prove the existing applied-commit ledger can co-commit preallocated
+10. Execute the real repository reducer and existing applied-commit ledger for
+    all five effects, proving it can co-commit preallocated
     commit/member identities and the effect fingerprint frozen only after
-    complete validated input for each operation.
+    complete validated input for each operation, preserve the prior scope on
+    add, atomically fall back from an archived active member, replay exactly,
+    and reject commit-ID reuse with a different fingerprint.
 
 Exit gate:
 

@@ -2382,6 +2382,156 @@ async fn existing_member_profile_save_is_local_only_and_advances_exact_revisions
     assert_eq!(mutation_authority.calls.load(Ordering::SeqCst), 2);
 }
 
+fn apply_phase0_agent_effect(
+    current: &HouseholdStateV1,
+    candidate: HouseholdStateV1,
+    effect: HouseholdEffectV1,
+    committed_at: CanonicalTimestampV1,
+) -> (HouseholdStateV1, HouseholdCommit) {
+    let command = HouseholdCommit::new(
+        current.account_binding.clone(),
+        current.revision,
+        CommitId::new(),
+        candidate,
+        effect,
+        committed_at,
+    )
+    .expect("complete candidate freezes its fingerprint");
+    let first = resolve_household_commit_v1(Some(current), &command).expect("first resolution");
+    let crash_replay =
+        resolve_household_commit_v1(Some(current), &command).expect("pre-persistence crash replay");
+    assert_eq!(first, crash_replay);
+    let HouseholdRepositoryResolutionV1::Write { state, outcome } = first else {
+        panic!("new command must produce a write")
+    };
+    assert_eq!(outcome.resulting_revision, state.revision);
+    assert!(state.bounded_applied_commits.iter().any(|record| {
+        record.commit_id == command.commit_id
+            && record.fingerprint == command.claimed_effect_fingerprint.as_digest()
+    }));
+    assert!(matches!(
+        resolve_household_commit_v1(Some(&state), &command).expect("exact replay"),
+        HouseholdRepositoryResolutionV1::Replay(_)
+    ));
+    (*state, command)
+}
+
+#[test]
+fn phase0_agent_effects_execute_all_five_exact_once_repository_paths() {
+    let mut state = initialized_state("phase0-five-effects");
+    let original_scope = state.active_scope.clone();
+    let member_id = heyfood_core::MemberId::new();
+
+    let (mut add_candidate, legacy_add_effect) =
+        atomic_create_candidate(&state, member_id.clone(), "Synthetic Member", timestamp(1));
+    let HouseholdEffectV1::CreateMemberWithDeclaredProfile {
+        member,
+        profile,
+        selected_scope: _,
+    } = legacy_add_effect
+    else {
+        unreachable!()
+    };
+    add_candidate.active_scope = original_scope.clone();
+    let add_effect = HouseholdEffectV1::CreateMemberWithDeclaredProfileAndScope {
+        member: member.clone(),
+        profile: profile.clone(),
+        previous_scope: original_scope.clone(),
+        resulting_scope: original_scope.clone(),
+    };
+    let (after_add, add_command) =
+        apply_phase0_agent_effect(&state, add_candidate, add_effect, timestamp(1));
+    assert_eq!(after_add.active_scope, original_scope);
+    state = after_add;
+
+    let mut edited_member = member.clone();
+    edited_member.display_name = DisplayName::parse("Synthetic Member Edited").unwrap();
+    edited_member.updated_at = timestamp(2);
+    let mut edited_profile = profile.clone();
+    edited_profile.profile_revision = profile.profile_revision.checked_next().unwrap();
+    let mut edited_declared = profile
+        .document
+        .declared_profile
+        .clone()
+        .expect("native declared profile");
+    edited_declared
+        .avoid_ingredients
+        .push("second private ingredient".to_owned());
+    edited_profile.document = HouseholdProfileDocumentV1::native(edited_declared).unwrap();
+    let mut edit_candidate = state.clone();
+    edit_candidate.revision = state.revision.checked_next().unwrap();
+    edit_candidate.updated_at = timestamp(2);
+    edit_candidate.members[0] = edited_member.clone();
+    edit_candidate.profiles[0] = edited_profile.clone();
+    let edit_effect = HouseholdEffectV1::ReplaceMemberAndDeclaredProfile {
+        member: edited_member,
+        profile: edited_profile,
+    };
+    let (after_edit, _) =
+        apply_phase0_agent_effect(&state, edit_candidate, edit_effect, timestamp(2));
+    state = after_edit;
+
+    let member_scope = HouseholdScope::Subject(HouseholdSubjectId::member(member_id.clone()));
+    let mut scope_candidate = state.clone();
+    scope_candidate.revision = state.revision.checked_next().unwrap();
+    scope_candidate.updated_at = timestamp(3);
+    scope_candidate.active_scope = member_scope.clone();
+    let (after_scope, _) = apply_phase0_agent_effect(
+        &state,
+        scope_candidate,
+        HouseholdEffectV1::SelectScope {
+            scope: member_scope.clone(),
+        },
+        timestamp(3),
+    );
+    state = after_scope;
+
+    let self_scope = HouseholdScope::Subject(HouseholdSubjectId::self_());
+    let mut archive_candidate = state.clone();
+    archive_candidate.revision = state.revision.checked_next().unwrap();
+    archive_candidate.updated_at = timestamp(4);
+    archive_candidate.members[0].lifecycle = HouseholdLifecycleV1::Archived;
+    archive_candidate.members[0].updated_at = timestamp(4);
+    archive_candidate.active_scope = self_scope.clone();
+    let archive_effect = HouseholdEffectV1::ArchiveMemberAndSelectScope {
+        member_id: member_id.clone(),
+        previous_scope: member_scope,
+        resulting_scope: self_scope.clone(),
+    };
+    let (after_archive, _) =
+        apply_phase0_agent_effect(&state, archive_candidate, archive_effect, timestamp(4));
+    state = after_archive;
+
+    let mut restore_candidate = state.clone();
+    restore_candidate.revision = state.revision.checked_next().unwrap();
+    restore_candidate.updated_at = timestamp(5);
+    restore_candidate.members[0].lifecycle = HouseholdLifecycleV1::Active;
+    restore_candidate.members[0].updated_at = timestamp(5);
+    let (after_restore, _) = apply_phase0_agent_effect(
+        &state,
+        restore_candidate,
+        HouseholdEffectV1::RestoreMember {
+            member_id: member_id.clone(),
+        },
+        timestamp(5),
+    );
+    assert_eq!(after_restore.active_scope, self_scope);
+    assert_eq!(after_restore.bounded_applied_commits.len(), 6);
+
+    let conflicting = HouseholdCommit::new(
+        state.account_binding.clone(),
+        state.revision,
+        add_command.commit_id,
+        after_restore.clone(),
+        HouseholdEffectV1::RestoreMember { member_id },
+        timestamp(5),
+    )
+    .expect("different command can be constructed before ledger comparison");
+    let conflict = resolve_household_commit_v1(Some(&after_restore), &conflicting)
+        .expect_err("reused commit ID must conflict");
+    assert_eq!(conflict.code, "household_commit_id_conflict");
+}
+
 #[tokio::test]
 async fn everyone_selection_uses_a_closed_target_and_authority_shape_is_enforced() {
     let mut state = initialized_state("account-a");

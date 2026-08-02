@@ -14,7 +14,9 @@
     "disclosure_generation",
     "affected_member_ref",
     "affected_member_label",
-    "profile_change_count",
+    "changes",
+    "consequences",
+    "recoverability",
     "created_at",
     "expires_at",
     "human_status",
@@ -53,11 +55,21 @@
       "maxLength": 320,
       "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
     },
-    "profile_change_count": {
-      "oneOf": [
-        { "type": "integer", "minimum": 0, "maximum": 4096 },
-        { "type": "null" }
-      ]
+    "changes": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/change" }
+    },
+    "consequences": {
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["conversation_continuity_reset", "active_scope_changed", "member_archived", "member_restored"]
+      }
+    },
+    "recoverability": {
+      "enum": ["editable_before_save", "reversible_archive", "new_proposal_required_after_save"]
     },
     "created_at": { "$ref": "#/$defs/timestamp" },
     "expires_at": { "$ref": "#/$defs/timestamp" },
@@ -68,11 +80,42 @@
     }
   },
   "$defs": {
+    "change_value": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "before", "after"],
+      "properties": {
+        "field": {
+          "enum": ["display_label", "relationship", "lifecycle", "diet_styles", "allergies", "restrictions", "health_conditions", "avoid_ingredients", "active_scope"]
+        },
+        "before": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/change_value" } },
+        "after": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/change_value" } }
+      }
+    },
     "timestamp": {
       "type": "string",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
     }
   },
+  "oneOf": [
+    { "properties": { "state": { "const": "prepared" }, "human_status": { "const": "Getting this change ready…" } }, "required": ["state", "human_status"] },
+    { "properties": { "state": { "const": "awaiting_local_input" }, "human_status": { "const": "More information needed" } }, "required": ["state", "human_status"] },
+    { "properties": { "state": { "const": "awaiting_local_review" }, "human_status": { "const": "Ready for your review" } }, "required": ["state", "human_status"] },
+    { "properties": { "state": { "const": "committing" }, "human_status": { "const": "Saving securely…" } }, "required": ["state", "human_status"] },
+    { "properties": { "state": { "const": "committed" }, "human_status": { "const": "Saved" } }, "required": ["state", "human_status"] },
+    { "properties": { "state": { "const": "cancelled" }, "human_status": { "const": "Cancelled — nothing was saved" } }, "required": ["state", "human_status"] },
+    { "properties": { "state": { "const": "expired" }, "human_status": { "const": "Expired — start a new change" } }, "required": ["state", "human_status"] },
+    { "properties": { "state": { "const": "stale" }, "human_status": { "const": "Household changed — review a fresh proposal" } }, "required": ["state", "human_status"] },
+    { "properties": { "state": { "const": "rejected" }, "human_status": { "const": "Can't use this change" } }, "required": ["state", "human_status"] },
+    { "properties": { "state": { "const": "proven_uncommitted" }, "human_status": { "const": "Not saved — heyfood verified no household change was made" } }, "required": ["state", "human_status"] },
+    { "properties": { "state": { "const": "reconciliation_required" }, "human_status": { "const": "Checking whether this was saved…" } }, "required": ["state", "human_status"] }
+  ],
   "allOf": [
     {
       "if": {
@@ -83,7 +126,8 @@
         "properties": {
           "affected_member_ref": { "type": "null" },
           "affected_member_label": { "type": "null" },
-          "profile_change_count": { "type": "null" }
+          "changes": { "maxItems": 0 },
+          "consequences": { "maxItems": 0 }
         }
       }
     },
@@ -93,7 +137,22 @@
         "required": ["projection"]
       },
       "then": {
-        "properties": { "profile_change_count": { "type": "null" } }
+        "properties": {
+          "changes": {
+            "items": {
+              "allOf": [
+                { "$ref": "#/$defs/change" },
+                {
+                  "properties": {
+                    "field": {
+                      "not": { "enum": ["diet_styles", "allergies", "restrictions", "health_conditions", "avoid_ingredients"] }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
       }
     }
   ]

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/agent-household-context-input.schema.json",
+  "title": "heyfood household context input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "subject", "requested_projection", "expected_disclosure_generation", "cursor", "limit"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "get_household_context" },
+    "subject": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "self" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "member_ref"], "properties": { "kind": { "const": "member" }, "member_ref": { "$ref": "#/$defs/member_ref" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "everyone" } } }
+      ]
+    },
+    "requested_projection": { "enum": ["content_free", "roster", "profile"] },
+    "expected_disclosure_generation": { "type": "integer", "minimum": 0 },
+    "cursor": { "type": ["string", "null"], "minLength": 1, "maxLength": 512 },
+    "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+  },
+  "$defs": {
+    "member_ref": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000-\\u001f\\u007f]+$" }
+  }
+}

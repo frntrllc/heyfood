@@ -159,7 +159,13 @@
         "mcp_inbound_frame_bytes",
         "mcp_tool_arguments_bytes",
         "mcp_structured_result_bytes",
+        "sse_line_bytes",
+        "sse_event_bytes",
+        "stream_event_count",
+        "stream_total_bytes",
         "outstanding_requests",
+        "remote_in_flight",
+        "queued_requests",
         "page_records",
         "proposal_lifetime_seconds"
       ],
@@ -169,7 +175,13 @@
         "mcp_inbound_frame_bytes": { "const": 1048576 },
         "mcp_tool_arguments_bytes": { "const": 1048576 },
         "mcp_structured_result_bytes": { "const": 4194304 },
+        "sse_line_bytes": { "const": 65536 },
+        "sse_event_bytes": { "const": 1048576 },
+        "stream_event_count": { "const": 4096 },
+        "stream_total_bytes": { "const": 4194304 },
         "outstanding_requests": { "const": 8 },
+        "remote_in_flight": { "const": 1 },
+        "queued_requests": { "const": 7 },
         "page_records": { "const": 100 },
         "proposal_lifetime_seconds": { "const": 600 }
       }
@@ -177,10 +189,11 @@
     "capability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "status", "contract_version", "authority", "disclosure"],
+      "required": ["id", "status", "summary", "contract_version"],
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$" },
         "status": { "enum": ["active", "deferred", "unavailable"] },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 512 },
         "contract_version": { "type": ["string", "null"], "maxLength": 64 },
         "authority": {
           "enum": ["read_only", "prepare_only", "human_terminal_only", "unavailable"]
@@ -195,15 +208,30 @@
       "additionalProperties": false,
       "required": [
         "path",
+        "purpose",
         "status",
         "audience",
+        "input_channel",
+        "input_schema_id",
+        "input_schema_sha256",
+        "output_family",
+        "output_schema_id",
+        "output_schema_sha256",
+        "error_schema_id",
+        "error_schema_sha256",
+        "exit_behavior",
         "operation_class",
         "network",
         "product_state_mutation",
-        "input_schema",
-        "result_schema",
+        "credential_side_effect_possible",
+        "required_scopes",
+        "authorization_upgrade_command",
         "retry_class",
-        "approval"
+        "reconciliation_command",
+        "human_confirmation",
+        "interactivity",
+        "browser_handoff",
+        "examples"
       ],
       "properties": {
         "path": {
@@ -211,20 +239,32 @@
           "pattern": "^[a-z][a-z0-9-]*( [a-z][a-z0-9-]*)*$",
           "maxLength": 256
         },
+        "purpose": { "type": "string", "minLength": 1, "maxLength": 512 },
         "status": { "enum": ["active", "deferred", "unavailable"] },
         "audience": { "enum": ["agent_safe", "human_terminal_only", "agent_unsupported"] },
-        "operation_class": { "enum": ["local_read", "prepare", "status", "cancel", "reconcile", "interactive"] },
+        "input_channel": {
+          "enum": ["none", "arguments", "json_stdin", "utf8_stdin", "arguments_or_utf8_stdin", "attached_terminal", "arguments_or_utf8_stdin_plus_controlling_terminal", "arguments_plus_controlling_terminal", "json_stdin_plus_controlling_terminal", "mcp_stdio"]
+        },
+        "input_schema_id": { "type": ["string", "null"], "maxLength": 256 },
+        "input_schema_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "output_family": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "output_schema_id": { "type": ["string", "null"], "maxLength": 256 },
+        "output_schema_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "error_schema_id": { "const": "https://hey.food/schemas/v1/heyfood-cli-error.schema.json" },
+        "error_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "exit_behavior": { "enum": ["one_json_value", "raw_markdown_or_one_json_value", "human_terminal", "shell_source", "typed_rejection", "long_lived_json_rpc_frames"] },
+        "operation_class": { "enum": ["local_read", "remote_read", "prepare", "confirm", "cancel", "mutation", "interactive", "authorization", "unavailable"] },
         "network": { "type": "boolean" },
         "product_state_mutation": { "type": "boolean" },
-        "input_schema": {
-          "oneOf": [
-            { "$ref": "#/$defs/schema_binding" },
-            { "type": "null" }
-          ]
-        },
-        "result_schema": { "$ref": "#/$defs/schema_binding" },
-        "retry_class": { "enum": ["safe_read", "no_blind_retry", "reconcile_before_retry"] },
-        "approval": { "enum": ["none", "attached_heyfood_tui"] }
+        "credential_side_effect_possible": { "type": "boolean" },
+        "required_scopes": { "type": "array", "maxItems": 32, "items": { "type": "string", "pattern": "^[a-z][a-z0-9:_-]{0,127}$" } },
+        "authorization_upgrade_command": { "type": ["string", "null"], "maxLength": 256 },
+        "retry_class": { "enum": ["not_applicable", "safe_read", "no_blind_retry", "reconcile_before_retry", "tool_specific"] },
+        "reconciliation_command": { "type": ["string", "null"], "maxLength": 256 },
+        "human_confirmation": { "enum": ["none", "attached_terminal", "heyfood_out_of_band"] },
+        "interactivity": { "enum": ["none", "attached_terminal", "controlling_terminal", "independent_browser_or_device"] },
+        "browser_handoff": { "enum": ["none", "optional", "required"] },
+        "examples": { "type": "array", "maxItems": 8, "items": { "type": "string", "minLength": 1, "maxLength": 512 } }
       },
       "allOf": [
         {
@@ -233,8 +273,22 @@
             "required": ["audience"]
           },
           "then": {
-            "properties": { "product_state_mutation": { "const": false } }
+            "properties": {
+              "product_state_mutation": { "const": false },
+              "human_confirmation": { "const": "none" },
+              "interactivity": { "const": "none" }
+            }
           }
+        },
+        {
+          "if": { "properties": { "input_schema_id": { "type": "null" } }, "required": ["input_schema_id"] },
+          "then": { "properties": { "input_schema_sha256": { "type": "null" } } },
+          "else": { "properties": { "input_schema_sha256": { "$ref": "#/$defs/sha256" } } }
+        },
+        {
+          "if": { "properties": { "output_schema_id": { "type": "null" } }, "required": ["output_schema_id"] },
+          "then": { "properties": { "output_schema_sha256": { "type": "null" } } },
+          "else": { "properties": { "output_schema_sha256": { "$ref": "#/$defs/sha256" } } }
         }
       ]
     },

@@ -18,6 +18,14 @@ use crate::{
 
 pub const HOUSEHOLD_EFFECT_FINGERPRINT_CONTRACT: &str = "heyfood.household.effect.v1";
 
+fn scope_kind(scope: &HouseholdScope) -> &'static str {
+    match scope {
+        HouseholdScope::Subject(HouseholdSubjectId::Self_) => "self",
+        HouseholdScope::Subject(HouseholdSubjectId::Member(_)) => "member",
+        HouseholdScope::Everyone => "everyone",
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ExpectedHouseholdStateV1 {
@@ -42,11 +50,26 @@ pub enum HouseholdEffectV1 {
         profile: HouseholdProfileRecordV1,
         selected_scope: HouseholdScope,
     },
+    CreateMemberWithDeclaredProfileAndScope {
+        member: HouseholdMemberV1,
+        profile: HouseholdProfileRecordV1,
+        previous_scope: HouseholdScope,
+        resulting_scope: HouseholdScope,
+    },
     ReplaceMember {
         member: HouseholdMemberV1,
     },
+    ReplaceMemberAndDeclaredProfile {
+        member: HouseholdMemberV1,
+        profile: HouseholdProfileRecordV1,
+    },
     ArchiveMember {
         member_id: MemberId,
+    },
+    ArchiveMemberAndSelectScope {
+        member_id: MemberId,
+        previous_scope: HouseholdScope,
+        resulting_scope: HouseholdScope,
     },
     RestoreMember {
         member_id: MemberId,
@@ -111,11 +134,35 @@ impl fmt::Debug for HouseholdEffectV1 {
                     },
                 )
                 .finish_non_exhaustive(),
+            Self::CreateMemberWithDeclaredProfileAndScope {
+                member: _,
+                profile,
+                previous_scope,
+                resulting_scope,
+            } => formatter
+                .debug_struct("HouseholdEffectV1::CreateMemberWithDeclaredProfileAndScope")
+                .field("profile_revision", &profile.profile_revision)
+                .field("previous_scope_kind", &scope_kind(previous_scope))
+                .field("resulting_scope_kind", &scope_kind(resulting_scope))
+                .finish_non_exhaustive(),
             Self::ReplaceMember { member: _ } => formatter
                 .debug_struct("HouseholdEffectV1::ReplaceMember")
                 .finish_non_exhaustive(),
+            Self::ReplaceMemberAndDeclaredProfile { member: _, profile } => formatter
+                .debug_struct("HouseholdEffectV1::ReplaceMemberAndDeclaredProfile")
+                .field("profile_revision", &profile.profile_revision)
+                .finish_non_exhaustive(),
             Self::ArchiveMember { member_id: _ } => formatter
                 .debug_struct("HouseholdEffectV1::ArchiveMember")
+                .finish_non_exhaustive(),
+            Self::ArchiveMemberAndSelectScope {
+                member_id: _,
+                previous_scope,
+                resulting_scope,
+            } => formatter
+                .debug_struct("HouseholdEffectV1::ArchiveMemberAndSelectScope")
+                .field("previous_scope_kind", &scope_kind(previous_scope))
+                .field("resulting_scope_kind", &scope_kind(resulting_scope))
                 .finish_non_exhaustive(),
             Self::RestoreMember { member_id: _ } => formatter
                 .debug_struct("HouseholdEffectV1::RestoreMember")
@@ -188,10 +235,39 @@ impl HouseholdEffectV1 {
                         member,
                         profile,
                         selected_scope,
+                        true,
                     )
                     .is_ok() => {}
+                    Self::CreateMemberWithDeclaredProfileAndScope {
+                        member,
+                        profile,
+                        previous_scope: _,
+                        resulting_scope,
+                    } if validate_create_member_with_declared_profile(
+                        candidate,
+                        member,
+                        profile,
+                        resulting_scope,
+                        false,
+                    )
+                    .is_ok() => {}
+                    Self::ReplaceMemberAndDeclaredProfile { member, profile }
+                        if candidate.members.iter().any(|value| value == member)
+                            && candidate.profiles.iter().any(|value| value == profile)
+                            && profile.subject
+                                == HouseholdSubjectId::member(member.member_id.clone()) => {}
                     Self::ArchiveMember { member_id }
                         if candidate.members.iter().any(|member| {
+                            &member.member_id == member_id
+                                && member.lifecycle
+                                    == crate::household_state::HouseholdLifecycleV1::Archived
+                        }) => {}
+                    Self::ArchiveMemberAndSelectScope {
+                        member_id,
+                        previous_scope: _,
+                        resulting_scope,
+                    } if candidate.active_scope == *resulting_scope
+                        && candidate.members.iter().any(|member| {
                             &member.member_id == member_id
                                 && member.lifecycle
                                     == crate::household_state::HouseholdLifecycleV1::Archived
@@ -266,6 +342,7 @@ fn validate_create_member_with_declared_profile(
     member: &HouseholdMemberV1,
     profile: &HouseholdProfileRecordV1,
     selected_scope: &HouseholdScope,
+    require_new_member_scope: bool,
 ) -> Result<(), HouseholdStateError> {
     let subject = HouseholdSubjectId::member(member.member_id.clone());
     if !member.member_id.is_native_uuid_v4()
@@ -279,7 +356,7 @@ fn validate_create_member_with_declared_profile(
         || profile.subject != subject
         || profile.profile_revision.get() != 1
         || profile.document.provenance != ProfileDocumentProvenanceV1::NativeDeclared
-        || selected_scope != &HouseholdScope::Subject(subject)
+        || (require_new_member_scope && selected_scope != &HouseholdScope::Subject(subject.clone()))
         || candidate.active_scope != *selected_scope
         || !candidate.members.iter().any(|value| value == member)
         || !candidate.profiles.iter().any(|value| value == profile)

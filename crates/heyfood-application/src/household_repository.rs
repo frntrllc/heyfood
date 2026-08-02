@@ -627,6 +627,49 @@ fn validate_semantic_delta(
             upsert_profile(&mut expected, profile.clone());
             expected.active_scope = selected_scope.clone();
         }
+        HouseholdEffectV1::CreateMemberWithDeclaredProfileAndScope {
+            member,
+            profile,
+            previous_scope,
+            resulting_scope,
+        } => {
+            if &expected.active_scope != previous_scope {
+                return Err(repository_error(
+                    "household_scope_conflict",
+                    "household member creation used a stale prior scope",
+                ));
+            }
+            let subject = HouseholdSubjectId::member(member.member_id.clone());
+            if expected
+                .members
+                .iter()
+                .any(|candidate| candidate.member_id == member.member_id)
+                || expected
+                    .profiles
+                    .iter()
+                    .any(|candidate| candidate.subject == subject)
+                || !member.member_id.is_native_uuid_v4()
+                || member.relationship == RelationshipV1::Self_
+                || member.relationship_source != RelationshipSourceV1::NativeDeclared
+                || member.lifecycle != HouseholdLifecycleV1::Active
+                || member.profile_state != HouseholdProfileStateV1::LocalOnly
+                || member.created_at != *committed_at
+                || member.updated_at != *committed_at
+                || profile.subject != subject
+                || profile.profile_revision.get() != 1
+                || profile.document.provenance
+                    != heyfood_core::ProfileDocumentProvenanceV1::NativeDeclared
+            {
+                return Err(repository_error(
+                    "household_member_create_invalid",
+                    "atomic household member creation is invalid",
+                ));
+            }
+            expected.members.push(member.clone());
+            sort_members(&mut expected);
+            upsert_profile(&mut expected, profile.clone());
+            expected.active_scope = resulting_scope.clone();
+        }
         HouseholdEffectV1::ReplaceMember { member } => {
             let existing = expected
                 .members
@@ -637,6 +680,25 @@ fn validate_semantic_delta(
                 })?;
             *existing = member.clone();
             sort_members(&mut expected);
+        }
+        HouseholdEffectV1::ReplaceMemberAndDeclaredProfile { member, profile } => {
+            let existing = expected
+                .members
+                .iter_mut()
+                .find(|candidate| candidate.member_id == member.member_id)
+                .ok_or_else(|| {
+                    repository_error("household_member_unknown", "household member is unknown")
+                })?;
+            let subject = HouseholdSubjectId::member(member.member_id.clone());
+            if profile.subject != subject {
+                return Err(repository_error(
+                    "household_profile_subject_mismatch",
+                    "household profile belongs to another subject",
+                ));
+            }
+            *existing = member.clone();
+            sort_members(&mut expected);
+            upsert_profile(&mut expected, profile.clone());
         }
         HouseholdEffectV1::ArchiveMember { member_id }
         | HouseholdEffectV1::RestoreMember { member_id } => {
@@ -653,6 +715,28 @@ fn validate_semantic_delta(
                 HouseholdLifecycleV1::Active
             };
             member.updated_at = committed_at.clone();
+        }
+        HouseholdEffectV1::ArchiveMemberAndSelectScope {
+            member_id,
+            previous_scope,
+            resulting_scope,
+        } => {
+            if &expected.active_scope != previous_scope {
+                return Err(repository_error(
+                    "household_scope_conflict",
+                    "household archive used a stale prior scope",
+                ));
+            }
+            let member = expected
+                .members
+                .iter_mut()
+                .find(|candidate| &candidate.member_id == member_id)
+                .ok_or_else(|| {
+                    repository_error("household_member_unknown", "household member is unknown")
+                })?;
+            member.lifecycle = HouseholdLifecycleV1::Archived;
+            member.updated_at = committed_at.clone();
+            expected.active_scope = resulting_scope.clone();
         }
         HouseholdEffectV1::SaveOwnerProfileAndOwnerSyncIntent {
             owner_profile,

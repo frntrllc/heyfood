@@ -1,12 +1,20 @@
 {
   "schema_version": 1,
   "ledger": "existing_household_applied_commit_v1",
+  "executable_repository_test": {
+    "source": "crates/heyfood-application/tests/household_repository.rs",
+    "name": "phase0_agent_effects_execute_all_five_exact_once_repository_paths",
+    "resolves_before_persistence": true,
+    "co_committed_ledger_readback": true,
+    "exact_replay_after_persistence": true,
+    "conflicting_fingerprint_rejected": true
+  },
   "operations": [
-    { "operation": "add", "preallocated_commit_id": true, "preallocated_member_id": true, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 },
-    { "operation": "edit", "preallocated_commit_id": true, "preallocated_member_id": false, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 },
-    { "operation": "archive", "preallocated_commit_id": true, "preallocated_member_id": false, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 },
-    { "operation": "restore", "preallocated_commit_id": true, "preallocated_member_id": false, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 },
-    { "operation": "scope", "preallocated_commit_id": true, "preallocated_member_id": false, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 }
+    { "operation": "add", "effect": "create_member_with_declared_profile_and_scope", "compound_invariant": "preserves_prior_scope", "preallocated_commit_id": true, "preallocated_member_id": true, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 },
+    { "operation": "edit", "effect": "replace_member_and_declared_profile", "compound_invariant": "member_and_profile_atomic", "preallocated_commit_id": true, "preallocated_member_id": false, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 },
+    { "operation": "archive", "effect": "archive_member_and_select_scope", "compound_invariant": "active_member_falls_back_to_self", "preallocated_commit_id": true, "preallocated_member_id": false, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 },
+    { "operation": "restore", "effect": "restore_member", "compound_invariant": "lifecycle_only", "preallocated_commit_id": true, "preallocated_member_id": false, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 },
+    { "operation": "scope", "effect": "select_scope", "compound_invariant": "scope_and_revision_atomic", "preallocated_commit_id": true, "preallocated_member_id": false, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 }
   ],
   "crash_points": [
     { "id": "before_intake_freeze", "expected": "no_fingerprint_and_no_household_change" },

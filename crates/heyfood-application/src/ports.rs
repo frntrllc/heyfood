@@ -12,6 +12,7 @@ use heyfood_core::{
 use tokio_util::sync::CancellationToken;
 
 use crate::household_agent_phase0::{
+    AuthorizedAgentHouseholdPrepareV1, BoundAgentHouseholdDisclosureV1,
     BoundAgentHouseholdOutcomeReceiptV1, BoundAgentHouseholdProposalV1, BoundAgentHouseholdReadV1,
 };
 use crate::household_repository::{
@@ -255,6 +256,13 @@ pub trait HouseholdRepositoryPort: Send + Sync {
 /// separately authorized. Prepare/cancel may change only the encrypted local
 /// proposal journal; they never change the household revision.
 pub trait HouseholdAgentPhase0Port: Send + Sync {
+    fn disclosure(
+        &self,
+        account: AccountId,
+        purpose: heyfood_core::AgentDisclosurePurposeV1,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<BoundAgentHouseholdDisclosureV1, PortError>>;
+
     fn read(
         &self,
         account: AccountId,
@@ -265,7 +273,7 @@ pub trait HouseholdAgentPhase0Port: Send + Sync {
     fn prepare(
         &self,
         account: AccountId,
-        request: heyfood_core::AgentHouseholdPrepareRequestV1,
+        request: AuthorizedAgentHouseholdPrepareV1,
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<BoundAgentHouseholdProposalV1, PortError>>;
 
