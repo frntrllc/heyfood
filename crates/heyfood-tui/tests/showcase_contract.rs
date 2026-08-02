@@ -209,8 +209,8 @@ fn assert_human_household_onboarding_copy(model: &AppModel) {
         "under_13",
         "age_13_17",
         "age_18_plus",
-        "range, ID",
-        "canonical ID",
+        "range, id",
+        "canonical id",
         "declared dietary profile",
         "profile-sync consent",
         "remote member sync",
@@ -242,6 +242,22 @@ fn assert_human_household_onboarding_copy(model: &AppModel) {
                 "separated by commas—for example, `celery, garlic, onion`—then press Enter."
             ),
             "ingredient onboarding copy omitted its exact input example: {text}"
+        );
+    }
+}
+
+#[test]
+fn household_onboarding_jargon_gate_is_case_insensitive() {
+    for forbidden in ["range, ID", "canonical ID", "Declared Dietary Profile"] {
+        let mut model = AppModel::default();
+        model.scrollback.push(SemanticEntry {
+            speaker: Speaker::Notice,
+            text: forbidden.into(),
+            streaming: false,
+        });
+        assert!(
+            std::panic::catch_unwind(|| assert_human_household_onboarding_copy(&model)).is_err(),
+            "human-copy gate accepted forbidden mixed-case jargon: {forbidden}"
         );
     }
 }
