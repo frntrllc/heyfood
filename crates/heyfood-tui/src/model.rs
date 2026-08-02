@@ -5724,6 +5724,14 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
             && !has_pending_household_driver_operation(model) =>
         {
             finish_native_owner_onboarding(model, operation_id, status);
+            if model.household_generation.is_some() {
+                let mut effects = vec![Effect::ResetConversation];
+                effects.extend(begin_household_load(
+                    model,
+                    HouseholdLoadIntentV1::Bootstrap,
+                ));
+                return effects;
+            }
         }
         RuntimeEvent::OnboardingFailed {
             operation_id,
@@ -7289,6 +7297,132 @@ mod tests {
             review.scrollback.entries().back().unwrap().text,
             crate::render::profile_copy(ProfileCopyStateV1::SavedWithAbsentConsent)
         );
+    }
+
+    #[test]
+    fn native_owner_save_reloads_household_authority_before_the_next_turn() {
+        let mut model = AppModel::default();
+        let generation = HouseholdModeGenerationV1::new(1).unwrap();
+        let digest = HouseholdAccountBindingDigestV1::from_bytes([0x52; 32]);
+        let bootstrap = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::HouseholdGenerationReadyV1 {
+                session_mode_generation: generation,
+                mode: HouseholdPresentationModeV1::NativeEnabled,
+                account_binding_digest: digest,
+            }),
+        );
+        let [
+            Effect::LoadHouseholdManagementV1 {
+                operation_id,
+                reducer_correlation,
+                ..
+            },
+        ] = bootstrap.as_slice()
+        else {
+            panic!("expected initial Household bootstrap");
+        };
+        let owner = HouseholdMemberPresentationV1::new(
+            HouseholdSubjectId::self_(),
+            "Me",
+            RelationshipV1::Self_,
+            HouseholdLifecycleV1::Active,
+            HouseholdProfileStateV1::Incomplete,
+            None,
+        )
+        .unwrap();
+        assert!(
+            dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::HouseholdManagementLoadedV1 {
+                    operation_id: *operation_id,
+                    session_mode_generation: generation,
+                    reducer_correlation: *reducer_correlation,
+                    purpose: HouseholdManagementLoadPurposeV1::Bootstrap,
+                    account_binding_digest: digest,
+                    household_revision: HouseholdRevision::new(1).unwrap(),
+                    active_scope: HouseholdScope::Subject(HouseholdSubjectId::self_()),
+                    members: vec![owner],
+                }),
+            )
+            .is_empty()
+        );
+
+        assert!(submit_text(&mut model, "/onboard").is_empty());
+        advance_to_onboarding_review(&mut model);
+        assert!(matches!(
+            submit_text(&mut model, "save").as_slice(),
+            [Effect::SaveOnboarding {
+                operation_id: 1,
+                ..
+            }]
+        ));
+
+        let refresh = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::NativeOwnerOnboardingSaved {
+                operation_id: 1,
+                status: NativeOwnerProfileSaveStatusV1::SyncPending,
+            }),
+        );
+        let [
+            Effect::ResetConversation,
+            Effect::LoadHouseholdManagementV1 {
+                operation_id: refresh_operation,
+                reducer_correlation: refresh_correlation,
+                purpose: HouseholdManagementLoadPurposeV1::Bootstrap,
+                ..
+            },
+        ] = refresh.as_slice()
+        else {
+            panic!("native owner save must reset continuity and reload Household authority");
+        };
+        assert!(model.household_snapshot.is_none());
+        assert!(matches!(
+            model.household_turn_gate,
+            HouseholdTurnGateV1::Loading
+        ));
+        assert_eq!(
+            model.scrollback.entries().back().unwrap().text,
+            crate::render::profile_copy(ProfileCopyStateV1::SyncPending)
+        );
+        assert!(submit_text(&mut model, "must remain blocked").is_empty());
+
+        let saved_owner = HouseholdMemberPresentationV1::new(
+            HouseholdSubjectId::self_(),
+            "Me",
+            RelationshipV1::Self_,
+            HouseholdLifecycleV1::Active,
+            HouseholdProfileStateV1::PendingSync,
+            Some(ProfileRevision::new(1).unwrap()),
+        )
+        .unwrap();
+        assert!(
+            dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::HouseholdManagementLoadedV1 {
+                    operation_id: *refresh_operation,
+                    session_mode_generation: generation,
+                    reducer_correlation: *refresh_correlation,
+                    purpose: HouseholdManagementLoadPurposeV1::Bootstrap,
+                    account_binding_digest: digest,
+                    household_revision: HouseholdRevision::new(2).unwrap(),
+                    active_scope: HouseholdScope::Subject(HouseholdSubjectId::self_()),
+                    members: vec![saved_owner],
+                }),
+            )
+            .is_empty()
+        );
+        let first_turn = submit_text(&mut model, "first turn after save");
+        assert!(matches!(
+            first_turn.as_slice(),
+            [Effect::SubmitTurn {
+                presented_household_context: Some(context),
+                ..
+            }] if context.household_revision().get() == 2
+                && context.active_scope()
+                    == &HouseholdScope::Subject(HouseholdSubjectId::self_())
+        ));
     }
 
     #[test]
