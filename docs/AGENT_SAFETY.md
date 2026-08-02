@@ -64,10 +64,14 @@ granted or revoked only in the attached TUI and cover all processes running as
 the same OS user with access to the account-bound state. Revocation must be
 revalidated before every result serialization and downgrades future proposal
 status to content-free output. Minor and unknown-age profiles remain hidden.
+Content-free Scope output still requires a current roster grant for every
+affected subject; projection never substitutes for authority.
 
 An uncertain household commit blocks later household mutation until the
-co-committed applied-commit ledger proves committed or uncommitted. Permanent
-erasure and an agent household confirm tool are absent.
+repository-held, proposal-bound evidence capability proves the co-committed
+ledger entry or proves the exact pre-dispatch revision remains unchanged with
+no matching entry. Caller-created household DTOs provide no reconciliation
+authority. Permanent erasure and an agent household confirm tool are absent.
 
 ## Prompt injection
 

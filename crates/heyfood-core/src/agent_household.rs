@@ -1437,6 +1437,15 @@ impl AgentHouseholdProposalPresentationV1 {
         {
             return Err(AgentHouseholdContractErrorV1::InvalidWireShape);
         }
+        if self.operation == AgentHouseholdOperationV1::Scope
+            && (self.projection != AgentHouseholdProjectionV1::ContentFree
+                || self.affected_member_ref.is_some()
+                || self.affected_member_label.is_some()
+                || !self.changes.is_empty()
+                || !self.consequences.is_empty())
+        {
+            return Err(AgentHouseholdContractErrorV1::InvalidWireShape);
+        }
         match self.projection {
             AgentHouseholdProjectionV1::ContentFree
                 if self.affected_member_ref.is_some()
@@ -1729,6 +1738,132 @@ impl AgentHouseholdOutcomeReceiptV1 {
     }
 }
 
+/// Repository-held capability for attesting the applied-commit ledger of one
+/// exact account/proposal/commit tuple. The random authority identity is never
+/// accepted from a household-state DTO and cannot be selected by a caller.
+pub struct HouseholdCommitEvidenceAuthorityV1 {
+    authority_id: Uuid,
+    account: AccountId,
+    proposal_ref: AgentHouseholdProposalIdV1,
+    commit_id: CommitId,
+}
+
+impl HouseholdCommitEvidenceAuthorityV1 {
+    #[must_use]
+    pub fn new(
+        account: AccountId,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+    ) -> Self {
+        Self {
+            authority_id: Uuid::new_v4(),
+            account,
+            proposal_ref,
+            commit_id,
+        }
+    }
+
+    #[must_use]
+    pub fn binding(&self) -> HouseholdCommitEvidenceBindingV1 {
+        HouseholdCommitEvidenceBindingV1 {
+            authority_id: self.authority_id,
+            account: self.account.clone(),
+            proposal_ref: self.proposal_ref,
+            commit_id: self.commit_id,
+        }
+    }
+
+    pub fn prove_committed(
+        &self,
+        state: &HouseholdStateV1,
+    ) -> Result<AppliedHouseholdCommitProofV1, AgentHouseholdContractErrorV1> {
+        state
+            .validate()
+            .map_err(|_| AgentHouseholdContractErrorV1::AppliedCommitMismatch)?;
+        if state.account_binding != self.account {
+            return Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch);
+        }
+        let record = state
+            .bounded_applied_commits
+            .iter()
+            .find(|record| {
+                record.commit_id == self.commit_id
+                    && record.outcome == AppliedCommitOutcomeV1::Committed
+            })
+            .ok_or(AgentHouseholdContractErrorV1::AppliedCommitMismatch)?;
+        Ok(AppliedHouseholdCommitProofV1 {
+            authority_id: self.authority_id,
+            account: self.account.clone(),
+            proposal_ref: self.proposal_ref,
+            commit_id: self.commit_id,
+            effect_fingerprint: HouseholdEffectFingerprintV1::from_digest(record.fingerprint),
+            resulting_revision: record.resulting_revision,
+        })
+    }
+
+    pub fn prove_uncommitted(
+        &self,
+        state: &HouseholdStateV1,
+        expected_household_revision: HouseholdRevision,
+    ) -> Result<UnappliedHouseholdCommitProofV1, AgentHouseholdContractErrorV1> {
+        state
+            .validate()
+            .map_err(|_| AgentHouseholdContractErrorV1::AppliedCommitMismatch)?;
+        if state.account_binding != self.account
+            || state.revision != expected_household_revision
+            || state
+                .bounded_applied_commits
+                .iter()
+                .any(|record| record.commit_id == self.commit_id)
+        {
+            return Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch);
+        }
+        Ok(UnappliedHouseholdCommitProofV1 {
+            authority_id: self.authority_id,
+            account: self.account.clone(),
+            proposal_ref: self.proposal_ref,
+            commit_id: self.commit_id,
+            observed_revision: state.revision,
+        })
+    }
+}
+
+impl fmt::Debug for HouseholdCommitEvidenceAuthorityV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HouseholdCommitEvidenceAuthorityV1")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Persisted verifier for one repository-held commit-evidence capability.
+#[derive(Clone, Eq, PartialEq)]
+pub struct HouseholdCommitEvidenceBindingV1 {
+    authority_id: Uuid,
+    account: AccountId,
+    proposal_ref: AgentHouseholdProposalIdV1,
+    commit_id: CommitId,
+}
+
+impl HouseholdCommitEvidenceBindingV1 {
+    fn matches(
+        &self,
+        account: &AccountId,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+    ) -> bool {
+        &self.account == account && self.proposal_ref == proposal_ref && self.commit_id == commit_id
+    }
+}
+
+impl fmt::Debug for HouseholdCommitEvidenceBindingV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HouseholdCommitEvidenceBindingV1")
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct LocalHouseholdProposalBindingV1 {
     account: AccountId,
@@ -1742,6 +1877,7 @@ pub struct LocalHouseholdProposalBindingV1 {
     expected_household_revision: HouseholdRevision,
     expected_profile_revision: Option<ProfileRevision>,
     commit_id: CommitId,
+    commit_evidence_binding: HouseholdCommitEvidenceBindingV1,
     member_id: Option<MemberId>,
     previous_scope: HouseholdScope,
     originating_session_digest: CanonicalDigestV1,
@@ -1764,6 +1900,7 @@ impl LocalHouseholdProposalBindingV1 {
         expected_household_revision: HouseholdRevision,
         expected_profile_revision: Option<ProfileRevision>,
         commit_id: CommitId,
+        commit_evidence_binding: HouseholdCommitEvidenceBindingV1,
         member_id: Option<MemberId>,
         previous_scope: HouseholdScope,
         originating_session_digest: CanonicalDigestV1,
@@ -1790,6 +1927,7 @@ impl LocalHouseholdProposalBindingV1 {
             || disclosure_purpose != AgentDisclosurePurposeV1::HouseholdAgentProposalStatus
             || !member_shape_is_valid
             || !projection_is_valid
+            || !commit_evidence_binding.matches(&account, proposal_ref, commit_id)
         {
             return Err(AgentHouseholdContractErrorV1::InvalidJournal);
         }
@@ -1805,6 +1943,7 @@ impl LocalHouseholdProposalBindingV1 {
             expected_household_revision,
             expected_profile_revision,
             commit_id,
+            commit_evidence_binding,
             member_id,
             previous_scope,
             originating_session_digest,
@@ -1909,6 +2048,7 @@ pub struct LocalHouseholdAuthoritySnapshotV1 {
     disclosure_generation: GenerationId,
     disclosure_grant_set_digest: CanonicalDigestV1,
     disclosure_purpose: AgentDisclosurePurposeV1,
+    required_subject_authority_active: bool,
     maximum_projection: AgentHouseholdProjectionV1,
     lifecycle_generation: GenerationId,
     household_revision: HouseholdRevision,
@@ -1924,6 +2064,7 @@ impl LocalHouseholdAuthoritySnapshotV1 {
         disclosure_generation: GenerationId,
         disclosure_grant_set_digest: CanonicalDigestV1,
         disclosure_purpose: AgentDisclosurePurposeV1,
+        required_subject_authority_active: bool,
         maximum_projection: AgentHouseholdProjectionV1,
         lifecycle_generation: GenerationId,
         household_revision: HouseholdRevision,
@@ -1935,6 +2076,7 @@ impl LocalHouseholdAuthoritySnapshotV1 {
             disclosure_generation,
             disclosure_grant_set_digest,
             disclosure_purpose,
+            required_subject_authority_active,
             maximum_projection,
             lifecycle_generation,
             household_revision,
@@ -2013,6 +2155,14 @@ impl LocalHouseholdProposalAuthorityV1 {
     #[must_use]
     pub const fn binding(&self) -> &LocalHouseholdProposalBindingV1 {
         &self.binding
+    }
+
+    fn begin_local_input(&mut self) -> Result<(), AgentHouseholdContractErrorV1> {
+        if self.state != AgentHouseholdProposalStateV1::Prepared {
+            return Err(AgentHouseholdContractErrorV1::InvalidTransition);
+        }
+        self.state = AgentHouseholdProposalStateV1::AwaitingLocalInput;
+        Ok(())
     }
 
     fn freeze_for_review(
@@ -2114,6 +2264,14 @@ impl LocalHouseholdProposalAuthorityV1 {
         Ok(())
     }
 
+    fn reconcile_proven_uncommitted(&mut self) -> Result<(), AgentHouseholdContractErrorV1> {
+        if self.state != AgentHouseholdProposalStateV1::ReconciliationRequired {
+            return Err(AgentHouseholdContractErrorV1::InvalidTransition);
+        }
+        self.state = AgentHouseholdProposalStateV1::ProvenUncommitted;
+        Ok(())
+    }
+
     fn validate_current(
         &self,
         current: &LocalHouseholdAuthoritySnapshotV1,
@@ -2126,6 +2284,7 @@ impl LocalHouseholdProposalAuthorityV1 {
         }
         if self.binding.disclosure_grant_set_digest != current.disclosure_grant_set_digest
             || self.binding.disclosure_purpose != current.disclosure_purpose
+            || !current.required_subject_authority_active
         {
             return Err(AgentHouseholdContractErrorV1::DisclosureGrantChanged);
         }
@@ -2161,11 +2320,13 @@ pub struct LocalHouseholdProposalCasTokenV1 {
     proposal_digest: Option<CanonicalDigestV1>,
 }
 
-/// Opaque proof obtained only by reading one exact committed record from the
-/// authoritative native household state's bounded applied-commit ledger.
+/// Opaque proof issued by the proposal-bound repository capability after it
+/// reads one exact committed record from the native applied-commit ledger.
 #[derive(Clone, Eq, PartialEq)]
 pub struct AppliedHouseholdCommitProofV1 {
+    authority_id: Uuid,
     account: AccountId,
+    proposal_ref: AgentHouseholdProposalIdV1,
     commit_id: CommitId,
     effect_fingerprint: HouseholdEffectFingerprintV1,
     resulting_revision: HouseholdRevision,
@@ -2180,23 +2341,23 @@ impl fmt::Debug for AppliedHouseholdCommitProofV1 {
     }
 }
 
-impl HouseholdStateV1 {
-    #[must_use]
-    pub fn applied_household_commit_proof_v1(
-        &self,
-        commit_id: CommitId,
-    ) -> Option<AppliedHouseholdCommitProofV1> {
-        self.bounded_applied_commits
-            .iter()
-            .find(|record| {
-                record.commit_id == commit_id && record.outcome == AppliedCommitOutcomeV1::Committed
-            })
-            .map(|record| AppliedHouseholdCommitProofV1 {
-                account: self.account_binding.clone(),
-                commit_id: record.commit_id,
-                effect_fingerprint: HouseholdEffectFingerprintV1::from_digest(record.fingerprint),
-                resulting_revision: record.resulting_revision,
-            })
+/// Opaque proof that the authoritative repository still holds the exact
+/// pre-dispatch revision and no record for this commit identity.
+#[derive(Clone, Eq, PartialEq)]
+pub struct UnappliedHouseholdCommitProofV1 {
+    authority_id: Uuid,
+    account: AccountId,
+    proposal_ref: AgentHouseholdProposalIdV1,
+    commit_id: CommitId,
+    observed_revision: HouseholdRevision,
+}
+
+impl fmt::Debug for UnappliedHouseholdCommitProofV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UnappliedHouseholdCommitProofV1")
+            .field("observed_revision", &self.observed_revision)
+            .finish_non_exhaustive()
     }
 }
 
@@ -2297,6 +2458,16 @@ impl LocalHouseholdProposalJournalV1 {
         })
     }
 
+    pub fn begin_local_input(
+        &mut self,
+        expected: &LocalHouseholdProposalCasTokenV1,
+    ) -> Result<(), AgentHouseholdContractErrorV1> {
+        self.apply_cas(
+            expected,
+            LocalHouseholdProposalAuthorityV1::begin_local_input,
+        )
+    }
+
     pub fn begin_commit(
         &mut self,
         expected: &LocalHouseholdProposalCasTokenV1,
@@ -2320,6 +2491,27 @@ impl LocalHouseholdProposalJournalV1 {
             expected,
             LocalHouseholdProposalAuthorityV1::cancel_before_commit,
         )
+    }
+
+    pub fn expire_before_commit(
+        &mut self,
+        expected: &LocalHouseholdProposalCasTokenV1,
+    ) -> Result<(), AgentHouseholdContractErrorV1> {
+        self.finish_before_commit(expected, AgentHouseholdProposalStateV1::Expired)
+    }
+
+    pub fn mark_stale_before_commit(
+        &mut self,
+        expected: &LocalHouseholdProposalCasTokenV1,
+    ) -> Result<(), AgentHouseholdContractErrorV1> {
+        self.finish_before_commit(expected, AgentHouseholdProposalStateV1::Stale)
+    }
+
+    pub fn reject_before_commit(
+        &mut self,
+        expected: &LocalHouseholdProposalCasTokenV1,
+    ) -> Result<(), AgentHouseholdContractErrorV1> {
+        self.finish_before_commit(expected, AgentHouseholdProposalStateV1::Rejected)
     }
 
     pub fn mark_reconciliation_required(
@@ -2350,7 +2542,9 @@ impl LocalHouseholdProposalJournalV1 {
             .checked_next()
             .map_err(|_| AgentHouseholdContractErrorV1::AppliedCommitMismatch)?;
         if self.authority.binding.account != proof.account
+            || self.authority.binding.proposal_ref != proof.proposal_ref
             || self.authority.binding.commit_id != proof.commit_id
+            || self.authority.binding.commit_evidence_binding.authority_id != proof.authority_id
             || frozen.effect_fingerprint != proof.effect_fingerprint
             || proof.resulting_revision != expected_resulting_revision
         {
@@ -2364,6 +2558,25 @@ impl LocalHouseholdProposalJournalV1 {
             }
             _ => return Err(AgentHouseholdContractErrorV1::InvalidTransition),
         }
+        self.commit_replacement(replacement)
+    }
+
+    pub fn reconcile_unapplied_commit(
+        &mut self,
+        expected: &LocalHouseholdProposalCasTokenV1,
+        proof: &UnappliedHouseholdCommitProofV1,
+    ) -> Result<(), AgentHouseholdContractErrorV1> {
+        self.ensure_cas(expected)?;
+        if self.authority.binding.account != proof.account
+            || self.authority.binding.proposal_ref != proof.proposal_ref
+            || self.authority.binding.commit_id != proof.commit_id
+            || self.authority.binding.commit_evidence_binding.authority_id != proof.authority_id
+            || self.authority.binding.expected_household_revision != proof.observed_revision
+        {
+            return Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch);
+        }
+        let mut replacement = self.authority.clone();
+        replacement.reconcile_proven_uncommitted()?;
         self.commit_replacement(replacement)
     }
 
@@ -2389,6 +2602,16 @@ impl LocalHouseholdProposalJournalV1 {
         let mut replacement = self.authority.clone();
         transition(&mut replacement)?;
         self.commit_replacement(replacement)
+    }
+
+    fn finish_before_commit(
+        &mut self,
+        expected: &LocalHouseholdProposalCasTokenV1,
+        terminal_state: AgentHouseholdProposalStateV1,
+    ) -> Result<(), AgentHouseholdContractErrorV1> {
+        self.apply_cas(expected, |authority| {
+            authority.finish_before_commit(terminal_state)
+        })
     }
 
     fn ensure_cas(
@@ -2440,6 +2663,7 @@ struct BindingWireV1 {
     expected_household_revision: HouseholdRevision,
     expected_profile_revision: Option<ProfileRevision>,
     commit_id: CommitId,
+    commit_evidence_authority_id: Uuid,
     member_id: Option<MemberId>,
     previous_scope: HouseholdScope,
     originating_session_digest: CanonicalDigestV1,
@@ -2478,6 +2702,7 @@ impl From<&LocalHouseholdProposalJournalV1> for JournalWireV1 {
                 expected_household_revision: binding.expected_household_revision,
                 expected_profile_revision: binding.expected_profile_revision,
                 commit_id: binding.commit_id,
+                commit_evidence_authority_id: binding.commit_evidence_binding.authority_id,
                 member_id: binding.member_id.clone(),
                 previous_scope: binding.previous_scope.clone(),
                 originating_session_digest: binding.originating_session_digest,
@@ -2510,6 +2735,12 @@ impl TryFrom<JournalWireV1> for LocalHouseholdProposalJournalV1 {
         {
             return Err(AgentHouseholdContractErrorV1::InvalidJournal);
         }
+        let commit_evidence_binding = HouseholdCommitEvidenceBindingV1 {
+            authority_id: value.binding.commit_evidence_authority_id,
+            account: value.binding.account.clone(),
+            proposal_ref: value.binding.proposal_ref,
+            commit_id: value.binding.commit_id,
+        };
         let binding = LocalHouseholdProposalBindingV1::new(
             value.binding.account,
             value.binding.proposal_ref,
@@ -2522,6 +2753,7 @@ impl TryFrom<JournalWireV1> for LocalHouseholdProposalJournalV1 {
             value.binding.expected_household_revision,
             value.binding.expected_profile_revision,
             value.binding.commit_id,
+            commit_evidence_binding,
             value.binding.member_id,
             value.binding.previous_scope,
             value.binding.originating_session_digest,
@@ -2740,9 +2972,32 @@ mod tests {
         profile_revision: Option<ProfileRevision>,
         member_id: Option<MemberId>,
     ) -> LocalHouseholdProposalBindingV1 {
+        binding_with_evidence(
+            operation,
+            disclosure_generation,
+            profile_revision,
+            member_id,
+        )
+        .0
+    }
+
+    fn binding_with_evidence(
+        operation: AgentHouseholdOperationV1,
+        disclosure_generation: GenerationId,
+        profile_revision: Option<ProfileRevision>,
+        member_id: Option<MemberId>,
+    ) -> (
+        LocalHouseholdProposalBindingV1,
+        HouseholdCommitEvidenceAuthorityV1,
+    ) {
+        let account = AccountId::parse("phase0-proposal-account").expect("account");
+        let proposal_ref = AgentHouseholdProposalIdV1::new();
+        let commit_id = CommitId::new();
+        let commit_evidence =
+            HouseholdCommitEvidenceAuthorityV1::new(account.clone(), proposal_ref, commit_id);
         LocalHouseholdProposalBindingV1::new(
-            AccountId::parse("phase0-proposal-account").expect("account"),
-            AgentHouseholdProposalIdV1::new(),
+            account,
+            proposal_ref,
             operation,
             disclosure_generation,
             CanonicalDigestV1::from_bytes([8; 32]),
@@ -2758,7 +3013,8 @@ mod tests {
             },
             revision(),
             profile_revision,
-            CommitId::new(),
+            commit_id,
+            commit_evidence.binding(),
             member_id,
             HouseholdScope::Subject(HouseholdSubjectId::self_()),
             CanonicalDigestV1::from_bytes([9; 32]),
@@ -2766,6 +3022,7 @@ mod tests {
             timestamp(),
             CanonicalTimestampV1::parse("2026-08-02T12:10:00.000Z").expect("expiry"),
         )
+        .map(|binding| (binding, commit_evidence))
         .expect("binding")
     }
 
@@ -2778,6 +3035,7 @@ mod tests {
             disclosure_generation,
             CanonicalDigestV1::from_bytes([8; 32]),
             AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
+            true,
             AgentHouseholdProjectionV1::Profile,
             GenerationId::new(11),
             revision(),
@@ -2883,6 +3141,7 @@ mod tests {
             current.disclosure_generation,
             current.disclosure_grant_set_digest,
             current.disclosure_purpose,
+            current.required_subject_authority_active,
             current.maximum_projection,
             current.lifecycle_generation,
             current.household_revision,
@@ -2931,6 +3190,7 @@ mod tests {
             GenerationId::new(2),
             CanonicalDigestV1::from_bytes([8; 32]),
             AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
+            true,
             AgentHouseholdProjectionV1::Profile,
             GenerationId::new(11),
             revision(),
@@ -2953,12 +3213,13 @@ mod tests {
 
     #[test]
     fn durable_journal_cas_survives_restart_and_binds_the_applied_fingerprint() {
-        let primary_binding = binding(
+        let (primary_binding, commit_evidence) = binding_with_evidence(
             AgentHouseholdOperationV1::Edit,
             GenerationId::new(4),
             ProfileRevision::new(2).ok(),
             Some(MemberId::new()),
         );
+        let proposal_ref = primary_binding.proposal_ref();
         let commit_id = primary_binding.commit_id();
         let current = snapshot(GenerationId::new(4), ProfileRevision::new(2).ok());
         let proposal_digest = CanonicalDigestV1::from_bytes([31; 32]);
@@ -3029,7 +3290,9 @@ mod tests {
             LocalHouseholdProposalJournalV1::restore(&committing_bytes).expect("crash recovery");
         let committing_token = crash_recovered.cas_token();
         let wrong_proof = AppliedHouseholdCommitProofV1 {
+            authority_id: Uuid::new_v4(),
             account: AccountId::parse("phase0-proposal-account").expect("account"),
+            proposal_ref,
             commit_id,
             effect_fingerprint: HouseholdEffectFingerprintV1::from_digest(
                 CanonicalDigestV1::from_bytes([99; 32]),
@@ -3041,7 +3304,9 @@ mod tests {
             Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch)
         );
         let skipped_revision_proof = AppliedHouseholdCommitProofV1 {
+            authority_id: commit_evidence.authority_id,
             account: AccountId::parse("phase0-proposal-account").expect("account"),
+            proposal_ref,
             commit_id,
             effect_fingerprint,
             resulting_revision: HouseholdRevision::new(9).expect("resulting revision"),
@@ -3051,7 +3316,9 @@ mod tests {
             Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch)
         );
         let exact_proof = AppliedHouseholdCommitProofV1 {
+            authority_id: commit_evidence.authority_id,
             account: AccountId::parse("phase0-proposal-account").expect("account"),
+            proposal_ref,
             commit_id,
             effect_fingerprint,
             resulting_revision: HouseholdRevision::new(8).expect("resulting revision"),
@@ -3119,40 +3386,202 @@ mod tests {
     }
 
     #[test]
-    fn proposal_commit_rechecks_live_projection_even_when_digest_is_unchanged() {
-        let mut authority = LocalHouseholdProposalAuthorityV1::awaiting_local_input(binding(
+    fn durable_journal_exposes_every_precommit_terminal_transition_via_cas() {
+        for source in [
+            AgentHouseholdProposalStateV1::Prepared,
+            AgentHouseholdProposalStateV1::AwaitingLocalInput,
+            AgentHouseholdProposalStateV1::AwaitingLocalReview,
+        ] {
+            for terminal in [
+                AgentHouseholdProposalStateV1::Expired,
+                AgentHouseholdProposalStateV1::Stale,
+                AgentHouseholdProposalStateV1::Rejected,
+            ] {
+                let mut journal = LocalHouseholdProposalJournalV1::new(
+                    LocalHouseholdProposalAuthorityV1::prepared(binding(
+                        AgentHouseholdOperationV1::Edit,
+                        GenerationId::new(4),
+                        ProfileRevision::new(2).ok(),
+                        Some(MemberId::new()),
+                    )),
+                )
+                .expect("initial journal");
+                if source == AgentHouseholdProposalStateV1::AwaitingLocalInput {
+                    let prepared = journal.cas_token();
+                    journal
+                        .begin_local_input(&prepared)
+                        .expect("prepared to local input");
+                    assert_eq!(
+                        journal.begin_local_input(&prepared),
+                        Err(AgentHouseholdContractErrorV1::JournalCasChanged)
+                    );
+                } else if source == AgentHouseholdProposalStateV1::AwaitingLocalReview {
+                    let prepared = journal.cas_token();
+                    journal
+                        .freeze_for_review(
+                            &prepared,
+                            &snapshot(GenerationId::new(4), ProfileRevision::new(2).ok()),
+                            frozen_candidate(
+                                CanonicalDigestV1::from_bytes([71; 32]),
+                                CanonicalDigestV1::from_bytes([72; 32]),
+                            ),
+                        )
+                        .expect("prepared to review");
+                }
+                let transition_token = journal.cas_token();
+                match terminal {
+                    AgentHouseholdProposalStateV1::Expired => journal
+                        .expire_before_commit(&transition_token)
+                        .expect("expire CAS"),
+                    AgentHouseholdProposalStateV1::Stale => journal
+                        .mark_stale_before_commit(&transition_token)
+                        .expect("stale CAS"),
+                    AgentHouseholdProposalStateV1::Rejected => journal
+                        .reject_before_commit(&transition_token)
+                        .expect("reject CAS"),
+                    _ => unreachable!(),
+                }
+                assert_eq!(journal.state(), terminal);
+                assert_eq!(
+                    journal.cancel_before_commit(&transition_token),
+                    Err(AgentHouseholdContractErrorV1::JournalCasChanged)
+                );
+                let restored = LocalHouseholdProposalJournalV1::restore(
+                    &journal.persisted_bytes().expect("terminal journal"),
+                )
+                .expect("restore terminal journal");
+                assert_eq!(restored.state(), terminal);
+            }
+        }
+    }
+
+    #[test]
+    fn reconciliation_requires_bound_authority_to_prove_no_commit() {
+        let (binding, commit_evidence) = binding_with_evidence(
             AgentHouseholdOperationV1::Edit,
             GenerationId::new(4),
             ProfileRevision::new(2).ok(),
             Some(MemberId::new()),
-        ));
-        let current = snapshot(GenerationId::new(4), ProfileRevision::new(2).ok());
-        let proposal_digest = CanonicalDigestV1::from_bytes([35; 32]);
-        authority
+        );
+        let proposal_ref = binding.proposal_ref();
+        let commit_id = binding.commit_id();
+        let mut journal = LocalHouseholdProposalJournalV1::new(
+            LocalHouseholdProposalAuthorityV1::prepared(binding),
+        )
+        .expect("journal");
+        let prepared = journal.cas_token();
+        journal
             .freeze_for_review(
-                &current,
-                frozen_candidate(proposal_digest, CanonicalDigestV1::from_bytes([36; 32])),
+                &prepared,
+                &snapshot(GenerationId::new(4), ProfileRevision::new(2).ok()),
+                frozen_candidate(
+                    CanonicalDigestV1::from_bytes([73; 32]),
+                    CanonicalDigestV1::from_bytes([74; 32]),
+                ),
             )
-            .expect("freeze");
-        let expired_grant_view = LocalHouseholdAuthoritySnapshotV1::new(
-            current.account.clone(),
-            current.disclosure_generation,
-            current.disclosure_grant_set_digest,
-            current.disclosure_purpose,
-            AgentHouseholdProjectionV1::ContentFree,
-            current.lifecycle_generation,
-            current.household_revision,
-            current.profile_revision,
-            current.observed_at.clone(),
+            .expect("review");
+        let review = journal.cas_token();
+        journal
+            .begin_commit(
+                &review,
+                &snapshot(GenerationId::new(4), ProfileRevision::new(2).ok()),
+                CanonicalDigestV1::from_bytes([73; 32]),
+            )
+            .expect("commit start");
+        let committing = journal.cas_token();
+        journal
+            .mark_reconciliation_required(&committing)
+            .expect("uncertain outcome");
+        let reconciliation = journal.cas_token();
+        let wrong_authority = UnappliedHouseholdCommitProofV1 {
+            authority_id: Uuid::new_v4(),
+            account: AccountId::parse("phase0-proposal-account").expect("account"),
+            proposal_ref,
+            commit_id,
+            observed_revision: revision(),
+        };
+        assert_eq!(
+            journal.reconcile_unapplied_commit(&reconciliation, &wrong_authority),
+            Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch)
+        );
+        let exact = UnappliedHouseholdCommitProofV1 {
+            authority_id: commit_evidence.authority_id,
+            account: AccountId::parse("phase0-proposal-account").expect("account"),
+            proposal_ref,
+            commit_id,
+            observed_revision: revision(),
+        };
+        journal
+            .reconcile_unapplied_commit(&reconciliation, &exact)
+            .expect("bound repository authority proves no commit");
+        assert_eq!(
+            journal.state(),
+            AgentHouseholdProposalStateV1::ProvenUncommitted
         );
         assert_eq!(
-            authority.begin_commit(
-                &expired_grant_view,
-                authority.proposal_generation(),
-                proposal_digest,
-            ),
-            Err(AgentHouseholdContractErrorV1::DisclosureProjectionChanged)
+            journal.reconcile_unapplied_commit(&reconciliation, &exact),
+            Err(AgentHouseholdContractErrorV1::JournalCasChanged)
         );
+        let restored = LocalHouseholdProposalJournalV1::restore(
+            &journal.persisted_bytes().expect("proven journal"),
+        )
+        .expect("restore proven journal");
+        assert_eq!(
+            restored.state(),
+            AgentHouseholdProposalStateV1::ProvenUncommitted
+        );
+    }
+
+    #[test]
+    fn proposal_commit_rechecks_live_projection_even_when_digest_is_unchanged() {
+        for operation in [
+            AgentHouseholdOperationV1::Edit,
+            AgentHouseholdOperationV1::Scope,
+        ] {
+            let profile_revision = (operation == AgentHouseholdOperationV1::Edit)
+                .then(|| ProfileRevision::new(2).expect("profile revision"));
+            let member_id = (operation == AgentHouseholdOperationV1::Edit).then(MemberId::new);
+            let mut journal = LocalHouseholdProposalJournalV1::new(
+                LocalHouseholdProposalAuthorityV1::awaiting_local_input(binding(
+                    operation,
+                    GenerationId::new(4),
+                    profile_revision,
+                    member_id,
+                )),
+            )
+            .expect("journal");
+            let current = snapshot(GenerationId::new(4), profile_revision);
+            let proposal_digest = CanonicalDigestV1::from_bytes([35; 32]);
+            let intake_token = journal.cas_token();
+            journal
+                .freeze_for_review(
+                    &intake_token,
+                    &current,
+                    frozen_candidate(proposal_digest, CanonicalDigestV1::from_bytes([36; 32])),
+                )
+                .expect("freeze");
+            let expired_grant_view = LocalHouseholdAuthoritySnapshotV1::new(
+                current.account.clone(),
+                current.disclosure_generation,
+                current.disclosure_grant_set_digest,
+                current.disclosure_purpose,
+                false,
+                AgentHouseholdProjectionV1::ContentFree,
+                current.lifecycle_generation,
+                current.household_revision,
+                current.profile_revision,
+                current.observed_at.clone(),
+            );
+            let review_token = journal.cas_token();
+            assert_eq!(
+                journal.begin_commit(&review_token, &expired_grant_view, proposal_digest),
+                Err(AgentHouseholdContractErrorV1::DisclosureGrantChanged)
+            );
+            assert_eq!(
+                journal.state(),
+                AgentHouseholdProposalStateV1::AwaitingLocalReview
+            );
+        }
     }
 
     #[test]

@@ -446,6 +446,11 @@ authority. Its closed projection variants are:
 | Roster and profile-read grants | The roster projection plus allowlisted before/after profile fields |
 
 Phase 0 deliberately keeps every agent-visible `scope` proposal content-free.
+Content-free is an output projection, not authorization: a scope proposal for
+an existing subject still requires that subject's current roster grant, and an
+`Everyone` proposal binds the complete independently loaded eligible roster.
+That subject authority is rechecked independently of projection before the
+adapter returns, on status, and immediately before commit.
 The exact previous and resulting scope remain in the encrypted local proposal
 journal and attached-TUI review; they are not represented as free-form
 `ActiveScope` change strings. Archive status may disclose the affected member
@@ -485,6 +490,8 @@ Internally, heyfood binds the proposal to:
 - expiry;
 - preallocated proposal identity, reducer commit ID, and new member ID when
   applicable;
+- a proposal/account/commit-specific verifier for a repository-held commit-
+  evidence capability that cannot be derived from household state DTO fields;
 - the frozen effect fingerprint only after every local-input field is complete
   and validated; and
 - single-use local review and commit state.
@@ -499,7 +506,9 @@ and has no operation that rebinds the authority to an arbitrary proposal.
 Durable journal construction accepts only the initial `prepared` or
 `awaiting_local_input` states. All later transitions are private journal CAS
 operations, so callers cannot transition a bare authority and wrap it after
-the fact.
+the fact. The journal exposes typed CAS operations for every edge in the
+frozen transition graph, including prepared-to-input, each pre-commit terminal
+result, and authoritative `proven_uncommitted` reconciliation.
 
 An `awaiting_local_input` record preallocates identities but does not claim a
 final proposal digest or effect fingerprint. Completing local intake validates
@@ -582,10 +591,13 @@ repository transaction.
 After readback, the external receipt is derived from the co-committed marker.
 A crash after repository publication but before proposal-status persistence is
 reconciled from that ledger using the same identities; it never allocates a
-second member or commit. Reconciliation accepts an opaque proof constructed
-only from the exact account-bound committed ledger record and verifies its
-account, commit ID, effect fingerprint, and exact successor household
-revision; it does not accept caller-supplied bare commit/fingerprint pairs.
+second member or commit. Reconciliation accepts an opaque proof issued only by
+the repository-held capability bound to that exact account, proposal, and
+commit. A committed proof verifies the exact ledger fingerprint and successor
+household revision. A proven-uncommitted proof requires the authoritative
+repository to remain at the exact pre-dispatch revision with no record for the
+commit identity. Public or caller-synthesized household state DTOs cannot mint
+either authority, and bare commit/fingerprint pairs are never accepted.
 The legal transition table is:
 
 ```text
@@ -597,6 +609,10 @@ awaiting_local_review -> committing
 committing -> committed | reconciliation_required
 reconciliation_required -> committed | proven_uncommitted
 ```
+
+The approval schema enumerates these 20 edges as a unique closed set and pins
+every archived scenario to one legal sequence; duplicate edges, skipped
+adjacency, and any terminal-state revival fail validation.
 
 Every transition uses compare-and-swap over the account, proposal digest,
 disclosure generation, revisions, state, expiry, and lifecycle generation.

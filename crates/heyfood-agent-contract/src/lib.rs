@@ -1972,7 +1972,7 @@ mod household_phase0_contract_tests {
             ),
             (
                 PRESENTATION_SCHEMA,
-                "ab123c4bc2cdef913f1ab27918399dcc686d18510e48a987f02af5c5c9ab8582",
+                "9488244a01f7aef1b9116cd7c4a77e0fe017ccb6aadd1fe3099dc6b25aecd7ba",
             ),
             (
                 OUTCOME_SCHEMA,
@@ -1980,7 +1980,7 @@ mod household_phase0_contract_tests {
             ),
             (
                 LOCAL_APPROVAL_SCHEMA,
-                "c3bcbcb045f1bc5691579a1392e9adc2ee2920a4b91ff7460811f71c2b4c2946",
+                "64433ae9a5471308d7dce51c4b43e3f72a5903311953c02e1161c63c3200b5b3",
             ),
             (
                 DISCLOSURE_SCHEMA,

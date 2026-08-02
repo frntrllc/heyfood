@@ -59,6 +59,11 @@ Account replacement, logout, repair, disclosure revocation, a conflicting
 household/profile/scope revision, expiry, or lifecycle-generation change
 invalidates the draft.
 
+Every edge above is a typed journal compare-and-swap and is enumerated as a
+closed, unique set in the protocol schema. Scope presentations remain
+content-free, but their affected-subject roster grants are still required and
+revalidated independently of that output projection.
+
 Add and profile edit begin without an effect fingerprint. Heyfood allocates
 the proposal, reducer commit, and any new member identity before local intake,
 but freezes the semantic timestamp, exact before/after hashes, proposal
@@ -81,6 +86,12 @@ new revision, and applied-commit record are published atomically. If status
 persistence is interrupted after repository publication, recovery reads that
 co-committed record; it never allocates a second identity or blindly repeats
 the mutation.
+
+The proof is issued by a repository-held capability bound to the exact
+account, proposal, and commit; a public household-state value cannot mint it.
+Committed proof requires the matching fingerprint and exact successor
+revision. Proven-uncommitted proof requires the authoritative repository to
+remain at the pre-dispatch revision with no record for that commit.
 
 An uncertain outcome blocks later household mutation until it becomes
 `committed` or `proven_uncommitted`. Preparation, status, cancellation, and

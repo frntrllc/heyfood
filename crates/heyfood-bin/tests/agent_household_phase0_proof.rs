@@ -32,7 +32,7 @@ const PROOF_MANIFEST: &[u8] = include_bytes!(concat!(
     "/../../docs/release-evidence/agent-household-phase0/phase0-proof-manifest.json"
 ));
 const PROOF_MANIFEST_SHA256: &str =
-    "c9beca387e62c4da3e83ab540c5b106cbf156d87d2e4ede1ecd03e7e51aac48d";
+    "89ff996ed57210ec3e525fcc191d0562cfdae86d77e170905e6760c6dbe91461";
 
 struct FixtureHouseholdAgentPort {
     account: AccountId,
@@ -533,6 +533,21 @@ fn edit_prepare_request() -> AgentHouseholdPrepareRequestV1 {
     }
 }
 
+fn scope_prepare_request() -> AgentHouseholdPrepareRequestV1 {
+    AgentHouseholdPrepareRequestV1 {
+        schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
+        kind: AgentHouseholdPrepareRequestKindV1::PrepareHouseholdChange,
+        operation: AgentHouseholdOperationV1::Scope,
+        requested_projection: AgentHouseholdProjectionV1::Profile,
+        expected_disclosure_generation: GenerationId::new(3),
+        expected_household_revision: HouseholdRevision::new(7).expect("revision"),
+        affected_member_ref: None,
+        bundled_scope: Some(HouseholdScope::Subject(HouseholdSubjectId::member(
+            MemberId::parse_preserved("10000000-0000-4000-8000-000000000001").expect("member"),
+        ))),
+    }
+}
+
 fn assert_internal_manifest() {
     let normalized = std::str::from_utf8(PROOF_MANIFEST)
         .expect("proof manifest UTF-8")
@@ -818,6 +833,19 @@ async fn prepare_revalidates_the_exact_disclosure_revision_set_after_adapter_wor
         assert!(result.changes.is_empty());
         assert!(result.consequences.is_empty());
     }
+
+    let scope_port = Arc::new(FixtureHouseholdAgentPort::new());
+    scope_port
+        .expire_disclosure_after_first
+        .store(true, Ordering::SeqCst);
+    let scope = HouseholdAgentPhase0Proof::new(scope_port)
+        .prepare(account(), scope_prepare_request(), CancellationToken::new())
+        .await
+        .expect("content-free Scope still invalidates when subject authority expires");
+    assert_eq!(scope.state, AgentHouseholdProposalStateV1::Stale);
+    assert_eq!(scope.projection, AgentHouseholdProjectionV1::ContentFree);
+    assert!(scope.affected_member_ref.is_none());
+    assert!(scope.changes.is_empty());
 }
 
 #[tokio::test]
@@ -1001,6 +1029,30 @@ async fn status_invalidates_same_generation_revision_rotation_and_natural_expiry
         assert!(status.affected_member_ref.is_none());
         assert!(status.changes.is_empty());
     }
+
+    let scope_port = Arc::new(FixtureHouseholdAgentPort::new());
+    let scope_controller = HouseholdAgentPhase0Proof::new(scope_port.clone());
+    scope_controller
+        .prepare(account(), scope_prepare_request(), CancellationToken::new())
+        .await
+        .expect("prepare content-free Scope proposal");
+    scope_port
+        .disclosure_observed_after_expiry
+        .store(true, Ordering::SeqCst);
+    let scope_status = scope_controller
+        .status(
+            account(),
+            scope_port.current_proposal_ref(),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("Scope status becomes stale after subject grant expiry");
+    assert_eq!(scope_status.state, AgentHouseholdProposalStateV1::Stale);
+    assert_eq!(
+        scope_status.projection,
+        AgentHouseholdProjectionV1::ContentFree
+    );
+    assert!(scope_status.changes.is_empty());
 }
 
 #[tokio::test]
@@ -1258,4 +1310,48 @@ fn rust_wire_types_round_trip_every_closed_household_surface_fixture() {
         jsonschema::draft202012::validate(&schema, &value)
             .unwrap_or_else(|error| panic!("Rust wire value failed schema: {error}"));
     }
+}
+
+#[test]
+fn closed_approval_and_scope_schemas_reject_illegal_authority_shapes() {
+    let approval_schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../schemas/v1/local-household-approval-protocol.schema.json"
+    ))
+    .expect("approval schema");
+    jsonschema::draft202012::meta::validate(&approval_schema).expect("approval meta-schema");
+    let approval_fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/agent/household-phase0/local-approval-lifecycle.json"
+    ))
+    .expect("approval fixture");
+    jsonschema::draft202012::validate(&approval_schema, &approval_fixture)
+        .expect("closed approval fixture");
+
+    let mut terminal_revival = approval_fixture.clone();
+    terminal_revival["legal_transitions"][0] = serde_json::json!(["committed", "prepared"]);
+    assert!(jsonschema::draft202012::validate(&approval_schema, &terminal_revival).is_err());
+
+    let mut duplicate_transition = approval_fixture.clone();
+    duplicate_transition["legal_transitions"][0] =
+        duplicate_transition["legal_transitions"][1].clone();
+    assert!(jsonschema::draft202012::validate(&approval_schema, &duplicate_transition).is_err());
+
+    let mut illegal_scenario_adjacency = approval_fixture;
+    illegal_scenario_adjacency["scenarios"][0]["states"] =
+        serde_json::json!(["prepared", "committed"]);
+    assert!(
+        jsonschema::draft202012::validate(&approval_schema, &illegal_scenario_adjacency).is_err()
+    );
+
+    let proposal_schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../schemas/v1/agent-household-proposal-presentation.schema.json"
+    ))
+    .expect("proposal schema");
+    jsonschema::draft202012::meta::validate(&proposal_schema).expect("proposal meta-schema");
+    let mut leaked_scope: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/agent/household-phase0/proposal-profile.json"
+    ))
+    .expect("profile proposal fixture");
+    leaked_scope["operation"] = serde_json::json!("scope");
+    assert!(jsonschema::draft202012::validate(&proposal_schema, &leaked_scope).is_err());
+    assert!(serde_json::from_value::<AgentHouseholdProposalPresentationV1>(leaked_scope).is_err());
 }

@@ -154,6 +154,21 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": { "operation": { "const": "scope" } },
+        "required": ["operation"]
+      },
+      "then": {
+        "properties": {
+          "projection": { "const": "content_free" },
+          "affected_member_ref": { "type": "null" },
+          "affected_member_label": { "type": "null" },
+          "changes": { "maxItems": 0 },
+          "consequences": { "maxItems": 0 }
+        }
+      }
     }
   ]
 }

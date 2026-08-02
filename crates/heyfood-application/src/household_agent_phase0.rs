@@ -310,7 +310,27 @@ impl HouseholdAgentPhase0Proof {
                 "household agent proposal operation shape is invalid",
             )
         })?;
-        let subjects = disclosure_subjects_for_prepare(&request);
+        let mut subjects = disclosure_subjects_for_prepare(&request);
+        if request.operation == heyfood_core::AgentHouseholdOperationV1::Scope
+            && request.bundled_scope == Some(HouseholdScope::Everyone)
+        {
+            let roster = self
+                .port
+                .eligible_roster(account.clone(), cancellation.clone())
+                .await?;
+            ensure_account(&account, &roster.account)?;
+            if roster.household_revision != request.expected_household_revision
+                || roster.eligible_subjects.is_empty()
+            {
+                return Err(phase0_error(
+                    "household_agent_scope_authority_stale",
+                    "household scope authority changed; prepare a fresh proposal",
+                ));
+            }
+            subjects = roster.eligible_subjects;
+            subjects.sort();
+            subjects.dedup();
+        }
         let initial_disclosure = self
             .port
             .disclosure(
@@ -329,6 +349,16 @@ impl HouseholdAgentPhase0Proof {
             request.expected_disclosure_generation,
             &initial_disclosure.grants,
         )?;
+        if !required_prepare_authority_is_active(
+            request.operation,
+            &subjects,
+            &initial_disclosure.grants,
+        ) {
+            return Err(phase0_error(
+                "household_agent_disclosure_required",
+                "household proposal authority is missing or expired",
+            ));
+        }
         let maximum_projection =
             if request.operation == heyfood_core::AgentHouseholdOperationV1::Scope {
                 AgentHouseholdProjectionV1::ContentFree
@@ -395,6 +425,11 @@ impl HouseholdAgentPhase0Proof {
             )
         };
         let disclosure_invalidated = disclosure_changed
+            || !required_prepare_authority_is_active(
+                request.operation,
+                &subjects,
+                &current_disclosure.grants,
+            )
             || projection_rank(current_maximum) < projection_rank(maximum_projection);
         let mut presentation = result.presentation.filtered_to(current_maximum);
         presentation.disclosure_generation = current_disclosure.grants.generation();
@@ -448,6 +483,11 @@ impl HouseholdAgentPhase0Proof {
             || result.frozen_disclosure.prepared.generation != disclosure.grants.generation()
             || result.frozen_disclosure.prepared.grant_set_digest
                 != disclosure.grants.revision_set_digest()
+            || !required_prepare_authority_is_active(
+                result.frozen_disclosure.prepared.operation,
+                result.frozen_disclosure.subjects(),
+                &disclosure.grants,
+            )
             || projection_rank(current_authorized_projection)
                 < projection_rank(result.frozen_disclosure.prepared.maximum_projection);
         let scope_is_content_free =
@@ -725,6 +765,17 @@ fn disclosure_subjects_for_prepare(
         },
         heyfood_core::AgentHouseholdOperationV1::Add => Vec::new(),
     }
+}
+
+fn required_prepare_authority_is_active(
+    operation: heyfood_core::AgentHouseholdOperationV1,
+    subjects: &[AgentDisclosureGrantSubjectV1],
+    grants: &AgentDisclosureGrantSetV1,
+) -> bool {
+    operation == heyfood_core::AgentHouseholdOperationV1::Add
+        || (!subjects.is_empty()
+            && projection_rank(grants.maximum_projection_for(subjects))
+                >= projection_rank(AgentHouseholdProjectionV1::Roster))
 }
 
 fn validate_returned_proposal(

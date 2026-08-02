@@ -48,15 +48,30 @@
       "type": "array",
       "minItems": 20,
       "maxItems": 20,
+      "uniqueItems": true,
       "items": {
-        "type": "array",
-        "prefixItems": [
-          { "$ref": "#/$defs/state" },
-          { "$ref": "#/$defs/state" }
-        ],
-        "items": false,
-        "minItems": 2,
-        "maxItems": 2
+        "oneOf": [
+          { "const": ["prepared", "awaiting_local_input"] },
+          { "const": ["prepared", "awaiting_local_review"] },
+          { "const": ["prepared", "cancelled"] },
+          { "const": ["prepared", "expired"] },
+          { "const": ["prepared", "stale"] },
+          { "const": ["prepared", "rejected"] },
+          { "const": ["awaiting_local_input", "awaiting_local_review"] },
+          { "const": ["awaiting_local_input", "cancelled"] },
+          { "const": ["awaiting_local_input", "expired"] },
+          { "const": ["awaiting_local_input", "stale"] },
+          { "const": ["awaiting_local_input", "rejected"] },
+          { "const": ["awaiting_local_review", "cancelled"] },
+          { "const": ["awaiting_local_review", "expired"] },
+          { "const": ["awaiting_local_review", "stale"] },
+          { "const": ["awaiting_local_review", "rejected"] },
+          { "const": ["awaiting_local_review", "committing"] },
+          { "const": ["committing", "committed"] },
+          { "const": ["committing", "reconciliation_required"] },
+          { "const": ["reconciliation_required", "committed"] },
+          { "const": ["reconciliation_required", "proven_uncommitted"] }
+        ]
       }
     },
     "freeze_boundary": {
@@ -102,7 +117,8 @@
     "scenarios": {
       "type": "array",
       "minItems": 6,
-      "maxItems": 32,
+      "maxItems": 6,
+      "uniqueItems": true,
       "items": { "$ref": "#/$defs/scenario" }
     }
   },
@@ -145,7 +161,57 @@
         "reconciliation_source": {
           "enum": ["not_needed", "applied_commit_ledger"]
         }
-      }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "id": { "const": "add_local_intake_commit" },
+            "states": { "const": ["prepared", "awaiting_local_input", "awaiting_local_review", "committing", "committed"] },
+            "household_revision_delta": { "const": 1 },
+            "reconciliation_source": { "const": "not_needed" }
+          }
+        },
+        {
+          "properties": {
+            "id": { "const": "cancel_before_dispatch" },
+            "states": { "const": ["prepared", "awaiting_local_input", "cancelled"] },
+            "household_revision_delta": { "const": 0 },
+            "reconciliation_source": { "const": "not_needed" }
+          }
+        },
+        {
+          "properties": {
+            "id": { "const": "disclosure_revoked_before_review" },
+            "states": { "const": ["prepared", "awaiting_local_input", "stale"] },
+            "household_revision_delta": { "const": 0 },
+            "reconciliation_source": { "const": "not_needed" }
+          }
+        },
+        {
+          "properties": {
+            "id": { "const": "concurrent_household_edit" },
+            "states": { "const": ["prepared", "awaiting_local_review", "stale"] },
+            "household_revision_delta": { "const": 0 },
+            "reconciliation_source": { "const": "not_needed" }
+          }
+        },
+        {
+          "properties": {
+            "id": { "const": "crash_after_repository_publication" },
+            "states": { "const": ["prepared", "awaiting_local_review", "committing", "reconciliation_required", "committed"] },
+            "household_revision_delta": { "const": 1 },
+            "reconciliation_source": { "const": "applied_commit_ledger" }
+          }
+        },
+        {
+          "properties": {
+            "id": { "const": "cancel_loses_commit_cas" },
+            "states": { "const": ["prepared", "awaiting_local_review", "committing", "reconciliation_required", "proven_uncommitted"] },
+            "household_revision_delta": { "const": 0 },
+            "reconciliation_source": { "const": "applied_commit_ledger" }
+          }
+        }
+      ]
     }
   }
 }

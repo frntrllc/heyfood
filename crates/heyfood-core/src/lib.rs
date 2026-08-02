@@ -40,10 +40,11 @@ pub use agent_household::{
     AgentHouseholdReadRequestKindV1, AgentHouseholdReadRequestV1, AgentHouseholdReadResultKindV1,
     AgentHouseholdReadSnapshotV1, AgentHouseholdRecoverabilityV1, AgentHouseholdRetryClassV1,
     AgentHouseholdSubjectV1, AgentMinimizedDeclaredProfileV1, AppliedHouseholdCommitProofV1,
+    HouseholdCommitEvidenceAuthorityV1, HouseholdCommitEvidenceBindingV1,
     LocalHouseholdAuthoritySnapshotV1, LocalHouseholdFrozenCandidateV1,
     LocalHouseholdProposalAuthorityV1, LocalHouseholdProposalBindingV1,
     LocalHouseholdProposalCasTokenV1, LocalHouseholdProposalJournalV1,
-    household_review_safe_lines_v1, household_review_safe_text_v1,
+    UnappliedHouseholdCommitProofV1, household_review_safe_lines_v1, household_review_safe_text_v1,
 };
 pub use auth::{
     AccountId, AuthCapabilities, AuthCredentialBundle, AuthorizationCapability, ChannelCredentials,
