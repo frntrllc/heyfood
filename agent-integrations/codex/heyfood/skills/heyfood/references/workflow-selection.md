@@ -20,6 +20,11 @@ Never treat MCP absence as permission to invoke a different audience.
 
 ### Supported read intents
 
+Your tool list is authoritative — this inventory describes a release, not a
+ceiling. A newer client may expose `heyfood_*` tools not named here; read their
+schemas and use them. Never withhold a tool the client advertises because this
+list predates it, and never assume one it does not.
+
 When present, prefer:
 
 - `heyfood_get_manifest` for installed contract discovery;
@@ -54,7 +59,10 @@ There is no command fallback on this surface. If no tool matches, stop.
 ### Tool inventory
 
 - `lookup_restaurant`, `search_restaurants` — identify a restaurant
-- `get_menu_status` — whether a menu has been captured
+- `get_menu_status` — polls a menu-fetch job. It requires a `job_id` issued by
+  a fetch you started, so on a read-only deployment that never starts one there
+  is nothing to poll. Do not call it to test whether a menu exists; that is not
+  what it answers.
 - `evaluate_menu`, `explain_item`, `recommend_items` — dietary assessment
 - `draft_order_message` — phrase an order request
 - `search_recipes`, `list_saved_recipes`, `suggest_recipes` — recipes

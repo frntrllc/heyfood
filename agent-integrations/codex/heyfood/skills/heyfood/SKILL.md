@@ -47,15 +47,25 @@ Menu Watch, explain that those require the local hey.food client.
 ## Start safely — local surface
 
 1. Run `heyfood agent describe` without network-dependent flags.
-2. Confirm manifest schema version 1 and read `automation_surfaces`,
-   `capabilities`, command audiences, scopes, and retry classes.
+2. Read `automation_surfaces`, `capabilities`, command audiences, scopes, and
+   retry classes. **Gate on the fields, not on the version number.** If every
+   field this skill relies on is present and readable, proceed — whatever
+   `schema_version` says. If any is missing or unreadable, stop and hand off,
+   again regardless of the version. A newer manifest that still carries these
+   fields is usable; an older one that does not is not, and a version equality
+   check gets both cases wrong.
 3. Prefer available `heyfood_*` MCP tools for typed product reads.
 4. If MCP is unavailable, invoke only commands whose exact manifest row says
    `agent_safe`. Never downgrade `human_terminal_only` or `agent_unsupported`.
 
-Use the exact installed executable's embedded contract. Do not rely on
-remembered command syntax, or on this skill, when the binary reports an
-incompatible manifest.
+Use the exact installed executable's embedded contract, not remembered command
+syntax and not this skill's examples. The manifest is authoritative: where it
+and this document disagree, the manifest wins and this document is stale.
+
+A manifest may gain fields, commands, capabilities, or MCP tools in a later
+release. Read what is there; never assume a capability the manifest does not
+advertise, and never refuse one it does advertise merely because this document
+predates it.
 
 Never drive bare `heyfood` or `heyfood chat`, allocate a PTY to answer its
 prompts, or parse terminal rendering as data.
