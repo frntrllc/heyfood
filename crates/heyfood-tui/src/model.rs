@@ -34,6 +34,8 @@ const UNPRESENTABLE_AGENT_CHOICES_MESSAGE: &str = "hey.food returned choices thi
 const UNPRESENTABLE_ACTION_CONFIRMATION_MESSAGE: &str = "hey.food returned a change confirmation this version can’t display safely. Nothing changed; ask to prepare the change again.";
 const NATIVE_HOUSEHOLD_AGENT_ERROR_MESSAGE: &str =
     "hey.food could not complete this Household request. Review current state before trying again.";
+const STALE_GROCERY_LIST_MESSAGE: &str =
+    "Stale Grocery list authority rejected; fetch the active list again.";
 
 const PROFILE_USAGE: &str = "/profile | /profile consent | /profile retry-sync";
 
@@ -6458,9 +6460,12 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
                     });
             let native_household_context =
                 model.profile_presentation_mode != ProfilePresentationModeV1::LegacyCompatibility;
+            let native_error_message = native_agent_error_message(&error.code);
             model.scrollback.mutate_last_assistant(|entry| {
                 if native_household_context {
-                    entry.text = NATIVE_HOUSEHOLD_AGENT_ERROR_MESSAGE.into();
+                    entry.text = native_error_message
+                        .unwrap_or(NATIVE_HOUSEHOLD_AGENT_ERROR_MESSAGE)
+                        .into();
                 } else if message_is_private
                     || contains_private_household_identifier(&entry.text)
                     || pending_private_household_ids.iter().any(|identifier| {
@@ -6490,6 +6495,18 @@ fn apply_agent_event(model: &mut AppModel, event: AgentEvent) {
 
 fn confirmation_error_preserves_pending(code: &str) -> bool {
     matches!(code, "edit_invalid" | "temporarily_unavailable")
+}
+
+fn native_agent_error_message(code: &str) -> Option<&'static str> {
+    match code {
+        // Never present the server-supplied message in native Household mode:
+        // it may contain private member identifiers. This stable code has a
+        // fixed, identifier-free local presentation so a rejected stale
+        // Grocery confirmation remains actionable without weakening the
+        // native error redaction boundary.
+        "list_version_conflict" => Some(STALE_GROCERY_LIST_MESSAGE),
+        _ => None,
+    }
 }
 
 fn confirmation_declared_member_ids(
@@ -7727,6 +7744,32 @@ mod tests {
             "Stale Grocery list authority rejected; fetch the active list again."
         );
         assert!(!text.contains("list_version_conflict"));
+    }
+
+    #[test]
+    fn native_stale_grocery_errors_render_fixed_local_copy() {
+        let member_id = "opaque-member-seven";
+        let mut model = model_with_known_opaque_member("confirm", member_id);
+        let _ = dispatch(&mut model, Action::Submit);
+        model.profile_presentation_mode = ProfilePresentationModeV1::NativeEnabled;
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::TurnEvent {
+                operation_id: 1,
+                event: AgentEvent::Error {
+                    error: AgentFailure {
+                        code: "list_version_conflict".into(),
+                        message: format!("stale Grocery list for {member_id}"),
+                        retryable: false,
+                    },
+                },
+            }),
+        );
+
+        let text = &model.scrollback.entries().back().unwrap().text;
+        assert_eq!(text, STALE_GROCERY_LIST_MESSAGE);
+        assert!(!text.contains("list_version_conflict"));
+        assert!(!text.contains(member_id));
     }
 
     #[test]
