@@ -32,6 +32,7 @@ it with the other surface's tools.
 |---|---|---|
 | Grocery list, Grocery exclusions | ✅ | ❌ **Not available** |
 | Menu Watch reads | ✅ | ❌ **Not available** |
+| Household-scoped evaluation | ❌ **Human TUI only** | ✅ |
 | Installed-contract, status, capability discovery | ✅ | ❌ |
 | Restaurant lookup and search | ❌ | ✅ |
 | Menu safety evaluation, dish explanation | ❌ | ✅ |

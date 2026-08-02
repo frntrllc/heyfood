@@ -182,6 +182,23 @@ detail to compress away.
 **Saving is a mutation** and is not available here. If a user asks to save a
 recipe, say so plainly rather than implying it was kept.
 
+### Households on the local surface — human-only
+
+The client has household onboarding, encrypted local household profiles, and
+scope switching. **None of it has an agent surface.** Verified against the
+0.7.0 manifest: no household capability, no household or member command, and
+the local MCP tool list is unchanged — the same six read tools.
+
+So on the local surface you cannot read the roster, cannot set or switch scope,
+and cannot evaluate for a member. Household management lives in the human TUI
+and is reached by the user running `heyfood`. Do not drive it, do not offer to,
+and do not present a Grocery read as household-scoped beyond whatever scope the
+result itself reports.
+
+If a user asks for household work and you only have the local surface, say it
+is done in the hey.food terminal app by them. If you also have the hosted
+surface, household-scoped evaluation is available there — see above.
+
 ### Not available remotely
 
 **Grocery and Menu Watch have no remote tools and no corresponding
