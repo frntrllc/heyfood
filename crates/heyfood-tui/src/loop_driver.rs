@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsStr,
     fmt, io,
     time::{Duration, Instant},
 };
@@ -71,6 +72,9 @@ fn terminal_body(
     let mut terminal = Terminal::new(backend).map_err(TuiError::Terminal)?;
     let size = terminal.size().map_err(TuiError::Terminal)?;
     let mut model = AppModel::default();
+    model.set_color_enabled(color_enabled_from_no_color(
+        std::env::var_os("NO_COLOR").as_deref(),
+    ));
     let _ = dispatch(
         &mut model,
         Action::Resize {
@@ -128,6 +132,10 @@ fn terminal_body(
     }
 }
 
+fn color_enabled_from_no_color(value: Option<&OsStr>) -> bool {
+    value.is_none_or(|value| value.is_empty())
+}
+
 fn apply(
     model: &mut AppModel,
     action: Action,
@@ -149,6 +157,13 @@ fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_color_disables_semantic_terminal_color() {
+        assert!(color_enabled_from_no_color(None));
+        assert!(color_enabled_from_no_color(Some(OsStr::new(""))));
+        assert!(!color_enabled_from_no_color(Some(OsStr::new("1"))));
+    }
 
     #[test]
     fn effect_delivery_preserves_cancel_before_exit_order() {

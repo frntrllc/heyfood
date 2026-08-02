@@ -235,25 +235,25 @@ for target in \
   x86_64-unknown-linux-gnu; do
   "$ROOT/scripts/release/package.sh" \
     "$ROOT/install.sh" \
-    0.6.3 \
+    0.7.0 \
     "$target" \
     "$native_state_distribution"
   "$ROOT/scripts/release/package-installer.sh" \
     "$ROOT/install.sh" \
-    0.6.3 \
+    0.7.0 \
     "$target" \
     "$native_state_distribution"
 done
 "$ROOT/scripts/release/checksums.sh" \
-  "$native_state_distribution" 0.6.3 --native-state
+  "$native_state_distribution" 0.7.0 --native-state
 "$ROOT/scripts/release/verify-assets.sh" \
-  "$native_state_distribution" 0.6.3 --native-state
+  "$native_state_distribution" 0.7.0 --native-state
 [[ "$(wc -l <"$native_state_distribution/SHA256SUMS" | tr -d '[:space:]')" -eq 9 ]] ||
-  fail "v0.6.3 must bind four product archives, four verifier archives, and one declaration"
-[[ -f "$native_state_distribution/heyfood-v0.6.3-native-state.json" ]] ||
-  fail "v0.6.3 must contain the canonical native-state declaration"
+  fail "v0.7.0 must bind four product archives, four verifier archives, and one declaration"
+[[ -f "$native_state_distribution/heyfood-v0.7.0-native-state.json" ]] ||
+  fail "v0.7.0 must contain the canonical native-state declaration"
 [[ "$(find "$native_state_distribution" -maxdepth 1 -type f | wc -l | tr -d '[:space:]')" -eq 10 ]] ||
-  fail "v0.6.3 must contain exactly ten public files including SHA256SUMS"
+  fail "v0.7.0 must contain exactly ten public files including SHA256SUMS"
 
 [[ -x "$candidate_transport" ]] ||
   fail "the content-free candidate transport must be executable"
@@ -303,7 +303,7 @@ PATH="$prohibited_tool_bin:$PATH" \
   HEYFOOD_PROHIBITED_TOOL_MARKER_DIR="$prohibited_tool_markers" \
   "$asset_verifier" \
   "$native_state_distribution" \
-  0.6.3 \
+  0.7.0 \
   --native-state-manifest-bound \
   "$candidate_manifest_sha256"
 assert_candidate_tools_unused
@@ -321,7 +321,7 @@ if PATH="$prohibited_tool_bin:$PATH" \
   HEYFOOD_PROHIBITED_TOOL_MARKER_DIR="$prohibited_tool_markers" \
   "$asset_verifier" \
   "$duplicate_manifest_distribution" \
-  0.6.3 \
+  0.7.0 \
   --native-state-manifest-bound \
   "$duplicate_manifest_sha256" >/dev/null 2>&1; then
   fail "manifest-bound verification accepted a duplicate checksum entry"
@@ -332,12 +332,12 @@ tampered_candidate_distribution="$CASE_DIR/tampered-candidate-distribution"
 mkdir "$tampered_candidate_distribution"
 cp -R "$native_state_distribution/." "$tampered_candidate_distribution/"
 printf 'tampered candidate bytes\n' \
-  >>"$tampered_candidate_distribution/heyfood-v0.6.3-aarch64-apple-darwin.tar.gz"
+  >>"$tampered_candidate_distribution/heyfood-v0.7.0-aarch64-apple-darwin.tar.gz"
 if PATH="$prohibited_tool_bin:$PATH" \
   HEYFOOD_PROHIBITED_TOOL_MARKER_DIR="$prohibited_tool_markers" \
   "$asset_verifier" \
   "$tampered_candidate_distribution" \
-  0.6.3 \
+  0.7.0 \
   --native-state-manifest-bound \
   "$candidate_manifest_sha256" >/dev/null 2>&1; then
   fail "manifest-bound verification accepted changed candidate bytes"
@@ -352,7 +352,7 @@ if PATH="$prohibited_tool_bin:$PATH" \
   HEYFOOD_PROHIBITED_TOOL_MARKER_DIR="$prohibited_tool_markers" \
   "$asset_verifier" \
   "$unexpected_candidate_distribution" \
-  0.6.3 \
+  0.7.0 \
   --native-state-manifest-bound \
   "$candidate_manifest_sha256" >/dev/null 2>&1; then
   fail "manifest-bound verification accepted an eleventh release file"
@@ -387,7 +387,7 @@ PATH="$prohibited_tool_bin:$PATH" \
   HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT="$candidate_transport_output" \
   "$candidate_transport" \
   "$native_state_distribution" \
-  0.6.3 \
+  0.7.0 \
   "$candidate_manifest_sha256" \
   "$candidate_transport_installer"
 assert_candidate_tools_unused
@@ -395,7 +395,7 @@ cmp \
   "$native_state_distribution/SHA256SUMS" \
   "$candidate_transport_output/SHA256SUMS"
 cmp \
-  "$native_state_distribution/heyfood-v0.6.3-x86_64-unknown-linux-gnu.tar.gz" \
+  "$native_state_distribution/heyfood-v0.7.0-x86_64-unknown-linux-gnu.tar.gz" \
   "$candidate_transport_output/product.tar.gz"
 
 refusal_root="$CASE_DIR/candidate-transport-refusal"
@@ -420,7 +420,7 @@ chmod 0700 \
   "$(dirname "$refusal_floor")" \
   "$refusal_state/data/accounts" \
   "$(dirname "$refusal_vault")"
-printf '#!/usr/bin/env bash\nprintf "heyfood 0.6.3\\n"\n' \
+printf '#!/usr/bin/env bash\nprintf "heyfood 0.7.0\\n"\n' \
   >"$refusal_bin/heyfood"
 printf 'native-state floor sentinel\n' >"$refusal_floor"
 printf 'encrypted household state sentinel\n' >"$refusal_vault"
@@ -430,7 +430,7 @@ cp "$refusal_bin/heyfood" "$refusal_root/heyfood.before"
 cp "$refusal_floor" "$refusal_root/floor.before"
 cp "$refusal_vault" "$refusal_root/vault.before"
 printf '%s\n' \
-  'heyfood installer: this installer supports heyfood 0.6.3; requested 0.6.2' \
+  'heyfood installer: this installer supports heyfood 0.7.0; requested 0.6.2' \
   >"$expected_refusal"
 
 refusal_status=0
@@ -442,7 +442,7 @@ HOME="$refusal_home" \
   "$candidate_transport" \
   --expect-no-download 0.6.2 \
   "$native_state_distribution" \
-  0.6.3 \
+  0.7.0 \
   "$candidate_manifest_sha256" \
   "$ROOT/install.sh" >"$refusal_stdout" 2>"$refusal_stderr" ||
   refusal_status=$?
@@ -476,7 +476,7 @@ curl -qfsSL \
   --tlsv1.2 \
   --retry 3 \
   --output "$HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT" \
-  "https://github.com/frntrllc/heyfood/releases/download/v0.6.3/SHA256SUMS"
+  "https://github.com/frntrllc/heyfood/releases/download/v0.7.0/SHA256SUMS"
 EOF
 chmod 0755 "$prohibited_download_installer"
 if PATH="$prohibited_tool_bin:$PATH" \
@@ -485,7 +485,7 @@ if PATH="$prohibited_tool_bin:$PATH" \
   "$candidate_transport" \
   --expect-no-download 0.6.2 \
   "$native_state_distribution" \
-  0.6.3 \
+  0.7.0 \
   "$candidate_manifest_sha256" \
   "$prohibited_download_installer" >/dev/null 2>"$prohibited_download_stderr"; then
   fail "expect-no-download mode accepted an installer curl invocation"
@@ -502,7 +502,7 @@ rejected_transport_output="$CASE_DIR/rejected-candidate-transport-output"
 if HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT="$rejected_transport_output" \
   "$candidate_transport" \
   "$native_state_distribution" \
-  0.6.3 \
+  0.7.0 \
   "$(printf '0%.0s' {1..64})" \
   "$candidate_transport_installer" >/dev/null 2>&1; then
   fail "the candidate transport accepted an unapproved release-set digest"
@@ -528,7 +528,7 @@ unapproved_url_output="$CASE_DIR/unapproved-url-output"
 if HEYFOOD_CANDIDATE_TRANSPORT_TEST_OUTPUT="$unapproved_url_output" \
   "$candidate_transport" \
   "$native_state_distribution" \
-  0.6.3 \
+  0.7.0 \
   "$candidate_manifest_sha256" \
   "$unapproved_url_installer" >/dev/null 2>&1; then
   fail "the candidate transport served an unapproved URL"
@@ -611,7 +611,7 @@ if [[ -z "$metadata_line" || -z "$artifact_line" || -z "$download_line" ||
   fail "publication must validate run, artifact, digest, set, and attestations before release creation"
 fi
 grep -Fq 'test "${#assets[@]}" -eq 10' "$PUBLIC_SMOKE_WORKFLOW" ||
-  fail "public smoke must require all ten v0.6.3 assets"
+  fail "public smoke must require all ten v0.7.0 assets"
 grep -Fq 'gh attestation verify "$asset"' "$PUBLIC_SMOKE_WORKFLOW" ||
   fail "public smoke must verify the attestation for every downloaded asset"
 grep -Fq 'scripts/release/smoke.sh' "$PUBLIC_SMOKE_WORKFLOW" ||
@@ -691,4 +691,4 @@ jq -e '
 ' "$ROOT/tests/showcase/core-release-matrix.v1.json" >/dev/null ||
   fail "the core matrix must preserve the bounded distribution and non-gates"
 
-printf 'release scope contract: complete v0.6.3 native-state set; Windows CI retained\n'
+printf 'release scope contract: complete v0.7.0 native-state set; Windows CI retained\n'

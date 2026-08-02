@@ -99,7 +99,7 @@ must fail with an upgrade instruction when the installed manifest is outside
 its declared compatibility range.
 
 The default `agent describe`, `agent doctor`, and MCP manifest responses remain
-schema v1 across the v0.6.2 to v0.6.3 binary upgrade. Agents following this
+schema v1 across the v0.6.2 to v0.7.0 binary upgrade. Agents following this
 guide should keep using those defaults. The explicit `--schema-version 2`
 forms expose native-state release compatibility metadata for installer and
 diagnostic tooling; they are not a prerequisite for an installed v0.6.2 Skill.

@@ -8,11 +8,11 @@ does not contain a native-state declaration or a standalone
 `heyfood-installer` verifier archive.
 
 The checked-in installer now coordinates `SUPPORTED_VERSION` and
-`NATIVE_STATE_RELEASE_VERSION` at `0.6.3`. It requires the v0.6.3 native-state
+`NATIVE_STATE_RELEASE_VERSION` at `0.7.0`. It requires the v0.7.0 native-state
 asset set and never fabricates, targets, replaces, or expects new assets on the
-immutable v0.6.2 release. The current v0.6.3 installer accepts only its exact
+immutable v0.6.2 release. The current v0.7.0 installer accepts only its exact
 supported version. Invoking it with `HEYFOOD_VERSION=0.6.2` is rejected before
-any release download or executable replacement and leaves the installed v0.6.3
+any release download or executable replacement and leaves the installed v0.7.0
 binary, compatibility floor, and account state unchanged.
 
 The archived v0.6.2 installer and binary predate the future compatibility
@@ -25,7 +25,7 @@ release; those remain protected release-workflow decisions.
 
 ## Native-state release asset contract
 
-Starting with v0.6.3, the complete release set is:
+Starting with v0.7.0, the complete release set is:
 
 - four `heyfood-v<VERSION>-<TARGET>.tar.gz` product archives;
 - four `heyfood-installer-v<VERSION>-<TARGET>.tar.gz` verifier archives;
@@ -78,8 +78,8 @@ nor required to understand v2 during the binary upgrade.
 
 Once the native-state floor exists, managed installation accepts only a
 candidate whose maximum native-state version and complete capability set
-satisfy that floor. The current v0.6.3 installer independently rejects every
-requested version other than v0.6.3 before download, so a request for v0.6.2
+satisfy that floor. The current v0.7.0 installer independently rejects every
+requested version other than v0.7.0 before download, so a request for v0.6.2
 cannot reach executable replacement. The compatibility floor cannot constrain
 an independently executed archived installer or binary; archived v0.6.2 code
 after migration remains unsupported and unprotected. A future supported

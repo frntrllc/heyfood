@@ -1042,6 +1042,7 @@ struct OnboardingFlow {
     member_name: Option<String>,
     member_age_evidence: Option<HouseholdAgeEvidenceInputV1>,
     household_correlation: Option<HouseholdReducerCorrelationV1>,
+    focused_option: usize,
 }
 
 impl fmt::Debug for OnboardingFlow {
@@ -1132,8 +1133,41 @@ impl Default for OnboardingFlow {
             member_name: None,
             member_age_evidence: None,
             household_correlation: None,
+            focused_option: 0,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OnboardingSelectionMode {
+    Single,
+    Multiple,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OnboardingChoice {
+    pub(crate) number: usize,
+    pub(crate) label: String,
+    pub(crate) selected: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OnboardingChoicePanel {
+    pub(crate) context: String,
+    pub(crate) title: String,
+    pub(crate) progress: Option<(u8, u8)>,
+    pub(crate) instruction: String,
+    pub(crate) choices: Vec<OnboardingChoice>,
+    pub(crate) focused: usize,
+    pub(crate) mode: OnboardingSelectionMode,
+}
+
+struct OnboardingChoiceDefinition {
+    title: String,
+    progress: Option<(u8, u8)>,
+    instruction: String,
+    mode: OnboardingSelectionMode,
+    options: Vec<(String, String)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1423,6 +1457,7 @@ pub struct AppModel {
     pub scroll_from_tail: usize,
     pub unseen_lines: usize,
     pub idle_exit_armed: bool,
+    color_enabled: bool,
     prompt_history: VecDeque<String>,
     history_index: Option<usize>,
     history_draft: String,
@@ -1531,6 +1566,7 @@ impl Default for AppModel {
             scroll_from_tail: 0,
             unseen_lines: 0,
             idle_exit_armed: false,
+            color_enabled: true,
             prompt_history: VecDeque::new(),
             history_index: None,
             history_draft: String::new(),
@@ -1567,6 +1603,21 @@ impl Default for AppModel {
 }
 
 impl AppModel {
+    #[must_use]
+    pub const fn color_enabled(&self) -> bool {
+        self.color_enabled
+    }
+
+    pub fn set_color_enabled(&mut self, enabled: bool) {
+        self.color_enabled = enabled;
+    }
+
+    #[must_use]
+    pub(crate) fn onboarding_choice_panel(&self) -> Option<OnboardingChoicePanel> {
+        let flow = self.onboarding.as_ref()?;
+        onboarding_choice_panel(flow, &self.draft)
+    }
+
     #[must_use]
     pub fn household_chrome_label(&self) -> Option<&str> {
         self.household_chrome_label.as_deref()
@@ -1996,6 +2047,15 @@ pub fn dispatch(model: &mut AppModel, action: Action) -> Vec<Effect> {
         Action::Insert('?') if model.draft.is_empty() && model.onboarding.is_none() => {
             show_help(model)
         }
+        Action::Insert(' ')
+            if model
+                .onboarding_choice_panel()
+                .is_some_and(|panel| panel.mode == OnboardingSelectionMode::Multiple)
+                && !model.draft.chars().any(char::is_alphabetic) =>
+        {
+            toggle_focused_onboarding_option(model);
+            model.idle_exit_armed = false;
+        }
         Action::Insert(character) => {
             reset_history_navigation(model);
             insert_at_cursor(model, &character.to_string());
@@ -2014,8 +2074,32 @@ pub fn dispatch(model: &mut AppModel, action: Action) -> Vec<Effect> {
             reset_history_navigation(model);
             delete(model);
         }
+        Action::MoveLeft
+            if model.onboarding_choice_panel().is_some()
+                && !model.draft.chars().any(char::is_alphabetic) =>
+        {
+            move_onboarding_focus(model, -1);
+        }
+        Action::MoveRight
+            if model.onboarding_choice_panel().is_some()
+                && !model.draft.chars().any(char::is_alphabetic) =>
+        {
+            move_onboarding_focus(model, 1);
+        }
         Action::MoveLeft => model.cursor = model.cursor.saturating_sub(1),
         Action::MoveRight => model.cursor = (model.cursor + 1).min(model.draft.chars().count()),
+        Action::HistoryPrevious if model.onboarding_choice_panel().is_some() => {
+            move_onboarding_focus(
+                model,
+                -isize::try_from(onboarding_grid_columns(model.width)).unwrap_or(1),
+            );
+        }
+        Action::HistoryNext if model.onboarding_choice_panel().is_some() => {
+            move_onboarding_focus(
+                model,
+                isize::try_from(onboarding_grid_columns(model.width)).unwrap_or(1),
+            );
+        }
         Action::HistoryPrevious => history_previous(model),
         Action::HistoryNext => history_next(model),
         Action::CompleteSlash => complete_slash(model),
@@ -2095,7 +2179,7 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
     if matches!(model.voice_phase, VoicePhase::Recording { .. }) {
         return stop_voice(model);
     }
-    if model.draft.trim().is_empty() {
+    if model.draft.trim().is_empty() && model.onboarding.is_none() {
         return Vec::new();
     }
     if model.draft.trim_start().starts_with('/') {
@@ -2462,9 +2546,25 @@ fn submit_onboarding(model: &mut AppModel) -> Vec<Effect> {
     if model.operation.is_active() {
         return Vec::new();
     }
+    let focused_answer = model.onboarding_choice_panel().and_then(|panel| {
+        (panel.mode == OnboardingSelectionMode::Single)
+            .then(|| panel.focused.saturating_add(1).to_string())
+    });
     let answer = std::mem::take(&mut model.draft);
     model.cursor = 0;
     let answer = answer.trim();
+    let answer = if answer.is_empty() {
+        let Some(answer) = focused_answer.as_deref() else {
+            push_notice(
+                model,
+                "Choose at least one option with Space, type choices separated by commas, or type `none`.",
+            );
+            return Vec::new();
+        };
+        answer
+    } else {
+        answer
+    };
     if matches!(answer.to_ascii_lowercase().as_str(), "cancel" | "/cancel") {
         let household_member = model
             .onboarding
@@ -2500,6 +2600,10 @@ fn submit_onboarding(model: &mut AppModel) -> Vec<Effect> {
         .expect("onboarding submission requires an active flow");
     if answer.eq_ignore_ascii_case("back") {
         flow.step = previous_onboarding_step(flow.step, &flow.profile, &flow.target);
+        flow.focused_option = 0;
+        let prior_answer = canonical_onboarding_answer(&flow);
+        model.draft = prior_answer;
+        model.cursor = model.draft.chars().count();
         model.onboarding = Some(flow);
         push_onboarding_prompt(model);
         return Vec::new();
@@ -2512,6 +2616,8 @@ fn submit_onboarding(model: &mut AppModel) -> Vec<Effect> {
         push_onboarding_prompt(model);
         return Vec::new();
     }
+
+    flow.focused_option = 0;
 
     if flow.step == OnboardingStep::Saving {
         let profile = flow.profile.clone();
@@ -2896,6 +3002,340 @@ fn is_none_answer(answer: &str) -> bool {
     )
 }
 
+fn move_onboarding_focus(model: &mut AppModel, delta: isize) {
+    let Some(choice_count) = model
+        .onboarding_choice_panel()
+        .map(|panel| panel.choices.len())
+        .filter(|count| *count > 0)
+    else {
+        return;
+    };
+    let flow = model
+        .onboarding
+        .as_mut()
+        .expect("choice presentation requires onboarding state");
+    flow.focused_option = if delta.is_negative() {
+        flow.focused_option.saturating_sub(delta.unsigned_abs())
+    } else {
+        flow.focused_option
+            .saturating_add(delta.unsigned_abs())
+            .min(choice_count - 1)
+    };
+}
+
+const fn onboarding_grid_columns(width: u16) -> usize {
+    if width < 60 {
+        1
+    } else if width < 100 {
+        2
+    } else {
+        3
+    }
+}
+
+fn toggle_focused_onboarding_option(model: &mut AppModel) {
+    let Some(panel) = model.onboarding_choice_panel() else {
+        return;
+    };
+    if panel.mode != OnboardingSelectionMode::Multiple || panel.choices.is_empty() {
+        return;
+    }
+    let focused_number = panel.focused.saturating_add(1);
+    let mut selected = panel
+        .choices
+        .iter()
+        .filter(|choice| choice.selected)
+        .map(|choice| choice.number)
+        .collect::<Vec<_>>();
+    if let Some(index) = selected.iter().position(|number| *number == focused_number) {
+        selected.remove(index);
+    } else {
+        selected.push(focused_number);
+    }
+    selected.sort_unstable();
+    model.draft = selected
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    model.cursor = model.draft.chars().count();
+    reset_history_navigation(model);
+}
+
+fn onboarding_choice_panel(flow: &OnboardingFlow, draft: &str) -> Option<OnboardingChoicePanel> {
+    let context = match &flow.target {
+        OnboardingTargetV1::Owner => "Food profile · Me".to_owned(),
+        OnboardingTargetV1::ExistingMember { display_label, .. } => {
+            format!("Food profile · {display_label}")
+        }
+        OnboardingTargetV1::NewMember {
+            bounded_draft: Some(draft),
+            ..
+        } => format!("Household · {}", draft.display_name()),
+        OnboardingTargetV1::NewMember {
+            bounded_draft: None,
+            ..
+        } => "Household · Add member".to_owned(),
+    };
+    let definition = match flow.step {
+        OnboardingStep::MemberRelationship => OnboardingChoiceDefinition {
+            title: "How are they related to you?".to_owned(),
+            progress: None,
+            instruction: "Choose one relationship.".to_owned(),
+            mode: OnboardingSelectionMode::Single,
+            options: vec![
+                ("spouse".into(), "Spouse".into()),
+                ("partner".into(), "Partner".into()),
+                ("parent".into(), "Parent".into()),
+                ("child".into(), "Child".into()),
+                ("sibling".into(), "Sibling".into()),
+                ("grandparent".into(), "Grandparent".into()),
+                ("friend".into(), "Friend".into()),
+                ("other".into(), "Other".into()),
+            ],
+        },
+        OnboardingStep::MemberAgeEvidence => OnboardingChoiceDefinition {
+            title: "Which age group applies?".to_owned(),
+            progress: None,
+            instruction: "Choose one. An exact date of birth is not needed.".to_owned(),
+            mode: OnboardingSelectionMode::Single,
+            options: vec![
+                ("under13".into(), "Under 13".into()),
+                ("13to17".into(), "13–17".into()),
+                ("18orolder".into(), "18 or older".into()),
+                ("notsure".into(), "Not sure".into()),
+            ],
+        },
+        OnboardingStep::Diets => catalog_choice_definition(
+            "Diet styles",
+            1,
+            "Select every diet style that applies. Custom text still works in the composer.",
+            OnboardingSelectionMode::Multiple,
+            diet_options(),
+        ),
+        OnboardingStep::Allergies => catalog_choice_definition(
+            "Allergies & restrictions",
+            2,
+            "Select everything this person must avoid. Type `none` only when none apply.",
+            OnboardingSelectionMode::Multiple,
+            allergy_options(),
+        ),
+        OnboardingStep::Conditions => catalog_choice_definition(
+            "Health conditions",
+            3,
+            "Select every condition that should shape food guidance.",
+            OnboardingSelectionMode::Multiple,
+            condition_options(),
+        ),
+        OnboardingStep::Severity => OnboardingChoiceDefinition {
+            title: "How much do these conditions affect food choices?".to_owned(),
+            progress: Some((4, 8)),
+            instruction: "Choose one severity level.".to_owned(),
+            mode: OnboardingSelectionMode::Single,
+            options: vec![
+                ("1".into(), "Mild".into()),
+                ("2".into(), "Moderate".into()),
+                ("3".into(), "Significant".into()),
+                ("4".into(), "Severe".into()),
+                ("5".into(), "Critical".into()),
+            ],
+        },
+        OnboardingStep::Activity => catalog_choice_definition(
+            "Activity level",
+            6,
+            "Choose one, or type `none` to skip.",
+            OnboardingSelectionMode::Single,
+            activity_options(),
+        ),
+        OnboardingStep::Cuisines => catalog_choice_definition(
+            "Cuisines you love",
+            7,
+            "Select every favorite. Custom text still works in the composer.",
+            OnboardingSelectionMode::Multiple,
+            cuisine_options(),
+        ),
+        OnboardingStep::MemberName
+        | OnboardingStep::AvoidIngredients
+        | OnboardingStep::Notes
+        | OnboardingStep::Review
+        | OnboardingStep::Saving => return None,
+    };
+    let OnboardingChoiceDefinition {
+        title,
+        progress,
+        instruction,
+        mode,
+        options,
+    } = definition;
+    let answer = if draft.trim().is_empty() {
+        canonical_onboarding_answer(flow)
+    } else {
+        draft.trim().to_owned()
+    };
+    let selected = selected_choice_numbers(&answer, &options, mode);
+    let focused = flow.focused_option.min(options.len().saturating_sub(1));
+    Some(OnboardingChoicePanel {
+        context,
+        title,
+        progress,
+        instruction,
+        choices: options
+            .into_iter()
+            .enumerate()
+            .map(|(index, (_, label))| OnboardingChoice {
+                number: index + 1,
+                label,
+                selected: selected.contains(&(index + 1)),
+            })
+            .collect(),
+        focused,
+        mode,
+    })
+}
+
+fn catalog_choice_definition(
+    title: &str,
+    step: u8,
+    instruction: &str,
+    mode: OnboardingSelectionMode,
+    options: &[OnboardingOption],
+) -> OnboardingChoiceDefinition {
+    OnboardingChoiceDefinition {
+        title: title.to_owned(),
+        progress: Some((step, 8)),
+        instruction: instruction.to_owned(),
+        mode,
+        options: options
+            .iter()
+            .map(|option| (option.id.clone(), option.label.clone()))
+            .collect(),
+    }
+}
+
+fn selected_choice_numbers(
+    answer: &str,
+    options: &[(String, String)],
+    mode: OnboardingSelectionMode,
+) -> HashSet<usize> {
+    let mut selected = HashSet::new();
+    for token in answer
+        .split(',')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        if let Some((start, end)) = token.split_once('-').and_then(|(start, end)| {
+            Some((
+                start.trim().parse::<usize>().ok()?,
+                end.trim().parse::<usize>().ok()?,
+            ))
+        }) {
+            for number in start..=end.min(options.len()) {
+                if number > 0 {
+                    selected.insert(number);
+                }
+            }
+            continue;
+        }
+        let matched = token
+            .parse::<usize>()
+            .ok()
+            .filter(|number| *number > 0 && *number <= options.len())
+            .or_else(|| {
+                let normalized = normalize_choice(token);
+                options
+                    .iter()
+                    .position(|(id, label)| {
+                        normalize_choice(id) == normalized || normalize_choice(label) == normalized
+                    })
+                    .map(|index| index + 1)
+            });
+        if let Some(number) = matched {
+            selected.insert(number);
+            if mode == OnboardingSelectionMode::Single {
+                break;
+            }
+        }
+    }
+    selected
+}
+
+fn canonical_onboarding_answer(flow: &OnboardingFlow) -> String {
+    match flow.step {
+        OnboardingStep::MemberRelationship => flow
+            .member_relationship
+            .map(|relationship| match relationship {
+                RelationshipV1::Self_ | RelationshipV1::Spouse => "1",
+                RelationshipV1::Partner => "2",
+                RelationshipV1::Parent => "3",
+                RelationshipV1::Child => "4",
+                RelationshipV1::Sibling => "5",
+                RelationshipV1::Grandparent => "6",
+                RelationshipV1::Friend => "7",
+                RelationshipV1::Other => "8",
+            })
+            .unwrap_or_default()
+            .to_owned(),
+        OnboardingStep::MemberName => flow.member_name.clone().unwrap_or_default(),
+        OnboardingStep::MemberAgeEvidence => flow
+            .member_age_evidence
+            .map(|age| match age {
+                HouseholdAgeEvidenceInputV1::Under13 => "1",
+                HouseholdAgeEvidenceInputV1::Age13To17 => "2",
+                HouseholdAgeEvidenceInputV1::Age18Plus => "3",
+                HouseholdAgeEvidenceInputV1::Unknown => "4",
+            })
+            .unwrap_or_default()
+            .to_owned(),
+        OnboardingStep::Diets => catalog_answer(
+            &flow.profile.diet_style_ids,
+            &flow.profile.custom_diet_styles,
+            diet_options(),
+        ),
+        OnboardingStep::Allergies => catalog_answer(
+            &flow.profile.allergy_ids,
+            &flow.profile.custom_restrictions,
+            allergy_options(),
+        ),
+        OnboardingStep::Conditions => catalog_answer(
+            &flow.profile.health_condition_ids,
+            &flow.profile.custom_health_conditions,
+            condition_options(),
+        ),
+        OnboardingStep::Severity => flow
+            .profile
+            .severity_level
+            .map_or_else(String::new, |value| value.to_string()),
+        OnboardingStep::AvoidIngredients => flow.profile.avoid_ingredients.join(", "),
+        OnboardingStep::Activity => flow
+            .profile
+            .activity_level
+            .as_ref()
+            .map_or_else(String::new, |id| {
+                catalog_answer(std::slice::from_ref(id), &[], activity_options())
+            }),
+        OnboardingStep::Cuisines => catalog_answer(
+            &flow.profile.cuisine_preferences,
+            &flow.profile.custom_cuisines,
+            cuisine_options(),
+        ),
+        OnboardingStep::Notes => flow.profile.notes.clone().unwrap_or_default(),
+        OnboardingStep::Review | OnboardingStep::Saving => String::new(),
+    }
+}
+
+fn catalog_answer(ids: &[String], custom: &[String], options: &[OnboardingOption]) -> String {
+    ids.iter()
+        .filter_map(|id| {
+            options
+                .iter()
+                .position(|option| &option.id == id)
+                .map(|index| (index + 1).to_string())
+        })
+        .chain(custom.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn push_onboarding_prompt(model: &mut AppModel) {
     let Some(flow) = model.onboarding.as_ref() else {
         return;
@@ -3095,7 +3535,7 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
     if name == "/health" {
         push_notice(
             model,
-            "Health integrations are deferred from the supported heyfood v0.6.3 contract.",
+            "Health integrations are deferred from the supported heyfood v0.7.0 contract.",
         );
         return Vec::new();
     }
@@ -3579,6 +4019,7 @@ fn start_new_member_onboarding(
         member_name: None,
         member_age_evidence: None,
         household_correlation: Some(reducer_correlation),
+        focused_option: 0,
     });
     finish_household_command_stream(
         model,
@@ -3638,6 +4079,7 @@ fn start_existing_member_onboarding(
                 member_name: None,
                 member_age_evidence: None,
                 household_correlation: Some(reducer_correlation),
+                focused_option: 0,
             });
             finish_household_command_stream(
                 model,
@@ -7657,6 +8099,101 @@ mod tests {
     }
 
     #[test]
+    fn onboarding_choice_navigation_and_space_build_safe_multi_selection() {
+        let mut model = AppModel::default();
+        begin_onboarding(&mut model, "Complete your dietary profile.");
+
+        let _ = dispatch(&mut model, Action::Insert(' '));
+        let _ = dispatch(&mut model, Action::HistoryNext);
+        let _ = dispatch(&mut model, Action::Insert(' '));
+        assert_eq!(model.draft, "1, 3");
+        assert_eq!(
+            model
+                .onboarding_choice_panel()
+                .unwrap()
+                .choices
+                .iter()
+                .filter(|choice| choice.selected)
+                .map(|choice| choice.number)
+                .collect::<Vec<_>>(),
+            [1, 3]
+        );
+
+        assert!(dispatch(&mut model, Action::Submit).is_empty());
+        let flow = model.onboarding.as_ref().unwrap();
+        assert_eq!(flow.step, OnboardingStep::Allergies);
+        assert_eq!(flow.profile.diet_style_ids, ["gluten_free", "vegetarian"]);
+        assert_eq!(flow.focused_option, 0);
+    }
+
+    #[test]
+    fn onboarding_empty_enter_selects_single_but_never_clears_multi_choice() {
+        let mut multi = AppModel::default();
+        begin_onboarding(&mut multi, "Complete your dietary profile.");
+        assert!(dispatch(&mut multi, Action::Submit).is_empty());
+        assert_eq!(
+            multi.onboarding.as_ref().map(|flow| flow.step),
+            Some(OnboardingStep::Diets)
+        );
+        assert!(
+            multi
+                .scrollback
+                .entries()
+                .back()
+                .unwrap()
+                .text
+                .contains("Space")
+        );
+
+        let mut single = AppModel {
+            onboarding: Some(OnboardingFlow {
+                step: OnboardingStep::MemberRelationship,
+                target: OnboardingTargetV1::NewMember {
+                    bounded_draft: None,
+                    expected_household_revision: HouseholdRevision::new(1).unwrap(),
+                    reducer_correlation: HouseholdReducerCorrelationV1::new(1).unwrap(),
+                },
+                ..OnboardingFlow::default()
+            }),
+            ..AppModel::default()
+        };
+        let _ = dispatch(&mut single, Action::MoveRight);
+        assert!(dispatch(&mut single, Action::Submit).is_empty());
+        let flow = single.onboarding.as_ref().unwrap();
+        assert_eq!(flow.member_relationship, Some(RelationshipV1::Partner));
+        assert_eq!(flow.step, OnboardingStep::MemberName);
+    }
+
+    #[test]
+    fn onboarding_keeps_typed_custom_text_and_restores_prior_choices_on_back() {
+        let mut custom = AppModel::default();
+        begin_onboarding(&mut custom, "Complete your dietary profile.");
+        let _ = dispatch(&mut custom, Action::InsertText("family".into()));
+        let _ = dispatch(&mut custom, Action::Insert(' '));
+        let _ = dispatch(&mut custom, Action::InsertText("recipe".into()));
+        assert_eq!(custom.draft, "family recipe");
+
+        let mut model = AppModel::default();
+        begin_onboarding(&mut model, "Complete your dietary profile.");
+        assert!(submit_text(&mut model, "1, 3").is_empty());
+        assert_eq!(
+            model.onboarding.as_ref().map(|flow| flow.step),
+            Some(OnboardingStep::Allergies)
+        );
+        assert!(submit_text(&mut model, "back").is_empty());
+        assert_eq!(model.draft, "1, 3");
+        let selected = model
+            .onboarding_choice_panel()
+            .unwrap()
+            .choices
+            .into_iter()
+            .filter(|choice| choice.selected)
+            .map(|choice| choice.number)
+            .collect::<Vec<_>>();
+        assert_eq!(selected, [1, 3]);
+    }
+
+    #[test]
     fn household_age_group_accepts_human_labels_without_exposing_wire_values() {
         for (answer, expected) in [
             ("Under 13", HouseholdAgeEvidenceInputV1::Under13),
@@ -10762,7 +11299,7 @@ mod tests {
         assert_eq!(model.operation, OperationState::Idle);
         assert_eq!(
             model.scrollback.entries().back().unwrap().text,
-            "Health integrations are deferred from the supported heyfood v0.6.3 contract."
+            "Health integrations are deferred from the supported heyfood v0.7.0 contract."
         );
     }
 

@@ -45,7 +45,7 @@ identifier from `--list`; unknown names return a typed runtime error.
 
 Discovery schema v1 is the default retained for installed-skill compatibility.
 Schema v2 must be requested explicitly and adds native-state compatibility
-metadata used by the v0.6.3 installer and release verifier.
+metadata used by the v0.7.0 installer and release verifier.
 
 `agent setup` and `agent uninstall` are separate opt-in user configuration
 operations. They default to dry-run, require `--apply` to change state,
@@ -178,11 +178,11 @@ authority are never rendered.
 
 ## Deferred Health integrations
 
-Health integrations are not part of the supported `v0.6.3` command surface.
+Health integrations are not part of the supported `v0.7.0` command surface.
 They are absent from root help, shell completion, and the TUI command registry.
 The retained `health` spelling fails locally with `capability_deferred` before
 credential access or network dispatch. Oura and Apple Health integration work
-remains post-`v0.6.3`; no Health implementation or canary is required for this
+remains post-`v0.7.0`; no Health implementation or canary is required for this
 release.
 
 ## Menu Watch
@@ -246,6 +246,12 @@ the same TUI process.
 Read panels are cancellable. `/household add` and `/onboard --for …` are the
 human-attached-TUI exceptions: they commit one complete version-1 declared
 member profile to the local encrypted repository only after explicit review.
+Choice steps use one responsive column on compact terminals, two on standard
+terminals, and three on wide terminals. Arrow keys move through the grid, Space toggles a
+multi-select option, and Enter chooses or continues. Typed comma-separated
+choices, numeric ranges, and bounded custom text remain supported. Focus and
+selection have explicit markers, so meaning does not depend on color;
+`NO_COLOR=1 heyfood` disables the semantic terminal palette.
 `/for me`, `/for <member>`, and `/for everyone` persist local scope across
 restart. Ordinary hosted turns evaluate the selected member or Everyone from
 an exact leased projection of the local declared profiles without creating
@@ -255,7 +261,7 @@ contains native audio support; unavailable artifacts and insufficient scopes
 fail before microphone access. Item-level Menu Watch diff detail, real-hardware
 voice qualification, full parity, hosted household sync/learned graph/health,
 cross-device household state, and the complete twelve-stage showcase are
-post-`v0.6.3` conformance work, not release gates.
+post-`v0.7.0` conformance work, not release gates.
 
 ## Unavailable compatibility topology
 

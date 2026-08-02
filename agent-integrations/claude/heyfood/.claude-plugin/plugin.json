@@ -1,6 +1,6 @@
 {
   "name": "heyfood",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "description": "Use the installed heyfood CLI safely from Claude Code.",
   "author": {
     "name": "FRNTR LLC",

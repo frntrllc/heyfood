@@ -3219,7 +3219,7 @@ fn installed_harness_inventory_matches_core_release_contract() {
     ))
     .expect("decode installed core release contract");
     assert_eq!(contract["schema_version"], 1);
-    assert_eq!(contract["release"], "0.6.3");
+    assert_eq!(contract["release"], "0.7.0");
     assert_eq!(
         contract["distribution"]["release_targets"],
         json!([

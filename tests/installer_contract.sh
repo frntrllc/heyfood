@@ -348,8 +348,8 @@ test_source_invariants() {
     fail "install.sh.sha256 does not match install.sh"
   assert_contains "$INSTALLER" 'set -euo pipefail'
   assert_contains "$INSTALLER" 'https://github.com'
-  assert_contains "$INSTALLER" 'SUPPORTED_VERSION="0.6.3"'
-  assert_contains "$INSTALLER" 'NATIVE_STATE_RELEASE_VERSION="0.6.3"'
+  assert_contains "$INSTALLER" 'SUPPORTED_VERSION="0.7.0"'
+  assert_contains "$INSTALLER" 'NATIVE_STATE_RELEASE_VERSION="0.7.0"'
   assert_contains "$INSTALLER" '.local/pipx/venvs/heyfood-cli/bin/heyfood'
   assert_contains "$INSTALLER" 'SHA256SUMS'
   assert_contains "$INSTALLER" 'native-state.json'
@@ -395,37 +395,37 @@ test_native_root_digest_vectors() {
 
 test_exact_native_install() {
   new_case exact
-  make_release 0.6.3 0.6.3 native
-  export HEYFOOD_VERSION=0.6.3
+  make_release 0.7.0 0.7.0 native
+  export HEYFOOD_VERSION=0.7.0
   run_installer
 
   [[ -x "$BIN_DIR/heyfood" ]] || fail "native executable was not installed"
-  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.3" ]] ||
+  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.7.0" ]] ||
     fail "installed executable did not report the exact release version"
-  assert_contains "$STDOUT_LOG" "Installed heyfood 0.6.3 at $BIN_DIR/heyfood"
+  assert_contains "$STDOUT_LOG" "Installed heyfood 0.7.0 at $BIN_DIR/heyfood"
   assert_contains "$STDOUT_LOG" "Open heyfood to sign in or create an account: heyfood"
   assert_contains "$STDOUT_LOG" "Agent contract: heyfood agent describe"
   assert_contains "$STDOUT_LOG" "Optional Codex/Claude setup preview:"
-  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.6.3/SHA256SUMS"
-  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.6.3/heyfood-v0.6.3-$(host_target).tar.gz"
-  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.6.3/heyfood-v0.6.3-native-state.json"
-  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.6.3/heyfood-installer-v0.6.3-$(host_target).tar.gz"
+  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.7.0/SHA256SUMS"
+  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.7.0/heyfood-v0.7.0-$(host_target).tar.gz"
+  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.7.0/heyfood-v0.7.0-native-state.json"
+  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.7.0/heyfood-installer-v0.7.0-$(host_target).tar.gz"
 }
 
 test_default_release_is_v063() {
   new_case default
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   run_installer
 
-  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.3" ]] ||
+  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.7.0" ]] ||
     fail "default supported release was not installed"
-  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.6.3/"
+  assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.7.0/"
   assert_not_contains "$DOWNLOAD_LOG" "/releases/latest"
 }
 
 test_streamed_install() {
   new_case streamed
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   /bin/bash <"$INSTALLER" >"$STDOUT_LOG" 2>"$STDERR_LOG"
   [[ -x "$BIN_DIR/heyfood" ]] || fail "streamed installer did not install heyfood"
 }
@@ -437,10 +437,10 @@ test_rejects_unsupported_or_unsafe_version_before_download() {
     fail "installer accepted an unsupported incident release"
   fi
   [[ ! -e "$DOWNLOAD_LOG" ]] || fail "installer downloaded before rejecting the unsupported release"
-  assert_contains "$STDERR_LOG" "this installer supports heyfood 0.6.3"
+  assert_contains "$STDERR_LOG" "this installer supports heyfood 0.7.0"
 
   new_case version-injection
-  export HEYFOOD_VERSION="0.6.3;touch-must-not-run"
+  export HEYFOOD_VERSION="0.7.0;touch-must-not-run"
   if run_installer; then
     fail "installer accepted an unsafe version"
   fi
@@ -450,7 +450,7 @@ test_rejects_unsupported_or_unsafe_version_before_download() {
 
 test_rejects_uncontrolled_install_targets() {
   new_case relative-bin
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   export HEYFOOD_BIN_DIR="relative/bin"
   if run_installer; then
     fail "installer accepted a relative bin directory"
@@ -458,7 +458,7 @@ test_rejects_uncontrolled_install_targets() {
   [[ ! -e "$DOWNLOAD_LOG" ]] || fail "installer downloaded before rejecting the directory"
 
   new_case symlink-bin
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   mkdir -p "$CASE_DIR/real-bin"
   ln -s "$CASE_DIR/real-bin" "$CASE_DIR/bin-link"
   export HEYFOOD_BIN_DIR="$CASE_DIR/bin-link"
@@ -468,7 +468,7 @@ test_rejects_uncontrolled_install_targets() {
   [[ ! -e "$DOWNLOAD_LOG" ]] || fail "installer downloaded before rejecting the symlink"
 
   new_case shared-bin
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   mkdir -p "$CASE_DIR/shared-bin"
   chmod 0775 "$CASE_DIR/shared-bin"
   export HEYFOOD_BIN_DIR="$CASE_DIR/shared-bin"
@@ -478,7 +478,7 @@ test_rejects_uncontrolled_install_targets() {
   [[ ! -e "$DOWNLOAD_LOG" ]] || fail "installer downloaded into a shared directory"
 
   new_case symlink-target
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   mkdir -p "$BIN_DIR"
   printf 'do not replace\n' >"$CASE_DIR/target"
   ln -s "$CASE_DIR/target" "$BIN_DIR/heyfood"
@@ -503,23 +503,23 @@ EOF
 
 test_migrates_known_legacy_pipx_symlink() {
   new_case legacy-pipx
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   make_legacy_pipx_link
   run_installer
 
   [[ -f "$BIN_DIR/heyfood" && ! -L "$BIN_DIR/heyfood" ]] ||
     fail "legacy pipx symlink was not replaced by the native executable"
-  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.3" ]] ||
-    fail "legacy pipx migration did not install v0.6.3"
+  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.7.0" ]] ||
+    fail "legacy pipx migration did not install v0.7.0"
   [[ "$("$HOME_DIR/.local/pipx/venvs/heyfood-cli/bin/heyfood")" == "heyfood 0.3.2" ]] ||
     fail "legacy pipx migration changed the old environment"
 }
 
 test_failed_install_preserves_known_legacy_pipx_symlink() {
   new_case legacy-pipx-failure
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   make_legacy_pipx_link
-  printf 'corruption\n' >>"$ASSET_DIR/heyfood-v0.6.3-$(host_target).tar.gz"
+  printf 'corruption\n' >>"$ASSET_DIR/heyfood-v0.7.0-$(host_target).tar.gz"
   if run_installer; then
     fail "legacy pipx migration accepted an invalid checksum"
   fi
@@ -551,19 +551,19 @@ write_existing_v063_binary() {
   cat >"$BIN_DIR/heyfood" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
-  printf 'heyfood 0.6.3\n'
+  printf 'heyfood 0.7.0\n'
   exit 0
 fi
-printf 'installed v0.6.3 sentinel\n'
+printf 'installed v0.7.0 sentinel\n'
 EOF
   chmod 0755 "$BIN_DIR/heyfood"
 }
 
 test_checksum_failure_preserves_existing_binary() {
   new_case bad-checksum
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   write_existing_binary
-  printf 'corruption\n' >>"$ASSET_DIR/heyfood-v0.6.3-$(host_target).tar.gz"
+  printf 'corruption\n' >>"$ASSET_DIR/heyfood-v0.7.0-$(host_target).tar.gz"
   if run_installer; then
     fail "installer accepted an invalid checksum"
   fi
@@ -573,12 +573,12 @@ test_checksum_failure_preserves_existing_binary() {
 
 test_archive_shape_failure_preserves_existing_binary() {
   new_case bad-archive
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   write_existing_binary
   printf 'unexpected\n' >"$CASE_DIR/payload/unexpected.txt"
-  tar -czf "$ASSET_DIR/heyfood-v0.6.3-$(host_target).tar.gz" \
+  tar -czf "$ASSET_DIR/heyfood-v0.7.0-$(host_target).tar.gz" \
     -C "$CASE_DIR/payload" heyfood unexpected.txt
-  refresh_native_checksums 0.6.3
+  refresh_native_checksums 0.7.0
   if run_installer; then
     fail "installer accepted unexpected archive members"
   fi
@@ -588,12 +588,12 @@ test_archive_shape_failure_preserves_existing_binary() {
 
 test_version_mismatch_preserves_existing_binary() {
   new_case wrong-version
-  make_release 0.6.3 9.9.9 native
+  make_release 0.7.0 9.9.9 native
   write_existing_binary
   if run_installer; then
     fail "installer accepted an executable with the wrong version"
   fi
-  assert_contains "$STDERR_LOG" "expected heyfood 0.6.3 before installation"
+  assert_contains "$STDERR_LOG" "expected heyfood 0.7.0 before installation"
   assert_existing_binary_untouched
 }
 
@@ -612,17 +612,17 @@ test_current_installer_refuses_v062_before_download_and_preserves_state() {
   state_digest=$(sha256_file "$state_sentinel")
   export HEYFOOD_VERSION=0.6.2
   if run_installer; then
-    fail "the current v0.6.3 installer accepted a v0.6.2 request"
+    fail "the current v0.7.0 installer accepted a v0.6.2 request"
   fi
 
   [[ ! -e "$DOWNLOAD_LOG" ]] ||
     fail "the current installer downloaded before rejecting the v0.6.2 request"
   assert_contains "$STDERR_LOG" \
-    "this installer supports heyfood 0.6.3; requested 0.6.2"
-  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.3" ]] ||
-    fail "the rejected v0.6.2 request replaced the installed v0.6.3 executable"
+    "this installer supports heyfood 0.7.0; requested 0.6.2"
+  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.7.0" ]] ||
+    fail "the rejected v0.6.2 request replaced the installed v0.7.0 executable"
   [[ "$(sha256_file "$BIN_DIR/heyfood")" == "$binary_digest" ]] ||
-    fail "the rejected v0.6.2 request changed the installed v0.6.3 bytes"
+    fail "the rejected v0.6.2 request changed the installed v0.7.0 bytes"
   [[ "$(sha256_file \
     "$HEYFOOD_STATE_DIR/data/compatibility/native-state-floor.v1.json")" == \
     "$floor_digest" ]] ||
@@ -634,28 +634,28 @@ test_current_installer_refuses_v062_before_download_and_preserves_state() {
 test_verified_native_state_install_and_compatible_reinstall() {
   new_case native-state-install
   use_native_state_installer
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   write_existing_binary
   run_installer
-  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.3" ]] ||
+  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.7.0" ]] ||
     fail "the standalone verifier prevented an exact no-floor install"
-  assert_contains "$DOWNLOAD_LOG" "heyfood-v0.6.3-native-state.json"
-  assert_contains "$DOWNLOAD_LOG" "heyfood-installer-v0.6.3-$(host_target).tar.gz"
+  assert_contains "$DOWNLOAD_LOG" "heyfood-v0.7.0-native-state.json"
+  assert_contains "$DOWNLOAD_LOG" "heyfood-installer-v0.7.0-$(host_target).tar.gz"
 
   new_case compatible-floor
   use_native_state_installer
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   write_existing_binary
   write_native_state_floor
   run_installer
-  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.6.3" ]] ||
+  [[ "$("$BIN_DIR/heyfood" --version)" == "heyfood 0.7.0" ]] ||
     fail "a compatible native-state-aware reinstall was rejected"
 }
 
 test_malformed_native_state_floor_rejects_before_download() {
   new_case malformed-floor
   use_native_state_installer
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   write_existing_binary
   write_native_state_floor
   printf '\n' >>"$HEYFOOD_STATE_DIR/data/compatibility/native-state-floor.v1.json"
@@ -672,7 +672,7 @@ test_malformed_native_state_floor_rejects_before_download() {
 test_pre_native_state_and_disagreeing_metadata_preserve_existing_binary() {
   new_case pre-native-state-release
   use_native_state_installer
-  make_release 0.6.3 0.6.3 native exact 1 1
+  make_release 0.7.0 0.7.0 native exact 1 1
   write_existing_binary
   if run_installer; then
     fail "installer accepted a pre-native-state release declaration"
@@ -682,7 +682,7 @@ test_pre_native_state_and_disagreeing_metadata_preserve_existing_binary() {
 
   new_case metadata-disagreement
   use_native_state_installer
-  make_release 0.6.3 0.6.3 native exact 1 2
+  make_release 0.7.0 0.7.0 native exact 1 2
   write_existing_binary
   if run_installer; then
     fail "installer accepted release and binary metadata disagreement"
@@ -696,7 +696,7 @@ test_structurally_invalid_candidate_manifests_preserve_existing_binary() {
   for variant in nested textual duplicate-top duplicate-nested wrong-schema invalid oversized; do
     new_case "candidate-$variant"
     use_native_state_installer
-    make_release 0.6.3 0.6.3 native "$variant"
+    make_release 0.7.0 0.7.0 native "$variant"
     write_existing_binary
     if run_installer; then
       fail "installer accepted the $variant candidate manifest"
@@ -709,12 +709,12 @@ test_structurally_invalid_candidate_manifests_preserve_existing_binary() {
 test_invalid_or_oversized_declarations_preserve_existing_binary() {
   new_case duplicate-declaration
   use_native_state_installer
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   write_existing_binary
   printf '%s' \
-    '{"binary_version":"0.6.3","binary_version":"0.6.3","maximum_native_state_version":2,"native_state_capabilities":["household-account-slot-v1","household-lifecycle-lock-v1","household-migration-guard-v1","household-teardown-journal-v1"],"schema_version":1}' \
-    >"$ASSET_DIR/heyfood-v0.6.3-native-state.json"
-  refresh_native_checksums 0.6.3
+    '{"binary_version":"0.7.0","binary_version":"0.7.0","maximum_native_state_version":2,"native_state_capabilities":["household-account-slot-v1","household-lifecycle-lock-v1","household-migration-guard-v1","household-teardown-journal-v1"],"schema_version":1}' \
+    >"$ASSET_DIR/heyfood-v0.7.0-native-state.json"
+  refresh_native_checksums 0.7.0
   if run_installer; then
     fail "installer accepted a duplicate-key release declaration"
   fi
@@ -723,14 +723,14 @@ test_invalid_or_oversized_declarations_preserve_existing_binary() {
 
   new_case oversized-declaration
   use_native_state_installer
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   write_existing_binary
   {
     printf '%s' '{"padding":"'
     head -c 4096 /dev/zero | tr '\0' x
     printf '%s' '"}'
-  } >"$ASSET_DIR/heyfood-v0.6.3-native-state.json"
-  refresh_native_checksums 0.6.3
+  } >"$ASSET_DIR/heyfood-v0.7.0-native-state.json"
+  refresh_native_checksums 0.7.0
   if run_installer; then
     fail "installer accepted an oversized release declaration"
   fi
@@ -741,9 +741,9 @@ test_invalid_or_oversized_declarations_preserve_existing_binary() {
 test_missing_or_failing_verifier_preserves_existing_binary() {
   new_case missing-metadata
   use_native_state_installer
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   write_existing_binary
-  rm "$ASSET_DIR/heyfood-v0.6.3-native-state.json"
+  rm "$ASSET_DIR/heyfood-v0.7.0-native-state.json"
   if run_installer; then
     fail "installer accepted a release without native state metadata"
   fi
@@ -752,9 +752,9 @@ test_missing_or_failing_verifier_preserves_existing_binary() {
 
   new_case missing-verifier
   use_native_state_installer
-  make_release 0.6.3 0.6.3 native
+  make_release 0.7.0 0.7.0 native
   write_existing_binary
-  rm "$ASSET_DIR/heyfood-installer-v0.6.3-$(host_target).tar.gz"
+  rm "$ASSET_DIR/heyfood-installer-v0.7.0-$(host_target).tar.gz"
   if run_installer; then
     fail "installer accepted a release without the standalone verifier"
   fi
@@ -763,7 +763,7 @@ test_missing_or_failing_verifier_preserves_existing_binary() {
 
   new_case rejecting-verifier
   use_native_state_installer
-  make_release 0.6.3 0.6.3 native exact 2 2 reject
+  make_release 0.7.0 0.7.0 native exact 2 2 reject
   write_existing_binary
   if run_installer; then
     fail "installer ignored a verifier rejection"
@@ -775,7 +775,7 @@ test_missing_or_failing_verifier_preserves_existing_binary() {
 test_interruption_before_replacement_preserves_existing_binary() {
   new_case verifier-interruption
   use_native_state_installer
-  make_release 0.6.3 0.6.3 native exact 2 2 interrupt
+  make_release 0.7.0 0.7.0 native exact 2 2 interrupt
   write_existing_binary
   if run_installer; then
     fail "interrupted installer reported success"

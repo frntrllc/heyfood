@@ -1,9 +1,9 @@
 # Native household local state
 
-The v0.6.3 native hey.food TUI keeps its household roster, selected scope, and
+The v0.7.0 native hey.food TUI keeps its household roster, selected scope, and
 declared dietary profiles in the account-bound encrypted household repository.
 Local roster management, member onboarding, and persistent scope selection are
-part of the supported v0.6.3 TUI contract. The TUI does not use the imported
+part of the supported v0.7.0 TUI contract. The TUI does not use the imported
 Python snapshot after native activation.
 
 ## Supported human workflow
@@ -91,19 +91,19 @@ is reported explicitly and remains resumable.
 
 ## Release and managed-install boundary
 
-v0.6.3 is the first activated native-state release. Its exact public set is
+v0.7.0 is the first activated native-state release. Its exact public set is
 four product archives, four matching standalone-verifier archives, one
 canonical native-state declaration, and `SHA256SUMS`. Both macOS product and
 verifier executables are signed and notarized before packaging; all ten assets
 are attested and verified after public download.
 
 The immutable v0.6.2 release remains four product archives plus its checksum
-manifest and gains no verifier or declaration. A managed v0.6.2-to-v0.6.3
-upgrade must preserve the prior executable until the v0.6.3 product,
+manifest and gains no verifier or declaration. A managed v0.6.2-to-v0.7.0
+upgrade must preserve the prior executable until the v0.7.0 product,
 standalone verifier, declaration, checksum, and native-state floor all verify.
-After the floor exists, the current v0.6.3 installer invoked with
+After the floor exists, the current v0.7.0 installer invoked with
 `HEYFOOD_VERSION=0.6.2` must fail at its exact supported-version gate before
-download or executable replacement and must leave v0.6.3 and local state
+download or executable replacement and must leave v0.7.0 and local state
 unchanged. The archived v0.6.2 installer and binary do not know about the
 future floor; executing either after migration is unsupported and unprotected.
 

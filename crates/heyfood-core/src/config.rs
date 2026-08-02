@@ -29,7 +29,7 @@ impl ConfigSchemaVersion {
 pub const CURRENT_CONFIG_SCHEMA: ConfigSchemaVersion = ConfigSchemaVersion::new(3);
 
 /// Strict rollout switch for D2 native household state. Native household is
-/// part of the supported v0.6.3 contract, so an ordinary public invocation
+/// part of the supported v0.7.0 contract, so an ordinary public invocation
 /// enables it. Operators may still set the switch to `0` as a pre-initialization
 /// emergency hold; once native provenance exists, the compatibility floor
 /// continues to fail closed regardless of the flag.

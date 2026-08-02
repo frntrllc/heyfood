@@ -5,16 +5,26 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use heyfood_core::{
     HouseholdLifecycleV1, HouseholdProfileStateV1, HouseholdScope, HouseholdSubjectId,
     RelationshipV1, terminal_safe_text,
 };
 
+use crate::model::{OnboardingChoicePanel, OnboardingSelectionMode};
 use crate::{
     AppModel, HouseholdMemberPresentationV1, OperationState, ProfileCopyStateV1, Speaker,
     slash_suggestions,
 };
+
+fn semantic_style(model: &AppModel, color: Color) -> Style {
+    if model.color_enabled() {
+        Style::default().fg(color)
+    } else {
+        Style::default()
+    }
+}
 
 #[must_use]
 pub fn profile_copy(state: ProfileCopyStateV1) -> String {
@@ -260,21 +270,21 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
             Span::styled(" hey.food", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
                 format!(" · {status}{scope}"),
-                Style::default().fg(Color::DarkGray),
+                semantic_style(model, Color::DarkGray),
             ),
         ]),
         ResponsiveMode::Standard => Line::from(vec![
             Span::styled(" hey.food", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
                 format!("  thoughtful food guidance · {status}{scope}"),
-                Style::default().fg(Color::DarkGray),
+                semantic_style(model, Color::DarkGray),
             ),
         ]),
         ResponsiveMode::Wide => Line::from(vec![
             Span::styled(" hey.food", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
                 format!("  Ask about food, meals, restaurants, or recipes · {status}{scope}"),
-                Style::default().fg(Color::DarkGray),
+                semantic_style(model, Color::DarkGray),
             ),
         ]),
     };
@@ -282,6 +292,10 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
 }
 
 fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
+    if let Some(panel) = model.onboarding_choice_panel() {
+        render_onboarding_choice_panel(frame, area, model, &panel);
+        return;
+    }
     let mut lines = Vec::new();
     let content_width = area.width.max(1) as usize;
     let mut latest_assistant_start = None;
@@ -289,7 +303,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Ask a question when you’re ready.",
-            Style::default().fg(Color::DarkGray),
+            semantic_style(model, Color::DarkGray),
         )));
     }
     for entry in model.scrollback.entries() {
@@ -306,12 +320,12 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         };
         lines.push(Line::from(Span::styled(
             label,
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
+            semantic_style(model, color).add_modifier(Modifier::BOLD),
         )));
         if entry.text.is_empty() && entry.streaming {
             lines.push(Line::from(Span::styled(
                 "…",
-                Style::default().fg(Color::DarkGray),
+                semantic_style(model, Color::DarkGray),
             )));
         } else {
             lines.extend(entry.text.lines().map(|line| Line::from(line.to_owned())));
@@ -321,15 +335,13 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             activity.clone(),
-            Style::default().fg(Color::Yellow),
+            semantic_style(model, Color::Yellow),
         )));
     }
     if model.unseen_lines > 0 {
         lines.push(Line::from(Span::styled(
             format!("{} new lines · End to follow", model.unseen_lines),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            semantic_style(model, Color::Yellow).add_modifier(Modifier::BOLD),
         )));
     }
 
@@ -355,20 +367,180 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     );
 }
 
+fn render_onboarding_choice_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &AppModel,
+    panel: &OnboardingChoicePanel,
+) {
+    let progress = panel
+        .progress
+        .map(|(step, total)| format!("Step {step} of {total}"));
+    let context = match progress {
+        Some(progress) => format!("{} · {progress}", panel.context),
+        None => panel.context.clone(),
+    };
+    let header_height = area.height.min(3);
+    let detail_height = area.height.saturating_sub(header_height).min(2);
+    let body_height = area
+        .height
+        .saturating_sub(header_height)
+        .saturating_sub(detail_height);
+    let regions = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Length(body_height),
+            Constraint::Length(detail_height),
+        ])
+        .split(area);
+
+    let header = vec![
+        Line::from(Span::styled(
+            context,
+            semantic_style(model, Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            panel.title.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            truncate_to_width(&panel.instruction, area.width as usize),
+            semantic_style(model, Color::DarkGray),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(header), regions[0]);
+
+    let columns = match responsive_mode(area.width) {
+        ResponsiveMode::Compact => 1,
+        ResponsiveMode::Standard => 2,
+        ResponsiveMode::Wide => 3,
+    };
+    let rows = usize::from(regions[1].height).max(1);
+    let page_size = rows.saturating_mul(columns).max(1);
+    let page = panel.focused / page_size;
+    let page_start = page.saturating_mul(page_size);
+    let gap = 2usize;
+    let total_gap = gap.saturating_mul(columns.saturating_sub(1));
+    let cell_width = (usize::from(area.width).saturating_sub(total_gap) / columns).max(1);
+    let mut choice_lines = Vec::with_capacity(rows);
+    for row in 0..rows {
+        let mut spans = Vec::new();
+        for column in 0..columns {
+            let choice_index = page_start + row * columns + column;
+            if column > 0 {
+                spans.push(Span::raw(" ".repeat(gap)));
+            }
+            let Some(choice) = panel.choices.get(choice_index) else {
+                spans.push(Span::raw(" ".repeat(cell_width)));
+                continue;
+            };
+            let focused = choice_index == panel.focused;
+            let focus_marker = if focused { "›" } else { " " };
+            let selected_marker = if choice.selected { "[✓]" } else { "[ ]" };
+            let prefix = format!("{focus_marker} {selected_marker} {:>2} ", choice.number);
+            let prefix_width = UnicodeWidthStr::width(prefix.as_str());
+            let label = truncate_to_width(&choice.label, cell_width.saturating_sub(prefix_width));
+            let content = pad_to_width(&format!("{prefix}{label}"), cell_width);
+            let style = if focused {
+                semantic_style(model, Color::Cyan).add_modifier(Modifier::BOLD)
+            } else if choice.selected {
+                semantic_style(model, Color::Green)
+            } else {
+                Style::default()
+            };
+            spans.push(Span::styled(content, style));
+        }
+        choice_lines.push(Line::from(spans));
+    }
+    frame.render_widget(Paragraph::new(choice_lines), regions[1]);
+
+    let selected_count = panel
+        .choices
+        .iter()
+        .filter(|choice| choice.selected)
+        .count();
+    let focused = panel
+        .choices
+        .get(panel.focused)
+        .map(|choice| format!("{} · {}", choice.number, choice.label))
+        .unwrap_or_default();
+    let page_count = panel.choices.len().max(1).div_ceil(page_size);
+    let page_copy = (page_count > 1).then(|| format!(" · Page {} of {page_count}", page + 1));
+    let summary = match panel.mode {
+        OnboardingSelectionMode::Single => page_copy.unwrap_or_default(),
+        OnboardingSelectionMode::Multiple => {
+            format!("{selected_count} selected{}", page_copy.unwrap_or_default())
+        }
+    };
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                truncate_to_width(&focused, area.width as usize),
+                semantic_style(model, Color::Green),
+            )),
+            Line::from(Span::styled(
+                truncate_to_width(&summary, area.width as usize),
+                semantic_style(model, Color::DarkGray),
+            )),
+        ]),
+        regions[2],
+    );
+}
+
+fn truncate_to_width(value: &str, maximum: usize) -> String {
+    if UnicodeWidthStr::width(value) <= maximum {
+        return value.to_owned();
+    }
+    if maximum == 0 {
+        return String::new();
+    }
+    if maximum == 1 {
+        return "…".into();
+    }
+    let mut output = String::new();
+    let target = maximum - 1;
+    let mut width = 0usize;
+    for character in value.chars() {
+        let character_width = character.width().unwrap_or(0);
+        if width.saturating_add(character_width) > target {
+            break;
+        }
+        output.push(character);
+        width = width.saturating_add(character_width);
+    }
+    output.push('…');
+    output
+}
+
+fn pad_to_width(value: &str, width: usize) -> String {
+    let mut output = truncate_to_width(value, width);
+    let padding = width.saturating_sub(UnicodeWidthStr::width(output.as_str()));
+    output.push_str(&" ".repeat(padding));
+    output
+}
+
 fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     let block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(semantic_style(model, Color::DarkGray));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let choice_panel = model.onboarding_choice_panel();
     let hint = if model.draft.is_empty() {
-        "Ask about food, a meal, a restaurant, or a recipe…"
+        match choice_panel.as_ref().map(|panel| panel.mode) {
+            Some(OnboardingSelectionMode::Single) => "Choose with ↑/↓, then press Enter…",
+            Some(OnboardingSelectionMode::Multiple) => {
+                "Press Space to select, or type comma-separated choices…"
+            }
+            None => "Ask about food, a meal, a restaurant, or a recipe…",
+        }
     } else {
         &model.draft
     };
     let style = if model.draft.is_empty() {
-        Style::default().fg(Color::DarkGray)
+        semantic_style(model, Color::DarkGray)
     } else {
         Style::default()
     };
@@ -391,7 +563,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
                 } else {
                     format!("{:<cell_width$}", spec.name)
                 };
-                spans.push(Span::styled(command, Style::default().fg(Color::Cyan)));
+                spans.push(Span::styled(command, semantic_style(model, Color::Cyan)));
             }
             lines.push(Line::from(spans));
         }
@@ -400,9 +572,9 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("  {:<14}", spec.usage),
-                    Style::default().fg(Color::Cyan),
+                    semantic_style(model, Color::Cyan),
                 ),
-                Span::styled(spec.description, Style::default().fg(Color::DarkGray)),
+                Span::styled(spec.description, semantic_style(model, Color::DarkGray)),
             ]));
         }
     }
@@ -419,11 +591,26 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
-    let text = match responsive_mode(area.width) {
-        ResponsiveMode::Compact => " / commands · ? help · ^C stop · ^D exit",
-        ResponsiveMode::Standard => " / commands · Enter send · Ctrl+C stop · End follow",
-        ResponsiveMode::Wide => {
-            " / commands · Tab complete · Shift+Enter newline · Ctrl+C stop · Ctrl+D exit"
+    let text = if let Some(panel) = model.onboarding_choice_panel() {
+        match (responsive_mode(area.width), panel.mode) {
+            (ResponsiveMode::Compact, OnboardingSelectionMode::Single) => {
+                " ↑↓←→ move · Enter choose · Esc cancel"
+            }
+            (ResponsiveMode::Compact, OnboardingSelectionMode::Multiple) => {
+                " ↑↓←→ move · Space toggle · Enter · Esc"
+            }
+            (_, OnboardingSelectionMode::Single) => " ↑↓←→ move · Enter choose · Esc cancel",
+            (_, OnboardingSelectionMode::Multiple) => {
+                " ↑↓←→ move · Space select · Enter continue · Esc cancel"
+            }
+        }
+    } else {
+        match responsive_mode(area.width) {
+            ResponsiveMode::Compact => " / commands · ? help · ^C stop · ^D exit",
+            ResponsiveMode::Standard => " / commands · Enter send · Ctrl+C stop · End follow",
+            ResponsiveMode::Wide => {
+                " / commands · Tab complete · Shift+Enter newline · Ctrl+C stop · Ctrl+D exit"
+            }
         }
     };
     let text = if model.unseen_lines > 0 {
@@ -432,7 +619,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         text.to_owned()
     };
     frame.render_widget(
-        Paragraph::new(text).style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(text).style(semantic_style(model, Color::DarkGray)),
         area,
     );
 }
@@ -592,6 +779,20 @@ mod tests {
                 )),
             }),
         );
+        model
+    }
+
+    fn allergy_onboarding_model() -> AppModel {
+        let mut model = AppModel::default();
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::BeginOnboarding {
+                message: "Complete your dietary profile.".into(),
+            }),
+        );
+        model.draft = "none".into();
+        model.cursor = model.draft.chars().count();
+        assert!(dispatch(&mut model, Action::Submit).is_empty());
         model
     }
 
@@ -807,6 +1008,43 @@ mod tests {
         assert_eq!(responsive_mode(40), ResponsiveMode::Compact);
         assert_eq!(responsive_mode(80), ResponsiveMode::Standard);
         assert_eq!(responsive_mode(120), ResponsiveMode::Wide);
+    }
+
+    #[test]
+    fn onboarding_choices_are_responsive_paginated_and_keyboard_visible() {
+        for width in [40, 80, 120] {
+            let mut model = allergy_onboarding_model();
+            for _ in 0..27 {
+                let _ = dispatch(&mut model, Action::HistoryNext);
+            }
+            let _ = dispatch(&mut model, Action::Insert(' '));
+            let rendered = snapshot(&model, width, 18);
+            assert!(rendered.contains("Allergies & restrictions"), "{rendered}");
+            assert!(rendered.contains("Red dye / food colorings"), "{rendered}");
+            assert!(rendered.contains("[✓]"), "{rendered}");
+            assert!(rendered.contains("Space"), "{rendered}");
+            assert!(rendered.contains("Page"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn no_color_preserves_semantics_without_emitting_terminal_colors() {
+        let mut model = allergy_onboarding_model();
+        model.set_color_enabled(false);
+        let _ = dispatch(&mut model, Action::Insert(' '));
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(frame, &model)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(
+            buffer
+                .content()
+                .iter()
+                .all(|cell| { cell.fg == Color::Reset && cell.bg == Color::Reset })
+        );
+        let rendered = snapshot(&model, 80, 18);
+        assert!(rendered.contains("[✓]"));
+        assert!(rendered.contains("Allergies & restrictions"));
     }
 
     #[test]

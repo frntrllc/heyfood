@@ -46,9 +46,9 @@ Browser-only window chrome and animation timing are not runtime requirements.
 The semantic layout, information density, colors, spacing, states, and keyboard
 experience are.
 
-## `0.6.3` bounded release matrix
+## `0.7.0` bounded release matrix
 
-The `0.6.3` release gate remains intentionally narrower than the twelve-stage
+The `0.7.0` release gate remains intentionally narrower than the twelve-stage
 landing-page inventory. Its machine-readable contract is
 `tests/showcase/core-release-matrix.v1.json`. The installed archive must prove:
 
@@ -77,7 +77,7 @@ landing-page inventory. Its machine-readable contract is
   candidate.
 
 Native voice, item-level Menu Watch diff detail, and Health integrations are not
-`0.6.3` gates.
+`0.7.0` gates.
 Health integrations are explicitly deferred from the supported release
 contract and require neither implementation nor a production canary. Menu Watch
 management and latest-summary rendering have since received bounded production
@@ -86,11 +86,11 @@ release: production registration/Grocery canaries, protected signing, the same
 matrix against the signed archives, and independent exact-SHA review were also
 required.
 
-## `0.6.3` recovery qualification
+## `0.7.0` recovery qualification
 
 The installed core matrix above retains its five executable groups.
 `signed_candidate_matrix_complete: true` proves only those groups; it does not
-prove the following `0.6.3` recovery-release gates:
+prove the following `0.7.0` recovery-release gates:
 
 - a deployed backend heartbeat remains visible during deliberately slow work,
   and the packaged client preserves valid partial content and choices on a
@@ -149,7 +149,7 @@ dietary, or audio content in test evidence.
 ## Full showcase-complete gate
 
 Longer-term landing-page TUI completion requires all of the following. These
-requirements do not broaden the bounded `0.6.3` release matrix:
+requirements do not broaden the bounded `0.7.0` release matrix:
 
 - 12/12 showcase stages pass from the installed artifact;
 - every negative and cancellation case passes;
@@ -179,9 +179,9 @@ cases. Household targeting, consent-aware dietary context, and Grocery safety
 cards now have bounded installed-artifact proof; production-canary proof
 remains.
 
-Ordinary Native CLI CI runs the bounded `0.6.3` behavior matrix from packaged
+Ordinary Native CLI CI runs the bounded `0.7.0` behavior matrix from packaged
 fixtures on macOS, Linux, and Windows. Windows execution is source
-qualification for a future release, not a `v0.6.3` distribution claim. The protected
+qualification for a future release, not a `v0.7.0` distribution claim. The protected
 candidate and public release matrices run only the four authorized macOS/Linux
 archives. The harness verifies the checksum and one-executable archive policy,
 extracts into a clean temporary user environment, drives registration and

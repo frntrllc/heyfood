@@ -4,7 +4,18 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
-## 0.6.3 - 2026-07-30
+## 0.7.0 - 2026-08-02
+
+- Replace the text-wall dietary questionnaire with a responsive, terminal-native
+  choice experience. Compact terminals paginate; standard and wide terminals
+  use two- and three-column grids. Arrow keys move through the grid, Space toggles safe
+  multi-selection, Enter chooses or continues, and existing comma/range/custom
+  text input remains supported.
+- Add a semantic terminal theme for headings, focus, selections, progress,
+  cautions, and errors. Meaning never depends on color, and `NO_COLOR` disables
+  all emitted terminal color while preserving labels and selection markers.
+- Make all thirteen supported slash commands visible from the exact `/` palette
+  at 40-, 80-, and 120-column terminal widths.
 
 - Add the terminal-native household lifecycle: `/household add` atomically
   creates a local member and complete version-1 declared dietary profile,
