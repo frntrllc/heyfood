@@ -265,11 +265,11 @@ mod tests {
             binary: BinaryIdentity {
                 path: PathBuf::from("/tmp/heyfood"),
                 sha256: "a".repeat(64),
-                version: "0.7.0",
+                version: "0.7.1",
             },
             package: SkillPackageIdentity {
                 name: "heyfood",
-                version: "0.7.0",
+                version: "0.7.1",
                 sha256: "b".repeat(64),
                 files: 6,
             },

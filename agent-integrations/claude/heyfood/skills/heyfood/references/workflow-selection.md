@@ -186,7 +186,7 @@ recipe, say so plainly rather than implying it was kept.
 
 The client has household onboarding, encrypted local household profiles, and
 scope switching. **None of it has an agent surface.** Verified against the
-0.7.0 manifest: no household capability, no household or member command, and
+0.7.1 manifest: no household capability, no household or member command, and
 the local MCP tool list is unchanged — the same six read tools.
 
 So on the local surface you cannot read the roster, cannot set or switch scope,

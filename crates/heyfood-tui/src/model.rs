@@ -1446,6 +1446,8 @@ enum HouseholdTurnGateV1 {
 #[derive(Clone, Eq, PartialEq)]
 pub struct AppModel {
     pub scrollback: Scrollback,
+    /// Home-abbreviated working directory shown in the window frame.
+    pub location: String,
     pub draft: String,
     /// Character index, not byte index.
     pub cursor: usize,
@@ -1556,6 +1558,7 @@ impl Default for AppModel {
     fn default() -> Self {
         Self {
             scrollback: Scrollback::default(),
+            location: "~".into(),
             draft: String::new(),
             cursor: 0,
             width: 80,
@@ -3542,7 +3545,7 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
     if name == "/health" {
         push_notice(
             model,
-            "Health integrations are deferred from the supported heyfood v0.7.0 contract.",
+            "Health integrations are deferred from the supported heyfood v0.7.1 contract.",
         );
         return Vec::new();
     }
@@ -11336,7 +11339,7 @@ mod tests {
         assert_eq!(model.operation, OperationState::Idle);
         assert_eq!(
             model.scrollback.entries().back().unwrap().text,
-            "Health integrations are deferred from the supported heyfood v0.7.0 contract."
+            "Health integrations are deferred from the supported heyfood v0.7.1 contract."
         );
     }
 

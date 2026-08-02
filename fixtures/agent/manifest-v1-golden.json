@@ -4,7 +4,7 @@
     "one_shot_json": "active",
     "tui_automation": "unsupported"
   },
-  "binary_version": "0.7.0",
+  "binary_version": "0.7.1",
   "build": {
     "build_input_digest_sha256": "4792b986e3f6b7f6da866aba9fa69edbb5963423d8d3f437542cbd0b15e12133",
     "dirty": true,
@@ -218,7 +218,7 @@
       "operation_class": "mutation",
       "output_family": "agent_setup_plan_v1",
       "output_schema_id": "https://hey.food/schemas/v1/heyfood-agent-setup-plan.schema.json",
-      "output_schema_sha256": "9e4ee56c33b51c42d57d417ac9c9bbdf28362a86d29f8436bfd899adc3336fbe",
+      "output_schema_sha256": "ea16d68a49be20cccdd827726bf708ca12d97f125c53adfb55729d22505c3fdd",
       "path": "agent setup",
       "product_state_mutation": false,
       "purpose": "Plan or install the canonical heyfood Agent Skill and read-only MCP registration.",
@@ -245,7 +245,7 @@
       "operation_class": "mutation",
       "output_family": "agent_setup_plan_v1",
       "output_schema_id": "https://hey.food/schemas/v1/heyfood-agent-setup-plan.schema.json",
-      "output_schema_sha256": "9e4ee56c33b51c42d57d417ac9c9bbdf28362a86d29f8436bfd899adc3336fbe",
+      "output_schema_sha256": "ea16d68a49be20cccdd827726bf708ca12d97f125c53adfb55729d22505c3fdd",
       "path": "agent uninstall",
       "product_state_mutation": false,
       "purpose": "Plan or remove an exact receipt-bound heyfood Agent Skill and MCP registration.",

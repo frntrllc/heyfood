@@ -4,19 +4,25 @@ expression: rendered
 ---
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ ~                                                                            │
-│ You                                                                          │
-│ Pad thai for lunch                                                           │
 │                                                                              │
-│ hey.food                                                                     │
-│ …                                                                            │
+│                 ▄                      ▄▄▄                 ▄                 │
+│                 █      ▄▄▄  ▄   ▄    ▄█▄▄   ▄▄▄   ▄▄▄   ▄▄▄█                 │
+│                 █▀▀▀▄ █▄▄▄█ █   █     █    █   █ █   █ █   █                 │
+│                 █   █ ▀▄▄▄  ▀▄▄▄█ ██  █    ▀▄▄▄▀ ▀▄▄▄▀ ▀▄▄▄█                 │
+│                              ▄▄▄▀                                            │
 │                                                                              │
-│ Responding…                                                                  │
+│                New question                 enter                            │
+│                New line               shift+enter                            │
+│                Scroll history           pgup/pgdn                            │
+│                Quit                        ctrl+d                            │
 │                                                                              │
+│                heyfood 0.7.1 is here!                                        │
+│                Ask about food, meals, restaurants, or recipes.               │
 │                                                                              │
 │                                                                              │
 │  / commands · Enter send · Ctrl+C stop · End follow                          │
 │ ╭──────────────────────────────────────────────────────────────────────────╮ │
-│ │› Can you suggest another option?                                         │ │
-│ ╰────────────────────────────────────────────────────── hey.food (working) ╯ │
+│ │› Ask about food, a meal, a restaurant, or a recipe…                      │ │
+│ ╰──────────────────────────────────────────────────────── hey.food (ready) ╯ │
 ╰──────────────────────────────────────────────────────────────────────────────╯
                                                         heyfood  0.7.1 [stable]

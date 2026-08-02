@@ -1,16 +1,16 @@
 # Native release signing
 
-The `v0.7.0` tag-driven release workflow uses the protected `native-release`
+The `v0.7.1` tag-driven release workflow uses the protected `native-release`
 GitHub environment. Its exact public set is four `heyfood` product archives,
 four matching `heyfood-installer` standalone-verifier archives, one canonical
 native-state declaration, and one `SHA256SUMS` manifest. The four targets are
 macOS Apple Silicon, macOS Intel, Linux ARM64, and Linux x64.
 Windows distribution is deferred to a separately qualified future release;
 ordinary Windows CI remains
-required, but the `v0.7.0` protected candidate, publication, and public-smoke
+required, but the `v0.7.1` protected candidate, publication, and public-smoke
 paths consume no Windows signing credential and emit no Windows asset.
 
-## Protected `v0.7.0` environment configuration
+## Protected `v0.7.1` environment configuration
 
 Configure these secrets in `native-release`:
 
@@ -56,7 +56,7 @@ and `NATIVE_STATE_RELEASE_VERSION` aligned. The compatibility details are in
 
 Ordinary pull-request CI includes Windows and builds unsigned platform fixtures
 to test compilation, Clippy, credentials, installed behavior, and archive
-determinism. It cannot satisfy the `v0.7.0` protected signing gate.
+determinism. It cannot satisfy the `v0.7.1` protected signing gate.
 
 Before merge or publication, dispatch `Native CLI CI` with
 `qualify_signed_candidate=true` at the exact proposed product SHA. The
@@ -104,4 +104,4 @@ Windows release packaging, Authenticode signing, and public installer
 qualification are deferred together to a future release. The Windows source,
 Credential Manager implementation, PowerShell packaging/signing scripts, and
 ordinary Windows CI remain in the repository. They do not authorize or produce
-a Windows `v0.7.0` release asset.
+a Windows `v0.7.1` release asset.

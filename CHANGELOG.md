@@ -4,6 +4,17 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
+## 0.7.1 - 2026-08-02
+
+- Redesign the interactive terminal around a calm, responsive application
+  frame with a branded startup view, clearer working/ready state, and an
+  approachable bordered composer.
+- Keep location, household scope, keyboard guidance, release channel, and
+  version visible in contextual chrome without displacing the conversation.
+- Preserve the complete command palette, long-menu paging, streaming,
+  onboarding, terminal restoration, and `NO_COLOR` behavior at 40-, 80-, and
+  120-column widths.
+
 ## 0.7.0 - 2026-08-02
 
 - Replace the text-wall dietary questionnaire with a responsive, terminal-native

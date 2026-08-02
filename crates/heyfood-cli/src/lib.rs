@@ -158,10 +158,10 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<GroceryCommand>,
     },
-    /// Health integrations are deferred from the supported v0.7.0 contract.
+    /// Health integrations are deferred from the supported v0.7.1 contract.
     #[command(
         hide = true,
-        about = "Health integrations are deferred from the supported v0.7.0 contract."
+        about = "Health integrations are deferred from the supported v0.7.1 contract."
     )]
     Health {
         #[command(subcommand)]
@@ -694,19 +694,19 @@ impl From<GroceryDecisionArgument> for GroceryDecisionWire {
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum HealthCommand {
-    /// Retained for future compatibility; unavailable in v0.7.0.
+    /// Retained for future compatibility; unavailable in v0.7.1.
     #[command(hide = true)]
     Status,
-    /// Retained for future compatibility; unavailable in v0.7.0.
+    /// Retained for future compatibility; unavailable in v0.7.1.
     #[command(hide = true)]
     Show,
-    /// Retained for future compatibility; unavailable in v0.7.0.
+    /// Retained for future compatibility; unavailable in v0.7.1.
     #[command(hide = true)]
     Connect(HealthProviderArgs),
-    /// Retained for future compatibility; unavailable in v0.7.0.
+    /// Retained for future compatibility; unavailable in v0.7.1.
     #[command(hide = true)]
     Sync(HealthProviderArgs),
-    /// Retained for future compatibility; unavailable in v0.7.0.
+    /// Retained for future compatibility; unavailable in v0.7.1.
     #[command(hide = true)]
     Disconnect(HealthDisconnectArgs),
 }

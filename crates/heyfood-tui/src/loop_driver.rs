@@ -75,6 +75,7 @@ fn terminal_body(
     model.set_color_enabled(color_enabled_from_no_color(
         std::env::var_os("NO_COLOR").as_deref(),
     ));
+    model.location = display_location();
     let _ = dispatch(
         &mut model,
         Action::Resize {
@@ -134,6 +135,27 @@ fn terminal_body(
 
 fn color_enabled_from_no_color(value: Option<&OsStr>) -> bool {
     value.is_none_or(|value| value.is_empty())
+}
+
+/// Home-abbreviated working directory for the window frame.
+fn display_location() -> String {
+    let Ok(cwd) = std::env::current_dir() else {
+        return "~".into();
+    };
+    let home_key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    let location = std::env::var_os(home_key)
+        .map(std::path::PathBuf::from)
+        .and_then(|home| {
+            cwd.strip_prefix(&home).ok().map(|relative| {
+                if relative.as_os_str().is_empty() {
+                    "~".to_owned()
+                } else {
+                    format!("~/{}", relative.display())
+                }
+            })
+        })
+        .unwrap_or_else(|| cwd.display().to_string());
+    heyfood_core::terminal_safe_text(&location)
 }
 
 fn apply(

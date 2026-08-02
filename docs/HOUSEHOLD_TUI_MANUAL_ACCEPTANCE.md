@@ -1,6 +1,6 @@
 # Native household TUI manual acceptance
 
-This is the required human-attached-terminal acceptance pass for the v0.7.0
+This is the required human-attached-terminal acceptance pass for the v0.7.1
 native household lifecycle and managed-install boundary. Do not automate the
 TUI through a PTY, capture the terminal, take screenshots, or record household
 labels, stable IDs, profile answers, account identifiers, paths, credentials,
@@ -41,7 +41,7 @@ transport fixture whenever a journey invokes the reviewed installer:
 ```bash
 scripts/release/candidate-transport.sh \
   "$candidate_directory" \
-  0.7.0 \
+  0.7.1 \
   "$approved_manifest_sha256" \
   ./install.sh
 ```
@@ -59,9 +59,9 @@ contents. `HOME`, `HEYFOOD_BIN_DIR`, and `HEYFOOD_STATE_DIR` still select the
 isolated profile for the journey.
 
 The approved candidate version and an installer-request version are separate
-inputs. The ordinary form above requests the approved `0.7.0` candidate. For
+inputs. The ordinary form above requests the approved `0.7.1` candidate. For
 Journey B's post-migration refusal, run this exact command against that same
-approved candidate set and the isolated profile that now contains v0.7.0:
+approved candidate set and the isolated profile that now contains v0.7.1:
 
 ```bash
 HOME="$journey_home" \
@@ -70,13 +70,13 @@ HEYFOOD_STATE_DIR="$journey_state_directory" \
 scripts/release/candidate-transport.sh \
   --expect-no-download 0.6.2 \
   "$candidate_directory" \
-  0.7.0 \
+  0.7.1 \
   "$approved_manifest_sha256" \
   ./install.sh
 ```
 
 The expected result is exit status 1 with exactly
-`heyfood installer: this installer supports heyfood 0.7.0; requested 0.6.2`
+`heyfood installer: this installer supports heyfood 0.7.1; requested 0.6.2`
 on stderr and no stdout. In this mode the network-free verifier checks the
 approved candidate binding, and the fixture refuses every installer `curl`
 invocation before serving bytes. It also fails if the installer accepts the
@@ -86,7 +86,7 @@ or TUI is involved.
 ## Preconditions
 
 - Use isolated local OS profiles and disposable hello.food test accounts.
-- Use the exact protected v0.7.0 candidate product/verifier pair, declaration,
+- Use the exact protected v0.7.1 candidate product/verifier pair, declaration,
   and `SHA256SUMS` intended for publication. Record only the candidate version
   and approved digest.
 - Before publication, route installer downloads through the checked-in
@@ -109,12 +109,12 @@ or TUI is involved.
 - For each evidence row, record only `PASS`, `FAIL`, or its allowed content-free
   failure category. Never attach terminal output.
 
-## Journey A — clean v0.7.0 install and household lifecycle
+## Journey A — clean v0.7.1 install and household lifecycle
 
-1. From an empty isolated installation and state root, run the reviewed v0.7.0
+1. From an empty isolated installation and state root, run the reviewed v0.7.1
    installer. Confirm it verifies the checksum-bound product archive,
    target-matched standalone verifier, and canonical declaration before the
-   executable appears. Confirm `heyfood --version` reports `0.7.0`.
+   executable appears. Confirm `heyfood --version` reports `0.7.1`.
 2. Launch the TUI, connect the disposable account, and complete owner
    onboarding if requested. Run `/household`; confirm the owner and current
    context agree with the TUI chrome.
@@ -158,32 +158,32 @@ or TUI is involved.
 12. Repeat one choice step with `NO_COLOR=1`. Confirm no color is emitted while
     focus, selection, instructions, and progress remain unambiguous.
 
-## Journey B — v0.6.2 to v0.7.0 upgrade and current-installer refusal
+## Journey B — v0.6.2 to v0.7.1 upgrade and current-installer refusal
 
 1. In a new isolated profile, install the immutable public v0.6.2 product and
    connect a disposable account. Launch and exit normally so its supported
    local account state exists.
-2. Upgrade with the reviewed v0.7.0 installer. Confirm the old executable
-   remains available until the v0.7.0 product, verifier, declaration, checksum,
+2. Upgrade with the reviewed v0.7.1 installer. Confirm the old executable
+   remains available until the v0.7.1 product, verifier, declaration, checksum,
    and candidate manifest pass verification; then confirm one atomic
-   replacement and `heyfood --version` reports `0.7.0`.
-3. Launch v0.7.0 and allow native household initialization/migration to finish.
+   replacement and `heyfood --version` reports `0.7.1`.
+3. Launch v0.7.1 and allow native household initialization/migration to finish.
    Confirm `/household` shows the account-bound owner exactly once and no
    repair or imported-snapshot fallback is reported. Add and save one synthetic
    member, restart, and confirm its local declared profile and selected scope
    persist.
 4. After the native-state compatibility floor exists, invoke the current
-   v0.7.0 installer with the exact `--expect-no-download 0.6.2` candidate
+   v0.7.1 installer with the exact `--expect-no-download 0.6.2` candidate
    transport command above. Confirm its exact supported-version gate refuses
    the request before any release download or executable replacement, leaves
-   v0.7.0 installed, and leaves the floor and encrypted household state
+   v0.7.1 installed, and leaves the floor and encrypted household state
    unchanged. Do not run the archived v0.6.2 installer or binary: neither
    knows about the future floor, and either is unsupported and unprotected
    after migration.
 
 ## Journey C — authorization rollover without household rebinding
 
-1. In a qualified v0.7.0 profile with a committed synthetic member, select
+1. In a qualified v0.7.1 profile with a committed synthetic member, select
    `/for me`. Use the content-free test control to expire the application
    session while leaving its authorized refresh path valid.
 2. Submit one owner operation. Confirm authority refresh/rollover completes,
@@ -242,9 +242,9 @@ or TUI is involved.
 | `NO_COLOR` semantic parity |  | `no_color_failed` |
 | Pre-save cancellation |  | `cancellation_failed` |
 | Terminal restoration |  | `terminal_restoration_failed` |
-| v0.6.2 to v0.7.0 atomic upgrade |  | `upgrade_failed` |
+| v0.6.2 to v0.7.1 atomic upgrade |  | `upgrade_failed` |
 | Native initialization preserves account binding |  | `migration_binding_failed` |
-| Current v0.7.0 installer refuses requested v0.6.2 before download |  | `managed_v062_request_refusal_failed` |
+| Current v0.7.1 installer refuses requested v0.6.2 before download |  | `managed_v062_request_refusal_failed` |
 | Expired-authority rollover preserves household |  | `authorization_rollover_failed` |
 | Same-account login replacement preserves household |  | `authorization_replacement_failed` |
 | Member authority rollover preserves exact household context |  | `member_rollover_context_failed` |

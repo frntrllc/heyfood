@@ -855,7 +855,7 @@ pub fn manifest() -> Value {
     manifest
 }
 
-/// Return the explicit v2 discovery contract used by the v0.7.0 native-state
+/// Return the explicit v2 discovery contract used by the v0.7.1 native-state
 /// release verifier. The default [`manifest`] remains the closed v1 contract
 /// consumed by already-installed v0.6.2 Agent Skills.
 #[must_use]
@@ -1234,11 +1234,11 @@ mod tests {
                     "binary": {
                         "path": "/absolute/heyfood",
                         "sha256": "0".repeat(64),
-                        "version": "0.7.0"
+                        "version": "0.7.1"
                     },
                     "package": {
                         "name": "heyfood",
-                        "version": "0.7.0",
+                        "version": "0.7.1",
                         "sha256": "1".repeat(64),
                         "files": 6
                     },

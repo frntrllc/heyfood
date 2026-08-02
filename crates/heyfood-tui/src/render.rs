@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Position, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -15,7 +15,13 @@ use heyfood_core::{
 use crate::model::{OnboardingChoicePanel, OnboardingSelectionMode};
 use crate::{
     AppModel, HouseholdMemberPresentationV1, OperationState, ProfileCopyStateV1, Speaker,
-    slash_suggestions,
+    slash_suggestions, startup, theme,
+};
+
+/// Release channel stamped by CI; local builds present as stable.
+const CHANNEL: &str = match option_env!("HEYFOOD_BUILD_CHANNEL") {
+    Some(channel) => channel,
+    None => "stable",
 };
 
 fn semantic_style(model: &AppModel, color: Color) -> Style {
@@ -183,7 +189,7 @@ pub const fn responsive_mode(width: u16) -> ResponsiveMode {
 
 #[must_use]
 pub fn composer_height(model: &AppModel, width: u16) -> u16 {
-    let available = width.saturating_sub(4).max(1) as usize;
+    let available = width.saturating_sub(10).max(1) as usize;
     let lines = model
         .draft
         .split('\n')
@@ -236,59 +242,73 @@ fn slash_grid_cell_width() -> usize {
 
 pub fn render(frame: &mut Frame<'_>, model: &AppModel) {
     let area = frame.area();
-    let composer = composer_height(model, area.width);
     let regions = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(area);
+
+    render_window(frame, regions[0], model);
+    render_version_footer(frame, regions[1], model);
+}
+
+fn render_window(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
+    let window = Block::default()
+        .borders(Borders::ALL)
+        .border_set(theme::BORDER)
+        .border_style(semantic_style(model, Color::DarkGray));
+    let inner = window.inner(area);
+    frame.render_widget(window, area);
+
+    let composer = composer_height(model, area.width);
+    let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(1),
-            Constraint::Length(composer),
             Constraint::Length(1),
+            Constraint::Length(composer),
         ])
-        .split(area);
+        .split(inner);
 
-    render_header(frame, regions[0], model);
-    render_transcript(frame, regions[1], model);
-    render_composer(frame, regions[2], model);
-    render_footer(frame, regions[3], model);
+    render_window_header(frame, rows[0], model);
+    let content = inset_horizontal(rows[1], 1);
+    if show_startup(model) {
+        startup::render_startup(frame, content, model.color_enabled());
+    } else {
+        render_transcript(frame, content, model);
+    }
+    render_tip(frame, inset_horizontal(rows[2], 1), model);
+    render_composer(frame, inset_horizontal(rows[3], 1), model);
 }
 
-fn render_header(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
-    let mode = responsive_mode(area.width);
-    let status = match model.operation {
-        OperationState::Idle => "ready",
-        OperationState::Running(_) => "working",
-        OperationState::Cancelling(_) => "stopping",
-        OperationState::Finishing(_) => "finishing",
-        OperationState::Exiting(_) => "closing",
-    };
-    let scope = household_chrome_copy(model, area.width)
-        .map(|scope| format!(" · {scope}"))
-        .unwrap_or_default();
-    let line = match mode {
-        ResponsiveMode::Compact => Line::from(vec![
-            Span::styled(" hey.food", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(
-                format!(" · {status}{scope}"),
-                semantic_style(model, Color::DarkGray),
-            ),
-        ]),
-        ResponsiveMode::Standard => Line::from(vec![
-            Span::styled(" hey.food", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(
-                format!("  thoughtful food guidance · {status}{scope}"),
-                semantic_style(model, Color::DarkGray),
-            ),
-        ]),
-        ResponsiveMode::Wide => Line::from(vec![
-            Span::styled(" hey.food", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(
-                format!("  Ask about food, meals, restaurants, or recipes · {status}{scope}"),
-                semantic_style(model, Color::DarkGray),
-            ),
-        ]),
-    };
-    frame.render_widget(Paragraph::new(line), area);
+fn render_window_header(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
+    let style = semantic_style(model, Color::DarkGray);
+    frame.render_widget(
+        Paragraph::new(Span::styled(format!(" {}", model.location), style)),
+        area,
+    );
+    if let Some(scope) = household_chrome_copy(model, area.width) {
+        frame.render_widget(
+            Paragraph::new(Span::styled(format!("{scope} "), style)).alignment(Alignment::Right),
+            area,
+        );
+    }
+}
+
+const fn inset_horizontal(area: Rect, margin: u16) -> Rect {
+    Rect {
+        x: area.x.saturating_add(margin),
+        y: area.y,
+        width: area.width.saturating_sub(margin.saturating_mul(2)),
+        height: area.height,
+    }
+}
+
+fn show_startup(model: &AppModel) -> bool {
+    model.scrollback.entries().is_empty()
+        && model.activity.is_none()
+        && model.onboarding_choice_panel().is_none()
+        && matches!(model.operation, OperationState::Idle)
 }
 
 fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
@@ -315,7 +335,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         }
         let (label, color) = match entry.speaker {
             Speaker::User => ("You", Color::Cyan),
-            Speaker::Assistant => ("hey.food", Color::Green),
+            Speaker::Assistant => ("hey.food", theme::ACCENT),
             Speaker::Notice => ("Notice", Color::Yellow),
         };
         lines.push(Line::from(Span::styled(
@@ -338,13 +358,6 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
             semantic_style(model, Color::Yellow),
         )));
     }
-    if model.unseen_lines > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("{} new lines · End to follow", model.unseen_lines),
-            semantic_style(model, Color::Yellow).add_modifier(Modifier::BOLD),
-        )));
-    }
-
     let total = wrapped_line_count(&lines, content_width);
     let visible = area.height as usize;
     let maximum_scroll = total.saturating_sub(visible);
@@ -521,9 +534,24 @@ fn pad_to_width(value: &str, width: usize) -> String {
 }
 
 fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
+    let status = match model.operation {
+        OperationState::Idle => "ready",
+        OperationState::Running(_) => "working",
+        OperationState::Cancelling(_) => "stopping",
+        OperationState::Finishing(_) => "finishing",
+        OperationState::Exiting(_) => "closing",
+    };
     let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(semantic_style(model, Color::DarkGray));
+        .borders(Borders::ALL)
+        .border_set(theme::BORDER)
+        .border_style(semantic_style(model, Color::DarkGray))
+        .title_bottom(
+            Line::from(Span::styled(
+                format!(" hey.food ({status}) "),
+                semantic_style(model, Color::DarkGray),
+            ))
+            .right_aligned(),
+        );
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -545,7 +573,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         Style::default()
     };
     let mut lines = vec![Line::from(vec![
-        Span::raw("> "),
+        Span::styled("› ", semantic_style(model, theme::ACCENT)),
         Span::styled(hint.to_owned(), style),
     ])];
     let suggestions = slash_suggestions(model, usize::MAX);
@@ -590,20 +618,25 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     ));
 }
 
-fn render_footer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
-    let text = if let Some(panel) = model.onboarding_choice_panel() {
+fn render_tip(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
+    let text = if model.unseen_lines > 0 {
+        format!("{} new lines · End to follow", model.unseen_lines)
+    } else if let Some(panel) = model.onboarding_choice_panel() {
         match (responsive_mode(area.width), panel.mode) {
             (ResponsiveMode::Compact, OnboardingSelectionMode::Single) => {
-                " ↑↓←→ move · Enter choose · Esc cancel"
+                "↑↓ move · Enter choose · Esc cancel"
             }
             (ResponsiveMode::Compact, OnboardingSelectionMode::Multiple) => {
-                " ↑↓←→ move · Space toggle · Enter · Esc"
+                "↑↓ move · Space toggle · Enter · Esc"
             }
             (_, OnboardingSelectionMode::Single) => " ↑↓←→ move · Enter choose · Esc cancel",
             (_, OnboardingSelectionMode::Multiple) => {
                 " ↑↓←→ move · Space select · Enter continue · Esc cancel"
             }
         }
+        .to_owned()
+    } else if model.focus_latest_result_start {
+        "Page Up/Page Down to browse · End to jump to latest".to_owned()
     } else {
         match responsive_mode(area.width) {
             ResponsiveMode::Compact => " / commands · ? help · ^C stop · ^D exit",
@@ -612,16 +645,27 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
                 " / commands · Tab complete · Shift+Enter newline · Ctrl+C stop · Ctrl+D exit"
             }
         }
-    };
-    let text = if model.unseen_lines > 0 {
-        format!(" {} new · End follow", model.unseen_lines)
-    } else {
-        text.to_owned()
+        .to_owned()
     };
     frame.render_widget(
         Paragraph::new(text).style(semantic_style(model, Color::DarkGray)),
         area,
     );
+}
+
+fn render_version_footer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
+    let line = Line::from(vec![
+        Span::styled("heyfood", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("  {} ", crate::VERSION),
+            semantic_style(model, Color::DarkGray),
+        ),
+        Span::styled(
+            format!("[{CHANNEL}] "),
+            semantic_style(model, Color::DarkGray),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), area);
 }
 
 fn composer_cursor(model: &AppModel, width: u16) -> (u16, u16) {
@@ -680,6 +724,22 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn semantic_text(rendered: &str) -> String {
+        rendered
+            .chars()
+            .map(|character| {
+                if matches!(character, '│' | '─' | '╭' | '╮' | '╰' | '╯') {
+                    ' '
+                } else {
+                    character
+                }
+            })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     fn streaming_model() -> AppModel {
@@ -1003,11 +1063,47 @@ mod tests {
                 "width {width}: {rendered}"
             );
             assert!(rendered.contains("Responding"), "width {width}: {rendered}");
+            assert!(rendered.contains("(working)"), "width {width}: {rendered}");
             assert!(!rendered.contains("██"));
         }
         assert_eq!(responsive_mode(40), ResponsiveMode::Compact);
         assert_eq!(responsive_mode(80), ResponsiveMode::Standard);
         assert_eq!(responsive_mode(120), ResponsiveMode::Wide);
+    }
+
+    #[test]
+    fn startup_screen_shows_logo_menu_and_version() {
+        let model = AppModel::default();
+        for width in [40, 80, 120] {
+            let rendered = snapshot(&model, width, 24);
+            insta::assert_snapshot!(format!("startup_{width}"), rendered);
+            assert!(rendered.contains("New question"), "width {width}");
+            assert!(rendered.contains("ctrl+d"), "width {width}");
+            assert!(
+                rendered.contains(&format!("heyfood {} is here!", crate::VERSION)),
+                "width {width}",
+            );
+            assert!(
+                rendered.contains(&format!("heyfood  {}", crate::VERSION)),
+                "footer missing at width {width}",
+            );
+        }
+        let narrow = snapshot(&model, 40, 24);
+        assert!(!narrow.contains('█'), "logo must hide on narrow terminals");
+        let wide = snapshot(&model, 120, 24);
+        assert!(wide.contains('█'), "logo must show on wide terminals");
+    }
+
+    #[test]
+    fn startup_screen_is_replaced_once_conversation_starts() {
+        let mut model = AppModel::default();
+        assert!(snapshot(&model, 80, 24).contains("New question"));
+        model.draft = "lunch".into();
+        model.cursor = 5;
+        let _ = dispatch(&mut model, Action::Submit);
+        let rendered = snapshot(&model, 80, 24);
+        assert!(!rendered.contains("New question"));
+        assert!(rendered.contains("You"));
     }
 
     #[test]
@@ -1046,6 +1142,20 @@ mod tests {
         let rendered = snapshot(&model, 80, 18);
         assert!(rendered.contains("[✓]"));
         assert!(rendered.contains("Allergies & restrictions"));
+
+        let mut startup = AppModel::default();
+        startup.set_color_enabled(false);
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(frame, &startup)).unwrap();
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .all(|cell| { cell.fg == Color::Reset && cell.bg == Color::Reset })
+        );
     }
 
     #[test]
@@ -1057,12 +1167,12 @@ mod tests {
             for width in [40, 80, 120] {
                 let model = restarted_local_only_scope_model(scope.clone());
                 let rendered = snapshot(&model, width, 18);
-                let semantic = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+                let semantic = semantic_text(&rendered);
                 assert!(
                     semantic.contains("ready"),
                     "width {width} omitted the ready state: {rendered}"
                 );
-                assert!(semantic.contains("Ask a question when you’re ready"));
+                assert!(semantic.contains("New question"));
                 assert!(semantic.contains("Ask about food"));
                 assert!(!semantic.contains("hosted unavailable"));
             }
@@ -1086,7 +1196,7 @@ mod tests {
         let model = restaurant_recommendation_model();
         for width in [40, 80, 120] {
             let rendered = snapshot(&model, width, 40);
-            let semantic = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+            let semantic = semantic_text(&rendered);
             for expected in [
                 "Top picks at Harbor Cafe",
                 "Grilled Fish",
@@ -1110,7 +1220,7 @@ mod tests {
             for width in [40, 80, 120] {
                 let mut model = long_full_menu_model(width, 18, top_level);
                 let rendered = snapshot(&model, width, 18);
-                let semantic = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+                let semantic = semantic_text(&rendered);
                 assert!(
                     semantic.contains("Current menu at Abby Jane Bakeshop"),
                     "top_level={top_level}, width {width} did not open at the menu heading: {rendered}"
@@ -1155,7 +1265,7 @@ mod tests {
         let model = interrupted_response_model();
         for width in [40, 80, 120] {
             let rendered = snapshot(&model, width, 22);
-            let semantic = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+            let semantic = semantic_text(&rendered);
             for expected in [
                 "saved dietary profile",
                 "response stopped before it finished",
@@ -1186,9 +1296,9 @@ mod tests {
                 },
             }),
         );
-        assert!(snapshot(&model, 80, 18).contains("new · End follow"));
+        assert!(snapshot(&model, 80, 18).contains("new lines · End to follow"));
         let _ = dispatch(&mut model, Action::FollowTail);
-        assert!(!snapshot(&model, 80, 18).contains("new · End follow"));
+        assert!(!snapshot(&model, 80, 18).contains("new lines · End to follow"));
     }
 
     #[test]
