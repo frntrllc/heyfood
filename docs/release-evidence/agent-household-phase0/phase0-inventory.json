@@ -5,19 +5,19 @@
   "phase0_complete": false,
   "product": {
     "base_sha": "81f992040ab3567f72a1b086196fdc064083c8a5",
-    "sha": "013f4377ffae042e8e877274640a0e7058fbab5f",
-    "tree": "af6cb1f2d6fdfc0eb588549c2d38512dd46690fd",
-    "supersedes_sha": "2599b662adf2138b6c7e4c877551c373204bb390"
+    "sha": "2deb10754e8f7da2657224672a7a73c8ae90a7c2",
+    "tree": "497964774f6b642f565f0d4c9b676fff587b6797",
+    "supersedes_sha": "013f4377ffae042e8e877274640a0e7058fbab5f"
   },
   "frozen_evidence": {
-    "plan_sha256": "a21105955cd9d6f262f8a0866f9f03369803a2b88ef08c7982b77b40301a11d0",
+    "plan_sha256": "2aa73de74b600af68f92d61149ff779788e6640e4f74ecc955255c7bae053aa4",
     "local_approval_schema_sha256": "64433ae9a5471308d7dce51c4b43e3f72a5903311953c02e1161c63c3200b5b3",
-    "proof_manifest_sha256": "89ff996ed57210ec3e525fcc191d0562cfdae86d77e170905e6760c6dbe91461",
+    "proof_manifest_sha256": "bde609ca42d7243ad08f1a8a0a2084c2487665ca4b7b2ba9292c0840822ce966",
     "set_digest_contract": "sha256(sorted repo-relative path + tab + sha256(raw bytes) + LF)",
     "closed_schema_set_count": 14,
     "closed_schema_set_sha256": "8cf24d77cdb92adb614d2f39cd96d57af8e7d519a802aa7a4f73de0cada8ec36",
     "fixture_set_count": 23,
-    "fixture_set_sha256": "ba39925afe84efe60c3c507e21d5843ebd81f348803784db8beb34db5ee6f809"
+    "fixture_set_sha256": "bd47b9be745b4582a2c3d3c8b48119f121fac5acc0c9719203623c2831ec2ee0"
   },
   "public_surface_baseline": {
     "default_manifest_schema_version": 1,
@@ -38,14 +38,14 @@
     "cargo_clippy_workspace_all_targets_all_features_locked_deny_warnings": "passed",
     "cargo_test_workspace_all_features_locked": {
       "status": "passed",
-      "passed": 1017,
+      "passed": 1019,
       "failed": 0,
       "ignored": 6
     },
-    "targeted_household_contract_tests": 7,
+    "targeted_household_contract_tests": 8,
     "targeted_household_core_tests": 15,
     "targeted_binary_composition_tests": 14,
-    "targeted_exact_once_repository_tests": 1,
+    "targeted_exact_once_repository_tests": 2,
     "qualified_at_exact_product_sha": true
   },
   "activation": {
