@@ -33,6 +33,7 @@ const TEST_PROMPT: &str = "Plan a synthetic dinner for installed-artifact qualif
 const TEST_RESPONSE: &str = "Installed artifact first turn complete.";
 const RETURNING_PROMPT: &str = "Give me a second authenticated installed-artifact turn.";
 const RETURNING_RESPONSE: &str = "Returning installed user turn complete.";
+const WORKING_COMPOSER: &str = "hey.food (working)";
 const READY_COMPOSER: &str = "hey.food (ready)";
 const GROCERY_CANCEL_PROMPT: &str = "Prepare onion for me, then let me cancel it.";
 const GROCERY_EDIT_PROMPT: &str = "Prepare onion for me so I can edit and accept it.";
@@ -567,6 +568,44 @@ async fn run_installed_archive_core_release_matrix() {
     let post_save_ready_copy = READY_COMPOSER;
     let returning_ready_copy = READY_COMPOSER.to_owned();
     let failure_copy = showcase_failure_copy(native_household_enabled);
+    let failure_wait_copy = if native_household_enabled {
+        "could not complete this Household request"
+    } else {
+        failure_copy
+    };
+
+    let mut clean_user_actions = vec![
+        PtyAction::Wait("Kosher".into()),
+        PtyAction::Submit("none".into()),
+        PtyAction::Wait("colorings".into()),
+        PtyAction::Submit("none".into()),
+        PtyAction::Wait("Autism".into()),
+        PtyAction::Submit("none".into()),
+        PtyAction::Wait("Ingredients to avoid".into()),
+        PtyAction::Submit("none".into()),
+        PtyAction::Wait("Activity level".into()),
+        PtyAction::Submit("none".into()),
+        PtyAction::Wait("Georgian".into()),
+        PtyAction::Submit("none".into()),
+        PtyAction::Wait("Anything else?".into()),
+        PtyAction::Submit("none".into()),
+        PtyAction::Wait("Review dietary profile".into()),
+        PtyAction::Submit("save".into()),
+        PtyAction::Wait(profile_saved_copy.into()),
+    ];
+    if native_household_enabled {
+        // The local-first save immediately reloads the authoritative
+        // Household snapshot. Prove that transition completes before the
+        // first turn instead of accepting a stale pre-save `ready` frame.
+        clean_user_actions.push(PtyAction::Wait(WORKING_COMPOSER.into()));
+    }
+    clean_user_actions.extend([
+        PtyAction::Wait(post_save_ready_copy.into()),
+        PtyAction::Submit(TEST_PROMPT.into()),
+        PtyAction::Wait(TEST_RESPONSE.into()),
+        PtyAction::Pause(Duration::from_millis(250)),
+        PtyAction::CtrlD,
+    ]);
 
     let clean_user = run_installed_pty(
         &installed_binary,
@@ -574,30 +613,7 @@ async fn run_installed_archive_core_release_matrix() {
         &base_url,
         &[],
         InstalledPtyOptions::new(80, false, credential_backend),
-        vec![
-            PtyAction::Wait("Kosher".into()),
-            PtyAction::Submit("none".into()),
-            PtyAction::Wait("colorings".into()),
-            PtyAction::Submit("none".into()),
-            PtyAction::Wait("Autism".into()),
-            PtyAction::Submit("none".into()),
-            PtyAction::Wait("Ingredients to avoid".into()),
-            PtyAction::Submit("none".into()),
-            PtyAction::Wait("Activity level".into()),
-            PtyAction::Submit("none".into()),
-            PtyAction::Wait("Georgian".into()),
-            PtyAction::Submit("none".into()),
-            PtyAction::Wait("Anything else?".into()),
-            PtyAction::Submit("none".into()),
-            PtyAction::Wait("Review dietary profile".into()),
-            PtyAction::Submit("save".into()),
-            PtyAction::Wait(profile_saved_copy.into()),
-            PtyAction::Wait(post_save_ready_copy.into()),
-            PtyAction::Submit(TEST_PROMPT.into()),
-            PtyAction::Wait(TEST_RESPONSE.into()),
-            PtyAction::Pause(Duration::from_millis(250)),
-            PtyAction::CtrlD,
-        ],
+        clean_user_actions,
     )
     .await;
     let mut speculative_probe = [0_u8; 1];
@@ -665,7 +681,7 @@ async fn run_installed_archive_core_release_matrix() {
             PtyAction::Wait("server outcome is unknown".into()),
             PtyAction::Pause(Duration::from_millis(250)),
             PtyAction::Submit(FAILURE_PROMPT.into()),
-            PtyAction::Wait(failure_copy.into()),
+            PtyAction::Wait(failure_wait_copy.into()),
             PtyAction::Pause(Duration::from_millis(250)),
             PtyAction::CtrlD,
         ],
@@ -1812,6 +1828,53 @@ fn household_contract_document() -> Value {
     })
 }
 
+fn owner_only_terminal_document(message: &str) -> Value {
+    // Native Household mode intentionally buffers model prose until the
+    // terminal document declares the complete identity set. Use the reviewed
+    // owner-only menu envelope so the installed-artifact fixture exercises
+    // that production presentation boundary instead of legacy plain prose.
+    json!({
+        "message": message,
+        "conversation_id": "showcase-conversation",
+        "structured": {
+            "type": "household_menu",
+            "restaurant_name": "Qualification Bistro",
+            "menu_freshness": "Menu updated just now",
+            "captured_at": "2026-08-02T12:00:00Z",
+            "source_lineage": "restaurant_owned",
+            "is_stale": false,
+            "member_summaries": [{
+                "member_id": "_self",
+                "label": "You"
+            }],
+            "sections": [{
+                "name": "Dinner",
+                "items": [{
+                    "item_id": "synthetic-dinner",
+                    "name": "Synthetic Dinner",
+                    "price_cents": 1200,
+                    "safety": {
+                        "_self": {
+                            "member_id": "_self",
+                            "label": "You",
+                            "level": "safe",
+                            "reason": message
+                        }
+                    }
+                }]
+            }],
+            "agent_picks": {
+                "_self": [{
+                    "item_id": "synthetic-dinner",
+                    "member_id": "_self",
+                    "reason": message,
+                    "tag": "Top pick"
+                }]
+            }
+        }
+    })
+}
+
 fn selected_member_menu_document() -> Value {
     json!({
         "message": "Here is Maya's evaluated menu.",
@@ -1860,9 +1923,9 @@ async fn respond_to_conversation(socket: &mut TcpStream, body: &Value, state: &m
     if let Some(prompt) = body.get("query").and_then(Value::as_str) {
         *state.prompt_counts.entry(prompt.to_owned()).or_default() += 1;
         match prompt {
-            TEST_PROMPT => respond_sse_message(socket, TEST_RESPONSE).await,
-            RETURNING_PROMPT => respond_sse_message(socket, RETURNING_RESPONSE).await,
-            WIDTH_PROMPT => respond_sse_message(socket, WIDTH_RESPONSE).await,
+            TEST_PROMPT => respond_sse_owner_message(socket, TEST_RESPONSE).await,
+            RETURNING_PROMPT => respond_sse_owner_message(socket, RETURNING_RESPONSE).await,
+            WIDTH_PROMPT => respond_sse_owner_message(socket, WIDTH_RESPONSE).await,
             HOUSEHOLD_JSON_PROMPT | HOUSEHOLD_HUMAN_PROMPT => {
                 respond_sse_document(socket, household_contract_document()).await;
             }
@@ -1954,13 +2017,13 @@ async fn respond_to_conversation(socket: &mut TcpStream, body: &Value, state: &m
         (CANCEL_CONFIRMATION_ID, "cancel") => {
             assert!(confirmation.get("edits").is_none());
             state.proposal_cancellations += 1;
-            respond_sse_message(socket, "Grocery proposal cancelled without mutation.").await;
+            respond_sse_owner_message(socket, "Grocery proposal cancelled without mutation.").await;
         }
         (CTRL_C_CONFIRMATION_ID, "cancel") => {
             assert!(confirmation.get("edits").is_none());
             state.proposal_cancellations += 1;
             state.ctrl_c_proposal_cancellations += 1;
-            respond_sse_message(
+            respond_sse_owner_message(
                 socket,
                 "Ctrl+C Grocery cancellation completed without mutation.",
             )
@@ -1981,7 +2044,8 @@ async fn respond_to_conversation(socket: &mut TcpStream, body: &Value, state: &m
             assert_eq!(edited_name, Some("scallion greens"));
             state.list_version += 1;
             state.proposal_accepts += 1;
-            respond_sse_message(socket, "Grocery list advanced exactly once to version 5.").await;
+            respond_sse_owner_message(socket, "Grocery list advanced exactly once to version 5.")
+                .await;
         }
         (STALE_LIST_CONFIRMATION_ID, "accept") => {
             state.stale_list_rejections += 1;
@@ -2099,13 +2163,10 @@ async fn respond_json(socket: &mut TcpStream, body: Value) {
     respond(socket, "application/json", &body).await;
 }
 
-async fn respond_sse_message(socket: &mut TcpStream, message: &str) {
+async fn respond_sse_owner_message(socket: &mut TcpStream, message: &str) {
     let partial = serde_json::to_string(&json!({"text": message})).expect("encode SSE partial");
-    let result = serde_json::to_string(&json!({
-        "message": message,
-        "conversation_id": "showcase-conversation"
-    }))
-    .expect("encode SSE result");
+    let result =
+        serde_json::to_string(&owner_only_terminal_document(message)).expect("encode SSE result");
     let body = format!("event: partial\ndata: {partial}\n\nevent: result\ndata: {result}\n\n");
     respond(socket, "text/event-stream", body.as_bytes()).await;
 }
@@ -2568,7 +2629,10 @@ fn assert_core_terminal_contract(
         );
     }
     if showcase_native_household_enabled(credential_backend, cfg!(windows)) {
-        assert_terminal_semantic_history_text(returning_user, NATIVE_HOUSEHOLD_FAILURE_MESSAGE);
+        assert_terminal_semantic_history_text(
+            returning_user,
+            "hey.food could not complete this Household request.",
+        );
         assert!(
             !terminal_semantic_history_contains(returning_user, SYNTHETIC_SERVER_FAILURE_MESSAGE),
             "native Household output exposed the fixture's untrusted server error message"
@@ -3202,6 +3266,21 @@ fn fixture_profile_write_expectation_tracks_the_onboarding_authority_mode() {
             "first_authenticated_tui_turn_completed",
         ]
     );
+}
+
+#[test]
+fn owner_only_showcase_result_declares_the_terminal_identity() {
+    let result = owner_only_terminal_document("Synthetic owner guidance.");
+    assert_eq!(result["message"], json!("Synthetic owner guidance."));
+    assert_eq!(result["conversation_id"], json!("showcase-conversation"));
+    let presentation = heyfood_application::render_household_menu(&result)
+        .expect("owner-only showcase document must be presentable");
+    assert!(
+        presentation.contains("Synthetic owner guidance."),
+        "{presentation}"
+    );
+    assert!(presentation.contains("For you"), "{presentation}");
+    assert!(!presentation.contains("_self"));
 }
 
 #[test]
