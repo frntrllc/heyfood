@@ -1028,15 +1028,7 @@ async fn run_installed_archive_core_release_matrix() {
             {
                 "id": "clean-user",
                 "status": "passed",
-                "assertions": [
-                    "device_registration_executed",
-                    "device_account_connection_executed",
-                    "account_bound_credentials_persisted",
-                    "missing_profile_onboarding_completed",
-                    "profile_sync_consent_granted",
-                    "profile_uploaded_once",
-                    "first_authenticated_tui_turn_completed"
-                ]
+                "assertions": clean_user_evidence_assertions(native_household_enabled)
             },
             {
                 "id": "returning-user",
@@ -2533,6 +2525,26 @@ const fn expected_remote_profile_writes(native_household_enabled: bool) -> usize
     if native_household_enabled { 0 } else { 1 }
 }
 
+fn clean_user_evidence_assertions(native_household_enabled: bool) -> Vec<&'static str> {
+    let mut assertions = vec![
+        "device_registration_executed",
+        "device_account_connection_executed",
+        "account_bound_credentials_persisted",
+        "missing_profile_onboarding_completed",
+    ];
+    if native_household_enabled {
+        assertions.extend([
+            "profile_persisted_locally",
+            "remote_profile_consent_not_granted",
+            "remote_profile_not_uploaded",
+        ]);
+    } else {
+        assertions.extend(["profile_sync_consent_granted", "profile_uploaded_once"]);
+    }
+    assertions.push("first_authenticated_tui_turn_completed");
+    assertions
+}
+
 fn assert_core_terminal_contract(
     clean_user: &[u8],
     returning_user: &[u8],
@@ -3173,6 +3185,31 @@ fn terminal_semantic_history_retains_cursor_fragmented_text_after_restoration() 
 fn fixture_profile_write_expectation_tracks_the_onboarding_authority_mode() {
     assert_eq!(expected_remote_profile_writes(false), 1);
     assert_eq!(expected_remote_profile_writes(true), 0);
+    assert_eq!(
+        clean_user_evidence_assertions(false),
+        vec![
+            "device_registration_executed",
+            "device_account_connection_executed",
+            "account_bound_credentials_persisted",
+            "missing_profile_onboarding_completed",
+            "profile_sync_consent_granted",
+            "profile_uploaded_once",
+            "first_authenticated_tui_turn_completed",
+        ]
+    );
+    assert_eq!(
+        clean_user_evidence_assertions(true),
+        vec![
+            "device_registration_executed",
+            "device_account_connection_executed",
+            "account_bound_credentials_persisted",
+            "missing_profile_onboarding_completed",
+            "profile_persisted_locally",
+            "remote_profile_consent_not_granted",
+            "remote_profile_not_uploaded",
+            "first_authenticated_tui_turn_completed",
+        ]
+    );
 }
 
 #[test]
