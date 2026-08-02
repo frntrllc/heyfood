@@ -20,6 +20,11 @@ Never treat MCP absence as permission to invoke a different audience.
 
 ### Supported read intents
 
+Your tool list is authoritative — this inventory describes a release, not a
+ceiling. A newer client may expose `heyfood_*` tools not named here; read their
+schemas and use them. Never withhold a tool the client advertises because this
+list predates it, and never assume one it does not.
+
 When present, prefer:
 
 - `heyfood_get_manifest` for installed contract discovery;
