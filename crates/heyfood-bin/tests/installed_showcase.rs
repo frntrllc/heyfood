@@ -59,6 +59,7 @@ const FIRST_RUN_ACCOUNT_CHOICE_COPY: &str =
     "Welcome to heyfood. Sign in or create a hello.food account in your browser to continue.";
 const FIXTURE_HEADER_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const FIXTURE_MAX_PENDING_CONNECTIONS: usize = 16;
+const INSTALLED_PTY_ROWS: u16 = 30;
 const TEST_ACCOUNT: &str = "showcase-user";
 const TEST_DEVICE_CODE: &str = "hf_dc_showcase_01234567890123456789";
 const TEST_LIST_ID: &str = "00000000-0000-4000-8000-000000000123";
@@ -2304,7 +2305,7 @@ fn run_installed_pty_blocking(
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
-            rows: 30,
+            rows: INSTALLED_PTY_ROWS,
             cols: options.columns,
             pixel_width: 0,
             pixel_height: 0,
@@ -2373,7 +2374,7 @@ fn run_installed_pty_blocking(
     let writer = Arc::new(Mutex::new(
         pair.master.take_writer().expect("take PTY writer"),
     ));
-    let capture = Arc::new(TerminalCapture::new(30, options.columns));
+    let capture = Arc::new(TerminalCapture::new(INSTALLED_PTY_ROWS, options.columns));
     let reader_capture = Arc::clone(&capture);
     let cursor_writer = Arc::clone(&writer);
     let reader_task = std::thread::spawn(move || {
@@ -2552,13 +2553,13 @@ fn assert_core_terminal_contract(
         );
     }
     if showcase_native_household_enabled(credential_backend, cfg!(windows)) {
-        assert_terminal_semantic_text(returning_user, NATIVE_HOUSEHOLD_FAILURE_MESSAGE);
+        assert_terminal_semantic_history_text(returning_user, NATIVE_HOUSEHOLD_FAILURE_MESSAGE);
         assert!(
-            !terminal_semantic_contains(returning_user, SYNTHETIC_SERVER_FAILURE_MESSAGE),
+            !terminal_semantic_history_contains(returning_user, SYNTHETIC_SERVER_FAILURE_MESSAGE),
             "native Household output exposed the fixture's untrusted server error message"
         );
     } else {
-        assert_terminal_semantic_text(returning_user, SYNTHETIC_SERVER_FAILURE_MESSAGE);
+        assert_terminal_semantic_history_text(returning_user, SYNTHETIC_SERVER_FAILURE_MESSAGE);
     }
 }
 
@@ -2603,16 +2604,21 @@ fn assert_raw_terminal_text(terminal: &[u8], expected: &str) {
     );
 }
 
-fn assert_terminal_semantic_text(terminal: &[u8], expected: &str) {
+fn assert_terminal_semantic_history_text(terminal: &[u8], expected: &str) {
     assert!(
-        terminal_semantic_contains(terminal, expected),
-        "installed terminal evidence omitted semantic text {expected:?}"
+        terminal_semantic_history_contains(terminal, expected),
+        "installed terminal history omitted semantic text {expected:?}"
     );
 }
 
-fn terminal_semantic_contains(terminal: &[u8], expected: &str) -> bool {
-    let observed = compact_terminal_text(&terminal_snapshot(terminal, 24, 80));
-    observed.contains(&compact_terminal_text(expected))
+fn terminal_semantic_history_contains(terminal: &[u8], expected: &str) -> bool {
+    terminal_replay(
+        terminal,
+        usize::from(INSTALLED_PTY_ROWS),
+        80,
+        Some(expected),
+    )
+    .1
 }
 
 fn raw_terminal_contains(terminal: &[u8], expected: &str) -> bool {
@@ -2929,11 +2935,30 @@ impl VirtualScreen {
 }
 
 fn terminal_snapshot(value: &[u8], rows: usize, columns: usize) -> String {
+    terminal_replay(value, rows, columns, None).0
+}
+
+fn terminal_replay(
+    value: &[u8],
+    rows: usize,
+    columns: usize,
+    expected: Option<&str>,
+) -> (String, bool) {
     let mut primary = VirtualScreen::new(rows, columns);
     let mut alternate = VirtualScreen::new(rows, columns);
     let mut in_alternate_screen = false;
+    let expected = expected.map(compact_terminal_text);
+    let mut expected_seen = false;
+    let mut visible_dirty = false;
     let mut index = 0;
     while index < value.len() {
+        if visible_dirty && (value[index] < 0x20 || value[index] == 0x7f) {
+            if let Some(expected) = expected.as_deref() {
+                expected_seen |=
+                    visible_screen_contains(&primary, &alternate, in_alternate_screen, expected);
+            }
+            visible_dirty = false;
+        }
         let screen = if in_alternate_screen {
             &mut alternate
         } else {
@@ -2942,20 +2967,24 @@ fn terminal_snapshot(value: &[u8], rows: usize, columns: usize) -> String {
         match value[index] {
             b'\r' => {
                 screen.column = 0;
+                visible_dirty = true;
                 index += 1;
             }
             b'\n' => {
                 screen.newline();
+                visible_dirty = true;
                 index += 1;
             }
             0x08 => {
                 screen.column = screen.column.saturating_sub(1);
+                visible_dirty = true;
                 index += 1;
             }
             b'\t' => {
                 screen.column = ((screen.column / 8) + 1)
                     .saturating_mul(8)
                     .min(screen.columns().saturating_sub(1));
+                visible_dirty = true;
                 index += 1;
             }
             0x1b => {
@@ -2987,6 +3016,7 @@ fn terminal_snapshot(value: &[u8], rows: usize, columns: usize) -> String {
                             };
                             screen.apply_csi(parameters, final_byte);
                         }
+                        visible_dirty = true;
                         index += 1;
                     }
                     Some(b']') => {
@@ -3006,11 +3036,13 @@ fn terminal_snapshot(value: &[u8], rows: usize, columns: usize) -> String {
                     Some(b'7') => {
                         screen.saved_row = screen.row;
                         screen.saved_column = screen.column;
+                        visible_dirty = true;
                         index += 1;
                     }
                     Some(b'8') => {
                         screen.row = screen.saved_row.min(screen.cells.len().saturating_sub(1));
                         screen.column = screen.saved_column.min(screen.columns().saturating_sub(1));
+                        visible_dirty = true;
                         index += 1;
                     }
                     Some(_) => index += 1,
@@ -3031,16 +3063,36 @@ fn terminal_snapshot(value: &[u8], rows: usize, columns: usize) -> String {
                     && let Some(character) = text.chars().next()
                 {
                     screen.put(character);
+                    visible_dirty = true;
                 }
                 index += width;
             }
         }
     }
-    if in_alternate_screen {
+    if visible_dirty && let Some(expected) = expected.as_deref() {
+        expected_seen |=
+            visible_screen_contains(&primary, &alternate, in_alternate_screen, expected);
+    }
+    let final_screen = if in_alternate_screen {
         alternate.text()
     } else {
         primary.text()
-    }
+    };
+    (final_screen, expected_seen)
+}
+
+fn visible_screen_contains(
+    primary: &VirtualScreen,
+    alternate: &VirtualScreen,
+    in_alternate_screen: bool,
+    expected: &str,
+) -> bool {
+    let visible = if in_alternate_screen {
+        alternate
+    } else {
+        primary
+    };
+    compact_terminal_text(&visible.text()).contains(expected)
 }
 
 #[test]
@@ -3078,22 +3130,32 @@ fn terminal_final_state_accepts_conpty_interleaving() {
 }
 
 #[test]
-fn terminal_semantic_checks_reconstruct_cursor_fragmented_text() {
+fn terminal_semantic_history_retains_cursor_fragmented_text_after_restoration() {
     let bytes = concat!(
         "\u{1b}[?1049h",
         "\u{1b}[2J",
         "\u{1b}[1;1Hsynthetic ",
         "\u{1b}[1;11Hinstalled ",
-        "\u{1b}[1;21Hfailure"
+        "\u{1b}[1;21Hfailure",
+        "\u{1b}[?1049l",
+        "restored primary screen"
     );
     assert!(!raw_terminal_contains(
         bytes.as_bytes(),
         SYNTHETIC_SERVER_FAILURE_MESSAGE
     ));
-    assert!(terminal_semantic_contains(
+    assert!(terminal_semantic_history_contains(
         bytes.as_bytes(),
         SYNTHETIC_SERVER_FAILURE_MESSAGE
     ));
+    assert!(
+        !compact_terminal_text(&terminal_snapshot(
+            bytes.as_bytes(),
+            usize::from(INSTALLED_PTY_ROWS),
+            80,
+        ))
+        .contains(&compact_terminal_text(SYNTHETIC_SERVER_FAILURE_MESSAGE))
+    );
 }
 
 #[test]
