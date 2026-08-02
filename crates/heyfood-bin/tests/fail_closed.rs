@@ -1,5 +1,8 @@
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static NEXT_TEMP_HOME: AtomicU64 = AtomicU64::new(0);
 
 struct TempHome(std::path::PathBuf);
 
@@ -9,11 +12,12 @@ impl TempHome {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        let discriminator = NEXT_TEMP_HOME.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "heyfood-functional-cut-{}-{nonce}",
-            std::process::id()
+            "heyfood-functional-cut-{}-{nonce}-{discriminator}",
+            std::process::id(),
         ));
-        std::fs::create_dir_all(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
         Self(path)
     }
 }
