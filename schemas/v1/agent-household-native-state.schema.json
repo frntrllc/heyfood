@@ -24,11 +24,12 @@
       "prefixItems": [
         { "const": "household-agent-disclosure-v1" },
         { "const": "household-agent-proposal-journal-v1" },
-        { "const": "household-agent-reconciliation-v1" }
+        { "const": "household-agent-reconciliation-v1" },
+        { "const": "household-agent-commit-evidence-ledger-v1" }
       ],
       "items": false,
-      "minItems": 3,
-      "maxItems": 3
+      "minItems": 4,
+      "maxItems": 4
     },
     "migration": {
       "type": "object",
@@ -87,6 +88,9 @@
               "reject_managed_downgrade",
               "rollback_read_only",
               "block_for_reconciliation",
+              "upgrade_key_bundle_v1",
+              "prove_applied_after_key_rotation",
+              "prove_unapplied_and_fence_after_key_rotation",
               "purge_on_account_replacement",
               "preserve_unrelated_state"
             ]

@@ -444,6 +444,78 @@ async fn secure_documents(
     (guard, key)
 }
 
+async fn rotate_and_finalize_household_key(prepared: &PreparedRepository) -> (KeyId, KeyId) {
+    let lifecycle = prepared
+        .vault
+        .acquire_lifecycle_lease(CancellationToken::new())
+        .await
+        .expect("lifecycle lease");
+    let mut lease = prepared
+        .vault
+        .acquire_vault_lease(
+            lifecycle,
+            HouseholdVaultLeaseModeV1::RequireExisting,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("vault lease");
+    let previous = HouseholdKeyStore::load(
+        prepared.store.as_ref(),
+        lease.lifecycle_lease(),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("key load")
+    .expect("stable key");
+    assert_eq!(previous.phase, HouseholdKeyBundlePhase::Stable);
+    let old_key_id = previous.active_key_id;
+    let new_key_id = KeyId::new();
+    let rewriting = HouseholdKeyBundle::rewriting(
+        prepared.vault.account_slot(),
+        previous
+            .revision
+            .checked_next()
+            .expect("rewriting revision"),
+        new_key_id,
+        HouseholdKeyMaterial::generate().expect("new household key"),
+        &previous,
+        Uuid::new_v4(),
+    )
+    .expect("rewriting key bundle");
+    HouseholdKeyStore::compare_exchange(
+        prepared.store.as_ref(),
+        &mut lease,
+        previous.revision,
+        rewriting.clone(),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("publish rewriting key bundle");
+    prepared
+        .vault
+        .rotate(&mut lease, rewriting.clone(), CancellationToken::new())
+        .await
+        .expect("rotate household vault");
+    let finalized = rewriting
+        .stabilized(
+            prepared.vault.account_slot(),
+            rewriting.revision.checked_next().expect("stable revision"),
+        )
+        .expect("stable rotated key bundle");
+    HouseholdKeyStore::compare_exchange(
+        prepared.store.as_ref(),
+        &mut lease,
+        rewriting.revision,
+        finalized.clone(),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("finalize rotated key bundle");
+    assert_eq!(finalized.phase, HouseholdKeyBundlePhase::Stable);
+    assert!(finalized.previous_key.is_none());
+    (old_key_id, new_key_id)
+}
+
 async fn delete_initializing_key(prepared: &PreparedRepository) -> HouseholdKeyBundle {
     let lifecycle = prepared
         .vault
@@ -822,26 +894,209 @@ async fn commit_evidence_is_rederived_after_repository_reopen_and_ignores_synthe
         .expect_err("proposal-created verifier cannot replace repository authority");
     assert_eq!(forged_error.code, "household_commit_evidence_mismatch");
 
-    reopened
+    let denied = reopened
         .commit(command.clone(), CancellationToken::new())
         .await
-        .expect("commit exact proposal effect");
+        .expect_err("authoritative absence permanently fences the exact commit");
+    assert_eq!(denied.code, "household_commit_permanently_denied");
+
+    let applied_proposal_ref = AgentHouseholdProposalIdV1::new();
+    let applied_commit_id = CommitId::from_uuid(fixed_uuid("56565656-5656-4656-8656-565656565656"));
+    let applied_command = next_commit(
+        &loaded.state,
+        &prepared.account,
+        loaded.state.revision,
+        applied_commit_id.as_uuid(),
+        timestamp(2),
+    );
+    let applied_evidence = reopened
+        .reserve_agent_commit_evidence(
+            applied_proposal_ref,
+            applied_commit_id,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("reserve applied evidence");
+    reopened
+        .commit(applied_command, CancellationToken::new())
+        .await
+        .expect("commit separate exact proposal effect");
     drop(reopened);
     let reopened_after_commit = repository(&prepared, NativeHouseholdModeV1::NativeEnabled);
-    let applied = reopened_after_commit
-        .prove_applied_agent_commit(&evidence, proposal_ref, commit_id, CancellationToken::new())
+    let _applied = reopened_after_commit
+        .prove_applied_agent_commit(
+            &applied_evidence,
+            applied_proposal_ref,
+            applied_commit_id,
+            CancellationToken::new(),
+        )
         .await
         .expect("reopened repository proves applied ledger entry");
-    let mut committed_journal =
-        LocalHouseholdProposalJournalV1::restore(&committing_bytes).expect("restore journal");
-    let committing_token = committed_journal.cas_token();
-    committed_journal
-        .reconcile_applied_commit(&committing_token, &applied)
-        .expect("close applied commit after process-shaped restart");
-    assert_eq!(
-        committed_journal.state(),
-        heyfood_core::AgentHouseholdProposalStateV1::Committed
+}
+
+#[tokio::test]
+async fn commit_evidence_reservations_survive_finalized_key_rotation_for_both_outcomes() {
+    let prepared = prepare_repository("commit-evidence-key-rotation").await;
+    let initial_repository = repository(&prepared, NativeHouseholdModeV1::NativeEnabled);
+    initial_repository
+        .initialize(prepared.command.clone(), CancellationToken::new())
+        .await
+        .expect("initialize repository");
+    let loaded = initial_repository
+        .load(&prepared.account, CancellationToken::new())
+        .await
+        .expect("load repository")
+        .expect("initialized state");
+
+    let applied_proposal = AgentHouseholdProposalIdV1::new();
+    let applied_commit = CommitId::from_uuid(fixed_uuid("57575757-5757-4757-8757-575757575757"));
+    let applied_command = next_commit(
+        &loaded.state,
+        &prepared.account,
+        loaded.state.revision,
+        applied_commit.as_uuid(),
+        timestamp(3),
     );
+    let applied_binding = initial_repository
+        .reserve_agent_commit_evidence(applied_proposal, applied_commit, CancellationToken::new())
+        .await
+        .expect("reserve applied evidence before rotation");
+
+    let absent_proposal = AgentHouseholdProposalIdV1::new();
+    let absent_commit = CommitId::from_uuid(fixed_uuid("58585858-5858-4858-8858-585858585858"));
+    let absent_command = next_commit(
+        &loaded.state,
+        &prepared.account,
+        loaded.state.revision,
+        absent_commit.as_uuid(),
+        timestamp(4),
+    );
+    let absent_binding = initial_repository
+        .reserve_agent_commit_evidence(absent_proposal, absent_commit, CancellationToken::new())
+        .await
+        .expect("reserve absence evidence before rotation");
+    drop(initial_repository);
+
+    let (old_key_id, new_key_id) = rotate_and_finalize_household_key(&prepared).await;
+    assert_ne!(old_key_id, new_key_id);
+    let (_, finalized_key) = secure_documents(&prepared).await;
+    let finalized_key = finalized_key.expect("finalized key");
+    assert_eq!(finalized_key.active_key_id, new_key_id);
+    assert!(finalized_key.previous_key.is_none());
+
+    let reopened = repository(&prepared, NativeHouseholdModeV1::NativeEnabled);
+    let _absence = reopened
+        .prove_unapplied_agent_commit(
+            &absent_binding,
+            absent_proposal,
+            absent_commit,
+            loaded.state.revision,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("prove exact absence after finalized rotation");
+    let denied = reopened
+        .commit(absent_command, CancellationToken::new())
+        .await
+        .expect_err("absence proof fences delayed exact commit");
+    assert_eq!(denied.code, "household_commit_permanently_denied");
+
+    reopened
+        .commit(applied_command, CancellationToken::new())
+        .await
+        .expect("apply reserved commit after finalized rotation");
+    drop(reopened);
+    let reopened_after_apply = repository(&prepared, NativeHouseholdModeV1::NativeEnabled);
+    let _applied = reopened_after_apply
+        .prove_applied_agent_commit(
+            &applied_binding,
+            applied_proposal,
+            applied_commit,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("prove applied ledger entry after rotation and restart");
+    let already_applied = reopened_after_apply
+        .reserve_agent_commit_evidence(
+            AgentHouseholdProposalIdV1::new(),
+            applied_commit,
+            CancellationToken::new(),
+        )
+        .await
+        .expect_err("an applied commit cannot acquire a later reservation");
+    assert_eq!(already_applied.code, "household_commit_evidence_mismatch");
+}
+
+#[tokio::test]
+async fn commit_dispatch_and_unapplied_proof_have_one_linearizable_winner() {
+    let prepared = prepare_repository("commit-evidence-race").await;
+    let repository = repository(&prepared, NativeHouseholdModeV1::NativeEnabled);
+    repository
+        .initialize(prepared.command.clone(), CancellationToken::new())
+        .await
+        .expect("initialize repository");
+    let loaded = repository
+        .load(&prepared.account, CancellationToken::new())
+        .await
+        .expect("load repository")
+        .expect("initialized state");
+    let proposal_ref = AgentHouseholdProposalIdV1::new();
+    let commit_id = CommitId::from_uuid(fixed_uuid("59595959-5959-4959-8959-595959595959"));
+    let command = next_commit(
+        &loaded.state,
+        &prepared.account,
+        loaded.state.revision,
+        commit_id.as_uuid(),
+        timestamp(5),
+    );
+    let binding = repository
+        .reserve_agent_commit_evidence(proposal_ref, commit_id, CancellationToken::new())
+        .await
+        .expect("reserve race evidence");
+
+    let (commit_result, absence_result) = tokio::join!(
+        repository.commit(command.clone(), CancellationToken::new()),
+        repository.prove_unapplied_agent_commit(
+            &binding,
+            proposal_ref,
+            commit_id,
+            loaded.state.revision,
+            CancellationToken::new(),
+        )
+    );
+    match (commit_result, absence_result) {
+        (Ok(_), Err(error)) => {
+            assert_eq!(error.code, "household_commit_evidence_mismatch");
+            repository
+                .prove_applied_agent_commit(
+                    &binding,
+                    proposal_ref,
+                    commit_id,
+                    CancellationToken::new(),
+                )
+                .await
+                .expect("commit winner remains provably applied");
+        }
+        (Err(error), Ok(_)) => {
+            assert_eq!(error.code, "household_commit_permanently_denied");
+            let readback = repository
+                .load(&prepared.account, CancellationToken::new())
+                .await
+                .expect("load after absence winner")
+                .expect("state after absence winner");
+            assert_eq!(readback.state.revision, loaded.state.revision);
+            let denied_replay = repository
+                .commit(command, CancellationToken::new())
+                .await
+                .expect_err("absence winner permanently fences replay");
+            assert_eq!(denied_replay.code, "household_commit_permanently_denied");
+        }
+        (Ok(_), Ok(_)) => panic!("commit and authoritative absence cannot both win"),
+        (Err(commit_error), Err(absence_error)) => panic!(
+            "race must have one winner: commit={}, absence={}",
+            commit_error.code, absence_error.code
+        ),
+    }
 }
 
 #[tokio::test]
@@ -1667,15 +1922,23 @@ async fn ready_guard_accepts_only_initial_revision_one_or_stable_revision_two_co
                     key.active_key_id,
                     key.active_key.clone(),
                 ),
-                "rewriting" => HouseholdKeyBundle::rewriting(
-                    prepared.vault.account_slot(),
-                    KeyBundleRevision::new(2).expect("revision"),
-                    key.active_key_id,
-                    key.active_key.clone(),
-                    KeyId::new(),
-                    HouseholdKeyMaterial::from_bytes([0x7b; 32]),
-                    fixed_uuid("99999999-9999-4999-8999-999999999999"),
-                ),
+                "rewriting" => {
+                    let previous = HouseholdKeyBundle::stable(
+                        prepared.vault.account_slot(),
+                        KeyBundleRevision::new(1).expect("revision"),
+                        KeyId::new(),
+                        HouseholdKeyMaterial::from_bytes([0x7b; 32]),
+                    );
+                    HouseholdKeyBundle::rewriting(
+                        prepared.vault.account_slot(),
+                        KeyBundleRevision::new(2).expect("revision"),
+                        key.active_key_id,
+                        key.active_key.clone(),
+                        &previous,
+                        fixed_uuid("99999999-9999-4999-8999-999999999999"),
+                    )
+                    .expect("rewriting key")
+                }
                 "stable-revision-two-uncommitted" => {
                     std::fs::remove_file(prepared.vault.household_directory().join("commit.hfj"))
                         .expect("remove journal");

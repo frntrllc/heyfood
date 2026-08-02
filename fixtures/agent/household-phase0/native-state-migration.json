@@ -5,7 +5,8 @@
   "required_capabilities": [
     "household-agent-disclosure-v1",
     "household-agent-proposal-journal-v1",
-    "household-agent-reconciliation-v1"
+    "household-agent-reconciliation-v1",
+    "household-agent-commit-evidence-ledger-v1"
   ],
   "migration": {
     "account_bound": true,
@@ -33,6 +34,9 @@
     { "id": "managed_downgrade", "expected": "reject_managed_downgrade" },
     { "id": "qualified_rollback", "expected": "rollback_read_only" },
     { "id": "unresolved_commit_journal", "expected": "block_for_reconciliation" },
+    { "id": "legacy_key_bundle", "expected": "upgrade_key_bundle_v1" },
+    { "id": "reserved_commit_then_key_rotation", "expected": "prove_applied_after_key_rotation" },
+    { "id": "reserved_absence_then_key_rotation", "expected": "prove_unapplied_and_fence_after_key_rotation" },
     { "id": "account_replacement", "expected": "purge_on_account_replacement" },
     { "id": "unrelated_state", "expected": "preserve_unrelated_state" }
   ]

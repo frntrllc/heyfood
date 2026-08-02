@@ -1992,7 +1992,7 @@ mod household_phase0_contract_tests {
             ),
             (
                 NATIVE_STATE_SCHEMA,
-                "690c3480c9b4719482063665a49f6d70969ece2eb5e0ee29ee88cc8e1a494403",
+                "58bd59a236fb508a5a2287e03c2f821afc75be40e1fe23516258956ee8d01917",
             ),
             (
                 MANIFEST_V3_SCHEMA,

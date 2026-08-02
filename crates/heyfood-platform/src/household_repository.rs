@@ -26,6 +26,7 @@ use sha2::Sha256;
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
+use crate::credential_broker::HouseholdCommitEvidenceStateV1;
 use crate::household_vault::HouseholdVaultStartupArtifactsV1;
 use crate::{
     HouseholdKeyBundle, HouseholdKeyBundlePhase, HouseholdKeyMaterial, HouseholdKeyStore,
@@ -128,12 +129,34 @@ impl NativeHouseholdRepository {
         let (guard, key) = self
             .reread_guard_and_key(&vault_lease, &cancellation)
             .await?;
-        let _ = self
+        let loaded = self
             .load_committed_under_lease(&mut vault_lease, &guard, &key, cancellation.clone())
             .await?;
         check_cancelled(&cancellation)?;
-        let secret =
-            derive_commit_evidence_secret(&key.active_key, &self.account, proposal_ref, commit_id)?;
+        if loaded
+            .state
+            .bounded_applied_commits
+            .iter()
+            .any(|record| record.commit_id == commit_id)
+        {
+            return Err(commit_evidence_mismatch_error());
+        }
+        let secret = derive_commit_evidence_secret(
+            key.commit_evidence_key(),
+            &self.account,
+            proposal_ref,
+            commit_id,
+        )?;
+        let replacement = key.reserve_commit_evidence(proposal_ref.as_uuid(), commit_id)?;
+        if replacement != key {
+            self.replace_commit_evidence_key_bundle(
+                &mut vault_lease,
+                &key,
+                &replacement,
+                cancellation,
+            )
+            .await?;
+        }
         Ok(HouseholdCommitEvidenceBindingV1::from_repository_secret(
             self.account.clone(),
             proposal_ref,
@@ -152,9 +175,27 @@ impl NativeHouseholdRepository {
         commit_id: CommitId,
         cancellation: CancellationToken,
     ) -> Result<AppliedHouseholdCommitProofV1, PortError> {
-        let (state, secret) = self
-            .load_commit_evidence_state(proposal_ref, commit_id, cancellation)
+        check_cancelled(&cancellation)?;
+        let mut vault_lease = self
+            .acquire_vault_lease(HouseholdVaultLeaseModeV1::RequireExisting, &cancellation)
             .await?;
+        let (guard, key) = self
+            .reread_guard_and_key(&vault_lease, &cancellation)
+            .await?;
+        let loaded = self
+            .load_committed_under_lease(&mut vault_lease, &guard, &key, cancellation)
+            .await?;
+        if key.commit_evidence_record(proposal_ref.as_uuid(), commit_id)
+            != Some(HouseholdCommitEvidenceStateV1::Reserved)
+        {
+            return Err(commit_evidence_mismatch_error());
+        }
+        let secret = derive_commit_evidence_secret(
+            key.commit_evidence_key(),
+            &self.account,
+            proposal_ref,
+            commit_id,
+        )?;
         let expected_binding = HouseholdCommitEvidenceBindingV1::from_repository_secret(
             self.account.clone(),
             proposal_ref,
@@ -164,7 +205,8 @@ impl NativeHouseholdRepository {
         if &expected_binding != binding {
             return Err(commit_evidence_mismatch_error());
         }
-        let record = state
+        let record = loaded
+            .state
             .bounded_applied_commits
             .iter()
             .find(|record| {
@@ -190,35 +232,6 @@ impl NativeHouseholdRepository {
         expected_revision: HouseholdRevision,
         cancellation: CancellationToken,
     ) -> Result<UnappliedHouseholdCommitProofV1, PortError> {
-        let (state, secret) = self
-            .load_commit_evidence_state(proposal_ref, commit_id, cancellation)
-            .await?;
-        let expected_binding = HouseholdCommitEvidenceBindingV1::from_repository_secret(
-            self.account.clone(),
-            proposal_ref,
-            commit_id,
-            &secret,
-        );
-        if &expected_binding != binding
-            || state.revision != expected_revision
-            || state
-                .bounded_applied_commits
-                .iter()
-                .any(|record| record.commit_id == commit_id)
-        {
-            return Err(commit_evidence_mismatch_error());
-        }
-        binding
-            .seal_unapplied_repository_observation(&secret, state.revision)
-            .map_err(commit_evidence_contract_error)
-    }
-
-    async fn load_commit_evidence_state(
-        &self,
-        proposal_ref: AgentHouseholdProposalIdV1,
-        commit_id: CommitId,
-        cancellation: CancellationToken,
-    ) -> Result<(HouseholdStateV1, Zeroizing<[u8; 32]>), PortError> {
         check_cancelled(&cancellation)?;
         let mut vault_lease = self
             .acquire_vault_lease(HouseholdVaultLeaseModeV1::RequireExisting, &cancellation)
@@ -229,10 +242,79 @@ impl NativeHouseholdRepository {
         let loaded = self
             .load_committed_under_lease(&mut vault_lease, &guard, &key, cancellation.clone())
             .await?;
+        if key
+            .commit_evidence_record(proposal_ref.as_uuid(), commit_id)
+            .is_none()
+        {
+            return Err(commit_evidence_mismatch_error());
+        }
+        let secret = derive_commit_evidence_secret(
+            key.commit_evidence_key(),
+            &self.account,
+            proposal_ref,
+            commit_id,
+        )?;
+        let expected_binding = HouseholdCommitEvidenceBindingV1::from_repository_secret(
+            self.account.clone(),
+            proposal_ref,
+            commit_id,
+            &secret,
+        );
+        if &expected_binding != binding
+            || loaded.state.revision != expected_revision
+            || loaded
+                .state
+                .bounded_applied_commits
+                .iter()
+                .any(|record| record.commit_id == commit_id)
+        {
+            return Err(commit_evidence_mismatch_error());
+        }
+        let replacement = key.deny_reserved_commit(proposal_ref.as_uuid(), commit_id)?;
+        if replacement != key {
+            self.replace_commit_evidence_key_bundle(
+                &mut vault_lease,
+                &key,
+                &replacement,
+                cancellation,
+            )
+            .await?;
+        }
+        binding
+            .seal_unapplied_repository_observation(&secret, loaded.state.revision)
+            .map_err(commit_evidence_contract_error)
+    }
+
+    async fn replace_commit_evidence_key_bundle(
+        &self,
+        vault_lease: &mut HouseholdVaultLease,
+        current: &HouseholdKeyBundle,
+        replacement: &HouseholdKeyBundle,
+        cancellation: CancellationToken,
+    ) -> Result<(), PortError> {
         check_cancelled(&cancellation)?;
-        let secret =
-            derive_commit_evidence_secret(&key.active_key, &self.account, proposal_ref, commit_id)?;
-        Ok((loaded.state, secret))
+        let exchange = HouseholdKeyStore::compare_exchange(
+            self.secure_store.as_ref(),
+            vault_lease,
+            current.revision,
+            replacement.clone(),
+            cancellation,
+        )
+        .await;
+        let observed = HouseholdKeyStore::load(
+            self.secure_store.as_ref(),
+            vault_lease.lifecycle_lease(),
+            CancellationToken::new(),
+        )
+        .await?;
+        match (exchange, observed) {
+            (_, Some(observed)) if observed == *replacement => Ok(()),
+            (Err(error), Some(observed)) if observed == *current => Err(error),
+            _ => Err(PortError::uncertain(
+                "household_commit_evidence_persist",
+                "household commit evidence persistence requires reconciliation",
+            )),
+        }
     }
 
     /// Wrap this concrete adapter in the live application session without
@@ -446,12 +528,8 @@ impl NativeHouseholdRepository {
         let stable_key = match key.phase {
             HouseholdKeyBundlePhase::Initializing => {
                 check_cancelled(&cancellation)?;
-                let replacement = HouseholdKeyBundle::stable(
-                    self.vault.account_slot(),
-                    key.revision.checked_next()?,
-                    key.active_key_id,
-                    key.active_key.clone(),
-                );
+                let replacement =
+                    key.stabilized(self.vault.account_slot(), key.revision.checked_next()?)?;
                 let exchange = HouseholdKeyStore::compare_exchange(
                     self.secure_store.as_ref(),
                     vault_lease,
@@ -1047,6 +1125,12 @@ impl NativeHouseholdRepository {
         let (guard, key) = self
             .reread_guard_and_key(&vault_lease, &cancellation)
             .await?;
+        if key.denies_commit(command.commit_id) {
+            return Err(PortError::new(
+                "household_commit_permanently_denied",
+                "household commit was permanently denied after authoritative reconciliation",
+            ));
+        }
         let current = self
             .load_committed_under_lease(&mut vault_lease, &guard, &key, cancellation.clone())
             .await?;

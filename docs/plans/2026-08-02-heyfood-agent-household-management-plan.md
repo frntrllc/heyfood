@@ -491,9 +491,12 @@ Internally, heyfood binds the proposal to:
 - preallocated proposal identity, reducer commit ID, and new member ID when
   applicable;
 - a proposal/account/commit-specific verifier for a commit-evidence secret
-  derived only inside the native repository from its durable account key; the
-  journal persists only the one-way verifier, while repository reopen securely
-  rederives the exact secret and household state DTOs cannot mint either proof;
+  derived only inside the native repository from a dedicated durable evidence
+  root that is preserved across household encryption-key rotation; the
+  repository durably reserves the exact proposal/commit tuple before returning
+  the verifier, while the proposal journal persists only the one-way verifier;
+  repository reopen securely rederives the exact secret and household state
+  DTOs cannot mint either proof;
 - the frozen effect fingerprint only after every local-input field is complete
   and validated; and
 - single-use local review and commit state.
@@ -511,6 +514,17 @@ operations, so callers cannot transition a bare authority and wrap it after
 the fact. The journal exposes typed CAS operations for every edge in the
 frozen transition graph, including prepared-to-input, each pre-commit terminal
 result, and authoritative `proven_uncommitted` reconciliation.
+
+The encrypted native key-bundle document upgrades from wire version 1 to wire
+version 2 inside native-state version 3. A v1 bundle derives the evidence root
+once from its authenticated active key during migration; every later rewrite
+and finalization preserves that root independently of the rotating encryption
+key. The same bounded, account-bound document stores content-free evidence
+records for exact proposal/commit reservations. Under the vault lease,
+authoritative absence atomically converts the matching reservation to a deny
+record before an unapplied proof is issued. Every later dispatch of that exact
+commit ID fails closed. If dispatch wins the lease first, absence proof fails
+and reconciliation must consume the applied-commit ledger instead.
 
 An `awaiting_local_input` record preallocates identities but does not claim a
 final proposal digest or effect fingerprint. Completing local intake validates
@@ -1018,8 +1032,10 @@ Exit gate:
 - cancel/commit races are linearizable and crash-injection fixtures reconcile
   from the co-committed applied-commit ledger;
 - commit evidence is securely rederived after a genuine native-repository
-  close/reopen, and a proposal-layer verifier plus synthesized state cannot
-  replace repository authority;
+  close/reopen and finalized household encryption-key rotation; a durable
+  repository reservation must predate dispatch, authoritative absence must
+  atomically fence the exact commit before issuing proof, and a proposal-layer
+  verifier plus synthesized state cannot replace repository authority;
 - local-intake completion, digest/fingerprint freeze, generation advance, and
   transition to review are atomic across crash/cancel/revocation races;
 - the TUI grammar, attached-human checklist, and renderer rules are frozen;

@@ -603,23 +603,38 @@ async fn key_rotation_rewrites_both_generations_and_the_journal_before_old_key_r
         .expect("initialize");
     let new_key_id = KeyId::new();
     let new_key = HouseholdKeyMaterial::from_bytes([0x66; 32]);
+    let previous = HouseholdKeyBundle::stable(
+        vault.account_slot(),
+        KeyBundleRevision::new(1).expect("revision"),
+        old_key_id,
+        old_key,
+    );
     let rewriting = HouseholdKeyBundle::rewriting(
         vault.account_slot(),
         KeyBundleRevision::new(2).expect("revision"),
         new_key_id,
         new_key.clone(),
-        old_key_id,
-        old_key,
+        &previous,
         Uuid::new_v4(),
-    );
+    )
+    .expect("rewriting bundle");
     let rotated = vault
-        .rotate(&mut vault_lease, rewriting, CancellationToken::new())
+        .rotate(
+            &mut vault_lease,
+            rewriting.clone(),
+            CancellationToken::new(),
+        )
         .await
         .expect("rotate");
     assert_eq!(rotated.journal_revision, 2);
     assert_eq!(rotated.canonical_state, state.canonical_state);
 
-    let finalized = stable_bundle(&vault, 3, new_key_id, new_key);
+    let finalized = rewriting
+        .stabilized(
+            vault.account_slot(),
+            KeyBundleRevision::new(3).expect("revision"),
+        )
+        .expect("finalized bundle");
     let restarted = vault
         .load(&mut vault_lease, finalized, CancellationToken::new())
         .await
