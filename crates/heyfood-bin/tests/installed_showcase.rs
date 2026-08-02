@@ -570,9 +570,9 @@ async fn run_installed_archive_core_release_matrix() {
         profile_saved_copy
     };
     let returning_ready_copy = if native_household_enabled {
-        READY_OWNER_SCOPE
+        READY_OWNER_SCOPE.to_owned()
     } else {
-        "Ask a question when you’re ready."
+        format!("heyfood {expected_version} is here!")
     };
     let failure_copy = showcase_failure_copy(native_household_enabled);
 
@@ -626,7 +626,7 @@ async fn run_installed_archive_core_release_matrix() {
         &[],
         InstalledPtyOptions::new(80, false, credential_backend),
         vec![
-            PtyAction::Wait(returning_ready_copy.into()),
+            PtyAction::Wait(returning_ready_copy.clone()),
             PtyAction::Submit(RETURNING_PROMPT.into()),
             PtyAction::Wait(RETURNING_RESPONSE.into()),
             PtyAction::Pause(Duration::from_millis(250)),
@@ -830,7 +830,7 @@ async fn run_installed_archive_core_release_matrix() {
         &[],
         InstalledPtyOptions::new(40, false, credential_backend),
         vec![
-            PtyAction::Wait(returning_ready_copy.into()),
+            PtyAction::Wait(returning_ready_copy.clone()),
             PtyAction::Submit("/grocery".into()),
             PtyAction::Wait("Onion is high-FODMAP.".into()),
             PtyAction::Wait("green parts of scallion".into()),
@@ -848,7 +848,7 @@ async fn run_installed_archive_core_release_matrix() {
         &[],
         InstalledPtyOptions::new(120, true, credential_backend),
         vec![
-            PtyAction::Wait(returning_ready_copy.into()),
+            PtyAction::Wait(returning_ready_copy.clone()),
             PtyAction::Submit(WIDTH_PROMPT.into()),
             PtyAction::Wait(WIDTH_RESPONSE.into()),
             PtyAction::Pause(Duration::from_millis(250)),
@@ -865,7 +865,7 @@ async fn run_installed_archive_core_release_matrix() {
         &[],
         InstalledPtyOptions::new(80, false, credential_backend),
         vec![
-            PtyAction::Wait(returning_ready_copy.into()),
+            PtyAction::Wait(returning_ready_copy.clone()),
             PtyAction::CtrlC,
             PtyAction::Wait("Press Ctrl+C again to exit".into()),
             PtyAction::CtrlC,
