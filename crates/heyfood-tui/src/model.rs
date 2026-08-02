@@ -2108,6 +2108,25 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
         {
             return cancel_household_draft(model);
         }
+        if matches!(
+            model.onboarding.as_ref(),
+            Some(OnboardingFlow {
+                target: OnboardingTargetV1::NewMember { .. },
+                step: OnboardingStep::MemberRelationship,
+                ..
+            })
+        ) && matches!(
+            model.draft.trim().to_ascii_lowercase().as_str(),
+            "/household" | "/household add"
+        ) {
+            model.draft.clear();
+            model.cursor = 0;
+            push_notice(
+                model,
+                "Household member setup is already open. Type a number from `1` to `8` or the relationship name, then press Enter. Type `cancel` to discard it.",
+            );
+            return Vec::new();
+        }
         return submit_slash_command(model);
     }
     if model.profile_consent_review.is_some() {
@@ -2884,7 +2903,7 @@ fn push_onboarding_prompt(model: &mut AppModel) {
 
 fn onboarding_prompt(flow: &OnboardingFlow) -> String {
     let prompt = match flow.step {
-        OnboardingStep::MemberRelationship => "New household member · relationship\nChoose how this person is related to you.\n\n 1. Spouse\n 2. Partner\n 3. Parent\n 4. Child\n 5. Sibling\n 6. Grandparent\n 7. Friend\n 8. Other\n\nType `cancel` to discard household member setup.".into(),
+        OnboardingStep::MemberRelationship => "New household member · relationship\nChoose how this person is related to you.\n\n 1. Spouse\n 2. Partner\n 3. Parent\n 4. Child\n 5. Sibling\n 6. Grandparent\n 7. Friend\n 8. Other\n\nType a number from `1` to `8` or the relationship name, then press Enter.\nType `cancel` to discard household member setup.".into(),
         OnboardingStep::MemberName => "New household member · display name\nEnter the name you want shown in this household (80 characters maximum).\n\nType `back` to revisit relationship or `cancel` to discard household member setup.".into(),
         OnboardingStep::MemberAgeEvidence => format!(
             "{} · age evidence\nChoose the one available age band. A date of birth is not requested.\n\n 1. under_13\n 2. age_13_17\n 3. age_18_plus\n 4. unknown\n\nType `back` to edit the display name or `cancel` to discard household member setup.",

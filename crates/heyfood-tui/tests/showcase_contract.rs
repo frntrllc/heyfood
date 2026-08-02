@@ -234,6 +234,22 @@ fn native_add_reuses_the_full_profile_flow_and_waits_for_context_apply() {
         }),
     );
 
+    let relationship_prompt = &model.scrollback.entries().back().unwrap().text;
+    assert!(
+        relationship_prompt
+            .contains("Type a number from `1` to `8` or the relationship name, then press Enter.")
+    );
+    assert!(submit_text(&mut model, "/household add").is_empty());
+    assert!(
+        model
+            .scrollback
+            .entries()
+            .back()
+            .unwrap()
+            .text
+            .contains("Household member setup is already open")
+    );
+
     // Registered slash commands are parsed before member onboarding answers.
     assert!(submit_text(&mut model, "/for me").is_empty());
     assert!(submit_text(&mut model, "4").is_empty());
