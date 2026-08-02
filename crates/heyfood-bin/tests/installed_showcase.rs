@@ -42,6 +42,9 @@ const GROCERY_CTRL_C_PROMPT: &str = "Prepare a Grocery proposal that I will canc
 const STREAM_CANCEL_PROMPT: &str = "Stream until I cancel this installed turn.";
 const UNCERTAIN_PROMPT: &str = "Consume this mutation-like turn and close before responding.";
 const FAILURE_PROMPT: &str = "Return a typed synthetic failure to the installed TUI.";
+const SYNTHETIC_SERVER_FAILURE_MESSAGE: &str = "synthetic installed failure";
+const NATIVE_HOUSEHOLD_FAILURE_MESSAGE: &str =
+    "hey.food could not complete this Household request. Review current state before trying again.";
 const WIDTH_PROMPT: &str = "Render a width-qualified installed response.";
 const WIDTH_RESPONSE: &str = "Width-qualified installed response complete.";
 const HOUSEHOLD_JSON_PROMPT: &str =
@@ -124,6 +127,14 @@ fn showcase_native_household_enabled(
     windows: bool,
 ) -> bool {
     credential_backend == ShowcaseCredentialBackend::Native && !windows
+}
+
+const fn showcase_failure_copy(native_household_enabled: bool) -> &'static str {
+    if native_household_enabled {
+        NATIVE_HOUSEHOLD_FAILURE_MESSAGE
+    } else {
+        SYNTHETIC_SERVER_FAILURE_MESSAGE
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -562,6 +573,7 @@ async fn run_installed_archive_core_release_matrix() {
     } else {
         "Ask a question when you’re ready."
     };
+    let failure_copy = showcase_failure_copy(native_household_enabled);
 
     let clean_user = run_installed_pty(
         &installed_binary,
@@ -660,7 +672,7 @@ async fn run_installed_archive_core_release_matrix() {
             PtyAction::Wait("server outcome is unknown".into()),
             PtyAction::Pause(Duration::from_millis(250)),
             PtyAction::Submit(FAILURE_PROMPT.into()),
-            PtyAction::Wait("synthetic installed failure".into()),
+            PtyAction::Wait(failure_copy.into()),
             PtyAction::Pause(Duration::from_millis(250)),
             PtyAction::CtrlD,
         ],
@@ -2539,6 +2551,15 @@ fn assert_core_terminal_contract(
             "human TUI output exposed protocol code {protocol_code:?}"
         );
     }
+    if showcase_native_household_enabled(credential_backend, cfg!(windows)) {
+        assert_raw_terminal_text(returning_user, NATIVE_HOUSEHOLD_FAILURE_MESSAGE);
+        assert!(
+            !raw_terminal_contains(returning_user, SYNTHETIC_SERVER_FAILURE_MESSAGE),
+            "native Household output exposed the fixture's untrusted server error message"
+        );
+    } else {
+        assert_raw_terminal_text(returning_user, SYNTHETIC_SERVER_FAILURE_MESSAGE);
+    }
 }
 
 fn assert_credential_disclosure_precedes_interactive_screen(
@@ -3110,4 +3131,12 @@ fn installed_harness_inventory_matches_core_release_contract() {
         ShowcaseCredentialBackend::IsolatedFile,
         false,
     ));
+    assert_eq!(
+        showcase_failure_copy(true),
+        NATIVE_HOUSEHOLD_FAILURE_MESSAGE
+    );
+    assert_eq!(
+        showcase_failure_copy(false),
+        SYNTHETIC_SERVER_FAILURE_MESSAGE
+    );
 }
