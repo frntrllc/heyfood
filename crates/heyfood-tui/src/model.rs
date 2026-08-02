@@ -208,6 +208,8 @@ impl OperationState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppModel {
     pub scrollback: Scrollback,
+    /// Home-abbreviated working directory shown in the window frame.
+    pub location: String,
     pub draft: String,
     /// Character index, not byte index.
     pub cursor: usize,
@@ -226,6 +228,7 @@ impl Default for AppModel {
     fn default() -> Self {
         Self {
             scrollback: Scrollback::default(),
+            location: "~".into(),
             draft: String::new(),
             cursor: 0,
             width: 80,

@@ -1,12 +1,18 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Position, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Alignment, Constraint, Direction, Layout, Position, Rect},
+    style::Style,
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::{AppModel, OperationState, Speaker};
+use crate::{AppModel, OperationState, Speaker, startup, theme};
+
+/// Release channel stamped by CI; local builds present as stable.
+const CHANNEL: &str = match option_env!("HEYFOOD_BUILD_CHANNEL") {
+    Some(channel) => channel,
+    None => "stable",
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResponsiveMode {
@@ -26,9 +32,11 @@ pub const fn responsive_mode(width: u16) -> ResponsiveMode {
     }
 }
 
+/// Rows reserved for the composer, borders included. `width` is the full
+/// terminal width; frame, border, and prompt chrome are subtracted here.
 #[must_use]
 pub fn composer_height(model: &AppModel, width: u16) -> u16 {
-    let available = width.saturating_sub(4).max(1) as usize;
+    let available = width.saturating_sub(10).max(1) as usize;
     let lines = model
         .draft
         .split('\n')
@@ -40,99 +48,82 @@ pub fn composer_height(model: &AppModel, width: u16) -> u16 {
 
 pub fn render(frame: &mut Frame<'_>, model: &AppModel) {
     let area = frame.area();
-    let composer = composer_height(model, area.width);
     let regions = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(area);
+    render_window(frame, regions[0], model);
+    render_footer(frame, regions[1]);
+}
+
+fn render_window(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
+    let window = Block::default()
+        .borders(Borders::ALL)
+        .border_set(theme::BORDER)
+        .border_style(theme::dim());
+    let inner = window.inner(area);
+    frame.render_widget(window, area);
+
+    let composer = composer_height(model, area.width);
+    let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(1),
-            Constraint::Length(composer),
             Constraint::Length(1),
+            Constraint::Length(composer),
         ])
-        .split(area);
+        .split(inner);
 
-    render_header(frame, regions[0], model);
-    render_transcript(frame, regions[1], model);
-    render_composer(frame, regions[2], model);
-    render_footer(frame, regions[3], model);
+    frame.render_widget(
+        Paragraph::new(Span::styled(format!(" {}", model.location), theme::dim())),
+        rows[0],
+    );
+    if show_startup(model) {
+        startup::render_startup(frame, inset_horizontal(rows[1], 1));
+    } else {
+        render_transcript(frame, inset_horizontal(rows[1], 1), model);
+    }
+    render_tip(frame, inset_horizontal(rows[2], 1), model);
+    render_composer(frame, inset_horizontal(rows[3], 1), model);
 }
 
-fn render_header(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
-    let status = match model.operation {
-        OperationState::Idle => "ready",
-        OperationState::Running(_) => "working",
-        OperationState::Cancelling(_) => "stopping",
-        OperationState::Finishing(_) => "finishing",
-        OperationState::Exiting(_) => "closing",
-    };
-    let line = match responsive_mode(area.width) {
-        ResponsiveMode::Compact => Line::from(vec![
-            Span::styled(" hey.food", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" · {status}"), Style::default().fg(Color::DarkGray)),
-        ]),
-        ResponsiveMode::Standard => Line::from(vec![
-            Span::styled(" hey.food", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(
-                format!("  thoughtful food guidance · {status}"),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]),
-        ResponsiveMode::Wide => Line::from(vec![
-            Span::styled(" hey.food", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(
-                format!("  Ask about food, meals, restaurants, or recipes · {status}"),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]),
-    };
-    frame.render_widget(Paragraph::new(line), area);
+const fn inset_horizontal(area: Rect, margin: u16) -> Rect {
+    Rect {
+        x: area.x.saturating_add(margin),
+        y: area.y,
+        width: area.width.saturating_sub(margin.saturating_mul(2)),
+        height: area.height,
+    }
+}
+
+fn show_startup(model: &AppModel) -> bool {
+    model.scrollback.entries().is_empty()
+        && model.activity.is_none()
+        && matches!(model.operation, OperationState::Idle)
 }
 
 fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     let mut lines = Vec::new();
-    if model.scrollback.entries().is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "Ask a question when you’re ready.",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
     for entry in model.scrollback.entries() {
         if !lines.is_empty() {
             lines.push(Line::from(""));
         }
-        let (label, color) = match entry.speaker {
-            Speaker::User => ("You", Color::Cyan),
-            Speaker::Assistant => ("hey.food", Color::Green),
-            Speaker::Notice => ("Notice", Color::Yellow),
+        let (label, style) = match entry.speaker {
+            Speaker::User => ("You", theme::user_label()),
+            Speaker::Assistant => ("hey.food", theme::accent_emphasis()),
+            Speaker::Notice => ("Notice", theme::notice_emphasis()),
         };
-        lines.push(Line::from(Span::styled(
-            label,
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(Span::styled(label, style)));
         if entry.text.is_empty() && entry.streaming {
-            lines.push(Line::from(Span::styled(
-                "…",
-                Style::default().fg(Color::DarkGray),
-            )));
+            lines.push(Line::from(Span::styled("…", theme::dim())));
         } else {
             lines.extend(entry.text.lines().map(|line| Line::from(line.to_owned())));
         }
     }
     if let Some(activity) = &model.activity {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            activity.clone(),
-            Style::default().fg(Color::Yellow),
-        )));
-    }
-    if model.unseen_lines > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("{} new lines · End to follow", model.unseen_lines),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(Span::styled(activity.clone(), theme::notice())));
     }
 
     let content_width = area.width.max(1) as usize;
@@ -153,29 +144,66 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     );
 }
 
+fn render_tip(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
+    let line = if model.unseen_lines > 0 {
+        Line::from(Span::styled(
+            format!("{} new lines · End to follow", model.unseen_lines),
+            theme::notice_emphasis(),
+        ))
+    } else {
+        let tip = match responsive_mode(area.width) {
+            ResponsiveMode::Compact => "Tip: Shift+Enter adds a new line.",
+            ResponsiveMode::Standard | ResponsiveMode::Wide => {
+                "Tip: Shift+Enter adds a new line. PageUp/PageDown scroll history."
+            }
+        };
+        Line::from(Span::styled(tip, theme::dim()))
+    };
+    frame.render_widget(Paragraph::new(line), area);
+}
+
 fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
+    let status = match model.operation {
+        OperationState::Idle => "ready",
+        OperationState::Running(_) => "working",
+        OperationState::Cancelling(_) => "stopping",
+        OperationState::Finishing(_) => "finishing",
+        OperationState::Exiting(_) => "closing",
+    };
     let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .borders(Borders::ALL)
+        .border_set(theme::BORDER)
+        .border_style(theme::dim())
+        .title_bottom(
+            Line::from(Span::styled(format!(" hey.food ({status}) "), theme::dim()))
+                .right_aligned(),
+        );
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let hint = if model.draft.is_empty() {
-        "Ask about food, a meal, a restaurant, or a recipe…"
+    let (content, style) = if model.draft.is_empty() {
+        (
+            "Ask about food, a meal, a restaurant, or a recipe…",
+            theme::dim(),
+        )
     } else {
-        &model.draft
+        (model.draft.as_str(), Style::default())
     };
-    let style = if model.draft.is_empty() {
-        Style::default().fg(Color::DarkGray)
-    } else {
-        Style::default()
-    };
-    frame.render_widget(
-        Paragraph::new(format!("> {hint}"))
-            .style(style)
-            .wrap(Wrap { trim: false }),
-        inner,
+    let text = Text::from(
+        content
+            .split('\n')
+            .enumerate()
+            .map(|(row, line)| {
+                let prefix = if row == 0 {
+                    Span::styled("› ", theme::accent())
+                } else {
+                    Span::raw("  ")
+                };
+                Line::from(vec![prefix, Span::styled(line.to_owned(), style)])
+            })
+            .collect::<Vec<_>>(),
     );
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
 
     let (cursor_x, cursor_y) = composer_cursor(model, inner.width.saturating_sub(2).max(1));
     frame.set_cursor_position(Position::new(
@@ -184,23 +212,13 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     ));
 }
 
-fn render_footer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
-    let text = match responsive_mode(area.width) {
-        ResponsiveMode::Compact => " Enter send · ^C stop · ^D exit",
-        ResponsiveMode::Standard => " Enter send · Shift+Enter newline · Ctrl+C stop · End follow",
-        ResponsiveMode::Wide => {
-            " Enter send · Shift+Enter newline · PageUp/PageDown scroll · Ctrl+C stop · Ctrl+D exit"
-        }
-    };
-    let text = if model.unseen_lines > 0 {
-        format!(" {} new · End follow", model.unseen_lines)
-    } else {
-        text.to_owned()
-    };
-    frame.render_widget(
-        Paragraph::new(text).style(Style::default().fg(Color::DarkGray)),
-        area,
-    );
+fn render_footer(frame: &mut Frame<'_>, area: Rect) {
+    let line = Line::from(vec![
+        Span::styled("heyfood", theme::emphasis()),
+        Span::styled(format!("  {} ", crate::VERSION), theme::dim()),
+        Span::styled(format!("[{CHANNEL}] "), theme::dim()),
+    ]);
+    frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), area);
 }
 
 fn composer_cursor(model: &AppModel, width: u16) -> (u16, u16) {
@@ -290,11 +308,47 @@ mod tests {
                 "width {width}: {rendered}"
             );
             assert!(rendered.contains("Responding"), "width {width}: {rendered}");
+            assert!(rendered.contains("(working)"), "width {width}: {rendered}");
             assert!(!rendered.contains("██"));
         }
         assert_eq!(responsive_mode(40), ResponsiveMode::Compact);
         assert_eq!(responsive_mode(80), ResponsiveMode::Standard);
         assert_eq!(responsive_mode(120), ResponsiveMode::Wide);
+    }
+
+    #[test]
+    fn startup_screen_shows_logo_menu_and_version() {
+        let model = AppModel::default();
+        for width in [40, 80, 120] {
+            let rendered = snapshot(&model, width, 24);
+            insta::assert_snapshot!(format!("startup_{width}"), rendered);
+            assert!(rendered.contains("New question"), "width {width}");
+            assert!(rendered.contains("ctrl+d"), "width {width}");
+            assert!(
+                rendered.contains(&format!("heyfood {} is here!", crate::VERSION)),
+                "width {width}",
+            );
+            assert!(
+                rendered.contains(&format!("heyfood  {}", crate::VERSION)),
+                "footer missing at width {width}",
+            );
+        }
+        let narrow = snapshot(&model, 40, 24);
+        assert!(!narrow.contains('█'), "logo must hide on narrow terminals");
+        let wide = snapshot(&model, 120, 24);
+        assert!(wide.contains('█'), "logo must show on wide terminals");
+    }
+
+    #[test]
+    fn startup_screen_is_replaced_once_conversation_starts() {
+        let mut model = AppModel::default();
+        assert!(snapshot(&model, 80, 24).contains("New question"));
+        model.draft = "lunch".into();
+        model.cursor = 5;
+        let _ = dispatch(&mut model, Action::Submit);
+        let rendered = snapshot(&model, 80, 24);
+        assert!(!rendered.contains("New question"));
+        assert!(rendered.contains("You"));
     }
 
     #[test]
@@ -305,7 +359,7 @@ mod tests {
         let wide = snapshot(&model, 120, 16);
         assert_ne!(narrow, wide);
         assert_eq!(model.scrollback, content);
-        assert!(narrow.contains("^C stop"));
+        assert!(narrow.contains("heyfood"));
         assert!(wide.contains("PageUp/PageDown"));
     }
 
@@ -322,8 +376,8 @@ mod tests {
                 },
             }),
         );
-        assert!(snapshot(&model, 80, 18).contains("new · End follow"));
+        assert!(snapshot(&model, 80, 18).contains("new lines · End to follow"));
         let _ = dispatch(&mut model, Action::FollowTail);
-        assert!(!snapshot(&model, 80, 18).contains("new · End follow"));
+        assert!(!snapshot(&model, 80, 18).contains("new lines · End to follow"));
     }
 }

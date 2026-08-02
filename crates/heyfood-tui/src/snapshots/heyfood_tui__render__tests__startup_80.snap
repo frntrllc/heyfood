@@ -1,0 +1,28 @@
+---
+source: crates/heyfood-tui/src/render.rs
+expression: rendered
+---
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ~                                                                            │
+│                                                                              │
+│                 ▄                      ▄▄▄                 ▄                 │
+│                 █      ▄▄▄  ▄   ▄    ▄█▄▄   ▄▄▄   ▄▄▄   ▄▄▄█                 │
+│                 █▀▀▀▄ █▄▄▄█ █   █     █    █   █ █   █ █   █                 │
+│                 █   █ ▀▄▄▄  ▀▄▄▄█ ██  █    ▀▄▄▄▀ ▀▄▄▄▀ ▀▄▄▄█                 │
+│                              ▄▄▄▀                                            │
+│                                                                              │
+│                New question                 enter                            │
+│                New line               shift+enter                            │
+│                Scroll history           pgup/pgdn                            │
+│                Quit                        ctrl+d                            │
+│                                                                              │
+│                heyfood 0.4.1 is here!                                        │
+│                Ask about food, meals, restaurants, or recipes.               │
+│                                                                              │
+│                                                                              │
+│ Tip: Shift+Enter adds a new line. PageUp/PageDown scroll history.            │
+│ ╭──────────────────────────────────────────────────────────────────────────╮ │
+│ │› Ask about food, a meal, a restaurant, or a recipe…                      │ │
+│ ╰──────────────────────────────────────────────────────── hey.food (ready) ╯ │
+╰──────────────────────────────────────────────────────────────────────────────╯
+                                                        heyfood  0.4.1 [stable]
