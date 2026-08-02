@@ -180,10 +180,48 @@ pub fn composer_height(model: &AppModel, width: u16) -> u16 {
         .map(|line| line.chars().count().max(1).div_ceil(available))
         .sum::<usize>()
         .clamp(1, 6);
-    let suggestions = slash_suggestions(model, 3).len();
+    let suggestions = slash_suggestion_line_count(model, available);
     u16::try_from(lines.saturating_add(suggestions))
         .unwrap_or(9)
         .saturating_add(2)
+}
+
+fn slash_suggestion_line_count(model: &AppModel, available: usize) -> usize {
+    let suggestions = slash_suggestions(model, usize::MAX);
+    if suggestions.is_empty() {
+        return 0;
+    }
+    if model.draft.trim() == "/" {
+        return suggestions
+            .len()
+            .div_ceil(slash_grid_columns(available, suggestions.len()));
+    }
+    suggestions
+        .iter()
+        .map(|spec| {
+            format!("  {:<14}{}", spec.usage, spec.description)
+                .chars()
+                .count()
+                .max(1)
+                .div_ceil(available.max(1))
+        })
+        .sum()
+}
+
+fn slash_grid_columns(available: usize, suggestion_count: usize) -> usize {
+    let cell_width = slash_grid_cell_width();
+    (available.max(1) / cell_width)
+        .max(1)
+        .min(suggestion_count.max(1))
+}
+
+fn slash_grid_cell_width() -> usize {
+    crate::SLASH_COMMAND_REGISTRY
+        .iter()
+        .map(|spec| spec.name.chars().count())
+        .max()
+        .unwrap_or(1)
+        .saturating_add(3)
 }
 
 pub fn render(frame: &mut Frame<'_>, model: &AppModel) {
@@ -338,14 +376,35 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         Span::raw("> "),
         Span::styled(hint.to_owned(), style),
     ])];
-    for spec in slash_suggestions(model, 3) {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {:<14}", spec.usage),
-                Style::default().fg(Color::Cyan),
-            ),
-            Span::styled(spec.description, Style::default().fg(Color::DarkGray)),
-        ]));
+    let suggestions = slash_suggestions(model, usize::MAX);
+    if model.draft.trim() == "/" {
+        let cell_width = slash_grid_cell_width();
+        let columns = slash_grid_columns(
+            inner.width.saturating_sub(4).max(1).into(),
+            suggestions.len(),
+        );
+        for row in suggestions.chunks(columns) {
+            let mut spans = vec![Span::raw("  ")];
+            for (index, spec) in row.iter().enumerate() {
+                let command = if index + 1 == row.len() {
+                    spec.name.to_owned()
+                } else {
+                    format!("{:<cell_width$}", spec.name)
+                };
+                spans.push(Span::styled(command, Style::default().fg(Color::Cyan)));
+            }
+            lines.push(Line::from(spans));
+        }
+    } else {
+        for spec in suggestions {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {:<14}", spec.usage),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::styled(spec.description, Style::default().fg(Color::DarkGray)),
+            ]));
+        }
     }
     frame.render_widget(
         Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
@@ -901,5 +960,28 @@ mod tests {
         let rendered = snapshot(&model, 80, 18);
         assert!(rendered.contains("/status"));
         assert!(rendered.contains("Show session readiness"));
+    }
+
+    #[test]
+    fn exact_slash_command_palette_is_complete_at_supported_widths() {
+        let mut model = AppModel::default();
+        model.draft = "/".into();
+        model.cursor = 1;
+
+        for width in [40, 80, 120] {
+            let rendered = snapshot(&model, width, 18);
+            let tokens = rendered.split_whitespace().collect::<Vec<_>>();
+            for spec in crate::SLASH_COMMAND_REGISTRY {
+                assert!(
+                    tokens.contains(&spec.name),
+                    "width {width} omitted {} from slash discovery: {rendered}",
+                    spec.name
+                );
+            }
+        }
+
+        assert_eq!(composer_height(&model, 40), 10);
+        assert_eq!(composer_height(&model, 80), 6);
+        assert_eq!(composer_height(&model, 120), 5);
     }
 }

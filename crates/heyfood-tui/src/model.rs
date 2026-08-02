@@ -9015,7 +9015,10 @@ mod tests {
             cursor: 1,
             ..AppModel::default()
         };
-        assert_eq!(slash_suggestions(&model, 3).len(), 3);
+        assert_eq!(
+            slash_suggestions(&model, usize::MAX).len(),
+            SLASH_COMMAND_REGISTRY.len()
+        );
         let _ = dispatch(&mut model, Action::CompleteSlash);
         assert_eq!(model.draft, "/", "ambiguous prefixes must remain editable");
 
