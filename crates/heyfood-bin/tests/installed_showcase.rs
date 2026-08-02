@@ -879,7 +879,7 @@ async fn run_installed_archive_core_release_matrix() {
         .expect("stop installed showcase fixture service");
     let summary = server.await.expect("join showcase fixture service");
     let requests = collect_request_evidence(request_receiver).await;
-    assert_fixture_summary(&summary);
+    assert_fixture_summary(&summary, native_household_enabled);
     assert_core_terminal_contract(
         &clean_user,
         &returning_user,
@@ -2473,7 +2473,7 @@ async fn collect_request_evidence(
     requests
 }
 
-fn assert_fixture_summary(summary: &FixtureSummary) {
+fn assert_fixture_summary(summary: &FixtureSummary, native_household_enabled: bool) {
     assert_eq!(
         summary.device_authorizations, 1,
         "returning installed processes must not repeat registration"
@@ -2482,8 +2482,15 @@ fn assert_fixture_summary(summary: &FixtureSummary) {
         summary.cli_sessions, 1,
         "returning installed processes must reload the account-bound session"
     );
-    assert_eq!(summary.consent_grants, 1);
-    assert_eq!(summary.profile_uploads, 1);
+    let expected_remote_profile_writes = expected_remote_profile_writes(native_household_enabled);
+    assert_eq!(
+        summary.consent_grants, expected_remote_profile_writes,
+        "native local-first onboarding must not grant remote profile consent"
+    );
+    assert_eq!(
+        summary.profile_uploads, expected_remote_profile_writes,
+        "native local-first onboarding must not upload the local Household profile"
+    );
     assert_eq!(summary.proposal_cancellations, 2);
     assert_eq!(summary.ctrl_c_proposal_cancellations, 1);
     assert_eq!(summary.proposal_accepts, 1);
@@ -2520,6 +2527,10 @@ fn assert_fixture_summary(summary: &FixtureSummary) {
         14,
         "fixture must observe only the bounded installed smoke turns"
     );
+}
+
+const fn expected_remote_profile_writes(native_household_enabled: bool) -> usize {
+    if native_household_enabled { 0 } else { 1 }
 }
 
 fn assert_core_terminal_contract(
@@ -3156,6 +3167,12 @@ fn terminal_semantic_history_retains_cursor_fragmented_text_after_restoration() 
         ))
         .contains(&compact_terminal_text(SYNTHETIC_SERVER_FAILURE_MESSAGE))
     );
+}
+
+#[test]
+fn fixture_profile_write_expectation_tracks_the_onboarding_authority_mode() {
+    assert_eq!(expected_remote_profile_writes(false), 1);
+    assert_eq!(expected_remote_profile_writes(true), 0);
 }
 
 #[test]
