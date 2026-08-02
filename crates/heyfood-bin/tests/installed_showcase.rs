@@ -542,6 +542,14 @@ async fn run_installed_archive_core_release_matrix() {
     )
     .await
     .expect("open speculative browser connection");
+    let profile_saved_copy = if showcase_native_household_enabled(
+        credential_backend,
+        expected_target.ends_with("-windows-msvc"),
+    ) {
+        "Saved on this device"
+    } else {
+        "Dietary profile saved"
+    };
 
     let clean_user = run_installed_pty(
         &installed_binary,
@@ -566,7 +574,7 @@ async fn run_installed_archive_core_release_matrix() {
             PtyAction::Submit("none".into()),
             PtyAction::Wait("Review dietary profile".into()),
             PtyAction::Submit("save".into()),
-            PtyAction::Wait("Dietary profile saved".into()),
+            PtyAction::Wait(profile_saved_copy.into()),
             PtyAction::Pause(Duration::from_millis(250)),
             PtyAction::Submit(TEST_PROMPT.into()),
             PtyAction::Wait(TEST_RESPONSE.into()),
