@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use crate::household_agent_phase0::{
     AuthorizedAgentHouseholdPrepareV1, BoundAgentHouseholdDisclosureV1,
     BoundAgentHouseholdOutcomeReceiptV1, BoundAgentHouseholdProposalV1, BoundAgentHouseholdReadV1,
+    BoundAgentHouseholdRosterAuthorityV1,
 };
 use crate::household_repository::{
     HouseholdCommit, HouseholdCommitOutcome, HouseholdErase, HouseholdEraseOutcome,
@@ -256,6 +257,15 @@ pub trait HouseholdRepositoryPort: Send + Sync {
 /// separately authorized. Prepare/cancel may change only the encrypted local
 /// proposal journal; they never change the household revision.
 pub trait HouseholdAgentPhase0Port: Send + Sync {
+    /// Load the complete eligible subject set directly from the account-bound
+    /// native household repository. `Everyone` reads must compare their raw
+    /// projection against this independent authority before disclosure.
+    fn eligible_roster(
+        &self,
+        account: AccountId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<BoundAgentHouseholdRosterAuthorityV1, PortError>>;
+
     fn disclosure(
         &self,
         account: AccountId,

@@ -40,7 +40,8 @@ pub use health::{
 pub use household_agent_phase0::{
     AuthorizedAgentHouseholdPrepareV1, BoundAgentHouseholdDisclosureV1,
     BoundAgentHouseholdOutcomeReceiptV1, BoundAgentHouseholdProposalV1, BoundAgentHouseholdReadV1,
-    FrozenAgentHouseholdDisclosureV1, HouseholdAgentPhase0Proof,
+    BoundAgentHouseholdRosterAuthorityV1, FrozenAgentHouseholdDisclosureV1,
+    HouseholdAgentPhase0Proof, PreparedAgentHouseholdDisclosureV1,
 };
 pub use household_context::{
     HouseholdContextErrorV1, HouseholdContextSnapshotV1, HouseholdSubjectContextV1,

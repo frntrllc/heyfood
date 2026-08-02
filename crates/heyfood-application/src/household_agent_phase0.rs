@@ -12,9 +12,9 @@ use heyfood_core::{
     AgentHouseholdOutcomeReceiptV1, AgentHouseholdPrepareRequestKindV1,
     AgentHouseholdPrepareRequestV1, AgentHouseholdProjectionV1, AgentHouseholdProposalIdV1,
     AgentHouseholdProposalPresentationV1, AgentHouseholdProposalStateV1,
-    AgentHouseholdReadRequestKindV1, AgentHouseholdReadRequestV1, AgentHouseholdReadResultKindV1,
-    AgentHouseholdReadSnapshotV1, AgentHouseholdSubjectV1, CanonicalDigestV1, GenerationId,
-    HouseholdScope, HouseholdSubjectId,
+    AgentHouseholdReadRequestV1, AgentHouseholdReadResultKindV1, AgentHouseholdReadSnapshotV1,
+    AgentHouseholdSubjectV1, CanonicalDigestV1, GenerationId, HouseholdRevision, HouseholdScope,
+    HouseholdSubjectId,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -24,6 +24,26 @@ use crate::{HouseholdAgentPhase0Port, PortError};
 pub struct BoundAgentHouseholdReadV1 {
     pub account: AccountId,
     pub snapshot: AgentHouseholdReadSnapshotV1,
+}
+
+/// Independently loaded eligible-roster authority for all-or-nothing
+/// `Everyone` reads. This must come from the account-bound native household
+/// repository, not from the projected agent read response.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BoundAgentHouseholdRosterAuthorityV1 {
+    pub account: AccountId,
+    pub household_revision: HouseholdRevision,
+    pub eligible_subjects: Vec<AgentDisclosureGrantSubjectV1>,
+}
+
+impl fmt::Debug for BoundAgentHouseholdRosterAuthorityV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BoundAgentHouseholdRosterAuthorityV1")
+            .field("household_revision", &self.household_revision)
+            .field("eligible_subject_count", &self.eligible_subjects.len())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -45,7 +65,7 @@ impl fmt::Debug for BoundAgentHouseholdDisclosureV1 {
 pub struct AuthorizedAgentHouseholdPrepareV1 {
     pub request: AgentHouseholdPrepareRequestV1,
     pub maximum_projection: AgentHouseholdProjectionV1,
-    pub frozen_disclosure: FrozenAgentHouseholdDisclosureV1,
+    pub prepared_disclosure: PreparedAgentHouseholdDisclosureV1,
 }
 
 impl fmt::Debug for AuthorizedAgentHouseholdPrepareV1 {
@@ -54,41 +74,45 @@ impl fmt::Debug for AuthorizedAgentHouseholdPrepareV1 {
             .debug_struct("AuthorizedAgentHouseholdPrepareV1")
             .field("request", &self.request)
             .field("maximum_projection", &self.maximum_projection)
-            .field("frozen_disclosure", &self.frozen_disclosure)
+            .field("prepared_disclosure", &self.prepared_disclosure)
             .finish_non_exhaustive()
     }
 }
 
-/// Non-serializable disclosure authority retained only in the encrypted local
-/// proposal journal. Agent-visible proposal documents never contain it.
+/// Non-serializable disclosure authority prepared before the local journal
+/// allocates a proposal reference. This cannot be used for status until it is
+/// bound to the exact returned proposal.
 #[derive(Clone, Eq, PartialEq)]
-pub struct FrozenAgentHouseholdDisclosureV1 {
+pub struct PreparedAgentHouseholdDisclosureV1 {
     account: AccountId,
     purpose: AgentDisclosurePurposeV1,
     generation: GenerationId,
     grant_set_digest: CanonicalDigestV1,
     subjects: Vec<AgentDisclosureGrantSubjectV1>,
     maximum_projection: AgentHouseholdProjectionV1,
+    operation: heyfood_core::AgentHouseholdOperationV1,
 }
 
-impl fmt::Debug for FrozenAgentHouseholdDisclosureV1 {
+impl fmt::Debug for PreparedAgentHouseholdDisclosureV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("FrozenAgentHouseholdDisclosureV1")
+            .debug_struct("PreparedAgentHouseholdDisclosureV1")
             .field("purpose", &self.purpose)
             .field("generation", &self.generation)
             .field("subject_count", &self.subjects.len())
             .field("maximum_projection", &self.maximum_projection)
+            .field("operation", &self.operation)
             .finish_non_exhaustive()
     }
 }
 
-impl FrozenAgentHouseholdDisclosureV1 {
+impl PreparedAgentHouseholdDisclosureV1 {
     fn from_grants(
         account: AccountId,
         purpose: AgentDisclosurePurposeV1,
         mut subjects: Vec<AgentDisclosureGrantSubjectV1>,
         maximum_projection: AgentHouseholdProjectionV1,
+        operation: heyfood_core::AgentHouseholdOperationV1,
         grants: &AgentDisclosureGrantSetV1,
     ) -> Self {
         subjects.sort();
@@ -100,12 +124,57 @@ impl FrozenAgentHouseholdDisclosureV1 {
             grant_set_digest: grants.revision_set_digest(),
             subjects,
             maximum_projection,
+            operation,
         }
     }
 
     #[must_use]
+    pub fn bind_to_proposal(
+        &self,
+        proposal_ref: AgentHouseholdProposalIdV1,
+    ) -> FrozenAgentHouseholdDisclosureV1 {
+        FrozenAgentHouseholdDisclosureV1 {
+            proposal_ref,
+            prepared: self.clone(),
+        }
+    }
+}
+
+/// Exact proposal-bound disclosure authority retained only in the encrypted
+/// local proposal journal. Agent-visible proposal documents never contain it.
+#[derive(Clone, Eq, PartialEq)]
+pub struct FrozenAgentHouseholdDisclosureV1 {
+    proposal_ref: AgentHouseholdProposalIdV1,
+    prepared: PreparedAgentHouseholdDisclosureV1,
+}
+
+impl fmt::Debug for FrozenAgentHouseholdDisclosureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FrozenAgentHouseholdDisclosureV1")
+            .field("purpose", &self.prepared.purpose)
+            .field("generation", &self.prepared.generation)
+            .field("subject_count", &self.prepared.subjects.len())
+            .field("maximum_projection", &self.prepared.maximum_projection)
+            .field("operation", &self.prepared.operation)
+            .finish_non_exhaustive()
+    }
+}
+
+impl FrozenAgentHouseholdDisclosureV1 {
+    #[must_use]
+    pub const fn proposal_ref(&self) -> AgentHouseholdProposalIdV1 {
+        self.proposal_ref
+    }
+
+    #[must_use]
+    pub const fn operation(&self) -> heyfood_core::AgentHouseholdOperationV1 {
+        self.prepared.operation
+    }
+
+    #[must_use]
     pub fn subjects(&self) -> &[AgentDisclosureGrantSubjectV1] {
-        &self.subjects
+        &self.prepared.subjects
     }
 }
 
@@ -167,11 +236,7 @@ impl HouseholdAgentPhase0Proof {
         cancellation: CancellationToken,
     ) -> Result<AgentHouseholdReadSnapshotV1, PortError> {
         check_cancelled(&cancellation)?;
-        if request.schema_version != AGENT_HOUSEHOLD_CONTRACT_VERSION
-            || request.kind != AgentHouseholdReadRequestKindV1::HouseholdReadRequest
-            || request.limit == 0
-            || request.limit > AGENT_HOUSEHOLD_MAX_MEMBERS_PER_PAGE
-        {
+        if request.validate_wire_shape().is_err() {
             return Err(phase0_error(
                 "household_agent_read_contract",
                 "household agent read request is outside the closed contract",
@@ -182,7 +247,18 @@ impl HouseholdAgentPhase0Proof {
             .read(account.clone(), request.clone(), cancellation.clone())
             .await?;
         ensure_account(&account, &result.account)?;
-        let subjects = validate_raw_read(&request, &result.snapshot)?;
+        let mut subjects = validate_raw_read(&request, &result.snapshot)?;
+        if matches!(
+            result.snapshot.resolved_subject,
+            Some(AgentHouseholdSubjectV1::Everyone)
+        ) {
+            let roster = self
+                .port
+                .eligible_roster(account.clone(), cancellation.clone())
+                .await?;
+            ensure_account(&account, &roster.account)?;
+            subjects = validate_everyone_authority(&result.snapshot, roster)?;
+        }
         let disclosure = self
             .port
             .disclosure(
@@ -263,11 +339,12 @@ impl HouseholdAgentPhase0Proof {
         let authorized = AuthorizedAgentHouseholdPrepareV1 {
             request: request.clone(),
             maximum_projection,
-            frozen_disclosure: FrozenAgentHouseholdDisclosureV1::from_grants(
+            prepared_disclosure: PreparedAgentHouseholdDisclosureV1::from_grants(
                 account.clone(),
                 AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
                 subjects.clone(),
                 maximum_projection,
+                request.operation,
                 &initial_disclosure.grants,
             ),
         };
@@ -277,7 +354,10 @@ impl HouseholdAgentPhase0Proof {
             .await?;
         ensure_account(&account, &result.account)?;
         validate_returned_proposal(&request, &result.presentation)?;
-        if result.frozen_disclosure != authorized.frozen_disclosure {
+        if result.frozen_disclosure.prepared != authorized.prepared_disclosure
+            || result.frozen_disclosure.proposal_ref != result.presentation.proposal_ref
+            || result.frozen_disclosure.prepared.operation != result.presentation.operation
+        {
             return Err(phase0_error(
                 "household_agent_disclosure_binding",
                 "household proposal did not preserve its frozen disclosure authority",
@@ -357,20 +437,21 @@ impl HouseholdAgentPhase0Proof {
         let current_authorized_projection = disclosure
             .grants
             .maximum_projection_for(result.frozen_disclosure.subjects());
-        let disclosure_changed = result.frozen_disclosure.account != account
-            || result.frozen_disclosure.purpose
+        let disclosure_changed = result.frozen_disclosure.prepared.account != account
+            || result.frozen_disclosure.prepared.purpose
                 != AgentDisclosurePurposeV1::HouseholdAgentProposalStatus
-            || result.frozen_disclosure.generation != disclosure.grants.generation()
-            || result.frozen_disclosure.grant_set_digest != disclosure.grants.revision_set_digest()
+            || result.frozen_disclosure.prepared.generation != disclosure.grants.generation()
+            || result.frozen_disclosure.prepared.grant_set_digest
+                != disclosure.grants.revision_set_digest()
             || projection_rank(current_authorized_projection)
-                < projection_rank(result.frozen_disclosure.maximum_projection);
+                < projection_rank(result.frozen_disclosure.prepared.maximum_projection);
         let scope_is_content_free =
             result.presentation.operation == heyfood_core::AgentHouseholdOperationV1::Scope;
         let maximum = if disclosure_changed || scope_is_content_free {
             AgentHouseholdProjectionV1::ContentFree
         } else {
             minimum_projection(
-                result.frozen_disclosure.maximum_projection,
+                result.frozen_disclosure.prepared.maximum_projection,
                 current_authorized_projection,
             )
         };
@@ -527,10 +608,7 @@ fn disclosure_subjects_for_read(
                 vec![AgentDisclosureGrantSubjectV1::Member(member.clone())]
             }
             AgentHouseholdSubjectV1::Everyone => {
-                if snapshot.next_cursor.is_some()
-                    || usize::from(snapshot.eligible_member_count)
-                        != snapshot.members.len().saturating_add(1)
-                {
+                if snapshot.next_cursor.is_some() {
                     return Err(phase0_error(
                         "household_agent_everyone_incomplete",
                         "everyone disclosure requires the complete eligible roster",
@@ -566,6 +644,45 @@ fn disclosure_subjects_for_read(
     subjects.sort();
     subjects.dedup();
     Ok(subjects)
+}
+
+fn validate_everyone_authority(
+    snapshot: &AgentHouseholdReadSnapshotV1,
+    mut authority: BoundAgentHouseholdRosterAuthorityV1,
+) -> Result<Vec<AgentDisclosureGrantSubjectV1>, PortError> {
+    let returned = disclosure_subjects_for_read(snapshot)?;
+    let mut projected_subjects = vec![AgentDisclosureGrantSubjectV1::Self_];
+    projected_subjects.extend(
+        snapshot
+            .members
+            .iter()
+            .map(|member| AgentDisclosureGrantSubjectV1::Member(member.member_ref.clone())),
+    );
+    let original_projected_length = projected_subjects.len();
+    projected_subjects.sort();
+    projected_subjects.dedup();
+    let original_authority_length = authority.eligible_subjects.len();
+    authority.eligible_subjects.sort();
+    authority.eligible_subjects.dedup();
+    let authority_is_valid = authority.household_revision == snapshot.household_revision
+        && original_authority_length == authority.eligible_subjects.len()
+        && original_projected_length == projected_subjects.len()
+        && authority.eligible_subjects.len() >= 2
+        && authority.eligible_subjects.len() <= usize::from(AGENT_HOUSEHOLD_MAX_MEMBERS_PER_PAGE)
+        && authority
+            .eligible_subjects
+            .contains(&AgentDisclosureGrantSubjectV1::Self_)
+        && usize::from(snapshot.eligible_member_count) == authority.eligible_subjects.len()
+        && projected_subjects == authority.eligible_subjects
+        && returned == authority.eligible_subjects;
+    if authority_is_valid {
+        Ok(returned)
+    } else {
+        Err(phase0_error(
+            "household_agent_everyone_incomplete",
+            "everyone disclosure does not match the authoritative eligible roster",
+        ))
+    }
 }
 
 fn scope_matches_subject(scope: &HouseholdScope, subject: &AgentHouseholdSubjectV1) -> bool {
@@ -638,6 +755,14 @@ fn validate_status_subject_binding(
     presentation: &AgentHouseholdProposalPresentationV1,
     frozen: &FrozenAgentHouseholdDisclosureV1,
 ) -> Result<(), PortError> {
+    if frozen.proposal_ref != presentation.proposal_ref
+        || frozen.prepared.operation != presentation.operation
+    {
+        return Err(phase0_error(
+            "household_agent_proposal_mismatch",
+            "household proposal status authority belongs to another proposal",
+        ));
+    }
     let valid = match presentation.operation {
         heyfood_core::AgentHouseholdOperationV1::Edit
         | heyfood_core::AgentHouseholdOperationV1::Archive
@@ -645,7 +770,7 @@ fn validate_status_subject_binding(
             .affected_member_ref
             .as_ref()
             .is_some_and(|member| {
-                frozen.subjects.as_slice()
+                frozen.prepared.subjects.as_slice()
                     == [AgentDisclosureGrantSubjectV1::Member(member.clone())]
             }),
         heyfood_core::AgentHouseholdOperationV1::Add

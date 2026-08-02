@@ -6,8 +6,9 @@ use std::sync::{
 use heyfood_application::{
     AuthorizedAgentHouseholdPrepareV1, BoundAgentHouseholdDisclosureV1,
     BoundAgentHouseholdOutcomeReceiptV1, BoundAgentHouseholdProposalV1, BoundAgentHouseholdReadV1,
-    BoxFuture, FrozenAgentHouseholdDisclosureV1, HouseholdAgentPhase0Port,
-    HouseholdAgentPhase0Proof, PortError,
+    BoundAgentHouseholdRosterAuthorityV1, BoxFuture, FrozenAgentHouseholdDisclosureV1,
+    HouseholdAgentPhase0Port, HouseholdAgentPhase0Proof, PortError,
+    PreparedAgentHouseholdDisclosureV1,
 };
 use heyfood_core::{
     AGENT_HOUSEHOLD_CONTRACT_VERSION, AccountId, AgentDisclosureDataClassV1,
@@ -33,7 +34,7 @@ const PROOF_MANIFEST: &[u8] = include_bytes!(concat!(
     "/../../docs/release-evidence/agent-household-phase0/phase0-proof-manifest.json"
 ));
 const PROOF_MANIFEST_SHA256: &str =
-    "c5a94c29e344b51fdb5b5f4f79d444287a842f6c256351adbf6a5c9c83160f81";
+    "415d9bf8ac6627c353060cebb3c5c71afc73f6d3a66fe0e36763bb8caff6261e";
 
 struct FixtureHouseholdAgentPort {
     account: AccountId,
@@ -50,9 +51,12 @@ struct FixtureHouseholdAgentPort {
     disclosure_observed_after_expiry: AtomicBool,
     returned_member_override: Mutex<Option<MemberId>>,
     active_scope_override: Mutex<Option<HouseholdScope>>,
+    authoritative_members: Mutex<Vec<MemberId>>,
     proposal_member_override: Mutex<Option<MemberId>>,
+    status_frozen_override: Mutex<Option<FrozenAgentHouseholdDisclosureV1>>,
     invalid_read_wire: AtomicBool,
     invalid_read_count_wire: AtomicBool,
+    eligible_count_override: AtomicU64,
     invalid_proposal_wire: AtomicBool,
     proposal: Mutex<Option<StoredFixtureProposal>>,
 }
@@ -60,6 +64,7 @@ struct FixtureHouseholdAgentPort {
 #[derive(Clone)]
 struct StoredFixtureProposal {
     presentation: AgentHouseholdProposalPresentationV1,
+    prepared_disclosure: PreparedAgentHouseholdDisclosureV1,
     frozen_disclosure: FrozenAgentHouseholdDisclosureV1,
 }
 
@@ -83,9 +88,14 @@ impl FixtureHouseholdAgentPort {
             disclosure_observed_after_expiry: AtomicBool::new(false),
             returned_member_override: Mutex::new(None),
             active_scope_override: Mutex::new(None),
+            authoritative_members: Mutex::new(vec![
+                MemberId::parse_preserved("10000000-0000-4000-8000-000000000001").expect("member"),
+            ]),
             proposal_member_override: Mutex::new(None),
+            status_frozen_override: Mutex::new(None),
             invalid_read_wire: AtomicBool::new(false),
             invalid_read_count_wire: AtomicBool::new(false),
+            eligible_count_override: AtomicU64::new(0),
             invalid_proposal_wire: AtomicBool::new(false),
             proposal: Mutex::new(None),
         }
@@ -150,6 +160,35 @@ impl FixtureHouseholdAgentPort {
 }
 
 impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
+    fn eligible_roster(
+        &self,
+        account: AccountId,
+        _cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<BoundAgentHouseholdRosterAuthorityV1, PortError>> {
+        Box::pin(async move {
+            if account != self.account {
+                return Err(PortError::new(
+                    "household_account_mismatch",
+                    "fixture roster authority belongs to another account",
+                ));
+            }
+            let mut eligible_subjects = vec![AgentDisclosureGrantSubjectV1::Self_];
+            eligible_subjects.extend(
+                self.authoritative_members
+                    .lock()
+                    .expect("authoritative members lock")
+                    .iter()
+                    .cloned()
+                    .map(AgentDisclosureGrantSubjectV1::Member),
+            );
+            Ok(BoundAgentHouseholdRosterAuthorityV1 {
+                account: self.account.clone(),
+                household_revision: self.current_revision(),
+                eligible_subjects,
+            })
+        })
+    }
+
     fn disclosure(
         &self,
         account: AccountId,
@@ -293,6 +332,7 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
                 .expect("active scope override lock")
                 .clone()
                 .unwrap_or(default_active_scope);
+            let eligible_count_override = self.eligible_count_override.load(Ordering::SeqCst);
             Ok(BoundAgentHouseholdReadV1 {
                 account: self.account.clone(),
                 snapshot: AgentHouseholdReadSnapshotV1 {
@@ -306,6 +346,8 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
                     disclosure_generation: self.current_generation(),
                     eligible_member_count: if self.invalid_read_count_wire.load(Ordering::SeqCst) {
                         101
+                    } else if eligible_count_override > 0 {
+                        u16::try_from(eligible_count_override).expect("eligible count override")
                     } else {
                         2
                     },
@@ -341,14 +383,18 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
                 presentation.changes[0].after = vec!["line\nfeed".to_owned()];
             }
             presentation = presentation.filtered_to(request.maximum_projection);
+            let frozen_disclosure = request
+                .prepared_disclosure
+                .bind_to_proposal(presentation.proposal_ref);
             *self.proposal.lock().expect("proposal lock") = Some(StoredFixtureProposal {
                 presentation: presentation.clone(),
-                frozen_disclosure: request.frozen_disclosure.clone(),
+                prepared_disclosure: request.prepared_disclosure,
+                frozen_disclosure: frozen_disclosure.clone(),
             });
             Ok(BoundAgentHouseholdProposalV1 {
                 account: self.account.clone(),
                 presentation,
-                frozen_disclosure: request.frozen_disclosure,
+                frozen_disclosure,
             })
         })
     }
@@ -377,7 +423,12 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
             Ok(BoundAgentHouseholdProposalV1 {
                 account: self.account.clone(),
                 presentation: stored.presentation,
-                frozen_disclosure: stored.frozen_disclosure,
+                frozen_disclosure: self
+                    .status_frozen_override
+                    .lock()
+                    .expect("status frozen override lock")
+                    .clone()
+                    .unwrap_or(stored.frozen_disclosure),
             })
         })
     }
@@ -812,6 +863,86 @@ async fn application_rejects_authorized_a_with_returned_b_for_reads_and_prepare(
 }
 
 #[tokio::test]
+async fn everyone_requires_the_independently_authoritative_complete_roster() {
+    let valid_port = Arc::new(FixtureHouseholdAgentPort::new());
+    HouseholdAgentPhase0Proof::new(valid_port)
+        .read(
+            account(),
+            AgentHouseholdReadRequestV1 {
+                schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
+                kind: AgentHouseholdReadRequestKindV1::HouseholdReadRequest,
+                subject: Some(AgentHouseholdSubjectV1::Everyone),
+                requested_projection: AgentHouseholdProjectionV1::Profile,
+                expected_disclosure_generation: GenerationId::new(3),
+                cursor: None,
+                limit: 10,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect("complete authoritative Everyone roster");
+
+    let omitted_member =
+        MemberId::parse_preserved("10000000-0000-4000-8000-000000000002").expect("member B");
+    let incomplete_port = Arc::new(FixtureHouseholdAgentPort::new());
+    incomplete_port
+        .authoritative_members
+        .lock()
+        .expect("authoritative members lock")
+        .push(omitted_member.clone());
+    let error = HouseholdAgentPhase0Proof::new(incomplete_port)
+        .read(
+            account(),
+            AgentHouseholdReadRequestV1 {
+                schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
+                kind: AgentHouseholdReadRequestKindV1::HouseholdReadRequest,
+                subject: Some(AgentHouseholdSubjectV1::Everyone),
+                requested_projection: AgentHouseholdProjectionV1::Profile,
+                expected_disclosure_generation: GenerationId::new(3),
+                cursor: None,
+                limit: 10,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect_err("adapter cannot omit member B and decrement its own count");
+    assert_eq!(error.code, "household_agent_everyone_incomplete");
+
+    let identity_only_port = Arc::new(FixtureHouseholdAgentPort::new());
+    identity_only_port
+        .authoritative_members
+        .lock()
+        .expect("authoritative members lock")
+        .push(omitted_member.clone());
+    *identity_only_port
+        .active_scope_override
+        .lock()
+        .expect("active scope override lock") = Some(HouseholdScope::Subject(
+        HouseholdSubjectId::member(omitted_member),
+    ));
+    identity_only_port
+        .eligible_count_override
+        .store(3, Ordering::SeqCst);
+    let error = HouseholdAgentPhase0Proof::new(identity_only_port)
+        .read(
+            account(),
+            AgentHouseholdReadRequestV1 {
+                schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
+                kind: AgentHouseholdReadRequestKindV1::HouseholdReadRequest,
+                subject: Some(AgentHouseholdSubjectV1::Everyone),
+                requested_projection: AgentHouseholdProjectionV1::Profile,
+                expected_disclosure_generation: GenerationId::new(3),
+                cursor: None,
+                limit: 10,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect_err("active-scope identity cannot substitute for an omitted member projection");
+    assert_eq!(error.code, "household_agent_everyone_incomplete");
+}
+
+#[tokio::test]
 async fn status_invalidates_same_generation_revision_rotation_and_natural_expiry() {
     for expires in [false, true] {
         let port = Arc::new(FixtureHouseholdAgentPort::new());
@@ -838,7 +969,88 @@ async fn status_invalidates_same_generation_revision_rotation_and_natural_expiry
 }
 
 #[tokio::test]
+async fn status_rejects_cross_proposal_and_cross_operation_frozen_authority() {
+    let proposal_port = Arc::new(FixtureHouseholdAgentPort::new());
+    let proposal_controller = HouseholdAgentPhase0Proof::new(proposal_port.clone());
+    proposal_controller
+        .prepare(account(), edit_prepare_request(), CancellationToken::new())
+        .await
+        .expect("prepare proposal A");
+    let other_proposal = AgentHouseholdProposalIdV1::from_uuid(
+        Uuid::parse_str("20000000-0000-4000-8000-000000000002").expect("proposal B"),
+    );
+    let swapped = proposal_port
+        .proposal
+        .lock()
+        .expect("proposal lock")
+        .as_ref()
+        .expect("stored proposal")
+        .prepared_disclosure
+        .bind_to_proposal(other_proposal);
+    *proposal_port
+        .status_frozen_override
+        .lock()
+        .expect("status frozen override lock") = Some(swapped);
+    let error = proposal_controller
+        .status(
+            account(),
+            proposal_port.proposal_ref,
+            CancellationToken::new(),
+        )
+        .await
+        .expect_err("proposal B authority cannot authorize proposal A status");
+    assert_eq!(error.code, "household_agent_proposal_mismatch");
+
+    let operation_port = Arc::new(FixtureHouseholdAgentPort::new());
+    let operation_controller = HouseholdAgentPhase0Proof::new(operation_port.clone());
+    operation_controller
+        .prepare(account(), edit_prepare_request(), CancellationToken::new())
+        .await
+        .expect("prepare edit");
+    let edit_presentation = operation_port
+        .proposal
+        .lock()
+        .expect("proposal lock")
+        .as_ref()
+        .expect("stored edit")
+        .presentation
+        .clone();
+    let mut archive_request = edit_prepare_request();
+    archive_request.operation = AgentHouseholdOperationV1::Archive;
+    operation_controller
+        .prepare(account(), archive_request, CancellationToken::new())
+        .await
+        .expect("prepare archive");
+    operation_port
+        .proposal
+        .lock()
+        .expect("proposal lock")
+        .as_mut()
+        .expect("stored archive")
+        .presentation = edit_presentation;
+    let error = operation_controller
+        .status(
+            account(),
+            operation_port.proposal_ref,
+            CancellationToken::new(),
+        )
+        .await
+        .expect_err("archive authority cannot authorize edit status");
+    assert_eq!(error.code, "household_agent_proposal_mismatch");
+}
+
+#[tokio::test]
 async fn application_rejects_rust_values_that_closed_json_schemas_cannot_emit() {
+    for cursor in [String::new(), "x".repeat(513)] {
+        let mut request = member_read_request(AgentHouseholdProjectionV1::Profile);
+        request.cursor = Some(cursor);
+        let error = HouseholdAgentPhase0Proof::new(Arc::new(FixtureHouseholdAgentPort::new()))
+            .read(account(), request, CancellationToken::new())
+            .await
+            .expect_err("schema-invalid cursor fails before adapter dispatch");
+        assert_eq!(error.code, "household_agent_read_contract");
+    }
+
     let read_port = Arc::new(FixtureHouseholdAgentPort::new());
     read_port.invalid_read_wire.store(true, Ordering::SeqCst);
     let error = HouseholdAgentPhase0Proof::new(read_port)

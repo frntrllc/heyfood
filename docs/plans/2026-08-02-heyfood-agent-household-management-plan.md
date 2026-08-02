@@ -291,7 +291,11 @@ An ungranted member is omitted from identity-bearing roster results; the agent
 may receive only a content-free restricted-member count and a TUI handoff. A
 profile read requires both roster and profile-read grants. `Everyone` fails
 closed unless every included subject has the required current grant; heyfood
-does not return a partial household while presenting it as Everyone.
+does not return a partial household while presenting it as Everyone. The
+application compares the raw `Everyone` projection and its reported count to a
+separate account-bound eligible-subject snapshot loaded directly from the
+native household repository at the same household revision. The projected
+adapter response is never its own completeness authority.
 
 Adapters are not policy authorities. The application layer loads the
 authoritative grant set, derives the exact subjects in the returned snapshot,
@@ -474,6 +478,7 @@ Internally, heyfood binds the proposal to:
 - exact target member and profile revision, when applicable;
 - exact disclosure purpose, per-subject revision-set digest, and disclosure generation;
 - exact agent presentation projection class;
+- exact proposal reference and operation on every frozen status authority;
 - operation and canonical before/after document hashes;
 - scope and conversation-continuity consequences;
 - originating MCP session and eligible host/version policy;
@@ -483,6 +488,12 @@ Internally, heyfood binds the proposal to:
 - the frozen effect fingerprint only after every local-input field is complete
   and validated; and
 - single-use local review and commit state.
+
+Every compare-and-swap token is also bound to the journal's account, proposal
+reference, and reducer commit ID in addition to its revision, state,
+generation, and frozen digest. A token from one proposal can never advance or
+cancel another proposal even when both journals are otherwise at identical
+states.
 
 An `awaiting_local_input` record preallocates identities but does not claim a
 final proposal digest or effect fingerprint. Completing local intake validates
@@ -1010,7 +1021,8 @@ Exit gate:
 - self, exact member, Everyone, omitted active scope, duplicate name, archived,
   incomplete, stale, corrupt, and cross-account cases pass;
 - adult/minor/unknown-age, missing/partial/revoked disclosure, Everyone with one
-  ungranted member, same-OS-user local-caller, different-OS-user denial, and
+  ungranted member, Everyone with an adapter-omitted member and decremented raw
+  count, same-OS-user local-caller, different-OS-user denial, and
   concurrent-revocation cases match the declared boundary;
 - output contains no forbidden profile or platform data;
 - CLI and MCP results are semantically identical;

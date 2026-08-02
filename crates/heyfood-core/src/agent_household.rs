@@ -850,6 +850,24 @@ impl fmt::Debug for AgentHouseholdReadRequestV1 {
     }
 }
 
+impl AgentHouseholdReadRequestV1 {
+    pub fn validate_wire_shape(&self) -> Result<(), AgentHouseholdContractErrorV1> {
+        if self.schema_version != AGENT_HOUSEHOLD_CONTRACT_VERSION
+            || self.kind != AgentHouseholdReadRequestKindV1::HouseholdReadRequest
+            || self.limit == 0
+            || self.limit > AGENT_HOUSEHOLD_MAX_MEMBERS_PER_PAGE
+            || self
+                .cursor
+                .as_ref()
+                .is_some_and(|value| !bounded_wire_text(value, 512))
+        {
+            Err(AgentHouseholdContractErrorV1::InvalidWireShape)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct AgentHouseholdReadSnapshotV1 {
     pub schema_version: u16,
@@ -2149,6 +2167,9 @@ impl LocalHouseholdProposalAuthorityV1 {
 /// revision. Callers cannot construct or modify its fields.
 #[derive(Clone, Eq, PartialEq)]
 pub struct LocalHouseholdProposalCasTokenV1 {
+    account: AccountId,
+    proposal_ref: AgentHouseholdProposalIdV1,
+    commit_id: CommitId,
     journal_revision: u64,
     state: AgentHouseholdProposalStateV1,
     proposal_generation: GenerationId,
@@ -2197,6 +2218,9 @@ impl LocalHouseholdProposalJournalV1 {
     #[must_use]
     pub fn cas_token(&self) -> LocalHouseholdProposalCasTokenV1 {
         LocalHouseholdProposalCasTokenV1 {
+            account: self.authority.binding.account.clone(),
+            proposal_ref: self.authority.binding.proposal_ref,
+            commit_id: self.authority.binding.commit_id,
             journal_revision: self.journal_revision,
             state: self.authority.state,
             proposal_generation: self.authority.proposal_generation,
@@ -2887,13 +2911,13 @@ mod tests {
 
     #[test]
     fn durable_journal_cas_survives_restart_and_binds_the_applied_fingerprint() {
-        let binding = binding(
+        let primary_binding = binding(
             AgentHouseholdOperationV1::Edit,
             GenerationId::new(4),
             ProfileRevision::new(2).ok(),
             Some(MemberId::new()),
         );
-        let commit_id = binding.commit_id();
+        let commit_id = primary_binding.commit_id();
         let current = snapshot(GenerationId::new(4), ProfileRevision::new(2).ok());
         let proposal_digest = CanonicalDigestV1::from_bytes([31; 32]);
         let effect_fingerprint =
@@ -2908,9 +2932,21 @@ mod tests {
             timestamp(),
         );
         let mut journal = LocalHouseholdProposalJournalV1::new(
-            LocalHouseholdProposalAuthorityV1::awaiting_local_input(binding),
+            LocalHouseholdProposalAuthorityV1::awaiting_local_input(primary_binding),
         );
         let intake_token = journal.cas_token();
+        let mut other_journal = LocalHouseholdProposalJournalV1::new(
+            LocalHouseholdProposalAuthorityV1::awaiting_local_input(binding(
+                AgentHouseholdOperationV1::Edit,
+                GenerationId::new(4),
+                ProfileRevision::new(2).ok(),
+                Some(MemberId::new()),
+            )),
+        );
+        assert_eq!(
+            other_journal.cancel_before_commit(&intake_token),
+            Err(AgentHouseholdContractErrorV1::JournalCasChanged)
+        );
         journal
             .freeze_for_review(&intake_token, &current, frozen)
             .expect("durable freeze CAS");

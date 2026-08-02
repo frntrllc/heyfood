@@ -9,15 +9,19 @@
     "account_bound_read",
     "application_enforced_disclosure_projection",
     "exact_returned_subject_binding",
+    "authoritative_everyone_roster_binding",
     "active_scope_identity_binding",
     "complete_disclosure_authority_digest",
     "non_mutating_prepare",
     "scope_proposal_content_free_handoff",
     "disclosure_filtered_status",
+    "proposal_bound_frozen_status_authority",
     "pre_dispatch_cancel",
     "durable_proposal_journal_cas",
+    "journal_identity_bound_cas",
     "crash_reconciliation_from_applied_commit_fingerprint",
     "five_effect_exact_once_repository_replay",
-    "rust_wire_schema_parity"
+    "rust_wire_schema_parity",
+    "closed_request_wire_validation"
   ]
 }
