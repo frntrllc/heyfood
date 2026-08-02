@@ -2914,23 +2914,23 @@ fn onboarding_prompt(flow: &OnboardingFlow) -> String {
         ),
         OnboardingStep::Diets => option_prompt(
             "Diet styles · 1/8",
-            "Choose any that apply. Enter numbers separated by commas (for example, `1, 3`), a range such as `1-3`, or another diet in your own words. Type `none` if none apply.",
+            "Choose any that apply. Type choices separated by commas—for example, `1, 3, 7-9`—then press Enter. You can also type another diet in your own words. Type `none` if none apply.",
             diet_options(),
         ),
         OnboardingStep::Allergies => option_prompt(
             "Allergies & restrictions · 2/8",
-            "Choose everything this person must avoid. Enter numbers separated by commas, a range such as `1-3`, or another restriction in your own words. Type `none` if there are none.",
+            "Choose everything this person must avoid. Type choices separated by commas—for example, `1, 3, 7-9`—then press Enter. You can also type another restriction in your own words. Type `none` if there are none.",
             allergy_options(),
         ),
         OnboardingStep::Conditions => option_prompt(
             "Health conditions · 3/8",
-            "Choose any that apply. Enter numbers separated by commas, a range such as `1-3`, or another condition in your own words. Type `none` if there are none.",
+            "Choose any that apply. Type choices separated by commas—for example, `1, 3, 7-9`—then press Enter. You can also type another condition in your own words. Type `none` if there are none.",
             condition_options(),
         ),
         OnboardingStep::Severity => {
             "Condition severity · 4/8\nHow much do these conditions affect food choices? Enter one number from 1 (mild) to 5 (critical).".into()
         }
-        OnboardingStep::AvoidIngredients => "Ingredients to avoid · 5/8\nList up to 20 ingredients, separated by commas. Type `none` if there are none.".into(),
+        OnboardingStep::AvoidIngredients => "Ingredients to avoid · 5/8\nList up to 20 ingredients separated by commas—for example, `celery, garlic, onion`—then press Enter. Type `none` if there are none.".into(),
         OnboardingStep::Activity => option_prompt(
             "Activity level · 6/8",
             "Choose one by number or name, then press Enter. Type `none` to skip this question.",
@@ -2938,7 +2938,7 @@ fn onboarding_prompt(flow: &OnboardingFlow) -> String {
         ),
         OnboardingStep::Cuisines => option_prompt(
             "Cuisines you love · 7/8",
-            "Choose any favorites. Enter numbers separated by commas, a range such as `1-3`, or another cuisine in your own words. Type `none` to skip this question.",
+            "Choose any favorites. Type choices separated by commas—for example, `1, 3, 7-9`—then press Enter. You can also type another cuisine in your own words. Type `none` to skip this question.",
             cuisine_options(),
         ),
         OnboardingStep::Notes => "Anything else? · 8/8\nShare anything else hey.food should know (280 characters maximum), or type `none`.".into(),
@@ -3641,9 +3641,7 @@ fn start_existing_member_onboarding(
             });
             finish_household_command_stream(
                 model,
-                format!(
-                    "Declared dietary profile for {display_label}\n\nThis profile will remain local to this device."
-                ),
+                format!("Food profile for {display_label}\n\nThis profile stays on this device."),
             );
             push_onboarding_prompt(model);
         }

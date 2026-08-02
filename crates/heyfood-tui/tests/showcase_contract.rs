@@ -204,6 +204,7 @@ fn answer_complete_profile(model: &mut AppModel) {
 
 fn assert_human_household_onboarding_copy(model: &AppModel) {
     let text = &model.scrollback.entries().back().unwrap().text;
+    let lower_text = text.to_ascii_lowercase();
     for forbidden in [
         "under_13",
         "age_13_17",
@@ -215,8 +216,32 @@ fn assert_human_household_onboarding_copy(model: &AppModel) {
         "remote member sync",
     ] {
         assert!(
-            !text.contains(forbidden),
+            !lower_text.contains(forbidden),
             "human onboarding copy exposed {forbidden:?}: {text}"
+        );
+    }
+    if [
+        "Diet styles · 1/8",
+        "Allergies & restrictions · 2/8",
+        "Health conditions · 3/8",
+        "Cuisines you love · 7/8",
+    ]
+    .iter()
+    .any(|title| text.contains(title))
+    {
+        assert!(
+            text.contains(
+                "Type choices separated by commas—for example, `1, 3, 7-9`—then press Enter."
+            ),
+            "multi-select onboarding copy omitted its exact input example: {text}"
+        );
+    }
+    if text.contains("Ingredients to avoid") {
+        assert!(
+            text.contains(
+                "separated by commas—for example, `celery, garlic, onion`—then press Enter."
+            ),
+            "ingredient onboarding copy omitted its exact input example: {text}"
         );
     }
 }
@@ -505,6 +530,12 @@ fn existing_member_onboarding_uses_typed_subject_and_can_cancel_before_dispatch(
             members: vec![owner(), incomplete.clone()],
         }),
     );
+    assert!(model.scrollback.entries().iter().all(|entry| {
+        !entry
+            .text
+            .to_ascii_lowercase()
+            .contains("declared dietary profile")
+    }));
     assert!(
         model
             .scrollback
