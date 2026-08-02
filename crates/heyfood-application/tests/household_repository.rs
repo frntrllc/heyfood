@@ -21,15 +21,19 @@ use heyfood_application::{
     resolve_household_initialize_v1, resolve_personalized_context_v1,
 };
 use heyfood_core::{
-    AccountId, AgeEvidenceSourceV1, AgeEvidenceV1, AppliedCommitOutcomeV1, AppliedCommitRecordV1,
-    CanonicalDateV1, CanonicalDigestV1, CanonicalJsonObjectV1, CanonicalTimestampV1, CommitId,
-    ConsentVersionV1, DisplayName, HOUSEHOLD_STATE_SCHEMA_VERSION, HouseholdDeclaredProfileV1,
-    HouseholdEffectV1, HouseholdLifecycleV1, HouseholdMemberV1, HouseholdOutboxId,
-    HouseholdOutboxRecordV1, HouseholdOwnerV1, HouseholdProfileDocumentV1,
-    HouseholdProfileOutboxEntryV1, HouseholdProfileRecordV1, HouseholdProfileStateV1,
-    HouseholdRevision, HouseholdScope, HouseholdStateV1, HouseholdSubjectId,
-    ImportedCompatibilityStateV1, LastDefiniteOwnerSyncErrorV1, LegacyRemoteProfileReferenceV1,
-    LegacySourceIdentityV1, MAX_HOUSEHOLD_MEMBERS, MigrationDispositionManifestV1,
+    AccountId, AgeEvidenceSourceV1, AgeEvidenceV1, AgentDisclosurePurposeV1,
+    AgentHouseholdOperationV1, AgentHouseholdProjectionV1, AgentHouseholdProposalIdV1,
+    AppliedCommitOutcomeV1, AppliedCommitRecordV1, CanonicalDateV1, CanonicalDigestV1,
+    CanonicalJsonObjectV1, CanonicalTimestampV1, CommitId, ConsentVersionV1, DisplayName,
+    GenerationId, HOUSEHOLD_STATE_SCHEMA_VERSION, HouseholdDeclaredProfileV1, HouseholdEffectV1,
+    HouseholdLifecycleV1, HouseholdMemberV1, HouseholdOutboxId, HouseholdOutboxRecordV1,
+    HouseholdOwnerV1, HouseholdProfileDocumentV1, HouseholdProfileOutboxEntryV1,
+    HouseholdProfileRecordV1, HouseholdProfileStateV1, HouseholdRevision, HouseholdScope,
+    HouseholdStateV1, HouseholdSubjectId, ImportedCompatibilityStateV1,
+    LastDefiniteOwnerSyncErrorV1, LegacyRemoteProfileReferenceV1, LegacySourceIdentityV1,
+    LocalHouseholdAuthoritySnapshotV1, LocalHouseholdFrozenCandidateV1,
+    LocalHouseholdProposalAuthorityV1, LocalHouseholdProposalBindingV1,
+    LocalHouseholdProposalJournalV1, MAX_HOUSEHOLD_MEMBERS, MigrationDispositionManifestV1,
     MigrationProvenanceV1, MinorStatusV1, OnboardingProfileInput, OutboxRevision,
     OwnerSyncIntentPhaseV1, OwnerSyncIntentV1, ProfileRevision, RelationshipSourceV1,
     RelationshipV1, RemoteProfileBaseV1, RemoteProfileExistenceV1, canonical_sha256_v1,
@@ -2439,10 +2443,109 @@ fn phase0_agent_effects_execute_all_five_exact_once_repository_paths() {
         previous_scope: original_scope.clone(),
         resulting_scope: original_scope.clone(),
     };
-    let (after_add, add_command) =
-        apply_phase0_agent_effect(&state, add_candidate, add_effect, timestamp(1));
+    let add_commit_id = CommitId::new();
+    let add_command = HouseholdCommit::new(
+        state.account_binding.clone(),
+        state.revision,
+        add_commit_id,
+        add_candidate,
+        add_effect,
+        timestamp(1),
+    )
+    .expect("complete add candidate freezes its fingerprint");
+    let proposal_digest = CanonicalDigestV1::from_bytes([0x51; 32]);
+    let binding = LocalHouseholdProposalBindingV1::new(
+        state.account_binding.clone(),
+        AgentHouseholdProposalIdV1::new(),
+        AgentHouseholdOperationV1::Add,
+        GenerationId::new(3),
+        CanonicalDigestV1::from_bytes([0x52; 32]),
+        AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
+        GenerationId::new(9),
+        AgentHouseholdProjectionV1::Profile,
+        state.revision,
+        None,
+        add_commit_id,
+        Some(member_id.clone()),
+        original_scope.clone(),
+        CanonicalDigestV1::from_bytes([0x53; 32]),
+        CanonicalDigestV1::from_bytes([0x54; 32]),
+        timestamp(0),
+        timestamp(59),
+    )
+    .expect("closed proposal binding");
+    let current_authority = LocalHouseholdAuthoritySnapshotV1::new(
+        state.account_binding.clone(),
+        GenerationId::new(3),
+        CanonicalDigestV1::from_bytes([0x52; 32]),
+        AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
+        AgentHouseholdProjectionV1::Profile,
+        GenerationId::new(9),
+        state.revision,
+        None,
+        timestamp(1),
+    );
+    let frozen = LocalHouseholdFrozenCandidateV1::new(
+        proposal_digest,
+        add_command.claimed_effect_fingerprint,
+        CanonicalDigestV1::from_bytes([0x55; 32]),
+        CanonicalDigestV1::from_bytes([0x56; 32]),
+        original_scope.clone(),
+        false,
+        timestamp(1),
+    );
+    let mut journal = LocalHouseholdProposalJournalV1::new(
+        LocalHouseholdProposalAuthorityV1::awaiting_local_input(binding),
+    );
+    let intake_token = journal.cas_token();
+    journal
+        .freeze_for_review(&intake_token, &current_authority, frozen)
+        .expect("intake and fingerprint freeze CAS");
+    let review_token = journal.cas_token();
+    journal
+        .begin_commit(&review_token, &current_authority, proposal_digest)
+        .expect("review-to-commit CAS");
+    let crash_journal = journal
+        .persisted_bytes()
+        .expect("durable committing journal");
+
+    let HouseholdRepositoryResolutionV1::Write {
+        state: after_add,
+        outcome: add_outcome,
+    } = resolve_household_commit_v1(Some(&state), &add_command).expect("repository write")
+    else {
+        panic!("new add command must write")
+    };
+    assert_eq!(add_outcome.resulting_revision, after_add.revision);
+    let applied = after_add
+        .bounded_applied_commits
+        .iter()
+        .find(|record| record.commit_id == add_commit_id)
+        .expect("co-committed applied marker");
+    assert_eq!(
+        applied.fingerprint,
+        add_command.claimed_effect_fingerprint.as_digest()
+    );
+    let mut recovered =
+        LocalHouseholdProposalJournalV1::restore(&crash_journal).expect("journal restart");
+    let committing_token = recovered.cas_token();
+    recovered
+        .reconcile_applied_commit(
+            &committing_token,
+            applied.commit_id,
+            heyfood_core::HouseholdEffectFingerprintV1::from_digest(applied.fingerprint),
+        )
+        .expect("exact reviewed fingerprint reconciles after crash");
+    assert_eq!(
+        recovered.state(),
+        heyfood_core::AgentHouseholdProposalStateV1::Committed
+    );
+    assert!(matches!(
+        resolve_household_commit_v1(Some(&after_add), &add_command).expect("exact replay"),
+        HouseholdRepositoryResolutionV1::Replay(_)
+    ));
     assert_eq!(after_add.active_scope, original_scope);
-    state = after_add;
+    state = *after_add;
 
     let mut edited_member = member.clone();
     edited_member.display_name = DisplayName::parse("Synthetic Member Edited").unwrap();

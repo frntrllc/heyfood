@@ -6,7 +6,8 @@ use std::sync::{
 use heyfood_application::{
     AuthorizedAgentHouseholdPrepareV1, BoundAgentHouseholdDisclosureV1,
     BoundAgentHouseholdOutcomeReceiptV1, BoundAgentHouseholdProposalV1, BoundAgentHouseholdReadV1,
-    BoxFuture, HouseholdAgentPhase0Port, HouseholdAgentPhase0Proof, PortError,
+    BoxFuture, FrozenAgentHouseholdDisclosureV1, HouseholdAgentPhase0Port,
+    HouseholdAgentPhase0Proof, PortError,
 };
 use heyfood_core::{
     AGENT_HOUSEHOLD_CONTRACT_VERSION, AccountId, AgentDisclosureDataClassV1,
@@ -32,7 +33,7 @@ const PROOF_MANIFEST: &[u8] = include_bytes!(concat!(
     "/../../docs/release-evidence/agent-household-phase0/phase0-proof-manifest.json"
 ));
 const PROOF_MANIFEST_SHA256: &str =
-    "d857e31cd297d1698ff72912cfda8aebd789bfcbb32dc4cda188d01cf11c3150";
+    "aa521002b5834641696a840615798097059275d692564f1157f52a916ce6c954";
 
 struct FixtureHouseholdAgentPort {
     account: AccountId,
@@ -46,7 +47,18 @@ struct FixtureHouseholdAgentPort {
     disclosure_calls: AtomicU64,
     rotate_disclosure_after_first: AtomicBool,
     disclosure_wrong_account: AtomicBool,
-    proposal: Mutex<Option<AgentHouseholdProposalPresentationV1>>,
+    disclosure_observed_after_expiry: AtomicBool,
+    returned_member_override: Mutex<Option<MemberId>>,
+    proposal_member_override: Mutex<Option<MemberId>>,
+    invalid_read_wire: AtomicBool,
+    invalid_proposal_wire: AtomicBool,
+    proposal: Mutex<Option<StoredFixtureProposal>>,
+}
+
+#[derive(Clone)]
+struct StoredFixtureProposal {
+    presentation: AgentHouseholdProposalPresentationV1,
+    frozen_disclosure: FrozenAgentHouseholdDisclosureV1,
 }
 
 impl FixtureHouseholdAgentPort {
@@ -66,6 +78,11 @@ impl FixtureHouseholdAgentPort {
             disclosure_calls: AtomicU64::new(0),
             rotate_disclosure_after_first: AtomicBool::new(false),
             disclosure_wrong_account: AtomicBool::new(false),
+            disclosure_observed_after_expiry: AtomicBool::new(false),
+            returned_member_override: Mutex::new(None),
+            proposal_member_override: Mutex::new(None),
+            invalid_read_wire: AtomicBool::new(false),
+            invalid_proposal_wire: AtomicBool::new(false),
             proposal: Mutex::new(None),
         }
     }
@@ -90,8 +107,25 @@ impl FixtureHouseholdAgentPort {
             state: AgentHouseholdProposalStateV1::AwaitingLocalInput,
             projection: request.requested_projection,
             disclosure_generation: self.current_generation(),
-            affected_member_ref: Some(self.member.clone()),
-            affected_member_label: Some(DisplayName::parse("Fixture Adult").expect("label")),
+            affected_member_ref: match request.operation {
+                AgentHouseholdOperationV1::Edit
+                | AgentHouseholdOperationV1::Archive
+                | AgentHouseholdOperationV1::Restore => Some(
+                    self.proposal_member_override
+                        .lock()
+                        .expect("proposal override lock")
+                        .clone()
+                        .unwrap_or_else(|| self.member.clone()),
+                ),
+                AgentHouseholdOperationV1::Add | AgentHouseholdOperationV1::Scope => None,
+            },
+            affected_member_label: matches!(
+                request.operation,
+                AgentHouseholdOperationV1::Edit
+                    | AgentHouseholdOperationV1::Archive
+                    | AgentHouseholdOperationV1::Restore
+            )
+            .then(|| DisplayName::parse("Fixture Adult").expect("label")),
             changes: vec![AgentHouseholdChangeV1 {
                 field: AgentHouseholdChangeFieldV1::Allergies,
                 before: vec!["milk".to_owned()],
@@ -150,6 +184,11 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
                         AgentDisclosureGrantingAuthorityV1::AuthorizedGuardianRosterOnly,
                     ),
                 };
+            let observed_at = if self.disclosure_observed_after_expiry.load(Ordering::SeqCst) {
+                timestamp("2026-08-02T12:21:00.000Z")
+            } else {
+                timestamp("2026-08-02T12:05:00.000Z")
+            };
             let grants = if self.disclosure_revoked.load(Ordering::SeqCst) {
                 Vec::new()
             } else {
@@ -176,7 +215,7 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
                     self.account.clone(),
                     generation,
                     purpose,
-                    timestamp("2026-08-02T12:05:00.000Z"),
+                    observed_at,
                     grants,
                 )
                 .expect("fixture grant set"),
@@ -205,6 +244,45 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
                 .subject
                 .clone()
                 .unwrap_or(AgentHouseholdSubjectV1::Member(self.member.clone()));
+            let projected_member = self
+                .returned_member_override
+                .lock()
+                .expect("returned member override lock")
+                .clone()
+                .unwrap_or_else(|| self.member.clone());
+            let mut members = match &resolved_subject {
+                AgentHouseholdSubjectV1::Self_ => self
+                    .returned_member_override
+                    .lock()
+                    .expect("returned member override lock")
+                    .is_some()
+                    .then(|| member_projection(projected_member.clone()))
+                    .into_iter()
+                    .collect(),
+                AgentHouseholdSubjectV1::Member(_) | AgentHouseholdSubjectV1::Everyone => {
+                    vec![member_projection(projected_member.clone())]
+                }
+            };
+            if self.invalid_read_wire.load(Ordering::SeqCst)
+                && let Some(profile) = members
+                    .first_mut()
+                    .and_then(|member| member.minimized_declared_profile.as_mut())
+            {
+                profile.allergies = vec!["milk".to_owned(), "milk".to_owned()];
+            }
+            let active_scope = if request.subject.is_none() {
+                match &resolved_subject {
+                    AgentHouseholdSubjectV1::Self_ => {
+                        HouseholdScope::Subject(HouseholdSubjectId::self_())
+                    }
+                    AgentHouseholdSubjectV1::Member(member) => {
+                        HouseholdScope::Subject(HouseholdSubjectId::member(member.clone()))
+                    }
+                    AgentHouseholdSubjectV1::Everyone => HouseholdScope::Everyone,
+                }
+            } else {
+                HouseholdScope::Subject(HouseholdSubjectId::member(self.member.clone()))
+            };
             Ok(BoundAgentHouseholdReadV1 {
                 account: self.account.clone(),
                 snapshot: AgentHouseholdReadSnapshotV1 {
@@ -213,30 +291,12 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
                     projection: AgentHouseholdProjectionV1::Profile,
                     resolved_subject: Some(resolved_subject),
                     resolved_from_active_scope: request.subject.is_none(),
-                    active_scope: Some(HouseholdScope::Subject(HouseholdSubjectId::member(
-                        self.member.clone(),
-                    ))),
+                    active_scope: Some(active_scope),
                     household_revision: self.current_revision(),
                     disclosure_generation: self.current_generation(),
                     eligible_member_count: 2,
                     restricted_member_count: 0,
-                    members: vec![AgentHouseholdMemberProjectionV1 {
-                        member_ref: self.member.clone(),
-                        display_label: DisplayName::parse("Fixture Adult").expect("label"),
-                        relationship: RelationshipV1::Friend,
-                        lifecycle: HouseholdLifecycleV1::Active,
-                        profile_state: HouseholdProfileStateV1::LocalOnly,
-                        profile_schema_version: Some(1),
-                        profile_revision: heyfood_core::ProfileRevision::new(2).ok(),
-                        profile_complete: true,
-                        minimized_declared_profile: Some(AgentMinimizedDeclaredProfileV1 {
-                            diet_styles: vec!["vegan".to_owned()],
-                            allergies: vec!["milk".to_owned()],
-                            restrictions: Vec::new(),
-                            health_conditions: Vec::new(),
-                            avoid_ingredients: vec!["celery".to_owned()],
-                        }),
-                    }],
+                    members,
                     next_cursor: None,
                 },
             })
@@ -263,11 +323,18 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
                 ));
             }
             let mut presentation = self.presentation(&request.request);
+            if self.invalid_proposal_wire.load(Ordering::SeqCst) {
+                presentation.changes[0].after = vec!["line\nfeed".to_owned()];
+            }
             presentation = presentation.filtered_to(request.maximum_projection);
-            *self.proposal.lock().expect("proposal lock") = Some(presentation.clone());
+            *self.proposal.lock().expect("proposal lock") = Some(StoredFixtureProposal {
+                presentation: presentation.clone(),
+                frozen_disclosure: request.frozen_disclosure.clone(),
+            });
             Ok(BoundAgentHouseholdProposalV1 {
                 account: self.account.clone(),
                 presentation,
+                frozen_disclosure: request.frozen_disclosure,
             })
         })
     }
@@ -295,7 +362,8 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
                 })?;
             Ok(BoundAgentHouseholdProposalV1 {
                 account: self.account.clone(),
-                presentation: stored,
+                presentation: stored.presentation,
+                frozen_disclosure: stored.frozen_disclosure,
             })
         })
     }
@@ -315,8 +383,9 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
             }
             let before = self.current_revision();
             if let Some(proposal) = self.proposal.lock().expect("proposal lock").as_mut() {
-                proposal.state = AgentHouseholdProposalStateV1::Cancelled;
-                proposal.human_status = proposal.state.human_status().to_owned();
+                proposal.presentation.state = AgentHouseholdProposalStateV1::Cancelled;
+                proposal.presentation.human_status =
+                    proposal.presentation.state.human_status().to_owned();
             }
             Ok(BoundAgentHouseholdOutcomeReceiptV1 {
                 account: self.account.clone(),
@@ -332,6 +401,26 @@ fn account() -> AccountId {
 
 fn timestamp(value: &str) -> CanonicalTimestampV1 {
     CanonicalTimestampV1::parse(value).expect("timestamp")
+}
+
+fn member_projection(member_ref: MemberId) -> AgentHouseholdMemberProjectionV1 {
+    AgentHouseholdMemberProjectionV1 {
+        member_ref,
+        display_label: DisplayName::parse("Fixture Adult").expect("label"),
+        relationship: RelationshipV1::Friend,
+        lifecycle: HouseholdLifecycleV1::Active,
+        profile_state: HouseholdProfileStateV1::LocalOnly,
+        profile_schema_version: Some(1),
+        profile_revision: heyfood_core::ProfileRevision::new(2).ok(),
+        profile_complete: true,
+        minimized_declared_profile: Some(AgentMinimizedDeclaredProfileV1 {
+            diet_styles: vec!["vegan".to_owned()],
+            allergies: vec!["milk".to_owned()],
+            restrictions: Vec::new(),
+            health_conditions: Vec::new(),
+            avoid_ingredients: vec!["celery".to_owned()],
+        }),
+    }
 }
 
 fn member_read_request(projection: AgentHouseholdProjectionV1) -> AgentHouseholdReadRequestV1 {
@@ -490,6 +579,7 @@ async fn bin_composes_read_prepare_revocation_safe_status_and_non_mutating_cance
         .await
         .expect("content-free status after revocation");
     assert_eq!(status.projection, AgentHouseholdProjectionV1::ContentFree);
+    assert_eq!(status.state, AgentHouseholdProposalStateV1::Stale);
     assert!(status.affected_member_ref.is_none());
     assert!(status.affected_member_label.is_none());
     assert!(status.changes.is_empty());
@@ -632,6 +722,112 @@ async fn prepare_revalidates_the_exact_disclosure_revision_set_after_adapter_wor
     assert!(result.affected_member_label.is_none());
     assert!(result.changes.is_empty());
     assert!(result.consequences.is_empty());
+}
+
+#[tokio::test]
+async fn application_rejects_authorized_a_with_returned_b_for_reads_and_prepare() {
+    let other_member =
+        MemberId::parse_preserved("10000000-0000-4000-8000-000000000002").expect("member B");
+
+    let member_port = Arc::new(FixtureHouseholdAgentPort::new());
+    *member_port
+        .returned_member_override
+        .lock()
+        .expect("returned member override lock") = Some(other_member.clone());
+    let error = HouseholdAgentPhase0Proof::new(member_port)
+        .read(
+            account(),
+            member_read_request(AgentHouseholdProjectionV1::Profile),
+            CancellationToken::new(),
+        )
+        .await
+        .expect_err("member A authority cannot disclose member B");
+    assert_eq!(error.code, "household_agent_subject_content_mismatch");
+
+    let self_port = Arc::new(FixtureHouseholdAgentPort::new());
+    *self_port
+        .returned_member_override
+        .lock()
+        .expect("returned member override lock") = Some(other_member.clone());
+    let error = HouseholdAgentPhase0Proof::new(self_port)
+        .read(
+            account(),
+            AgentHouseholdReadRequestV1 {
+                schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
+                kind: AgentHouseholdReadRequestKindV1::HouseholdReadRequest,
+                subject: Some(AgentHouseholdSubjectV1::Self_),
+                requested_projection: AgentHouseholdProjectionV1::Profile,
+                expected_disclosure_generation: GenerationId::new(3),
+                cursor: None,
+                limit: 1,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect_err("self authority cannot disclose member B");
+    assert_eq!(error.code, "household_agent_subject_content_mismatch");
+
+    let proposal_port = Arc::new(FixtureHouseholdAgentPort::new());
+    *proposal_port
+        .proposal_member_override
+        .lock()
+        .expect("proposal override lock") = Some(other_member);
+    let error = HouseholdAgentPhase0Proof::new(proposal_port)
+        .prepare(account(), edit_prepare_request(), CancellationToken::new())
+        .await
+        .expect_err("member A proposal cannot return member B");
+    assert_eq!(error.code, "household_agent_subject_content_mismatch");
+}
+
+#[tokio::test]
+async fn status_invalidates_same_generation_revision_rotation_and_natural_expiry() {
+    for expires in [false, true] {
+        let port = Arc::new(FixtureHouseholdAgentPort::new());
+        let controller = HouseholdAgentPhase0Proof::new(port.clone());
+        controller
+            .prepare(account(), edit_prepare_request(), CancellationToken::new())
+            .await
+            .expect("prepare");
+        if expires {
+            port.disclosure_observed_after_expiry
+                .store(true, Ordering::SeqCst);
+        } else {
+            port.disclosure_revision.fetch_add(1, Ordering::SeqCst);
+        }
+        let status = controller
+            .status(account(), port.proposal_ref, CancellationToken::new())
+            .await
+            .expect("stale content-free status");
+        assert_eq!(status.state, AgentHouseholdProposalStateV1::Stale);
+        assert_eq!(status.projection, AgentHouseholdProjectionV1::ContentFree);
+        assert!(status.affected_member_ref.is_none());
+        assert!(status.changes.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn application_rejects_rust_values_that_closed_json_schemas_cannot_emit() {
+    let read_port = Arc::new(FixtureHouseholdAgentPort::new());
+    read_port.invalid_read_wire.store(true, Ordering::SeqCst);
+    let error = HouseholdAgentPhase0Proof::new(read_port)
+        .read(
+            account(),
+            member_read_request(AgentHouseholdProjectionV1::Profile),
+            CancellationToken::new(),
+        )
+        .await
+        .expect_err("duplicate profile values fail before disclosure");
+    assert_eq!(error.code, "household_agent_read_contract");
+
+    let proposal_port = Arc::new(FixtureHouseholdAgentPort::new());
+    proposal_port
+        .invalid_proposal_wire
+        .store(true, Ordering::SeqCst);
+    let error = HouseholdAgentPhase0Proof::new(proposal_port)
+        .prepare(account(), edit_prepare_request(), CancellationToken::new())
+        .await
+        .expect_err("control-bearing proposal values fail before output");
+    assert_eq!(error.code, "household_agent_proposal_contract");
 }
 
 #[tokio::test]

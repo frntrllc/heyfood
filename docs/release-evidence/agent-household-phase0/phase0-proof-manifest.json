@@ -8,9 +8,14 @@
   "paths": [
     "account_bound_read",
     "application_enforced_disclosure_projection",
+    "exact_returned_subject_binding",
+    "complete_disclosure_authority_digest",
     "non_mutating_prepare",
     "disclosure_filtered_status",
     "pre_dispatch_cancel",
-    "five_effect_exact_once_repository_replay"
+    "durable_proposal_journal_cas",
+    "crash_reconciliation_from_applied_commit_fingerprint",
+    "five_effect_exact_once_repository_replay",
+    "rust_wire_schema_parity"
   ]
 }

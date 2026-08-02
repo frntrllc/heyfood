@@ -13,7 +13,8 @@ use heyfood_core::{
     AgentHouseholdPrepareRequestV1, AgentHouseholdProjectionV1, AgentHouseholdProposalIdV1,
     AgentHouseholdProposalPresentationV1, AgentHouseholdProposalStateV1,
     AgentHouseholdReadRequestKindV1, AgentHouseholdReadRequestV1, AgentHouseholdReadResultKindV1,
-    AgentHouseholdReadSnapshotV1, AgentHouseholdSubjectV1, CanonicalDigestV1,
+    AgentHouseholdReadSnapshotV1, AgentHouseholdSubjectV1, CanonicalDigestV1, GenerationId,
+    HouseholdScope, HouseholdSubjectId,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -44,7 +45,7 @@ impl fmt::Debug for BoundAgentHouseholdDisclosureV1 {
 pub struct AuthorizedAgentHouseholdPrepareV1 {
     pub request: AgentHouseholdPrepareRequestV1,
     pub maximum_projection: AgentHouseholdProjectionV1,
-    pub disclosure_grant_set_digest: CanonicalDigestV1,
+    pub frozen_disclosure: FrozenAgentHouseholdDisclosureV1,
 }
 
 impl fmt::Debug for AuthorizedAgentHouseholdPrepareV1 {
@@ -53,7 +54,58 @@ impl fmt::Debug for AuthorizedAgentHouseholdPrepareV1 {
             .debug_struct("AuthorizedAgentHouseholdPrepareV1")
             .field("request", &self.request)
             .field("maximum_projection", &self.maximum_projection)
+            .field("frozen_disclosure", &self.frozen_disclosure)
             .finish_non_exhaustive()
+    }
+}
+
+/// Non-serializable disclosure authority retained only in the encrypted local
+/// proposal journal. Agent-visible proposal documents never contain it.
+#[derive(Clone, Eq, PartialEq)]
+pub struct FrozenAgentHouseholdDisclosureV1 {
+    account: AccountId,
+    purpose: AgentDisclosurePurposeV1,
+    generation: GenerationId,
+    grant_set_digest: CanonicalDigestV1,
+    subjects: Vec<AgentDisclosureGrantSubjectV1>,
+    maximum_projection: AgentHouseholdProjectionV1,
+}
+
+impl fmt::Debug for FrozenAgentHouseholdDisclosureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FrozenAgentHouseholdDisclosureV1")
+            .field("purpose", &self.purpose)
+            .field("generation", &self.generation)
+            .field("subject_count", &self.subjects.len())
+            .field("maximum_projection", &self.maximum_projection)
+            .finish_non_exhaustive()
+    }
+}
+
+impl FrozenAgentHouseholdDisclosureV1 {
+    fn from_grants(
+        account: AccountId,
+        purpose: AgentDisclosurePurposeV1,
+        mut subjects: Vec<AgentDisclosureGrantSubjectV1>,
+        maximum_projection: AgentHouseholdProjectionV1,
+        grants: &AgentDisclosureGrantSetV1,
+    ) -> Self {
+        subjects.sort();
+        subjects.dedup();
+        Self {
+            account,
+            purpose,
+            generation: grants.generation(),
+            grant_set_digest: grants.revision_set_digest(),
+            subjects,
+            maximum_projection,
+        }
+    }
+
+    #[must_use]
+    pub fn subjects(&self) -> &[AgentDisclosureGrantSubjectV1] {
+        &self.subjects
     }
 }
 
@@ -70,6 +122,7 @@ impl fmt::Debug for BoundAgentHouseholdReadV1 {
 pub struct BoundAgentHouseholdProposalV1 {
     pub account: AccountId,
     pub presentation: AgentHouseholdProposalPresentationV1,
+    pub frozen_disclosure: FrozenAgentHouseholdDisclosureV1,
 }
 
 impl fmt::Debug for BoundAgentHouseholdProposalV1 {
@@ -77,6 +130,7 @@ impl fmt::Debug for BoundAgentHouseholdProposalV1 {
         formatter
             .debug_struct("BoundAgentHouseholdProposalV1")
             .field("presentation", &self.presentation)
+            .field("frozen_disclosure", &self.frozen_disclosure)
             .finish_non_exhaustive()
     }
 }
@@ -128,8 +182,7 @@ impl HouseholdAgentPhase0Proof {
             .read(account.clone(), request.clone(), cancellation.clone())
             .await?;
         ensure_account(&account, &result.account)?;
-        validate_raw_read(&request, &result.snapshot)?;
-        let subjects = disclosure_subjects_for_read(&result.snapshot)?;
+        let subjects = validate_raw_read(&request, &result.snapshot)?;
         let disclosure = self
             .port
             .disclosure(
@@ -179,12 +232,7 @@ impl HouseholdAgentPhase0Proof {
                 "household agent proposal operation shape is invalid",
             )
         })?;
-        let subjects = request
-            .affected_member_ref
-            .clone()
-            .map(AgentDisclosureGrantSubjectV1::Member)
-            .into_iter()
-            .collect::<Vec<_>>();
+        let subjects = disclosure_subjects_for_prepare(&request);
         let initial_disclosure = self
             .port
             .disclosure(
@@ -210,13 +258,26 @@ impl HouseholdAgentPhase0Proof {
         let authorized = AuthorizedAgentHouseholdPrepareV1 {
             request: request.clone(),
             maximum_projection,
-            disclosure_grant_set_digest: initial_disclosure.grants.revision_set_digest(),
+            frozen_disclosure: FrozenAgentHouseholdDisclosureV1::from_grants(
+                account.clone(),
+                AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
+                subjects.clone(),
+                maximum_projection,
+                &initial_disclosure.grants,
+            ),
         };
         let result = self
             .port
-            .prepare(account.clone(), authorized, cancellation.clone())
+            .prepare(account.clone(), authorized.clone(), cancellation.clone())
             .await?;
         ensure_account(&account, &result.account)?;
+        validate_returned_proposal(&request, &result.presentation)?;
+        if result.frozen_disclosure != authorized.frozen_disclosure {
+            return Err(phase0_error(
+                "household_agent_disclosure_binding",
+                "household proposal did not preserve its frozen disclosure authority",
+            ));
+        }
         let current_disclosure = self
             .port
             .disclosure(
@@ -271,13 +332,7 @@ impl HouseholdAgentPhase0Proof {
                 "household agent proposal reference changed across status",
             ));
         }
-        let subjects = result
-            .presentation
-            .affected_member_ref
-            .clone()
-            .map(AgentDisclosureGrantSubjectV1::Member)
-            .into_iter()
-            .collect::<Vec<_>>();
+        validate_status_subject_binding(&result.presentation, &result.frozen_disclosure)?;
         let disclosure = self
             .port
             .disclosure(
@@ -292,9 +347,30 @@ impl HouseholdAgentPhase0Proof {
             AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
             &disclosure.grants,
         )?;
-        let maximum = disclosure.grants.maximum_projection_for(&subjects);
+        let current_authorized_projection = disclosure
+            .grants
+            .maximum_projection_for(result.frozen_disclosure.subjects());
+        let disclosure_changed = result.frozen_disclosure.account != account
+            || result.frozen_disclosure.purpose
+                != AgentDisclosurePurposeV1::HouseholdAgentProposalStatus
+            || result.frozen_disclosure.generation != disclosure.grants.generation()
+            || result.frozen_disclosure.grant_set_digest != disclosure.grants.revision_set_digest()
+            || projection_rank(current_authorized_projection)
+                < projection_rank(result.frozen_disclosure.maximum_projection);
+        let maximum = if disclosure_changed {
+            AgentHouseholdProjectionV1::ContentFree
+        } else {
+            minimum_projection(
+                result.frozen_disclosure.maximum_projection,
+                current_authorized_projection,
+            )
+        };
         let mut presentation = result.presentation.filtered_to(maximum);
         presentation.disclosure_generation = disclosure.grants.generation();
+        if disclosure_changed {
+            presentation.state = AgentHouseholdProposalStateV1::Stale;
+            presentation.human_status = presentation.state.human_status().to_owned();
+        }
         validate_presentation(&presentation, maximum, None)?;
         Ok(presentation)
     }
@@ -327,7 +403,13 @@ impl HouseholdAgentPhase0Proof {
 fn validate_raw_read(
     request: &AgentHouseholdReadRequestV1,
     snapshot: &AgentHouseholdReadSnapshotV1,
-) -> Result<(), PortError> {
+) -> Result<Vec<AgentDisclosureGrantSubjectV1>, PortError> {
+    snapshot.validate_wire_shape().map_err(|_| {
+        phase0_error(
+            "household_agent_read_contract",
+            "household agent read result is outside the closed wire schema",
+        )
+    })?;
     if snapshot.schema_version != AGENT_HOUSEHOLD_CONTRACT_VERSION
         || snapshot.kind != AgentHouseholdReadResultKindV1::HouseholdReadResult
     {
@@ -356,7 +438,20 @@ fn validate_raw_read(
             "household agent read exceeded the requested page limit",
         ));
     }
-    Ok(())
+    let subjects = disclosure_subjects_for_read(snapshot)?;
+    if snapshot.resolved_from_active_scope
+        && !snapshot
+            .resolved_subject
+            .as_ref()
+            .zip(snapshot.active_scope.as_ref())
+            .is_some_and(|(subject, scope)| scope_matches_subject(scope, subject))
+    {
+        return Err(phase0_error(
+            "household_agent_subject_resolution",
+            "household agent active scope does not match the resolved subject",
+        ));
+    }
+    Ok(subjects)
 }
 
 fn validate_filtered_read(
@@ -403,8 +498,22 @@ fn disclosure_subjects_for_read(
         return Ok(Vec::new());
     };
     match subject {
-        AgentHouseholdSubjectV1::Self_ => Ok(vec![AgentDisclosureGrantSubjectV1::Self_]),
+        AgentHouseholdSubjectV1::Self_ => {
+            if !snapshot.members.is_empty() {
+                return Err(phase0_error(
+                    "household_agent_subject_content_mismatch",
+                    "self household read returned another member's record",
+                ));
+            }
+            Ok(vec![AgentDisclosureGrantSubjectV1::Self_])
+        }
         AgentHouseholdSubjectV1::Member(member) => {
+            if snapshot.members.len() != 1 || snapshot.members[0].member_ref != *member {
+                return Err(phase0_error(
+                    "household_agent_subject_content_mismatch",
+                    "member household read returned a different member's record",
+                ));
+            }
             Ok(vec![AgentDisclosureGrantSubjectV1::Member(member.clone())])
         }
         AgentHouseholdSubjectV1::Everyone => {
@@ -424,8 +533,113 @@ fn disclosure_subjects_for_read(
                     .iter()
                     .map(|member| AgentDisclosureGrantSubjectV1::Member(member.member_ref.clone())),
             );
+            let original_length = subjects.len();
+            subjects.sort();
+            subjects.dedup();
+            if subjects.len() != original_length {
+                return Err(phase0_error(
+                    "household_agent_subject_content_mismatch",
+                    "everyone household read returned a duplicate member record",
+                ));
+            }
             Ok(subjects)
         }
+    }
+}
+
+fn scope_matches_subject(scope: &HouseholdScope, subject: &AgentHouseholdSubjectV1) -> bool {
+    match (scope, subject) {
+        (HouseholdScope::Subject(HouseholdSubjectId::Self_), AgentHouseholdSubjectV1::Self_)
+        | (HouseholdScope::Everyone, AgentHouseholdSubjectV1::Everyone) => true,
+        (
+            HouseholdScope::Subject(HouseholdSubjectId::Member(scope_member)),
+            AgentHouseholdSubjectV1::Member(subject_member),
+        ) => scope_member == subject_member,
+        _ => false,
+    }
+}
+
+fn disclosure_subjects_for_prepare(
+    request: &AgentHouseholdPrepareRequestV1,
+) -> Vec<AgentDisclosureGrantSubjectV1> {
+    match request.operation {
+        heyfood_core::AgentHouseholdOperationV1::Edit
+        | heyfood_core::AgentHouseholdOperationV1::Archive
+        | heyfood_core::AgentHouseholdOperationV1::Restore => request
+            .affected_member_ref
+            .clone()
+            .map(AgentDisclosureGrantSubjectV1::Member)
+            .into_iter()
+            .collect(),
+        heyfood_core::AgentHouseholdOperationV1::Scope => match request.bundled_scope.as_ref() {
+            Some(HouseholdScope::Subject(HouseholdSubjectId::Self_)) => {
+                vec![AgentDisclosureGrantSubjectV1::Self_]
+            }
+            Some(HouseholdScope::Subject(HouseholdSubjectId::Member(member))) => {
+                vec![AgentDisclosureGrantSubjectV1::Member(member.clone())]
+            }
+            Some(HouseholdScope::Everyone) | None => Vec::new(),
+        },
+        heyfood_core::AgentHouseholdOperationV1::Add => Vec::new(),
+    }
+}
+
+fn validate_returned_proposal(
+    request: &AgentHouseholdPrepareRequestV1,
+    presentation: &AgentHouseholdProposalPresentationV1,
+) -> Result<(), PortError> {
+    if presentation.operation != request.operation {
+        return Err(phase0_error(
+            "household_agent_proposal_operation_mismatch",
+            "household proposal returned a different operation",
+        ));
+    }
+    let expected_member = match request.operation {
+        heyfood_core::AgentHouseholdOperationV1::Edit
+        | heyfood_core::AgentHouseholdOperationV1::Archive
+        | heyfood_core::AgentHouseholdOperationV1::Restore => request.affected_member_ref.as_ref(),
+        heyfood_core::AgentHouseholdOperationV1::Add
+        | heyfood_core::AgentHouseholdOperationV1::Scope => None,
+    };
+    if presentation.affected_member_ref.as_ref() != expected_member
+        || (expected_member.is_none() && presentation.affected_member_label.is_some())
+        || (expected_member.is_some() && presentation.affected_member_label.is_none())
+    {
+        return Err(phase0_error(
+            "household_agent_subject_content_mismatch",
+            "household proposal returned content for a different member",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_status_subject_binding(
+    presentation: &AgentHouseholdProposalPresentationV1,
+    frozen: &FrozenAgentHouseholdDisclosureV1,
+) -> Result<(), PortError> {
+    let valid = match presentation.operation {
+        heyfood_core::AgentHouseholdOperationV1::Edit
+        | heyfood_core::AgentHouseholdOperationV1::Archive
+        | heyfood_core::AgentHouseholdOperationV1::Restore => presentation
+            .affected_member_ref
+            .as_ref()
+            .is_some_and(|member| {
+                frozen.subjects.as_slice()
+                    == [AgentDisclosureGrantSubjectV1::Member(member.clone())]
+            }),
+        heyfood_core::AgentHouseholdOperationV1::Add
+        | heyfood_core::AgentHouseholdOperationV1::Scope => {
+            presentation.affected_member_ref.is_none()
+                && presentation.affected_member_label.is_none()
+        }
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(phase0_error(
+            "household_agent_subject_content_mismatch",
+            "household proposal status is not bound to its authorized subject",
+        ))
     }
 }
 
@@ -462,6 +676,12 @@ fn validate_presentation(
     maximum_projection: AgentHouseholdProjectionV1,
     expected_generation: Option<heyfood_core::GenerationId>,
 ) -> Result<(), PortError> {
+    presentation.validate_wire_shape().map_err(|_| {
+        phase0_error(
+            "household_agent_proposal_contract",
+            "household agent proposal is outside the closed wire schema",
+        )
+    })?;
     if presentation.schema_version != AGENT_HOUSEHOLD_CONTRACT_VERSION
         || expected_generation.is_some_and(|value| value != presentation.disclosure_generation)
         || !presentation.has_canonical_copy()

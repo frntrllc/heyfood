@@ -54,6 +54,55 @@ pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 pub const MAX_SCHEMA_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentCompatibilitySemanticError {
+    InvalidDocument,
+    InvertedSupportedRange,
+    ManifestOutsideSupportedRange,
+}
+
+/// Enforce cross-field compatibility invariants that JSON Schema cannot
+/// express. The binary-owned compatibility emitter must call this before it
+/// serializes a result.
+pub fn validate_agent_compatibility_semantics(
+    value: &Value,
+) -> Result<(), AgentCompatibilitySemanticError> {
+    let manifest_version = value
+        .get("manifest_schema_version")
+        .and_then(Value::as_u64)
+        .ok_or(AgentCompatibilitySemanticError::InvalidDocument)?;
+    let compatible = value
+        .get("compatible")
+        .and_then(Value::as_bool)
+        .ok_or(AgentCompatibilitySemanticError::InvalidDocument)?;
+    let installations = value
+        .get("installations")
+        .and_then(Value::as_array)
+        .ok_or(AgentCompatibilitySemanticError::InvalidDocument)?;
+    for installation in installations {
+        let minimum = installation
+            .get("supported_manifest_minimum")
+            .and_then(Value::as_u64);
+        let maximum = installation
+            .get("supported_manifest_maximum")
+            .and_then(Value::as_u64);
+        if let (Some(minimum), Some(maximum)) = (minimum, maximum) {
+            if minimum > maximum {
+                return Err(AgentCompatibilitySemanticError::InvertedSupportedRange);
+            }
+            let claims_compatible =
+                installation.get("status").and_then(Value::as_str) == Some("compatible");
+            if (compatible || claims_compatible) && !(minimum..=maximum).contains(&manifest_version)
+            {
+                return Err(AgentCompatibilitySemanticError::ManifestOutsideSupportedRange);
+            }
+        } else if compatible {
+            return Err(AgentCompatibilitySemanticError::InvalidDocument);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EmbeddedSchema {
     Manifest,
     ManifestV2,
@@ -1324,7 +1373,10 @@ mod household_phase0_contract_tests {
 
     use serde_json::Value;
 
-    use super::{PUBLIC_SCHEMAS, canonical_json, manifest, manifest_v2, sha256_hex};
+    use super::{
+        PUBLIC_SCHEMAS, canonical_json, manifest, manifest_v2, sha256_hex,
+        validate_agent_compatibility_semantics,
+    };
 
     struct ContractCase {
         name: &'static str,
@@ -1686,6 +1738,8 @@ mod household_phase0_contract_tests {
         let schema = parse(COMPATIBILITY_SCHEMA);
         let known = parse(COMPATIBILITY_KNOWN);
         let unknown = parse(COMPATIBILITY_UNKNOWN);
+        jsonschema::draft202012::validate(&schema, &known).expect("known compatibility schema");
+        validate_agent_compatibility_semantics(&known).expect("known compatibility semantics");
         for invalid in [
             {
                 let mut value = unknown.clone();
@@ -1722,6 +1776,19 @@ mod household_phase0_contract_tests {
             assert!(
                 jsonschema::draft202012::validate(&schema, &invalid).is_err(),
                 "contradictory compatibility result was accepted: {}",
+                canonical_json(&invalid)
+            );
+        }
+
+        for (minimum, maximum) in [(4, 5), (1, 2), (5, 4)] {
+            let mut invalid = known.clone();
+            invalid["installations"][0]["supported_manifest_minimum"] = serde_json::json!(minimum);
+            invalid["installations"][0]["supported_manifest_maximum"] = serde_json::json!(maximum);
+            jsonschema::draft202012::validate(&schema, &invalid)
+                .expect("cross-field contradiction is structurally valid");
+            assert!(
+                validate_agent_compatibility_semantics(&invalid).is_err(),
+                "out-of-range compatibility result was accepted: {}",
                 canonical_json(&invalid)
             );
         }
