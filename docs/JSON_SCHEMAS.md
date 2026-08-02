@@ -116,3 +116,26 @@ The explicit `--schema-version 2` discovery option uses
 `doctor-v2`. The v2 manifest adds the exact top-level
 `native_state_compatibility` declaration for the managed installer and release
 verifier; a consumer receives it only by requesting v2.
+
+## Agent-aware household Phase 0 schemas
+
+The following closed schemas are frozen for implementation review but are not
+embedded in v0.7.0 public schema discovery and do not activate a route:
+
+- `schemas/v3/heyfood-agent-manifest.schema.json`;
+- `schemas/v1/heyfood-agent-compatibility.schema.json`;
+- `schemas/v1/agent-household-read.schema.json`;
+- `schemas/v1/agent-household-action.schema.json`;
+- `schemas/v1/agent-household-proposal-presentation.schema.json`;
+- `schemas/v1/agent-household-outcome.schema.json`;
+- `schemas/v1/household-agent-disclosure.schema.json`;
+- `schemas/v1/local-household-approval-protocol.schema.json`; and
+- `schemas/v1/agent-household-native-state.schema.json`.
+
+The v3 schema is a structural successor, not an additive v2 edit. Explicit
+v1/v2 views remain frozen and omit household agent claims. Proposal and
+outcome schemas contain lookup/status evidence only and forbid commit
+authority. The local approval protocol is distinct from the existing hosted
+`agent-approval-protocol` schema. Fixtures and binding digests are under
+`fixtures/agent/household-phase0/`; validation runs in the
+`heyfood-agent-contract` test suite.

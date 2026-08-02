@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "program": "heyfood-agent-household",
+  "rules": {
+    "blind_retry_after_dispatch": false,
+    "agent_commit_authority": false,
+    "uncertain_outcome_blocks_later_mutation": true,
+    "reconciliation_source": "co_committed_applied_commit_ledger"
+  },
+  "boundaries": [
+    { "id": "disclosure-grant-create", "actor": "attached_tui", "product_mutation": false, "consent": "fresh_local_affirmation", "cancellation": "before_cas", "retry": "fresh_status_then_explicit_action", "recovery": "account_bound_disclosure_journal" },
+    { "id": "disclosure-grant-expand", "actor": "attached_tui", "product_mutation": false, "consent": "fresh_local_affirmation", "cancellation": "before_cas", "retry": "fresh_status_then_explicit_action", "recovery": "account_bound_disclosure_journal" },
+    { "id": "disclosure-grant-revoke", "actor": "attached_tui", "product_mutation": false, "consent": "fresh_local_action", "cancellation": "before_cas", "retry": "fresh_status_then_explicit_action", "recovery": "generation_invalidates_cached_projection" },
+    { "id": "proposal-journal-prepare", "actor": "agent_or_attached_tui", "product_mutation": false, "consent": "not_approval", "cancellation": "before_journal_cas", "retry": "status_before_new_prepare", "recovery": "proposal_reference_lookup" },
+    { "id": "local-intake-freeze", "actor": "attached_tui", "product_mutation": false, "consent": "complete_validated_local_input", "cancellation": "before_freeze_cas", "retry": "status_before_new_generation", "recovery": "proposal_journal_generation" },
+    { "id": "household-add-commit", "actor": "attached_tui_save", "product_mutation": true, "consent": "exact_reviewed_proposal", "cancellation": "before_committing_cas", "retry": "reconcile_before_retry", "recovery": "applied_commit_ledger" },
+    { "id": "household-edit-commit", "actor": "attached_tui_save", "product_mutation": true, "consent": "exact_reviewed_proposal", "cancellation": "before_committing_cas", "retry": "reconcile_before_retry", "recovery": "applied_commit_ledger" },
+    { "id": "household-archive-commit", "actor": "attached_tui_save", "product_mutation": true, "consent": "exact_reviewed_proposal", "cancellation": "before_committing_cas", "retry": "reconcile_before_retry", "recovery": "applied_commit_ledger" },
+    { "id": "household-restore-commit", "actor": "attached_tui_save", "product_mutation": true, "consent": "exact_reviewed_proposal", "cancellation": "before_committing_cas", "retry": "reconcile_before_retry", "recovery": "applied_commit_ledger" },
+    { "id": "household-scope-commit", "actor": "attached_tui_save", "product_mutation": true, "consent": "exact_reviewed_proposal", "cancellation": "before_committing_cas", "retry": "reconcile_before_retry", "recovery": "applied_commit_ledger_and_conversation_reset" },
+    { "id": "proposal-terminal-cleanup", "actor": "application", "product_mutation": false, "consent": "not_applicable", "cancellation": "cleanup_must_finish_or_journal", "retry": "idempotent_exact_proposal", "recovery": "teardown_recovery_journal" },
+    { "id": "account-household-teardown", "actor": "logout_or_account_replacement", "product_mutation": true, "consent": "explicit_account_lifecycle_action", "cancellation": "cannot_skip_started_teardown", "retry": "resume_exact_journal", "recovery": "household_teardown_journal" }
+  ]
+}

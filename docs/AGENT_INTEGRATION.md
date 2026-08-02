@@ -107,3 +107,18 @@ diagnostic tooling; they are not a prerequisite for an installed v0.6.2 Skill.
 This guide describes only the exact binary that embeds it. Public support
 claims require installed-artifact qualification for the named host, version,
 platform, and tool set.
+
+## Future household contract (inactive Phase 0)
+
+The source tree contains a reviewed Phase 0 contract for future agent-aware
+householding. It is not part of this embedded v0.7.0 guide or public manifest.
+Do not infer household commands from source files or release plans. Continue
+to route household management to bare `heyfood` unless the exact installed
+manifest advertises the capability and exact tools.
+
+The future shared skill must branch on discovered capability/tool state, not
+on a version string. Its v0.7.0 branch remains the current human-TUI handoff.
+Its future branch may use disclosed reads and prepare/status/cancel/reconcile,
+but never approval or commit. The binary-owned, offline compatibility command
+is `heyfood agent compatibility --json --no-input`; it becomes callable only
+in a separately authorized phase.

@@ -263,6 +263,20 @@ voice qualification, full parity, hosted household sync/learned graph/health,
 cross-device household state, and the complete twelve-stage showcase are
 post-`v0.7.1` conformance work, not release gates.
 
+### Frozen future household grammar (inactive)
+
+Phase 0 freezes `/household edit <member>`, `/household archive <member>`,
+`/household restore <member>`, `/household agent-access <member>`, and
+`/household changes` for a future attached-human implementation. The complete
+registry, keys, human labels, and state copy are in
+`fixtures/agent/household-phase0/tui-grammar.json`. These entries are not
+active v0.7.0 commands and must not appear in its help or completion registry.
+
+The future agent machine grammar is separately limited to `household show`,
+`household member`, and the six typed household MCP tools frozen in the Phase
+0 command/tool matrix. It includes no one-shot mutation, confirm, commit,
+erasure, generic shell, or TUI-control route.
+
 ## Unavailable compatibility topology
 
 Health integrations, profile editing, restaurant search, recommendation, menu,

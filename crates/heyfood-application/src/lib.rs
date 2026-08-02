@@ -6,6 +6,7 @@ pub mod capability;
 pub mod ensure_session;
 pub mod grocery;
 pub mod health;
+pub mod household_agent_phase0;
 pub mod household_context;
 pub mod household_evaluation;
 pub mod household_menu;
@@ -35,6 +36,10 @@ pub use grocery::{
 };
 pub use health::{
     HealthAuthorization, HealthConnection, HealthContext, HealthManagementOutcome, HealthPort,
+};
+pub use household_agent_phase0::{
+    BoundAgentHouseholdOutcomeReceiptV1, BoundAgentHouseholdProposalV1, BoundAgentHouseholdReadV1,
+    HouseholdAgentPhase0Proof,
 };
 pub use household_context::{
     HouseholdContextErrorV1, HouseholdContextSnapshotV1, HouseholdSubjectContextV1,
@@ -85,8 +90,9 @@ pub use one_shot_turn::{
 pub use ports::{
     AcceptedTurn, AudioCapture, AudioCapturePort, BoxEventStream, BoxFuture, BrowserPort,
     ClipboardPort, ClockPort, ConfigCommit, ConfigMutation, ConfigPort, CredentialCommit,
-    CredentialPort, EventStream, HouseholdMutationAuthorityPort, HouseholdMutationAuthorityV1,
-    HouseholdMutationPurposeV1, HouseholdRepositoryPort, PortError, ServicePort,
+    CredentialPort, EventStream, HouseholdAgentPhase0Port, HouseholdMutationAuthorityPort,
+    HouseholdMutationAuthorityV1, HouseholdMutationPurposeV1, HouseholdRepositoryPort, PortError,
+    ServicePort,
 };
 pub use run_turn::{
     MAX_TURN_EVENTS, MAX_TURN_STREAM_BYTES, RefreshPolicy, RunTurn, RunTurnError, RunTurnOutcome,

@@ -1504,6 +1504,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "time",
+ "unicode-width",
  "url",
  "uuid",
  "zeroize",

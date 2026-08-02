@@ -49,6 +49,7 @@ specific `capability_deferred`.
 | Agent self-description | `heyfood agent describe/guide/schema/doctor` | None | Supported in v0.7.1; offline, credential-free, bounded, and non-mutating. |
 | Codex/Claude Agent Skill setup | `heyfood agent setup` / `agent uninstall` | N/A | Supported in v0.7.1 for the exact qualified host versions; dry-run is default, apply requires the reviewed plan digest, and setup registers MCP through host-owned commands. |
 | Local read-only MCP | `heyfood mcp serve` | Existing authenticated read controllers | Supported in v0.7.1 with exactly six bounded read/discovery tools, bounded cursor pagination, and no agent mutation surface. |
+| Agent-aware household Phase 0 | No public command or tool | Local contracts and fake-port proof only | Closed source prototype: v3 manifest, disclosure, local approval, native-state, and read/prepare/status/cancel contracts are frozen for exact-SHA review. The v0.7.0 manifest, six-tool MCP surface, installer, and public claims remain unchanged. |
 
 ## Process contract
 

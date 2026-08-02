@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/local-household-approval-protocol.schema.json",
+  "title": "heyfood local household approval protocol v1",
+  "description": "Closed attached-TUI-only local household review and commit contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "contract",
+    "approval_surface",
+    "agent_confirm_tool",
+    "permanent_erasure",
+    "review_lifetime_seconds",
+    "states",
+    "legal_transitions",
+    "freeze_boundary",
+    "authority_separation",
+    "scenarios"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "contract": { "const": "local_household_approval_protocol_v1" },
+    "approval_surface": { "const": "attached_heyfood_tui" },
+    "agent_confirm_tool": { "const": false },
+    "permanent_erasure": { "const": false },
+    "review_lifetime_seconds": { "const": 600 },
+    "states": {
+      "type": "array",
+      "prefixItems": [
+        { "const": "prepared" },
+        { "const": "awaiting_local_input" },
+        { "const": "awaiting_local_review" },
+        { "const": "committing" },
+        { "const": "committed" },
+        { "const": "cancelled" },
+        { "const": "expired" },
+        { "const": "stale" },
+        { "const": "rejected" },
+        { "const": "proven_uncommitted" },
+        { "const": "reconciliation_required" }
+      ],
+      "items": false,
+      "minItems": 11,
+      "maxItems": 11
+    },
+    "legal_transitions": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 20,
+      "items": {
+        "type": "array",
+        "prefixItems": [
+          { "$ref": "#/$defs/state" },
+          { "$ref": "#/$defs/state" }
+        ],
+        "items": false,
+        "minItems": 2,
+        "maxItems": 2
+      }
+    },
+    "freeze_boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_state",
+        "target_state",
+        "validated_complete_input",
+        "digest_and_effect_fingerprint_atomic",
+        "generation_advances_once"
+      ],
+      "properties": {
+        "source_state": { "enum": ["prepared", "awaiting_local_input"] },
+        "target_state": { "const": "awaiting_local_review" },
+        "validated_complete_input": { "const": true },
+        "digest_and_effect_fingerprint_atomic": { "const": true },
+        "generation_advances_once": { "const": true }
+      }
+    },
+    "authority_separation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent_can_prepare",
+        "agent_can_status",
+        "agent_can_cancel_before_dispatch",
+        "agent_can_reconcile",
+        "agent_can_approve",
+        "agent_can_commit",
+        "tui_save_required"
+      ],
+      "properties": {
+        "agent_can_prepare": { "const": true },
+        "agent_can_status": { "const": true },
+        "agent_can_cancel_before_dispatch": { "const": true },
+        "agent_can_reconcile": { "const": true },
+        "agent_can_approve": { "const": false },
+        "agent_can_commit": { "const": false },
+        "tui_save_required": { "const": true }
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/scenario" }
+    }
+  },
+  "$defs": {
+    "state": {
+      "enum": [
+        "prepared",
+        "awaiting_local_input",
+        "awaiting_local_review",
+        "committing",
+        "committed",
+        "cancelled",
+        "expired",
+        "stale",
+        "rejected",
+        "proven_uncommitted",
+        "reconciliation_required"
+      ]
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "states",
+        "household_revision_delta",
+        "automatic_retry",
+        "reconciliation_source"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,95}$" },
+        "states": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/state" }
+        },
+        "household_revision_delta": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "automatic_retry": { "const": false },
+        "reconciliation_source": {
+          "enum": ["not_needed", "applied_commit_ledger"]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "binary_version": "0.8.0",
+  "manifest_schema_version": 3,
+  "compatible": false,
+  "installations": [
+    {
+      "host": "openclaw",
+      "host_version": null,
+      "receipt_state": "missing",
+      "skill_package_version": null,
+      "skill_sha256": null,
+      "supported_manifest_minimum": null,
+      "supported_manifest_maximum": null,
+      "status": "skill_identity_unknown",
+      "reason": "receipt_missing",
+      "remediation": {
+        "program": "heyfood",
+        "arguments": ["agent", "setup", "--target", "openclaw", "--scope", "user", "--apply"]
+      }
+    }
+  ],
+  "network_accessed": false,
+  "credentials_accessed": false,
+  "product_state_mutated": false
+}

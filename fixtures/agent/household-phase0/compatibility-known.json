@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "binary_version": "0.8.0",
+  "manifest_schema_version": 3,
+  "compatible": true,
+  "installations": [
+    {
+      "host": "codex",
+      "host_version": "codex-cli synthetic",
+      "receipt_state": "verified",
+      "skill_package_version": "1.1.0",
+      "skill_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "supported_manifest_minimum": 1,
+      "supported_manifest_maximum": 3,
+      "status": "compatible",
+      "reason": "supported_manifest_range",
+      "remediation": {
+        "program": "heyfood",
+        "arguments": ["agent", "setup", "--target", "codex", "--scope", "user", "--apply"]
+      }
+    }
+  ],
+  "network_accessed": false,
+  "credentials_accessed": false,
+  "product_state_mutated": false
+}

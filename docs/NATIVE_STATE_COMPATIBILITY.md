@@ -85,3 +85,19 @@ an independently executed archived installer or binary; archived v0.6.2 code
 after migration remains unsupported and unprotected. A future supported
 rollback must use a separately qualified native-state-compatible binary in its
 native rollback-read-only mode.
+
+## Frozen future agent-household migration (inactive)
+
+Phase 0 freezes a future native-state v3 declaration for encrypted
+per-subject disclosure grants, the local proposal journal, and household
+reconciliation. The declaration is
+`schemas/v1/agent-household-native-state.schema.json` with closed cases in
+`fixtures/agent/household-phase0/native-state-migration.json`.
+
+This declaration is not in the v0.7.0 installer, compatibility floor,
+manifest v2, verifier, or public asset set. Before any v3-only write, a future
+managed installer must atomically establish the reviewed writer floor and
+complete or resume the account-bound v2→v3 migration. A managed v0.7.0
+downgrade must then be rejected before replacement. Any supported rollback is
+separately qualified, read-only, and preserves unresolved proposal/committing/
+reconciliation journals while blocking mutation.

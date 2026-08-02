@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/household-agent-disclosure.schema.json",
+  "title": "heyfood household agent disclosure policy v1",
+  "description": "Closed disclosure-policy fixtures; the account binding itself is never agent-visible.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "contract",
+    "local_caller_boundary",
+    "grant_surface",
+    "data_classes",
+    "rules",
+    "scenarios"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "contract": { "const": "household_agent_disclosure_v1" },
+    "local_caller_boundary": { "const": "same_os_user_and_account_bound_state" },
+    "grant_surface": { "const": "attached_heyfood_tui_only" },
+    "data_classes": {
+      "type": "array",
+      "prefixItems": [
+        { "const": "roster" },
+        { "const": "minimized_declared_profile" }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adult_profile_requires_affirmation",
+        "minor_profile_disclosure",
+        "unknown_age_profile_disclosure",
+        "everyone_is_all_or_nothing",
+        "revocation_advances_generation",
+        "revocation_cannot_recall_prior_copies"
+      ],
+      "properties": {
+        "adult_profile_requires_affirmation": { "const": true },
+        "minor_profile_disclosure": { "const": false },
+        "unknown_age_profile_disclosure": { "const": false },
+        "everyone_is_all_or_nothing": { "const": true },
+        "revocation_advances_generation": { "const": true },
+        "revocation_cannot_recall_prior_copies": { "const": true }
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "age_status",
+          "roster_grant",
+          "profile_grant",
+          "requested_projection",
+          "result"
+        ],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,95}$" },
+          "age_status": { "enum": ["adult", "minor", "unknown"] },
+          "roster_grant": { "enum": ["active", "missing", "expired", "revoked"] },
+          "profile_grant": { "enum": ["active", "missing", "expired", "revoked"] },
+          "requested_projection": { "enum": ["content_free", "roster", "profile", "everyone"] },
+          "result": {
+            "enum": [
+              "content_free",
+              "roster",
+              "profile",
+              "household_agent_disclosure_required",
+              "household_agent_disclosure_revoked"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

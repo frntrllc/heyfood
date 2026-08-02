@@ -1,7 +1,8 @@
 # heyfood agent integration threat model
 
 **Status:** v0.7.1 read/discovery integration qualified and public; agent
-mutations remain absent and separately gated
+mutations remain absent and separately gated. Agent-aware household Phase 0
+contracts are frozen in source but not routed or advertised.
 **Release source:** `80d0b4b3defeb4ded45b890cd0b4bab85193e587`
 
 ## Assets and trust boundaries
@@ -57,6 +58,13 @@ approval prompts are not trusted mutation approvers.
 | Terminal corruption | Agent drives the TUI or abandoned child owns raw mode | TUI automation unsupported; MCP is stdio JSON-RPC; bounded child cleanup | PTY/ConPTY restoration and parent-death tests |
 | False capability claims | Deferred Health or hidden commands appear usable | Public manifest has active/deferred/unavailable only; hidden topology absent | Help/completion/schema/manifest parity tests |
 | Supply-chain drift | Skill, schema, or plugin does not match the binary | Exact digests, compatibility versions, signed/attested artifacts, exact-byte review | Installed-artifact provenance matrix |
+| Household disclosure without consent | A local agent reads another person's roster identity or dietary profile because the account owner stored it | Separate current per-subject roster/profile grants created only in the attached TUI; minor/unknown-age profile reads fail closed; Everyone is all-or-nothing | Missing/partial/revoked/minor/unknown-age and same/different OS-user fixtures |
+| Same-user caller confusion | A grant intended for one coding agent is silently treated as host-bound authentication | v0.8.0 grants explicitly cover every caller with the same OS-user access to the account-bound state; no per-host claim exists | Disclosure notice and cross-OS-user denial tests |
+| Local approval spoofing | Model text, MCP arguments, a PTY, or an agent-host dialog pretends to save a household change | Only `Save changes` in the attached heyfood TUI can win the local review-to-commit CAS; there is no agent confirm tool | Absent-tool, natural-language, redirected-I/O, and PTY negative tests |
+| Malicious member content | A label uses ANSI, bidi, invisibles, markup, or URL text to imitate review controls | Canonical values remain data and the local review renderer visibly escapes terminal controls and directional/invisible characters | Hostile-content digest and compact/standard/wide rendering fixtures |
+| Proposal authority leakage | Status repeats hidden account, digest, commit, or profile data after grant revocation | Closed presentation projections; revalidate account/grant generation before every serialization; downgrade to content-free | Future-field leakage and concurrent-revocation tests |
+| Cancel/commit race | Agent cancellation reports success after the attached TUI began committing | Linearizable CAS; cancellation after `committing` returns too-late and reconciliation owns the outcome | Race and crash-injection state-machine tests |
+| Native downgrade corruption | v0.7.0 interprets a v0.8.0 proposal or reconciliation journal as older household state | Managed writer floor, crash-resumable v2→v3 migration, downgrade refusal, separately qualified rollback-read-only mode | Migration interruption and downgrade matrix |
 
 ## Mutation families
 
@@ -84,6 +92,11 @@ hard failure.
   out-of-band approval protocol still requires its separate security,
   implementation, and production qualification before any mutation tool can
   be advertised.
+- The future local household contract is independently versioned from that
+  hosted approval protocol. Phase 0 proves only a fake-port read and
+  non-mutating prepare/status/cancel seam. It does not activate a command,
+  MCP tool, disclosure grant UI, proposal journal, commit path, or release.
+  See [LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md](LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md).
 
 The machine-readable Phase 0 inventory distinguishes Phase 0 review and
 qualification blockers from intentionally deferred implementation.

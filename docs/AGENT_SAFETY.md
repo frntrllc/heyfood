@@ -25,6 +25,10 @@ restaurant content, and conversational text are untrusted.
    or raw API requests through an agent surface.
 7. Never mix accounts, household members, approval sessions, conversations,
    list versions, or context hashes.
+8. Never treat account ownership, relationship, a stored local profile, or
+   agent setup as permission to disclose another person's household data.
+9. Never collect protected household profile answers in an agent conversation
+   when the installed contract requires attached-TUI local intake.
 
 ## Human-only commands
 
@@ -46,6 +50,24 @@ Commit, cancellation, decline, expiry, and reconciliation are mutually
 consistent terminal states. Equivalent same-endpoint idempotent replay may
 return the original result; changed content must conflict. Ambiguous paths
 fail before idempotency lookup.
+
+## Local household approval
+
+The Phase 0 local household protocol is not the hosted out-of-band protocol.
+An agent may eventually prepare, observe, cancel before dispatch, and
+reconcile only when the exact installed v3 manifest advertises those tools.
+It can never approve or commit. The person reviews and chooses `Save changes`
+or `Cancel` in bare `heyfood`; automating that TUI is unsupported.
+
+Roster and minimized-profile grants are separate and subject-bound. They are
+granted or revoked only in the attached TUI and cover all processes running as
+the same OS user with access to the account-bound state. Revocation must be
+revalidated before every result serialization and downgrades future proposal
+status to content-free output. Minor and unknown-age profiles remain hidden.
+
+An uncertain household commit blocks later household mutation until the
+co-committed applied-commit ledger proves committed or uncommitted. Permanent
+erasure and an agent household confirm tool are absent.
 
 ## Prompt injection
 

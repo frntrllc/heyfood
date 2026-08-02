@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "kind": "household_read_result",
+  "projection": "profile",
+  "resolved_subject": {
+    "kind": "member",
+    "member_ref": "10000000-0000-4000-8000-000000000001"
+  },
+  "resolved_from_active_scope": false,
+  "active_scope": {
+    "member": "10000000-0000-4000-8000-000000000001"
+  },
+  "household_revision": 7,
+  "disclosure_generation": 3,
+  "eligible_member_count": 2,
+  "restricted_member_count": 0,
+  "members": [
+    {
+      "member_ref": "10000000-0000-4000-8000-000000000001",
+      "display_label": "Synthetic Adult",
+      "profile_revision": 2
+    }
+  ],
+  "next_cursor": null
+}

@@ -6,6 +6,15 @@ TUI through a PTY, capture the terminal, take screenshots, or record household
 labels, stable IDs, profile answers, account identifiers, paths, credentials,
 tokens, vault bytes, or authorization responses.
 
+The future v0.8.0 agent-aware household qualification extends this checklist
+with direct edit/archive/restore/scope parity, per-subject agent-access grant
+creation/revocation, `/household changes`, every local proposal state,
+restart/resume, cancel/commit races, and truthful saving/reconciliation copy.
+Those additions are frozen in
+[LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md](LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md)
+but are not active v0.7.0 acceptance steps. They must remain human-operated;
+the no-PTY-automation and content-free evidence rules continue to apply.
+
 ## Exact candidate retrieval and installer transport
 
 Run protected `Native CLI CI` with `qualify_signed_candidate=true` at the exact

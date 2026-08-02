@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "ledger": "existing_household_applied_commit_v1",
+  "operations": [
+    { "operation": "add", "preallocated_commit_id": true, "preallocated_member_id": true, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 },
+    { "operation": "edit", "preallocated_commit_id": true, "preallocated_member_id": false, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 },
+    { "operation": "archive", "preallocated_commit_id": true, "preallocated_member_id": false, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 },
+    { "operation": "restore", "preallocated_commit_id": true, "preallocated_member_id": false, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 },
+    { "operation": "scope", "preallocated_commit_id": true, "preallocated_member_id": false, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 }
+  ],
+  "crash_points": [
+    { "id": "before_intake_freeze", "expected": "no_fingerprint_and_no_household_change" },
+    { "id": "after_intake_freeze_before_review", "expected": "resume_exact_review_generation" },
+    { "id": "after_committing_cas_before_repository_publish", "expected": "reconcile_to_proven_uncommitted" },
+    { "id": "after_repository_publish_before_status_publish", "expected": "reconcile_to_committed_from_ledger" },
+    { "id": "after_committed_status_before_cleanup", "expected": "resume_content_cleanup_without_recommit" }
+  ],
+  "replay": {
+    "same_commit_and_fingerprint": "return_same_outcome",
+    "same_commit_different_fingerprint": "fail_closed",
+    "new_commit_while_reconciliation_open": "blocked"
+  }
+}

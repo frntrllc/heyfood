@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "proposal_ref": "20000000-0000-4000-8000-000000000002",
+  "operation": "archive",
+  "state": "awaiting_local_review",
+  "projection": "roster",
+  "disclosure_generation": 3,
+  "affected_member_ref": "10000000-0000-4000-8000-000000000001",
+  "affected_member_label": "Synthetic Adult",
+  "profile_change_count": null,
+  "created_at": "2026-08-02T12:00:00.000Z",
+  "expires_at": "2026-08-02T12:10:00.000Z",
+  "human_status": "Ready for your review",
+  "handoff_command": "heyfood",
+  "handoff_instruction": "Open `/household changes` to review this change locally."
+}

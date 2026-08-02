@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "contract": "local_household_approval_protocol_v1",
+  "approval_surface": "attached_heyfood_tui",
+  "agent_confirm_tool": false,
+  "permanent_erasure": false,
+  "review_lifetime_seconds": 600,
+  "states": [
+    "prepared",
+    "awaiting_local_input",
+    "awaiting_local_review",
+    "committing",
+    "committed",
+    "cancelled",
+    "expired",
+    "stale",
+    "rejected",
+    "proven_uncommitted",
+    "reconciliation_required"
+  ],
+  "legal_transitions": [
+    ["prepared", "awaiting_local_input"],
+    ["prepared", "awaiting_local_review"],
+    ["prepared", "cancelled"],
+    ["prepared", "expired"],
+    ["prepared", "stale"],
+    ["prepared", "rejected"],
+    ["awaiting_local_input", "awaiting_local_review"],
+    ["awaiting_local_input", "cancelled"],
+    ["awaiting_local_input", "expired"],
+    ["awaiting_local_input", "stale"],
+    ["awaiting_local_input", "rejected"],
+    ["awaiting_local_review", "cancelled"],
+    ["awaiting_local_review", "expired"],
+    ["awaiting_local_review", "stale"],
+    ["awaiting_local_review", "rejected"],
+    ["awaiting_local_review", "committing"],
+    ["committing", "committed"],
+    ["committing", "reconciliation_required"],
+    ["reconciliation_required", "committed"],
+    ["reconciliation_required", "proven_uncommitted"]
+  ],
+  "freeze_boundary": {
+    "source_state": "awaiting_local_input",
+    "target_state": "awaiting_local_review",
+    "validated_complete_input": true,
+    "digest_and_effect_fingerprint_atomic": true,
+    "generation_advances_once": true
+  },
+  "authority_separation": {
+    "agent_can_prepare": true,
+    "agent_can_status": true,
+    "agent_can_cancel_before_dispatch": true,
+    "agent_can_reconcile": true,
+    "agent_can_approve": false,
+    "agent_can_commit": false,
+    "tui_save_required": true
+  },
+  "scenarios": [
+    {
+      "id": "add_local_intake_commit",
+      "states": ["prepared", "awaiting_local_input", "awaiting_local_review", "committing", "committed"],
+      "household_revision_delta": 1,
+      "automatic_retry": false,
+      "reconciliation_source": "not_needed"
+    },
+    {
+      "id": "cancel_before_dispatch",
+      "states": ["prepared", "awaiting_local_input", "cancelled"],
+      "household_revision_delta": 0,
+      "automatic_retry": false,
+      "reconciliation_source": "not_needed"
+    },
+    {
+      "id": "disclosure_revoked_before_review",
+      "states": ["prepared", "awaiting_local_input", "stale"],
+      "household_revision_delta": 0,
+      "automatic_retry": false,
+      "reconciliation_source": "not_needed"
+    },
+    {
+      "id": "concurrent_household_edit",
+      "states": ["prepared", "awaiting_local_review", "stale"],
+      "household_revision_delta": 0,
+      "automatic_retry": false,
+      "reconciliation_source": "not_needed"
+    },
+    {
+      "id": "crash_after_repository_publication",
+      "states": ["prepared", "awaiting_local_review", "committing", "reconciliation_required", "committed"],
+      "household_revision_delta": 1,
+      "automatic_retry": false,
+      "reconciliation_source": "applied_commit_ledger"
+    },
+    {
+      "id": "cancel_loses_commit_cas",
+      "states": ["prepared", "awaiting_local_review", "committing", "reconciliation_required", "proven_uncommitted"],
+      "household_revision_delta": 0,
+      "automatic_retry": false,
+      "reconciliation_source": "applied_commit_ledger"
+    }
+  ]
+}

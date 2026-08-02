@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "kind": "household_read_result",
+  "projection": "content_free",
+  "resolved_subject": {
+    "kind": "everyone"
+  },
+  "resolved_from_active_scope": true,
+  "active_scope": "everyone",
+  "household_revision": 7,
+  "disclosure_generation": 4,
+  "eligible_member_count": 2,
+  "restricted_member_count": 1,
+  "members": [],
+  "next_cursor": null
+}

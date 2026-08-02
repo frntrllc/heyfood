@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "from_native_state_version": 2,
+  "to_native_state_version": 3,
+  "required_capabilities": [
+    "household-agent-disclosure-v1",
+    "household-agent-proposal-journal-v1",
+    "household-agent-reconciliation-v1"
+  ],
+  "migration": {
+    "account_bound": true,
+    "atomic": true,
+    "crash_resumable": true,
+    "before_first_v3_write": true
+  },
+  "downgrade": {
+    "managed_v0_7_writer_allowed": false,
+    "reject_before_replacement": true
+  },
+  "rollback": {
+    "mode": "read_only",
+    "requires_separate_qualification": true
+  },
+  "unresolved_journals": {
+    "block_mutation": true,
+    "preserve": true,
+    "never_interpret_as_v2": true
+  },
+  "scenarios": [
+    { "id": "public_v0_7_to_v0_8", "expected": "migrate" },
+    { "id": "interrupted_migration", "expected": "resume_migration" },
+    { "id": "post_migration_restart", "expected": "open_v3" },
+    { "id": "managed_downgrade", "expected": "reject_managed_downgrade" },
+    { "id": "qualified_rollback", "expected": "rollback_read_only" },
+    { "id": "unresolved_commit_journal", "expected": "block_for_reconciliation" },
+    { "id": "account_replacement", "expected": "purge_on_account_replacement" },
+    { "id": "unrelated_state", "expected": "preserve_unrelated_state" }
+  ]
+}

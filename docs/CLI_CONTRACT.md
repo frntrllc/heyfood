@@ -44,6 +44,12 @@ outputs for compatibility with Agent Skills installed by v0.6.2. The explicit
 forms expose the v0.7.1 native-state-aware contracts. Unsupported schema
 versions fail during argument parsing before credentials or network access.
 
+Phase 0 source also freezes future `household show`, `household member`, and
+`agent compatibility` process contracts plus manifest schema v3. They are not
+Clap routes, help entries, completion entries, public schemas, or supported
+commands in v0.7.1. Their later activation requires separate authorization,
+default-manifest/skill coordination, and exact-SHA review.
+
 Health integrations are deferred from the supported `v0.7.1` contract.
 `health` is hidden from root help and generated shell completion, `/health` is
 absent from the TUI command registry, and new grants do not request

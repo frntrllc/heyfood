@@ -11,6 +11,9 @@ use heyfood_core::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::household_agent_phase0::{
+    BoundAgentHouseholdOutcomeReceiptV1, BoundAgentHouseholdProposalV1, BoundAgentHouseholdReadV1,
+};
 use crate::household_repository::{
     HouseholdCommit, HouseholdCommitOutcome, HouseholdErase, HouseholdEraseOutcome,
     HouseholdInitialize, HouseholdLoad, HouseholdReadLeaseV1,
@@ -244,6 +247,41 @@ pub trait HouseholdRepositoryPort: Send + Sync {
         command: HouseholdErase,
         cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<HouseholdEraseOutcome, PortError>>;
+}
+
+/// Phase-0-only local household agent persistence seam.
+///
+/// No production adapter or public route is composed until a later phase is
+/// separately authorized. Prepare/cancel may change only the encrypted local
+/// proposal journal; they never change the household revision.
+pub trait HouseholdAgentPhase0Port: Send + Sync {
+    fn read(
+        &self,
+        account: AccountId,
+        request: heyfood_core::AgentHouseholdReadRequestV1,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<BoundAgentHouseholdReadV1, PortError>>;
+
+    fn prepare(
+        &self,
+        account: AccountId,
+        request: heyfood_core::AgentHouseholdPrepareRequestV1,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<BoundAgentHouseholdProposalV1, PortError>>;
+
+    fn status(
+        &self,
+        account: AccountId,
+        proposal_ref: heyfood_core::AgentHouseholdProposalIdV1,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<BoundAgentHouseholdProposalV1, PortError>>;
+
+    fn cancel(
+        &self,
+        account: AccountId,
+        proposal_ref: heyfood_core::AgentHouseholdProposalIdV1,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<BoundAgentHouseholdOutcomeReceiptV1, PortError>>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

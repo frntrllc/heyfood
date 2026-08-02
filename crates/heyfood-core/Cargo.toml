@@ -14,6 +14,7 @@ serde = { workspace = true, features = ["alloc", "derive"] }
 serde_json = { workspace = true, default-features = false, features = ["arbitrary_precision", "raw_value", "std"] }
 sha2 = { workspace = true, features = ["std"] }
 time = { workspace = true, features = ["formatting", "parsing", "serde", "std"] }
+unicode-width.workspace = true
 url = { workspace = true, features = ["serde", "std"] }
 uuid = { workspace = true, features = ["serde", "std", "v4"] }
 zeroize = { workspace = true, features = ["alloc"] }

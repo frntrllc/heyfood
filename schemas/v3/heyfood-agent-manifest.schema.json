@@ -1,0 +1,320 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v3/heyfood-agent-manifest.schema.json",
+  "title": "heyfood agent manifest v3",
+  "description": "Phase-0 frozen future manifest contract. It is not a public v0.7.0 discovery surface.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "product",
+    "binary_version",
+    "build",
+    "compatibility",
+    "automation_surfaces",
+    "native_state_compatibility",
+    "limits",
+    "capabilities",
+    "commands",
+    "mcp_inventory",
+    "household_contracts",
+    "frozen_compatibility_views"
+  ],
+  "properties": {
+    "schema_version": { "const": 3 },
+    "product": { "const": "heyfood" },
+    "binary_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "build": { "$ref": "#/$defs/build" },
+    "compatibility": { "$ref": "#/$defs/compatibility" },
+    "automation_surfaces": { "$ref": "#/$defs/automation_surfaces" },
+    "native_state_compatibility": { "$ref": "#/$defs/native_state" },
+    "limits": { "$ref": "#/$defs/limits" },
+    "capabilities": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "commands": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/command" }
+    },
+    "mcp_inventory": { "$ref": "#/$defs/mcp_inventory" },
+    "household_contracts": { "$ref": "#/$defs/household_contracts" },
+    "frozen_compatibility_views": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v1_schema_sha256", "v2_schema_sha256", "v1_and_v2_omit_household_agent_surface"],
+      "properties": {
+        "v1_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "v2_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "v1_and_v2_omit_household_agent_surface": { "const": true }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "git_object": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "schema_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sha256"],
+      "properties": {
+        "id": { "type": "string", "format": "uri", "maxLength": 256 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_commit",
+        "source_tree",
+        "dirty",
+        "toolchain",
+        "distribution_channel",
+        "target",
+        "features",
+        "build_input_digest_sha256"
+      ],
+      "properties": {
+        "source_commit": { "$ref": "#/$defs/git_object" },
+        "source_tree": { "$ref": "#/$defs/git_object" },
+        "dirty": { "type": "boolean" },
+        "toolchain": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "distribution_channel": { "enum": ["development", "candidate", "release"] },
+        "target": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "features": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        },
+        "build_input_digest_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "guide_version",
+        "mcp_protocol_version",
+        "minimum_skill_contract_version",
+        "maximum_skill_contract_version",
+        "additive_optional_fields",
+        "bootstrap_command",
+        "bootstrap_result_schema"
+      ],
+      "properties": {
+        "guide_version": { "const": 2 },
+        "mcp_protocol_version": { "const": 1 },
+        "minimum_skill_contract_version": { "type": "integer", "minimum": 2 },
+        "maximum_skill_contract_version": { "type": "integer", "minimum": 2 },
+        "additive_optional_fields": { "const": false },
+        "bootstrap_command": { "const": "heyfood agent compatibility --json --no-input" },
+        "bootstrap_result_schema": { "$ref": "#/$defs/schema_binding" }
+      }
+    },
+    "automation_surfaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["one_shot_json", "mcp_stdio", "tui_automation"],
+      "properties": {
+        "one_shot_json": { "const": "active" },
+        "mcp_stdio": { "const": "active" },
+        "tui_automation": { "const": "unsupported" }
+      }
+    },
+    "native_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binary_version",
+        "maximum_native_state_version",
+        "minimum_managed_writer_version",
+        "native_state_capabilities",
+        "schema_version",
+        "declaration_schema"
+      ],
+      "properties": {
+        "binary_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "maximum_native_state_version": { "const": 3 },
+        "minimum_managed_writer_version": { "const": "0.8.0" },
+        "native_state_capabilities": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,127}$" }
+        },
+        "schema_version": { "const": 2 },
+        "declaration_schema": { "$ref": "#/$defs/schema_binding" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest_bytes",
+        "schema_bytes",
+        "mcp_inbound_frame_bytes",
+        "mcp_tool_arguments_bytes",
+        "mcp_structured_result_bytes",
+        "outstanding_requests",
+        "page_records",
+        "proposal_lifetime_seconds"
+      ],
+      "properties": {
+        "manifest_bytes": { "const": 1048576 },
+        "schema_bytes": { "const": 1048576 },
+        "mcp_inbound_frame_bytes": { "const": 1048576 },
+        "mcp_tool_arguments_bytes": { "const": 1048576 },
+        "mcp_structured_result_bytes": { "const": 4194304 },
+        "outstanding_requests": { "const": 8 },
+        "page_records": { "const": 100 },
+        "proposal_lifetime_seconds": { "const": 600 }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "contract_version", "authority", "disclosure"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$" },
+        "status": { "enum": ["active", "deferred", "unavailable"] },
+        "contract_version": { "type": ["string", "null"], "maxLength": 64 },
+        "authority": {
+          "enum": ["read_only", "prepare_only", "human_terminal_only", "unavailable"]
+        },
+        "disclosure": {
+          "enum": ["none", "per_subject_roster", "per_subject_profile", "local_status_only"]
+        }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "status",
+        "audience",
+        "operation_class",
+        "network",
+        "product_state_mutation",
+        "input_schema",
+        "result_schema",
+        "retry_class",
+        "approval"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*( [a-z][a-z0-9-]*)*$",
+          "maxLength": 256
+        },
+        "status": { "enum": ["active", "deferred", "unavailable"] },
+        "audience": { "enum": ["agent_safe", "human_terminal_only", "agent_unsupported"] },
+        "operation_class": { "enum": ["local_read", "prepare", "status", "cancel", "reconcile", "interactive"] },
+        "network": { "type": "boolean" },
+        "product_state_mutation": { "type": "boolean" },
+        "input_schema": {
+          "oneOf": [
+            { "$ref": "#/$defs/schema_binding" },
+            { "type": "null" }
+          ]
+        },
+        "result_schema": { "$ref": "#/$defs/schema_binding" },
+        "retry_class": { "enum": ["safe_read", "no_blind_retry", "reconcile_before_retry"] },
+        "approval": { "enum": ["none", "attached_heyfood_tui"] }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "audience": { "const": "agent_safe" } },
+            "required": ["audience"]
+          },
+          "then": {
+            "properties": { "product_state_mutation": { "const": false } }
+          }
+        }
+      ]
+    },
+    "mcp_inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "tool_set_version", "tools"],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "tool_set_version": { "const": 2 },
+        "tools": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/tool" }
+        }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "status",
+        "operation_class",
+        "authority",
+        "approval",
+        "input_schema",
+        "result_schema",
+        "read_only_hint",
+        "destructive_hint",
+        "idempotent_hint"
+      ],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,127}$" },
+        "status": { "enum": ["active", "deferred", "unavailable"] },
+        "operation_class": { "enum": ["local_read", "prepare", "status", "cancel", "reconcile"] },
+        "authority": { "enum": ["read_only", "prepare_only", "cancel_before_dispatch", "reconcile_only"] },
+        "approval": { "enum": ["none", "attached_heyfood_tui"] },
+        "input_schema": { "$ref": "#/$defs/schema_binding" },
+        "result_schema": { "$ref": "#/$defs/schema_binding" },
+        "read_only_hint": { "type": "boolean" },
+        "destructive_hint": { "const": false },
+        "idempotent_hint": { "type": "boolean" }
+      }
+    },
+    "household_contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "read",
+        "proposal_presentation",
+        "disclosure",
+        "local_approval",
+        "native_state",
+        "operations",
+        "agent_confirm_tool",
+        "permanent_erasure"
+      ],
+      "properties": {
+        "read": { "$ref": "#/$defs/schema_binding" },
+        "proposal_presentation": { "$ref": "#/$defs/schema_binding" },
+        "disclosure": { "$ref": "#/$defs/schema_binding" },
+        "local_approval": { "$ref": "#/$defs/schema_binding" },
+        "native_state": { "$ref": "#/$defs/schema_binding" },
+        "operations": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "add" },
+            { "const": "edit" },
+            { "const": "archive" },
+            { "const": "restore" },
+            { "const": "scope" }
+          ],
+          "items": false,
+          "minItems": 5,
+          "maxItems": 5
+        },
+        "agent_confirm_tool": { "const": false },
+        "permanent_erasure": { "const": false }
+      }
+    }
+  }
+}

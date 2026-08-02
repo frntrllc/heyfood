@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/agent-household-read.schema.json",
+  "title": "heyfood agent household read v1",
+  "description": "Closed request and disclosure-filtered result contract for local household reads.",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/result" }
+  ],
+  "$defs": {
+    "member_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "subject": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "self" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "member_ref"],
+          "properties": {
+            "kind": { "const": "member" },
+            "member_ref": { "$ref": "#/$defs/member_ref" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "everyone" } }
+        }
+      ]
+    },
+    "scope": {
+      "oneOf": [
+        { "const": "self" },
+        { "const": "everyone" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["member"],
+          "properties": { "member": { "$ref": "#/$defs/member_ref" } }
+        }
+      ]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "subject",
+        "requested_projection",
+        "expected_disclosure_generation",
+        "cursor",
+        "limit"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "household_read_request" },
+        "subject": {
+          "oneOf": [
+            { "$ref": "#/$defs/subject" },
+            { "type": "null" }
+          ]
+        },
+        "requested_projection": { "enum": ["content_free", "roster", "profile"] },
+        "expected_disclosure_generation": { "type": "integer", "minimum": 0 },
+        "cursor": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["member_ref", "display_label", "profile_revision"],
+      "properties": {
+        "member_ref": { "$ref": "#/$defs/member_ref" },
+        "display_label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 320,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "profile_revision": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "projection",
+        "resolved_subject",
+        "resolved_from_active_scope",
+        "active_scope",
+        "household_revision",
+        "disclosure_generation",
+        "eligible_member_count",
+        "restricted_member_count",
+        "members",
+        "next_cursor"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "household_read_result" },
+        "projection": { "enum": ["content_free", "roster", "profile"] },
+        "resolved_subject": { "$ref": "#/$defs/subject" },
+        "resolved_from_active_scope": { "type": "boolean" },
+        "active_scope": { "$ref": "#/$defs/scope" },
+        "household_revision": { "type": "integer", "minimum": 1 },
+        "disclosure_generation": { "type": "integer", "minimum": 0 },
+        "eligible_member_count": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "restricted_member_count": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "members": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/member" }
+        },
+        "next_cursor": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "projection": { "const": "content_free" } },
+            "required": ["projection"]
+          },
+          "then": {
+            "properties": { "members": { "maxItems": 0 } }
+          }
+        }
+      ]
+    }
+  }
+}

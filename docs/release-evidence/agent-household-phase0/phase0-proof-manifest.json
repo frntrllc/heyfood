@@ -1,0 +1,14 @@
+{
+  "schema_version": 0,
+  "phase": "agent_household_phase0",
+  "proof_only": true,
+  "public_command": false,
+  "public_mcp_tool": false,
+  "public_manifest_changed": false,
+  "paths": [
+    "account_bound_read",
+    "non_mutating_prepare",
+    "disclosure_filtered_status",
+    "pre_dispatch_cancel"
+  ]
+}

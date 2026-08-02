@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod agent;
+pub mod agent_household;
 pub mod auth;
 pub mod config;
 pub mod error;
@@ -23,6 +24,19 @@ pub mod validation;
 pub mod wire;
 
 pub use agent::{AgentChoice, AgentEvent, AgentFailure};
+pub use agent_household::{
+    AGENT_HOUSEHOLD_CONTRACT_VERSION, AGENT_HOUSEHOLD_MAX_MEMBERS_PER_PAGE,
+    AGENT_HOUSEHOLD_REVIEW_MAXIMUM_WIDTH, AGENT_HOUSEHOLD_REVIEW_MINIMUM_WIDTH,
+    AgentDisclosureDataClassV1, AgentDisclosureGrantStateV1, AgentDisclosureGrantV1,
+    AgentDisclosureGrantingAuthorityV1, AgentHouseholdContractErrorV1,
+    AgentHouseholdMemberProjectionV1, AgentHouseholdNextActionV1, AgentHouseholdOperationV1,
+    AgentHouseholdOutcomeReceiptV1, AgentHouseholdPrepareRequestV1, AgentHouseholdProjectionV1,
+    AgentHouseholdProposalIdV1, AgentHouseholdProposalPresentationV1,
+    AgentHouseholdProposalStateV1, AgentHouseholdReadRequestV1, AgentHouseholdReadSnapshotV1,
+    AgentHouseholdRetryClassV1, AgentHouseholdSubjectV1, LocalHouseholdAuthoritySnapshotV1,
+    LocalHouseholdFrozenCandidateV1, LocalHouseholdProposalAuthorityV1,
+    LocalHouseholdProposalBindingV1, household_review_safe_lines_v1, household_review_safe_text_v1,
+};
 pub use auth::{
     AccountId, AuthCapabilities, AuthCredentialBundle, AuthorizationCapability, ChannelCredentials,
     CredentialVersion, GROCERY_READ_SCOPE, GROCERY_WRITE_SCOPE, GroceryScopeAuthority,

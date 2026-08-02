@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/agent-household-proposal-presentation.schema.json",
+  "title": "heyfood agent household proposal presentation v1",
+  "description": "Disclosure-filtered status only. This document never authorizes commit.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "proposal_ref",
+    "operation",
+    "state",
+    "projection",
+    "disclosure_generation",
+    "affected_member_ref",
+    "affected_member_label",
+    "profile_change_count",
+    "created_at",
+    "expires_at",
+    "human_status",
+    "handoff_command",
+    "handoff_instruction"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "proposal_ref": { "type": "string", "format": "uuid" },
+    "operation": { "enum": ["add", "edit", "archive", "restore", "scope"] },
+    "state": {
+      "enum": [
+        "prepared",
+        "awaiting_local_input",
+        "awaiting_local_review",
+        "committing",
+        "committed",
+        "cancelled",
+        "expired",
+        "stale",
+        "rejected",
+        "proven_uncommitted",
+        "reconciliation_required"
+      ]
+    },
+    "projection": { "enum": ["content_free", "roster", "profile"] },
+    "disclosure_generation": { "type": "integer", "minimum": 0 },
+    "affected_member_ref": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "affected_member_label": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 320,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "profile_change_count": {
+      "oneOf": [
+        { "type": "integer", "minimum": 0, "maximum": 4096 },
+        { "type": "null" }
+      ]
+    },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "expires_at": { "$ref": "#/$defs/timestamp" },
+    "human_status": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "handoff_command": { "const": "heyfood" },
+    "handoff_instruction": {
+      "const": "Open `/household changes` to review this change locally."
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "projection": { "const": "content_free" } },
+        "required": ["projection"]
+      },
+      "then": {
+        "properties": {
+          "affected_member_ref": { "type": "null" },
+          "affected_member_label": { "type": "null" },
+          "profile_change_count": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "projection": { "const": "roster" } },
+        "required": ["projection"]
+      },
+      "then": {
+        "properties": { "profile_change_count": { "type": "null" } }
+      }
+    }
+  ]
+}

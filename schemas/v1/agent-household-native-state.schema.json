@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/agent-household-native-state.schema.json",
+  "title": "heyfood agent household native-state declaration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "from_native_state_version",
+    "to_native_state_version",
+    "required_capabilities",
+    "migration",
+    "downgrade",
+    "rollback",
+    "unresolved_journals",
+    "scenarios"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "from_native_state_version": { "const": 2 },
+    "to_native_state_version": { "const": 3 },
+    "required_capabilities": {
+      "type": "array",
+      "prefixItems": [
+        { "const": "household-agent-disclosure-v1" },
+        { "const": "household-agent-proposal-journal-v1" },
+        { "const": "household-agent-reconciliation-v1" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["account_bound", "atomic", "crash_resumable", "before_first_v3_write"],
+      "properties": {
+        "account_bound": { "const": true },
+        "atomic": { "const": true },
+        "crash_resumable": { "const": true },
+        "before_first_v3_write": { "const": true }
+      }
+    },
+    "downgrade": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["managed_v0_7_writer_allowed", "reject_before_replacement"],
+      "properties": {
+        "managed_v0_7_writer_allowed": { "const": false },
+        "reject_before_replacement": { "const": true }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "requires_separate_qualification"],
+      "properties": {
+        "mode": { "const": "read_only" },
+        "requires_separate_qualification": { "const": true }
+      }
+    },
+    "unresolved_journals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["block_mutation", "preserve", "never_interpret_as_v2"],
+      "properties": {
+        "block_mutation": { "const": true },
+        "preserve": { "const": true },
+        "never_interpret_as_v2": { "const": true }
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "expected"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,95}$" },
+          "expected": {
+            "enum": [
+              "migrate",
+              "resume_migration",
+              "open_v3",
+              "reject_managed_downgrade",
+              "rollback_read_only",
+              "block_for_reconciliation",
+              "purge_on_account_replacement",
+              "preserve_unrelated_state"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

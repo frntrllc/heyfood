@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "proposal_ref": "20000000-0000-4000-8000-000000000004",
+  "state": "reconciliation_required",
+  "household_revision_before": 7,
+  "household_revision_after": null,
+  "known_no_household_mutation": false,
+  "retry_class": "reconcile_before_retry",
+  "next_action": "reconcile"
+}

@@ -53,6 +53,12 @@ Household lifecycle mutation is human-TUI-only. It is absent from agent
 manifests, one-shot machine JSON, MCP tools, redirected stdin, and command-line
 profile arguments.
 
+That statement remains the public v0.7.0 behavior. A future v0.8.0
+agent-aware design is frozen separately in
+[LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md](LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md).
+Phase 0 adds contracts and a non-routable fake-port proof only; it does not
+change the current human-only surface.
+
 ## Account and continuity binding
 
 Every management operation is bound to:

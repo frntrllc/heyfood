@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "kind": "prepare_household_change",
+  "operation": "add",
+  "affected_member_ref": null,
+  "requested_projection": "content_free",
+  "expected_disclosure_generation": 3,
+  "expected_household_revision": 7,
+  "bundled_scope": null
+}

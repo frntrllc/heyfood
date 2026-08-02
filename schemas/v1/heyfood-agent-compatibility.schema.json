@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/heyfood-agent-compatibility.schema.json",
+  "title": "heyfood agent compatibility result v1",
+  "description": "Version-invariant, offline compatibility diagnosis owned by the installed binary.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "binary_version",
+    "manifest_schema_version",
+    "compatible",
+    "installations",
+    "network_accessed",
+    "credentials_accessed",
+    "product_state_mutated"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "binary_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "manifest_schema_version": { "type": "integer", "minimum": 1 },
+    "compatible": { "type": "boolean" },
+    "installations": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/installation" }
+    },
+    "network_accessed": { "const": false },
+    "credentials_accessed": { "const": false },
+    "product_state_mutated": { "const": false }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "installation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host",
+        "host_version",
+        "receipt_state",
+        "skill_package_version",
+        "skill_sha256",
+        "supported_manifest_minimum",
+        "supported_manifest_maximum",
+        "status",
+        "reason",
+        "remediation"
+      ],
+      "properties": {
+        "host": { "enum": ["codex", "claude-code", "openclaw"] },
+        "host_version": { "type": ["string", "null"], "maxLength": 128 },
+        "receipt_state": { "enum": ["verified", "missing", "invalid"] },
+        "skill_package_version": { "type": ["string", "null"], "maxLength": 64 },
+        "skill_sha256": {
+          "oneOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "supported_manifest_minimum": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        },
+        "supported_manifest_maximum": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        },
+        "status": { "enum": ["compatible", "incompatible", "skill_identity_unknown"] },
+        "reason": {
+          "enum": [
+            "supported_manifest_range",
+            "manifest_schema_too_new",
+            "manifest_schema_too_old",
+            "receipt_missing",
+            "receipt_invalid"
+          ]
+        },
+        "remediation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["program", "arguments"],
+          "properties": {
+            "program": { "const": "heyfood" },
+            "arguments": {
+              "type": "array",
+              "minItems": 5,
+              "maxItems": 16,
+              "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

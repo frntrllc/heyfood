@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "activation": "phase0_contract_only",
+  "commands": [
+    "/household",
+    "/household add",
+    "/household edit <member>",
+    "/household archive <member>",
+    "/household restore <member>",
+    "/household agent-access <member>",
+    "/household changes",
+    "/for <self|member|everyone>"
+  ],
+  "inbox_keys": {
+    "up_down": "Move focus",
+    "enter": "Open focused change",
+    "escape": "Return without deciding",
+    "ctrl_c": "Exit review without changing the household"
+  },
+  "actions": ["Save changes", "Cancel", "Archive member"],
+  "states": {
+    "prepared": "Getting this change ready…",
+    "awaiting_local_input": "More information needed",
+    "awaiting_local_review": "Ready for your review",
+    "committing": "Saving securely…",
+    "committed": "Saved",
+    "cancelled": "Cancelled — nothing was saved",
+    "expired": "Expired — start a new change",
+    "stale": "Household changed — review a fresh proposal",
+    "rejected": "Can't use this change",
+    "proven_uncommitted": "Not saved — heyfood verified no household change was made",
+    "reconciliation_required": "Checking whether this was saved…"
+  },
+  "direct_add": {
+    "save": "member_profile_and_explicit_scope_atomically",
+    "cancel": "discard_all_and_preserve_prior_scope"
+  },
+  "agent_prepared_add": {
+    "default_scope_change": false,
+    "bundled_scope": "all_or_nothing"
+  },
+  "help_completion_registry_must_match": true
+}

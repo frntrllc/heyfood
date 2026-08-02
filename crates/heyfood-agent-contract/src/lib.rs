@@ -1317,3 +1317,325 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod household_phase0_contract_tests {
+    use std::collections::BTreeSet;
+
+    use serde_json::Value;
+
+    use super::{PUBLIC_SCHEMAS, canonical_json, manifest, manifest_v2, sha256_hex};
+
+    struct ContractCase {
+        name: &'static str,
+        schema: &'static str,
+        fixtures: &'static [&'static str],
+    }
+
+    const READ_SCHEMA: &str = include_str!("../../../schemas/v1/agent-household-read.schema.json");
+    const ACTION_SCHEMA: &str =
+        include_str!("../../../schemas/v1/agent-household-action.schema.json");
+    const PRESENTATION_SCHEMA: &str =
+        include_str!("../../../schemas/v1/agent-household-proposal-presentation.schema.json");
+    const OUTCOME_SCHEMA: &str =
+        include_str!("../../../schemas/v1/agent-household-outcome.schema.json");
+    const LOCAL_APPROVAL_SCHEMA: &str =
+        include_str!("../../../schemas/v1/local-household-approval-protocol.schema.json");
+    const DISCLOSURE_SCHEMA: &str =
+        include_str!("../../../schemas/v1/household-agent-disclosure.schema.json");
+    const COMPATIBILITY_SCHEMA: &str =
+        include_str!("../../../schemas/v1/heyfood-agent-compatibility.schema.json");
+    const NATIVE_STATE_SCHEMA: &str =
+        include_str!("../../../schemas/v1/agent-household-native-state.schema.json");
+    const MANIFEST_V3_SCHEMA: &str =
+        include_str!("../../../schemas/v3/heyfood-agent-manifest.schema.json");
+
+    const READ_REQUEST: &str =
+        include_str!("../../../fixtures/agent/household-phase0/read-request.json");
+    const READ_PROFILE: &str =
+        include_str!("../../../fixtures/agent/household-phase0/read-result-profile.json");
+    const READ_CONTENT_FREE: &str =
+        include_str!("../../../fixtures/agent/household-phase0/read-result-content-free.json");
+    const PREPARE_REQUEST: &str =
+        include_str!("../../../fixtures/agent/household-phase0/prepare-request.json");
+    const CANCEL_REQUEST: &str =
+        include_str!("../../../fixtures/agent/household-phase0/cancel-request.json");
+    const PROPOSAL_CONTENT_FREE: &str =
+        include_str!("../../../fixtures/agent/household-phase0/proposal-content-free.json");
+    const PROPOSAL_ROSTER: &str =
+        include_str!("../../../fixtures/agent/household-phase0/proposal-roster.json");
+    const PROPOSAL_PROFILE: &str =
+        include_str!("../../../fixtures/agent/household-phase0/proposal-profile.json");
+    const CANCEL_OUTCOME: &str =
+        include_str!("../../../fixtures/agent/household-phase0/cancel-outcome.json");
+    const RECONCILIATION_OUTCOME: &str =
+        include_str!("../../../fixtures/agent/household-phase0/reconciliation-outcome.json");
+    const LOCAL_APPROVAL: &str =
+        include_str!("../../../fixtures/agent/household-phase0/local-approval-lifecycle.json");
+    const DISCLOSURE: &str =
+        include_str!("../../../fixtures/agent/household-phase0/disclosure-cases.json");
+    const COMPATIBILITY_KNOWN: &str =
+        include_str!("../../../fixtures/agent/household-phase0/compatibility-known.json");
+    const COMPATIBILITY_UNKNOWN: &str =
+        include_str!("../../../fixtures/agent/household-phase0/compatibility-unknown.json");
+    const NATIVE_STATE: &str =
+        include_str!("../../../fixtures/agent/household-phase0/native-state-migration.json");
+    const MANIFEST_V3: &str =
+        include_str!("../../../fixtures/agent/household-phase0/manifest-v3-contract.json");
+    const COMMAND_TOOL_MATRIX: &str =
+        include_str!("../../../fixtures/agent/household-phase0/command-tool-matrix.json");
+    const DG_R2: &str = include_str!("../../../fixtures/agent/household-phase0/dg-r2.json");
+    const TUI_GRAMMAR: &str =
+        include_str!("../../../fixtures/agent/household-phase0/tui-grammar.json");
+    const APPLIED_COMMIT_PROOF: &str =
+        include_str!("../../../fixtures/agent/household-phase0/applied-commit-proof.json");
+
+    fn parse(value: &str) -> Value {
+        serde_json::from_str(value).expect("phase0 contract JSON")
+    }
+
+    #[test]
+    fn closed_phase0_schemas_validate_their_fixtures() {
+        let cases = [
+            ContractCase {
+                name: "household read",
+                schema: READ_SCHEMA,
+                fixtures: &[READ_REQUEST, READ_PROFILE, READ_CONTENT_FREE],
+            },
+            ContractCase {
+                name: "household action",
+                schema: ACTION_SCHEMA,
+                fixtures: &[PREPARE_REQUEST, CANCEL_REQUEST],
+            },
+            ContractCase {
+                name: "proposal presentation",
+                schema: PRESENTATION_SCHEMA,
+                fixtures: &[PROPOSAL_CONTENT_FREE, PROPOSAL_ROSTER, PROPOSAL_PROFILE],
+            },
+            ContractCase {
+                name: "outcome receipt",
+                schema: OUTCOME_SCHEMA,
+                fixtures: &[CANCEL_OUTCOME, RECONCILIATION_OUTCOME],
+            },
+            ContractCase {
+                name: "local approval",
+                schema: LOCAL_APPROVAL_SCHEMA,
+                fixtures: &[LOCAL_APPROVAL],
+            },
+            ContractCase {
+                name: "disclosure",
+                schema: DISCLOSURE_SCHEMA,
+                fixtures: &[DISCLOSURE],
+            },
+            ContractCase {
+                name: "compatibility bootstrap",
+                schema: COMPATIBILITY_SCHEMA,
+                fixtures: &[COMPATIBILITY_KNOWN, COMPATIBILITY_UNKNOWN],
+            },
+            ContractCase {
+                name: "native state",
+                schema: NATIVE_STATE_SCHEMA,
+                fixtures: &[NATIVE_STATE],
+            },
+            ContractCase {
+                name: "manifest v3",
+                schema: MANIFEST_V3_SCHEMA,
+                fixtures: &[MANIFEST_V3],
+            },
+        ];
+
+        for case in cases {
+            let schema = parse(case.schema);
+            jsonschema::draft202012::meta::validate(&schema)
+                .unwrap_or_else(|error| panic!("{} meta-schema: {error}", case.name));
+            for fixture in case.fixtures {
+                let instance = parse(fixture);
+                jsonschema::draft202012::validate(&schema, &instance)
+                    .unwrap_or_else(|error| panic!("{} fixture: {error}", case.name));
+            }
+        }
+    }
+
+    #[test]
+    fn household_action_schema_rejects_ambiguous_or_authority_bearing_shapes() {
+        let schema = parse(ACTION_SCHEMA);
+        let valid = parse(PREPARE_REQUEST);
+        for invalid in [
+            {
+                let mut value = valid.clone();
+                value["operation"] = serde_json::json!("scope");
+                value["bundled_scope"] = Value::Null;
+                value
+            },
+            {
+                let mut value = valid.clone();
+                value["operation"] = serde_json::json!("edit");
+                value["affected_member_ref"] = Value::Null;
+                value
+            },
+            {
+                let mut value = valid.clone();
+                value["commit_id"] = serde_json::json!("forbidden");
+                value
+            },
+            {
+                let mut value = parse(CANCEL_REQUEST);
+                value["kind"] = serde_json::json!("confirm_household_change");
+                value
+            },
+        ] {
+            assert!(
+                jsonschema::draft202012::validate(&schema, &invalid).is_err(),
+                "invalid action was accepted: {}",
+                canonical_json(&invalid)
+            );
+        }
+    }
+
+    #[test]
+    fn phase0_keeps_v1_v2_and_public_routes_frozen() {
+        let v1 = manifest();
+        let v2 = manifest_v2();
+        assert_eq!(v1["schema_version"], 1);
+        assert_eq!(v2["schema_version"], 2);
+        assert_eq!(v1["commands"].as_array().map(Vec::len), Some(30));
+        assert_eq!(v2["commands"].as_array().map(Vec::len), Some(30));
+        assert_eq!(PUBLIC_SCHEMAS.len(), 11);
+
+        for encoded in [canonical_json(&v1), canonical_json(&v2)] {
+            for forbidden in [
+                "\"id\":\"household-roster\"",
+                "\"id\":\"household-profile\"",
+                "\"id\":\"household-lifecycle\"",
+                "heyfood_get_household",
+                "prepare_household_change",
+                "agent compatibility",
+            ] {
+                assert!(
+                    !encoded.contains(forbidden),
+                    "public compatibility view gained {forbidden}"
+                );
+            }
+        }
+        assert_eq!(
+            sha256_hex(super::MANIFEST_SCHEMA.as_bytes()),
+            "056011fb36521e89fae5540eda25c8e895df8a0f6e104df3a842821f3c672839"
+        );
+        assert_eq!(
+            sha256_hex(super::MANIFEST_V2_SCHEMA.as_bytes()),
+            "ed28909d5f7bd3afc296acac5af07e7f67acf146427fa566394cc2331e4b65fc"
+        );
+    }
+
+    #[test]
+    fn agent_visible_proposals_and_outcomes_contain_no_commit_authority() {
+        for fixture in [
+            PROPOSAL_CONTENT_FREE,
+            PROPOSAL_ROSTER,
+            PROPOSAL_PROFILE,
+            CANCEL_OUTCOME,
+            RECONCILIATION_OUTCOME,
+        ] {
+            let encoded = canonical_json(&parse(fixture));
+            for forbidden in [
+                "account_binding",
+                "commit_credential",
+                "commit_id",
+                "effect_fingerprint",
+                "lifecycle_generation",
+                "operation_id",
+                "proposal_digest",
+                "repository_path",
+                "single_use_nonce",
+            ] {
+                assert!(
+                    !encoded.contains(forbidden),
+                    "agent result exposed {forbidden}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn matrix_and_policy_fixtures_freeze_the_phase0_boundary() {
+        for (schema, expected) in [
+            (
+                READ_SCHEMA,
+                "b70db3f02dc3c68333bbf79c3ff92c415715d5ce7d07a99af445adefced4e8e2",
+            ),
+            (
+                ACTION_SCHEMA,
+                "e8f717da7b16102483c72fa79f001487284c7fca939867c6dd869ec9376550b2",
+            ),
+            (
+                PRESENTATION_SCHEMA,
+                "8d308f78910d3f822bd14f3bf3da3b10ff08c66399277e0bdd973695e8c8b25a",
+            ),
+            (
+                OUTCOME_SCHEMA,
+                "5a41f2021d3be5a030250d3695ff1e8b4625e7596ea351b1870f0f6d25355582",
+            ),
+            (
+                LOCAL_APPROVAL_SCHEMA,
+                "c3bcbcb045f1bc5691579a1392e9adc2ee2920a4b91ff7460811f71c2b4c2946",
+            ),
+            (
+                DISCLOSURE_SCHEMA,
+                "43b2c08ffb58ce97d2fc80dbd483715ae3172c1a9c2a375df1563bfc5f34bb2b",
+            ),
+            (
+                COMPATIBILITY_SCHEMA,
+                "8011a2a51300ea6f10d12b24f537e8fa47b28cd48a793f9158f6775154d900d9",
+            ),
+            (
+                NATIVE_STATE_SCHEMA,
+                "690c3480c9b4719482063665a49f6d70969ece2eb5e0ee29ee88cc8e1a494403",
+            ),
+            (
+                MANIFEST_V3_SCHEMA,
+                "d72d3aec9ac7923f2198567fe25109da2a2c3c24373918222bf6e53a9486933b",
+            ),
+        ] {
+            assert_eq!(sha256_hex(schema.as_bytes()), expected);
+        }
+
+        let matrix = parse(COMMAND_TOOL_MATRIX);
+        assert_eq!(matrix["baseline"]["command_count"], 30);
+        assert_eq!(matrix["baseline"]["mcp_tool_count"], 6);
+        assert_eq!(matrix["future_v3"]["command_count"], 33);
+        assert_eq!(matrix["future_v3"]["mcp_tool_count"], 12);
+        let tools = matrix["future_v3"]["mcp_tools"]
+            .as_array()
+            .expect("tool list");
+        let names = tools
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("tool name"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(names.len(), 12);
+        assert!(
+            !names
+                .iter()
+                .any(|name| name.contains("confirm") || name.contains("erase"))
+        );
+
+        let dg_r2 = parse(DG_R2);
+        assert_eq!(dg_r2["rules"]["blind_retry_after_dispatch"], false);
+        assert_eq!(dg_r2["rules"]["agent_commit_authority"], false);
+        assert_eq!(dg_r2["boundaries"].as_array().map(Vec::len), Some(12));
+
+        let tui = parse(TUI_GRAMMAR);
+        assert_eq!(tui["activation"], "phase0_contract_only");
+        assert_eq!(tui["commands"].as_array().map(Vec::len), Some(8));
+        assert_eq!(tui["help_completion_registry_must_match"], true);
+
+        let ledger = parse(APPLIED_COMMIT_PROOF);
+        assert_eq!(ledger["operations"].as_array().map(Vec::len), Some(5));
+        assert!(
+            ledger["operations"]
+                .as_array()
+                .expect("operations")
+                .iter()
+                .all(|operation| operation["fingerprint_frozen_after_complete_input"] == true)
+        );
+    }
+}

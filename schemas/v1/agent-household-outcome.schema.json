@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/agent-household-outcome.schema.json",
+  "title": "heyfood agent household outcome receipt v1",
+  "description": "Content-minimized outcome evidence. No field authorizes approval, commit, or retry.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "proposal_ref",
+    "state",
+    "household_revision_before",
+    "household_revision_after",
+    "known_no_household_mutation",
+    "retry_class",
+    "next_action"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "proposal_ref": { "type": "string", "format": "uuid" },
+    "state": {
+      "enum": [
+        "committed",
+        "cancelled",
+        "expired",
+        "stale",
+        "rejected",
+        "proven_uncommitted",
+        "reconciliation_required"
+      ]
+    },
+    "household_revision_before": { "type": "integer", "minimum": 1 },
+    "household_revision_after": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "null" }
+      ]
+    },
+    "known_no_household_mutation": { "type": "boolean" },
+    "retry_class": {
+      "enum": ["not_applicable", "safe_read", "no_blind_retry", "reconcile_before_retry"]
+    },
+    "next_action": {
+      "enum": ["none", "open_attached_tui", "observe_status", "reconcile", "prepare_fresh"]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "known_no_household_mutation": { "const": true } },
+        "required": ["known_no_household_mutation"]
+      },
+      "then": {
+        "properties": {
+          "state": { "enum": ["cancelled", "expired", "stale", "rejected", "proven_uncommitted"] },
+          "household_revision_after": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "state": { "const": "reconciliation_required" } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "household_revision_after": { "type": "null" },
+          "known_no_household_mutation": { "const": false },
+          "retry_class": { "const": "reconcile_before_retry" },
+          "next_action": { "const": "reconcile" }
+        }
+      }
+    }
+  ]
+}

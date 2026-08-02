@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v1/agent-household-action.schema.json",
+  "title": "heyfood agent household action request v1",
+  "description": "Closed non-sensitive prepare/status/cancel/reconcile request contract. No variant can approve or commit.",
+  "oneOf": [
+    { "$ref": "#/$defs/prepare" },
+    { "$ref": "#/$defs/proposal_lookup" }
+  ],
+  "$defs": {
+    "member_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "proposal_ref": { "type": "string", "format": "uuid" },
+    "scope": {
+      "oneOf": [
+        { "const": "self" },
+        { "const": "everyone" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["member"],
+          "properties": { "member": { "$ref": "#/$defs/member_ref" } }
+        }
+      ]
+    },
+    "prepare": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "operation",
+        "affected_member_ref",
+        "requested_projection",
+        "expected_disclosure_generation",
+        "expected_household_revision",
+        "bundled_scope"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "prepare_household_change" },
+        "operation": { "enum": ["add", "edit", "archive", "restore", "scope"] },
+        "affected_member_ref": {
+          "oneOf": [
+            { "$ref": "#/$defs/member_ref" },
+            { "type": "null" }
+          ]
+        },
+        "requested_projection": { "enum": ["content_free", "roster", "profile"] },
+        "expected_disclosure_generation": { "type": "integer", "minimum": 0 },
+        "expected_household_revision": { "type": "integer", "minimum": 1 },
+        "bundled_scope": {
+          "oneOf": [
+            { "$ref": "#/$defs/scope" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "operation": { "const": "add" } },
+            "required": ["operation"]
+          },
+          "then": {
+            "properties": { "affected_member_ref": { "type": "null" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "enum": ["edit", "restore"] } },
+            "required": ["operation"]
+          },
+          "then": {
+            "properties": {
+              "affected_member_ref": { "$ref": "#/$defs/member_ref" },
+              "bundled_scope": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "archive" } },
+            "required": ["operation"]
+          },
+          "then": {
+            "properties": { "affected_member_ref": { "$ref": "#/$defs/member_ref" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "scope" } },
+            "required": ["operation"]
+          },
+          "then": {
+            "properties": {
+              "affected_member_ref": { "type": "null" },
+              "bundled_scope": { "$ref": "#/$defs/scope" }
+            }
+          }
+        }
+      ]
+    },
+    "proposal_lookup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "kind", "proposal_ref"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "enum": ["get_household_change", "cancel_household_change", "reconcile_household_change"] },
+        "proposal_ref": { "$ref": "#/$defs/proposal_ref" }
+      }
+    }
+  }
+}

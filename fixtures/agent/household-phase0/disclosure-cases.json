@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "contract": "household_agent_disclosure_v1",
+  "local_caller_boundary": "same_os_user_and_account_bound_state",
+  "grant_surface": "attached_heyfood_tui_only",
+  "data_classes": ["roster", "minimized_declared_profile"],
+  "rules": {
+    "adult_profile_requires_affirmation": true,
+    "minor_profile_disclosure": false,
+    "unknown_age_profile_disclosure": false,
+    "everyone_is_all_or_nothing": true,
+    "revocation_advances_generation": true,
+    "revocation_cannot_recall_prior_copies": true
+  },
+  "scenarios": [
+    { "id": "adult_roster_active", "age_status": "adult", "roster_grant": "active", "profile_grant": "missing", "requested_projection": "roster", "result": "roster" },
+    { "id": "adult_profile_active", "age_status": "adult", "roster_grant": "active", "profile_grant": "active", "requested_projection": "profile", "result": "profile" },
+    { "id": "adult_profile_missing", "age_status": "adult", "roster_grant": "active", "profile_grant": "missing", "requested_projection": "profile", "result": "household_agent_disclosure_required" },
+    { "id": "minor_roster_active", "age_status": "minor", "roster_grant": "active", "profile_grant": "missing", "requested_projection": "roster", "result": "roster" },
+    { "id": "minor_profile_forbidden", "age_status": "minor", "roster_grant": "active", "profile_grant": "active", "requested_projection": "profile", "result": "household_agent_disclosure_required" },
+    { "id": "unknown_profile_forbidden", "age_status": "unknown", "roster_grant": "active", "profile_grant": "active", "requested_projection": "profile", "result": "household_agent_disclosure_required" },
+    { "id": "revoked_status_downgrade", "age_status": "adult", "roster_grant": "revoked", "profile_grant": "revoked", "requested_projection": "profile", "result": "content_free" },
+    { "id": "everyone_partial_denied", "age_status": "adult", "roster_grant": "missing", "profile_grant": "missing", "requested_projection": "everyone", "result": "household_agent_disclosure_required" },
+    { "id": "expired_grant_denied", "age_status": "adult", "roster_grant": "expired", "profile_grant": "expired", "requested_projection": "profile", "result": "household_agent_disclosure_required" }
+  ]
+}
