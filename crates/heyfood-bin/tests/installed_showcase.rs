@@ -2552,13 +2552,13 @@ fn assert_core_terminal_contract(
         );
     }
     if showcase_native_household_enabled(credential_backend, cfg!(windows)) {
-        assert_raw_terminal_text(returning_user, NATIVE_HOUSEHOLD_FAILURE_MESSAGE);
+        assert_terminal_semantic_text(returning_user, NATIVE_HOUSEHOLD_FAILURE_MESSAGE);
         assert!(
-            !raw_terminal_contains(returning_user, SYNTHETIC_SERVER_FAILURE_MESSAGE),
+            !terminal_semantic_contains(returning_user, SYNTHETIC_SERVER_FAILURE_MESSAGE),
             "native Household output exposed the fixture's untrusted server error message"
         );
     } else {
-        assert_raw_terminal_text(returning_user, SYNTHETIC_SERVER_FAILURE_MESSAGE);
+        assert_terminal_semantic_text(returning_user, SYNTHETIC_SERVER_FAILURE_MESSAGE);
     }
 }
 
@@ -2601,6 +2601,18 @@ fn assert_raw_terminal_text(terminal: &[u8], expected: &str) {
         raw_terminal_contains(terminal, expected),
         "installed terminal evidence omitted raw text {expected:?}"
     );
+}
+
+fn assert_terminal_semantic_text(terminal: &[u8], expected: &str) {
+    assert!(
+        terminal_semantic_contains(terminal, expected),
+        "installed terminal evidence omitted semantic text {expected:?}"
+    );
+}
+
+fn terminal_semantic_contains(terminal: &[u8], expected: &str) -> bool {
+    let observed = compact_terminal_text(&terminal_snapshot(terminal, 24, 80));
+    observed.contains(&compact_terminal_text(expected))
 }
 
 fn raw_terminal_contains(terminal: &[u8], expected: &str) -> bool {
@@ -3062,6 +3074,25 @@ fn terminal_final_state_accepts_conpty_interleaving() {
     assert!(terminal_final_state(restored.as_bytes()));
     assert!(!terminal_final_state(
         format!("{restored}\u{1b}[?25l").as_bytes()
+    ));
+}
+
+#[test]
+fn terminal_semantic_checks_reconstruct_cursor_fragmented_text() {
+    let bytes = concat!(
+        "\u{1b}[?1049h",
+        "\u{1b}[2J",
+        "\u{1b}[1;1Hsynthetic ",
+        "\u{1b}[1;11Hinstalled ",
+        "\u{1b}[1;21Hfailure"
+    );
+    assert!(!raw_terminal_contains(
+        bytes.as_bytes(),
+        SYNTHETIC_SERVER_FAILURE_MESSAGE
+    ));
+    assert!(terminal_semantic_contains(
+        bytes.as_bytes(),
+        SYNTHETIC_SERVER_FAILURE_MESSAGE
     ));
 }
 
