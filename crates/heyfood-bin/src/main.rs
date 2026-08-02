@@ -1837,7 +1837,7 @@ async fn one_shot_inner(
             )
             .await
         }
-        NativeHouseholdModeV1::NativeEnabled | NativeHouseholdModeV1::NativeRollbackReadOnly => {
+        NativeHouseholdModeV1::NativeEnabled => {
             let household = prepared.household_session.as_ref().ok_or_else(|| {
                 heyfood_bin::OneShotError::new(
                     "household_native_session_missing",
@@ -1845,6 +1845,25 @@ async fn one_shot_inner(
                 )
             })?;
             heyfood_bin::execute_qualified_native_one_shot(
+                prepared.service.as_ref(),
+                prepared.ensure_session.as_ref(),
+                prepared.snapshot,
+                output_mode,
+                command,
+                &stdin,
+                cancellation,
+                household,
+            )
+            .await
+        }
+        NativeHouseholdModeV1::NativeRollbackReadOnly => {
+            let household = prepared.household_session.as_ref().ok_or_else(|| {
+                heyfood_bin::OneShotError::new(
+                    "household_native_session_missing",
+                    "Native household state opened without its account-bound session.",
+                )
+            })?;
+            heyfood_bin::execute_qualified_native_rollback_one_shot(
                 prepared.service.as_ref(),
                 prepared.ensure_session.as_ref(),
                 prepared.snapshot,

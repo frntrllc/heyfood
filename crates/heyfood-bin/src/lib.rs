@@ -2323,6 +2323,7 @@ pub struct OneShotExecutor<'a> {
     credentials: &'a SessionCredentials,
     output_mode: OutputMode,
     imported_state: Option<&'a ImportedPythonState>,
+    native_restaurant_names: Option<&'a [String]>,
     authorized_context: Option<&'a AuthorizedHostedContextV1>,
 }
 
@@ -2418,6 +2419,16 @@ pub async fn execute_qualified_native_one_shot(
             "Native household context is bound to another account.",
         ));
     }
+    let native_restaurant_names = match &command {
+        Command::Item(arguments) if arguments.at.as_deref().is_some_and(is_numeric_selector) => {
+            let load = household
+                .load_required(cancellation.child_token())
+                .await
+                .map_err(OneShotError::from)?;
+            Some(native_restaurant_names(&load.state)?)
+        }
+        _ => None,
+    };
     let authorized_context = if matches!(command, Command::Ask(_) | Command::Reply(_)) {
         let authorized = household
             .acquire_authorized_hosted_context(cancellation.child_token())
@@ -2445,9 +2456,92 @@ pub async fn execute_qualified_native_one_shot(
         }
     };
     OneShotExecutor::new(service, &credentials, output_mode)
+        .with_native_restaurant_names(native_restaurant_names.as_deref())
         .with_authorized_context(authorized_context.as_ref())
         .execute(command, stdin, cancellation)
         .await
+}
+
+/// Execute a one-shot command while the committed native Household is in its
+/// emergency rollback posture. Conversational turns are rejected before any
+/// Household read, credential refresh, or hosted dispatch; non-conversational
+/// channel commands preserve their existing transport contracts.
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_qualified_native_rollback_one_shot(
+    service: &HttpService,
+    ensure_session: &EnsureSession,
+    snapshot: heyfood_core::SessionSnapshot,
+    output_mode: OutputMode,
+    command: Command,
+    stdin: &[u8],
+    cancellation: CancellationToken,
+    household: &HouseholdSession,
+) -> Result<String, OneShotError> {
+    if matches!(command, Command::Ask(_) | Command::Reply(_)) {
+        return Err(OneShotError::new(
+            "household_native_rollback_read_only",
+            "Conversational turns are unavailable in native rollback read-only mode.",
+        ));
+    }
+    execute_qualified_native_one_shot(
+        service,
+        ensure_session,
+        snapshot,
+        output_mode,
+        command,
+        stdin,
+        cancellation,
+        household,
+    )
+    .await
+}
+
+fn is_numeric_selector(selector: &str) -> bool {
+    let selector = selector.trim();
+    !selector.is_empty() && selector.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn native_restaurant_names(state: &HouseholdStateV1) -> Result<Vec<String>, OneShotError> {
+    let field = state
+        .imported_compatibility
+        .fields
+        .iter()
+        .find(|field| field.field_name == "last_restaurant_search")
+        .ok_or_else(|| {
+            OneShotError::new(
+                "restaurant_search_missing",
+                "no previous restaurant search was migrated; run search before using --at",
+            )
+        })?;
+    let restaurants = field
+        .value
+        .as_value()
+        .as_object()
+        .and_then(|value| value.get("restaurants"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            OneShotError::new(
+                "restaurant_search_invalid",
+                "the migrated restaurant search is unavailable",
+            )
+        })?;
+    restaurants
+        .iter()
+        .map(|restaurant| {
+            restaurant
+                .as_object()
+                .and_then(|value| value.get("name"))
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty() && name.trim() == *name && name.len() <= 200)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    OneShotError::new(
+                        "restaurant_search_invalid",
+                        "the migrated restaurant search is unavailable",
+                    )
+                })
+        })
+        .collect()
 }
 
 impl<'a> OneShotExecutor<'a> {
@@ -2462,6 +2556,7 @@ impl<'a> OneShotExecutor<'a> {
             credentials,
             output_mode,
             imported_state: None,
+            native_restaurant_names: None,
             authorized_context: None,
         }
     }
@@ -2472,6 +2567,15 @@ impl<'a> OneShotExecutor<'a> {
         imported_state: Option<&'a ImportedPythonState>,
     ) -> Self {
         self.imported_state = imported_state;
+        self
+    }
+
+    #[must_use]
+    const fn with_native_restaurant_names(
+        mut self,
+        native_restaurant_names: Option<&'a [String]>,
+    ) -> Self {
+        self.native_restaurant_names = native_restaurant_names;
         self
     }
 
@@ -2572,8 +2676,7 @@ impl<'a> OneShotExecutor<'a> {
             .transpose()?
             .flatten();
         if let Some(selector) = arguments.at.as_deref()
-            && selector.trim().bytes().all(|byte| byte.is_ascii_digit())
-            && !selector.trim().is_empty()
+            && is_numeric_selector(selector)
         {
             restaurant = Some(self.restaurant_from_selector(selector)?);
         }
@@ -2601,6 +2704,14 @@ impl<'a> OneShotExecutor<'a> {
                     "restaurant selection is out of range",
                 )
             })?;
+        if let Some(restaurants) = self.native_restaurant_names {
+            return restaurants.get(index - 1).cloned().ok_or_else(|| {
+                OneShotError::new(
+                    "restaurant_selector",
+                    format!("restaurant selection {index} is out of range for the last search"),
+                )
+            });
+        }
         let state = self.bound_imported_state()?;
         let restaurants = state
             .account_scoped
