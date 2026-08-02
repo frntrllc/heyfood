@@ -95,9 +95,9 @@
     "remote_member_erasure"
   ],
   "manual_release_gates": [
-    "clean_v0_6_3_install",
-    "v0_6_2_to_v0_6_3_upgrade",
-    "current_v0_6_3_installer_refuses_v0_6_2_request",
+    "clean_v0_7_0_install",
+    "v0_6_2_to_v0_7_0_upgrade",
+    "current_v0_7_0_installer_refuses_v0_6_2_request",
     "authorization_rollover_preserves_household_binding",
     "rotated_session_logout_refreshes_resumes_teardown_removes_vault_key_and_preserves_global_floor"
   ],

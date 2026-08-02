@@ -8,6 +8,13 @@ readonly ROOT
 readonly RELEASE_WORKFLOW="$ROOT/.github/workflows/release.yml"
 readonly CANDIDATE_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 readonly PUBLIC_SMOKE_WORKFLOW="$ROOT/.github/workflows/post-release-smoke.yml"
+WORKSPACE_VERSION=$(cargo metadata --locked --no-deps --format-version 1 \
+  --manifest-path "$ROOT/Cargo.toml" | jq -er \
+  '.packages[] | select(.name == "heyfood-bin") | .version')
+readonly WORKSPACE_VERSION
+CURRENT_GATE_VERSION="v${WORKSPACE_VERSION//./_}"
+readonly CURRENT_GATE_VERSION
+readonly PREVIOUS_GATE_VERSION="v0_6_2"
 CASE_DIR=$(mktemp -d)
 readonly CASE_DIR
 
@@ -682,13 +689,16 @@ jq -e '
     "remote_member_erasure"
   ] and
   .manual_release_gates == [
-    "clean_v0_6_3_install",
-    "v0_6_2_to_v0_6_3_upgrade",
-    "current_v0_6_3_installer_refuses_v0_6_2_request",
+    "clean_\($current)_install",
+    "\($previous)_to_\($current)_upgrade",
+    "current_\($current)_installer_refuses_\($previous)_request",
     "authorization_rollover_preserves_household_binding",
     "rotated_session_logout_refreshes_resumes_teardown_removes_vault_key_and_preserves_global_floor"
   ]
-' "$ROOT/tests/showcase/core-release-matrix.v1.json" >/dev/null ||
+' --arg current "$CURRENT_GATE_VERSION" \
+  --arg previous "$PREVIOUS_GATE_VERSION" \
+  "$ROOT/tests/showcase/core-release-matrix.v1.json" >/dev/null ||
   fail "the core matrix must preserve the bounded distribution and non-gates"
 
-printf 'release scope contract: complete v0.7.0 native-state set; Windows CI retained\n'
+printf 'release scope contract: complete v%s native-state set; Windows CI retained\n' \
+  "$WORKSPACE_VERSION"

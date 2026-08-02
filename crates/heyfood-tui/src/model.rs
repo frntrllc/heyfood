@@ -2109,6 +2109,9 @@ pub fn dispatch(model: &mut AppModel, action: Action) -> Vec<Effect> {
         }
         Action::Submit => return submit(model),
         Action::VoiceToggle => return toggle_voice(model),
+        Action::CancelVoice if model.onboarding.is_some() && !model.operation.is_active() => {
+            return cancel_onboarding(model);
+        }
         Action::CancelVoice if has_active_household_work(model) => {
             return cancel_household_draft(model);
         }
@@ -2566,32 +2569,7 @@ fn submit_onboarding(model: &mut AppModel) -> Vec<Effect> {
         answer
     };
     if matches!(answer.to_ascii_lowercase().as_str(), "cancel" | "/cancel") {
-        let household_member = model
-            .onboarding
-            .as_ref()
-            .is_some_and(|flow| !matches!(flow.target, OnboardingTargetV1::Owner));
-        let native_local_first = model.onboarding.as_ref().is_some_and(|flow| {
-            matches!(flow.copy_mode, OnboardingCopyMode::NativeLocalFirst)
-                && matches!(flow.target, OnboardingTargetV1::Owner)
-        });
-        model.onboarding = None;
-        if household_member {
-            push_notice(
-                model,
-                "Household member setup cancelled. No member or member profile was changed.",
-            );
-        } else if native_local_first {
-            push_notice(
-                model,
-                &crate::render::profile_copy(ProfileCopyStateV1::OnboardingSaveCancelled),
-            );
-        } else {
-            push_notice(
-                model,
-                "Dietary onboarding cancelled. Nothing was sent or saved.",
-            );
-        }
-        return Vec::new();
+        return cancel_onboarding(model);
     }
 
     let mut flow = model
@@ -2660,6 +2638,35 @@ fn submit_onboarding(model: &mut AppModel) -> Vec<Effect> {
     });
     model.onboarding = Some(flow);
     push_onboarding_prompt(model);
+    Vec::new()
+}
+
+fn cancel_onboarding(model: &mut AppModel) -> Vec<Effect> {
+    let Some(flow) = model.onboarding.take() else {
+        return Vec::new();
+    };
+    model.draft.clear();
+    model.cursor = 0;
+    model.operation = OperationState::Idle;
+    model.activity = None;
+    model.idle_exit_armed = false;
+
+    if !matches!(flow.target, OnboardingTargetV1::Owner) {
+        push_notice(
+            model,
+            "Household member setup cancelled. No member or member profile was changed.",
+        );
+    } else if matches!(flow.copy_mode, OnboardingCopyMode::NativeLocalFirst) {
+        push_notice(
+            model,
+            &crate::render::profile_copy(ProfileCopyStateV1::OnboardingSaveCancelled),
+        );
+    } else {
+        push_notice(
+            model,
+            "Dietary onboarding cancelled. Nothing was sent or saved.",
+        );
+    }
     Vec::new()
 }
 
@@ -7731,6 +7738,34 @@ mod tests {
     }
 
     #[test]
+    fn owner_onboarding_escape_cancels_without_a_mutation_effect() {
+        let mut model = AppModel::default();
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::BeginOnboarding {
+                message: "Complete your dietary profile.".into(),
+            }),
+        );
+        assert!(submit_text(&mut model, "vegan").is_empty());
+        model.draft = "unsaved custom answer".into();
+        model.cursor = model.draft.chars().count();
+
+        let effects = dispatch(&mut model, Action::CancelVoice);
+
+        assert!(effects.is_empty());
+        assert!(model.onboarding.is_none());
+        assert!(model.draft.is_empty());
+        assert_eq!(model.operation, OperationState::Idle);
+        assert!(
+            model
+                .scrollback
+                .entries()
+                .back()
+                .is_some_and(|entry| entry.text.contains("Nothing was sent or saved"))
+        );
+    }
+
+    #[test]
     fn native_onboarding_uses_local_first_review_cancel_and_save_copy() {
         let mut review = AppModel::default();
         let _ = dispatch(
@@ -7748,7 +7783,9 @@ mod tests {
         assert!(!text.contains("Type `save` to grant profile-sync consent"));
 
         let mut cancelled = review.clone();
-        assert!(submit_text(&mut cancelled, "cancel").is_empty());
+        assert!(dispatch(&mut cancelled, Action::CancelVoice).is_empty());
+        assert!(cancelled.onboarding.is_none());
+        assert_eq!(cancelled.operation, OperationState::Idle);
         assert_eq!(
             cancelled.scrollback.entries().back().unwrap().text,
             crate::render::profile_copy(ProfileCopyStateV1::OnboardingSaveCancelled)

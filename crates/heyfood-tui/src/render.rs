@@ -1023,6 +1023,7 @@ mod tests {
             assert!(rendered.contains("Red dye / food colorings"), "{rendered}");
             assert!(rendered.contains("[✓]"), "{rendered}");
             assert!(rendered.contains("Space"), "{rendered}");
+            assert!(rendered.contains("Esc"), "{rendered}");
             assert!(rendered.contains("Page"), "{rendered}");
         }
     }

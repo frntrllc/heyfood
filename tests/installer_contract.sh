@@ -412,7 +412,7 @@ test_exact_native_install() {
   assert_contains "$DOWNLOAD_LOG" "/releases/download/v0.7.0/heyfood-installer-v0.7.0-$(host_target).tar.gz"
 }
 
-test_default_release_is_v063() {
+test_default_release_is_current() {
   new_case default
   make_release 0.7.0 0.7.0 native
   run_installer
@@ -546,7 +546,7 @@ assert_existing_binary_untouched() {
     fail "a failed installation changed the existing executable"
 }
 
-write_existing_v063_binary() {
+write_existing_current_binary() {
   mkdir -p "$BIN_DIR"
   cat >"$BIN_DIR/heyfood" <<'EOF'
 #!/usr/bin/env bash
@@ -601,7 +601,7 @@ test_current_installer_refuses_v062_before_download_and_preserves_state() {
   local binary_digest floor_digest state_digest state_sentinel
   new_case current-installer-v062-refusal
   use_native_state_installer
-  write_existing_v063_binary
+  write_existing_current_binary
   write_native_state_floor
   state_sentinel="$HEYFOOD_STATE_DIR/data/accounts/test-account/household-state.enc"
   mkdir -p "$(dirname "$state_sentinel")"
@@ -786,7 +786,7 @@ test_interruption_before_replacement_preserves_existing_binary() {
 test_source_invariants
 test_native_root_digest_vectors
 test_exact_native_install
-test_default_release_is_v063
+test_default_release_is_current
 test_streamed_install
 test_rejects_unsupported_or_unsafe_version_before_download
 test_rejects_uncontrolled_install_targets
