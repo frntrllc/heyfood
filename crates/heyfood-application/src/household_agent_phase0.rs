@@ -251,10 +251,15 @@ impl HouseholdAgentPhase0Proof {
             request.expected_disclosure_generation,
             &initial_disclosure.grants,
         )?;
-        let maximum_projection = minimum_projection(
-            request.requested_projection,
-            initial_disclosure.grants.maximum_projection_for(&subjects),
-        );
+        let maximum_projection =
+            if request.operation == heyfood_core::AgentHouseholdOperationV1::Scope {
+                AgentHouseholdProjectionV1::ContentFree
+            } else {
+                minimum_projection(
+                    request.requested_projection,
+                    initial_disclosure.grants.maximum_projection_for(&subjects),
+                )
+            };
         let authorized = AuthorizedAgentHouseholdPrepareV1 {
             request: request.clone(),
             maximum_projection,
@@ -296,7 +301,9 @@ impl HouseholdAgentPhase0Proof {
             != initial_disclosure.grants.generation()
             || current_disclosure.grants.revision_set_digest()
                 != initial_disclosure.grants.revision_set_digest();
-        let current_maximum = if disclosure_changed {
+        let current_maximum = if disclosure_changed
+            || request.operation == heyfood_core::AgentHouseholdOperationV1::Scope
+        {
             AgentHouseholdProjectionV1::ContentFree
         } else {
             minimum_projection(
@@ -357,7 +364,9 @@ impl HouseholdAgentPhase0Proof {
             || result.frozen_disclosure.grant_set_digest != disclosure.grants.revision_set_digest()
             || projection_rank(current_authorized_projection)
                 < projection_rank(result.frozen_disclosure.maximum_projection);
-        let maximum = if disclosure_changed {
+        let scope_is_content_free =
+            result.presentation.operation == heyfood_core::AgentHouseholdOperationV1::Scope;
+        let maximum = if disclosure_changed || scope_is_content_free {
             AgentHouseholdProjectionV1::ContentFree
         } else {
             minimum_projection(
@@ -497,54 +506,66 @@ fn disclosure_subjects_for_read(
     let Some(subject) = snapshot.resolved_subject.as_ref() else {
         return Ok(Vec::new());
     };
-    match subject {
-        AgentHouseholdSubjectV1::Self_ => {
-            if !snapshot.members.is_empty() {
-                return Err(phase0_error(
-                    "household_agent_subject_content_mismatch",
-                    "self household read returned another member's record",
-                ));
+    let mut subjects =
+        match subject {
+            AgentHouseholdSubjectV1::Self_ => {
+                if !snapshot.members.is_empty() {
+                    return Err(phase0_error(
+                        "household_agent_subject_content_mismatch",
+                        "self household read returned another member's record",
+                    ));
+                }
+                vec![AgentDisclosureGrantSubjectV1::Self_]
             }
-            Ok(vec![AgentDisclosureGrantSubjectV1::Self_])
-        }
-        AgentHouseholdSubjectV1::Member(member) => {
-            if snapshot.members.len() != 1 || snapshot.members[0].member_ref != *member {
-                return Err(phase0_error(
-                    "household_agent_subject_content_mismatch",
-                    "member household read returned a different member's record",
-                ));
+            AgentHouseholdSubjectV1::Member(member) => {
+                if snapshot.members.len() != 1 || snapshot.members[0].member_ref != *member {
+                    return Err(phase0_error(
+                        "household_agent_subject_content_mismatch",
+                        "member household read returned a different member's record",
+                    ));
+                }
+                vec![AgentDisclosureGrantSubjectV1::Member(member.clone())]
             }
-            Ok(vec![AgentDisclosureGrantSubjectV1::Member(member.clone())])
-        }
-        AgentHouseholdSubjectV1::Everyone => {
-            if snapshot.next_cursor.is_some()
-                || usize::from(snapshot.eligible_member_count)
-                    != snapshot.members.len().saturating_add(1)
-            {
-                return Err(phase0_error(
-                    "household_agent_everyone_incomplete",
-                    "everyone disclosure requires the complete eligible roster",
-                ));
+            AgentHouseholdSubjectV1::Everyone => {
+                if snapshot.next_cursor.is_some()
+                    || usize::from(snapshot.eligible_member_count)
+                        != snapshot.members.len().saturating_add(1)
+                {
+                    return Err(phase0_error(
+                        "household_agent_everyone_incomplete",
+                        "everyone disclosure requires the complete eligible roster",
+                    ));
+                }
+                let mut everyone_subjects = vec![AgentDisclosureGrantSubjectV1::Self_];
+                everyone_subjects.extend(snapshot.members.iter().map(|member| {
+                    AgentDisclosureGrantSubjectV1::Member(member.member_ref.clone())
+                }));
+                let original_length = everyone_subjects.len();
+                everyone_subjects.sort();
+                everyone_subjects.dedup();
+                if everyone_subjects.len() != original_length {
+                    return Err(phase0_error(
+                        "household_agent_subject_content_mismatch",
+                        "everyone household read returned a duplicate member record",
+                    ));
+                }
+                everyone_subjects
             }
-            let mut subjects = vec![AgentDisclosureGrantSubjectV1::Self_];
-            subjects.extend(
-                snapshot
-                    .members
-                    .iter()
-                    .map(|member| AgentDisclosureGrantSubjectV1::Member(member.member_ref.clone())),
-            );
-            let original_length = subjects.len();
-            subjects.sort();
-            subjects.dedup();
-            if subjects.len() != original_length {
-                return Err(phase0_error(
-                    "household_agent_subject_content_mismatch",
-                    "everyone household read returned a duplicate member record",
-                ));
+        };
+    if let Some(active_scope) = snapshot.active_scope.as_ref() {
+        match active_scope {
+            HouseholdScope::Subject(HouseholdSubjectId::Self_) => {
+                subjects.push(AgentDisclosureGrantSubjectV1::Self_);
             }
-            Ok(subjects)
+            HouseholdScope::Subject(HouseholdSubjectId::Member(member)) => {
+                subjects.push(AgentDisclosureGrantSubjectV1::Member(member.clone()));
+            }
+            HouseholdScope::Everyone => {}
         }
     }
+    subjects.sort();
+    subjects.dedup();
+    Ok(subjects)
 }
 
 fn scope_matches_subject(scope: &HouseholdScope, subject: &AgentHouseholdSubjectV1) -> bool {

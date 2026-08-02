@@ -711,6 +711,21 @@ impl fmt::Debug for AgentHouseholdMemberProjectionV1 {
     }
 }
 
+impl AgentHouseholdMemberProjectionV1 {
+    fn validate_wire_shape(&self) -> Result<(), AgentHouseholdContractErrorV1> {
+        if self.profile_schema_version == Some(0)
+            || self
+                .minimized_declared_profile
+                .as_ref()
+                .is_some_and(|profile| profile.validate_wire_shape().is_err())
+        {
+            Err(AgentHouseholdContractErrorV1::InvalidWireShape)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct AgentMinimizedDeclaredProfileV1 {
     pub diet_styles: Vec<String>,
@@ -985,16 +1000,16 @@ impl AgentHouseholdReadSnapshotV1 {
         if self.schema_version != AGENT_HOUSEHOLD_CONTRACT_VERSION
             || self.kind != AgentHouseholdReadResultKindV1::HouseholdReadResult
             || self.members.len() > usize::from(AGENT_HOUSEHOLD_MAX_MEMBERS_PER_PAGE)
+            || self.eligible_member_count > AGENT_HOUSEHOLD_MAX_MEMBERS_PER_PAGE
+            || self.restricted_member_count > AGENT_HOUSEHOLD_MAX_MEMBERS_PER_PAGE
             || self
                 .next_cursor
                 .as_ref()
                 .is_some_and(|value| !bounded_wire_text(value, 512))
-            || self.members.iter().any(|member| {
-                member
-                    .minimized_declared_profile
-                    .as_ref()
-                    .is_some_and(|profile| profile.validate_wire_shape().is_err())
-            })
+            || self
+                .members
+                .iter()
+                .any(|member| member.validate_wire_shape().is_err())
         {
             return Err(AgentHouseholdContractErrorV1::InvalidWireShape);
         }
@@ -1086,7 +1101,6 @@ pub enum AgentHouseholdChangeFieldV1 {
     Restrictions,
     HealthConditions,
     AvoidIngredients,
-    ActiveScope,
 }
 
 impl AgentHouseholdChangeFieldV1 {
@@ -1738,7 +1752,26 @@ impl LocalHouseholdProposalBindingV1 {
         created_at: CanonicalTimestampV1,
         expires_at: CanonicalTimestampV1,
     ) -> Result<Self, AgentHouseholdContractErrorV1> {
-        if expires_at <= created_at {
+        let member_shape_is_valid = match operation {
+            AgentHouseholdOperationV1::Add
+            | AgentHouseholdOperationV1::Edit
+            | AgentHouseholdOperationV1::Archive
+            | AgentHouseholdOperationV1::Restore => member_id.is_some(),
+            AgentHouseholdOperationV1::Scope => member_id.is_none(),
+        };
+        let projection_is_valid = match operation {
+            AgentHouseholdOperationV1::Add | AgentHouseholdOperationV1::Scope => {
+                projection == AgentHouseholdProjectionV1::ContentFree
+            }
+            AgentHouseholdOperationV1::Edit
+            | AgentHouseholdOperationV1::Archive
+            | AgentHouseholdOperationV1::Restore => true,
+        };
+        if expires_at <= created_at
+            || disclosure_purpose != AgentDisclosurePurposeV1::HouseholdAgentProposalStatus
+            || !member_shape_is_valid
+            || !projection_is_valid
+        {
             return Err(AgentHouseholdContractErrorV1::InvalidJournal);
         }
         Ok(Self {
@@ -2446,6 +2479,7 @@ impl TryFrom<JournalWireV1> for LocalHouseholdProposalJournalV1 {
             AgentHouseholdProposalStateV1::AwaitingLocalReview
                 | AgentHouseholdProposalStateV1::Committing
                 | AgentHouseholdProposalStateV1::Committed
+                | AgentHouseholdProposalStateV1::ProvenUncommitted
                 | AgentHouseholdProposalStateV1::ReconciliationRequired
         );
         let frozen_forbidden = matches!(
@@ -2648,7 +2682,14 @@ mod tests {
             CanonicalDigestV1::from_bytes([8; 32]),
             AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
             GenerationId::new(11),
-            AgentHouseholdProjectionV1::Profile,
+            if matches!(
+                operation,
+                AgentHouseholdOperationV1::Add | AgentHouseholdOperationV1::Scope
+            ) {
+                AgentHouseholdProjectionV1::ContentFree
+            } else {
+                AgentHouseholdProjectionV1::Profile
+            },
             revision(),
             profile_revision,
             CommitId::new(),
@@ -2735,7 +2776,7 @@ mod tests {
             AgentHouseholdOperationV1::Edit,
             GenerationId::new(4),
             profile_revision,
-            None,
+            Some(MemberId::new()),
         ));
         assert_eq!(
             authority.freeze_for_review(
@@ -2915,6 +2956,49 @@ mod tests {
         assert_eq!(
             LocalHouseholdProposalJournalV1::restore(
                 &serde_json::to_vec(&tampered).expect("tampered journal")
+            ),
+            Err(AgentHouseholdContractErrorV1::InvalidJournal)
+        );
+
+        let mut wrong_purpose: serde_json::Value =
+            serde_json::from_slice(&committing_bytes).expect("journal JSON");
+        wrong_purpose["binding"]["disclosure_purpose"] = serde_json::json!("household_agent_read");
+        assert_eq!(
+            LocalHouseholdProposalJournalV1::restore(
+                &serde_json::to_vec(&wrong_purpose).expect("wrong-purpose journal")
+            ),
+            Err(AgentHouseholdContractErrorV1::InvalidJournal)
+        );
+
+        let mut invalid_member_shape: serde_json::Value =
+            serde_json::from_slice(&committing_bytes).expect("journal JSON");
+        invalid_member_shape["binding"]["member_id"] = serde_json::Value::Null;
+        assert_eq!(
+            LocalHouseholdProposalJournalV1::restore(
+                &serde_json::to_vec(&invalid_member_shape).expect("invalid-member journal")
+            ),
+            Err(AgentHouseholdContractErrorV1::InvalidJournal)
+        );
+
+        let mut invalid_add_projection: serde_json::Value =
+            serde_json::from_slice(&committing_bytes).expect("journal JSON");
+        invalid_add_projection["binding"]["operation"] = serde_json::json!("add");
+        assert_eq!(
+            LocalHouseholdProposalJournalV1::restore(
+                &serde_json::to_vec(&invalid_add_projection).expect("invalid-add journal")
+            ),
+            Err(AgentHouseholdContractErrorV1::InvalidJournal)
+        );
+
+        let mut missing_proven_authority: serde_json::Value =
+            serde_json::from_slice(&committing_bytes).expect("journal JSON");
+        missing_proven_authority["state"] = serde_json::json!("proven_uncommitted");
+        missing_proven_authority["frozen"] = serde_json::Value::Null;
+        missing_proven_authority["proposal_generation"] = serde_json::json!(0);
+        assert_eq!(
+            LocalHouseholdProposalJournalV1::restore(
+                &serde_json::to_vec(&missing_proven_authority)
+                    .expect("missing-proven-authority journal")
             ),
             Err(AgentHouseholdContractErrorV1::InvalidJournal)
         );

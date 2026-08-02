@@ -92,7 +92,7 @@
       "required": ["field", "before", "after"],
       "properties": {
         "field": {
-          "enum": ["display_label", "relationship", "lifecycle", "diet_styles", "allergies", "restrictions", "health_conditions", "avoid_ingredients", "active_scope"]
+          "enum": ["display_label", "relationship", "lifecycle", "diet_styles", "allergies", "restrictions", "health_conditions", "avoid_ingredients"]
         },
         "before": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/change_value" } },
         "after": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/change_value" } }

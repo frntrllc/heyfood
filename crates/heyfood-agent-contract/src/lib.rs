@@ -1972,7 +1972,7 @@ mod household_phase0_contract_tests {
             ),
             (
                 PRESENTATION_SCHEMA,
-                "6c43b331da204d413ba79399df6a5ae4ffc8e42829d8a4937cf2f093caf77189",
+                "ab123c4bc2cdef913f1ab27918399dcc686d18510e48a987f02af5c5c9ab8582",
             ),
             (
                 OUTCOME_SCHEMA,

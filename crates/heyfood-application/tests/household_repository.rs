@@ -2462,7 +2462,7 @@ fn phase0_agent_effects_execute_all_five_exact_once_repository_paths() {
         CanonicalDigestV1::from_bytes([0x52; 32]),
         AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
         GenerationId::new(9),
-        AgentHouseholdProjectionV1::Profile,
+        AgentHouseholdProjectionV1::ContentFree,
         state.revision,
         None,
         add_commit_id,

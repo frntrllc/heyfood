@@ -441,6 +441,14 @@ authority. Its closed projection variants are:
 | Roster grant only | The common fields plus human-readable affected member, stable member reference, non-profile consequences, and recoverability |
 | Roster and profile-read grants | The roster projection plus allowlisted before/after profile fields |
 
+Phase 0 deliberately keeps every agent-visible `scope` proposal content-free.
+The exact previous and resulting scope remain in the encrypted local proposal
+journal and attached-TUI review; they are not represented as free-form
+`ActiveScope` change strings. Archive status may disclose the affected member
+only under that member's current grant, while any exact fallback-scope detail
+remains local. This avoids turning an untyped diff into a second identity
+carrier before a separately reviewed typed scope presentation exists.
+
 Every variant may report `prepared`, `awaiting_local_input`,
 `awaiting_local_review`, `committing`, `committed`, `cancelled`, `expired`,
 `stale`, `rejected`, `proven_uncommitted`, or `reconciliation_required`.

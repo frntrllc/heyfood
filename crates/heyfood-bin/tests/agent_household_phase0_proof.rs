@@ -33,7 +33,7 @@ const PROOF_MANIFEST: &[u8] = include_bytes!(concat!(
     "/../../docs/release-evidence/agent-household-phase0/phase0-proof-manifest.json"
 ));
 const PROOF_MANIFEST_SHA256: &str =
-    "aa521002b5834641696a840615798097059275d692564f1157f52a916ce6c954";
+    "c5a94c29e344b51fdb5b5f4f79d444287a842f6c256351adbf6a5c9c83160f81";
 
 struct FixtureHouseholdAgentPort {
     account: AccountId,
@@ -49,8 +49,10 @@ struct FixtureHouseholdAgentPort {
     disclosure_wrong_account: AtomicBool,
     disclosure_observed_after_expiry: AtomicBool,
     returned_member_override: Mutex<Option<MemberId>>,
+    active_scope_override: Mutex<Option<HouseholdScope>>,
     proposal_member_override: Mutex<Option<MemberId>>,
     invalid_read_wire: AtomicBool,
+    invalid_read_count_wire: AtomicBool,
     invalid_proposal_wire: AtomicBool,
     proposal: Mutex<Option<StoredFixtureProposal>>,
 }
@@ -80,8 +82,10 @@ impl FixtureHouseholdAgentPort {
             disclosure_wrong_account: AtomicBool::new(false),
             disclosure_observed_after_expiry: AtomicBool::new(false),
             returned_member_override: Mutex::new(None),
+            active_scope_override: Mutex::new(None),
             proposal_member_override: Mutex::new(None),
             invalid_read_wire: AtomicBool::new(false),
+            invalid_read_count_wire: AtomicBool::new(false),
             invalid_proposal_wire: AtomicBool::new(false),
             proposal: Mutex::new(None),
         }
@@ -270,7 +274,7 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
             {
                 profile.allergies = vec!["milk".to_owned(), "milk".to_owned()];
             }
-            let active_scope = if request.subject.is_none() {
+            let default_active_scope = if request.subject.is_none() {
                 match &resolved_subject {
                     AgentHouseholdSubjectV1::Self_ => {
                         HouseholdScope::Subject(HouseholdSubjectId::self_())
@@ -283,6 +287,12 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
             } else {
                 HouseholdScope::Subject(HouseholdSubjectId::member(self.member.clone()))
             };
+            let active_scope = self
+                .active_scope_override
+                .lock()
+                .expect("active scope override lock")
+                .clone()
+                .unwrap_or(default_active_scope);
             Ok(BoundAgentHouseholdReadV1 {
                 account: self.account.clone(),
                 snapshot: AgentHouseholdReadSnapshotV1 {
@@ -294,7 +304,11 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
                     active_scope: Some(active_scope),
                     household_revision: self.current_revision(),
                     disclosure_generation: self.current_generation(),
-                    eligible_member_count: 2,
+                    eligible_member_count: if self.invalid_read_count_wire.load(Ordering::SeqCst) {
+                        101
+                    } else {
+                        2
+                    },
                     restricted_member_count: 0,
                     members,
                     next_cursor: None,
@@ -771,12 +785,30 @@ async fn application_rejects_authorized_a_with_returned_b_for_reads_and_prepare(
     *proposal_port
         .proposal_member_override
         .lock()
-        .expect("proposal override lock") = Some(other_member);
+        .expect("proposal override lock") = Some(other_member.clone());
     let error = HouseholdAgentPhase0Proof::new(proposal_port)
         .prepare(account(), edit_prepare_request(), CancellationToken::new())
         .await
         .expect_err("member A proposal cannot return member B");
     assert_eq!(error.code, "household_agent_subject_content_mismatch");
+
+    let scope_port = Arc::new(FixtureHouseholdAgentPort::new());
+    *scope_port
+        .active_scope_override
+        .lock()
+        .expect("active scope override lock") = Some(HouseholdScope::Subject(
+        HouseholdSubjectId::member(other_member),
+    ));
+    let result = HouseholdAgentPhase0Proof::new(scope_port)
+        .read(
+            account(),
+            member_read_request(AgentHouseholdProjectionV1::Profile),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("ungranted active-scope identity downgrades the complete result");
+    assert_eq!(result.projection, AgentHouseholdProjectionV1::ContentFree);
+    assert!(result.active_scope.is_none());
 }
 
 #[tokio::test]
@@ -819,6 +851,20 @@ async fn application_rejects_rust_values_that_closed_json_schemas_cannot_emit() 
         .expect_err("duplicate profile values fail before disclosure");
     assert_eq!(error.code, "household_agent_read_contract");
 
+    let count_port = Arc::new(FixtureHouseholdAgentPort::new());
+    count_port
+        .invalid_read_count_wire
+        .store(true, Ordering::SeqCst);
+    let error = HouseholdAgentPhase0Proof::new(count_port)
+        .read(
+            account(),
+            member_read_request(AgentHouseholdProjectionV1::Profile),
+            CancellationToken::new(),
+        )
+        .await
+        .expect_err("Rust u16 values above the JSON schema bound fail closed");
+    assert_eq!(error.code, "household_agent_read_contract");
+
     let proposal_port = Arc::new(FixtureHouseholdAgentPort::new());
     proposal_port
         .invalid_proposal_wire
@@ -828,6 +874,35 @@ async fn application_rejects_rust_values_that_closed_json_schemas_cannot_emit() 
         .await
         .expect_err("control-bearing proposal values fail before output");
     assert_eq!(error.code, "household_agent_proposal_contract");
+}
+
+#[tokio::test]
+async fn scope_proposals_are_always_agent_visible_as_content_free_handoffs() {
+    let port = Arc::new(FixtureHouseholdAgentPort::new());
+    let result = HouseholdAgentPhase0Proof::new(port.clone())
+        .prepare(
+            account(),
+            AgentHouseholdPrepareRequestV1 {
+                schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
+                kind: AgentHouseholdPrepareRequestKindV1::PrepareHouseholdChange,
+                operation: AgentHouseholdOperationV1::Scope,
+                requested_projection: AgentHouseholdProjectionV1::Profile,
+                expected_disclosure_generation: GenerationId::new(3),
+                expected_household_revision: port.current_revision(),
+                affected_member_ref: None,
+                bundled_scope: Some(HouseholdScope::Subject(HouseholdSubjectId::member(
+                    port.member.clone(),
+                ))),
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect("scope prepare");
+    assert_eq!(result.projection, AgentHouseholdProjectionV1::ContentFree);
+    assert!(result.affected_member_ref.is_none());
+    assert!(result.affected_member_label.is_none());
+    assert!(result.changes.is_empty());
+    assert!(result.consequences.is_empty());
 }
 
 #[tokio::test]
