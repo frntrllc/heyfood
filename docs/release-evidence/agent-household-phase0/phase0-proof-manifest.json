@@ -27,7 +27,10 @@
     "closed_cas_transition_graph",
     "crash_reconciliation_from_applied_commit_fingerprint",
     "repository_capability_bound_commit_evidence",
+    "durable_key_derived_commit_evidence_after_repository_reopen",
+    "caller_synthesized_state_cannot_issue_commit_evidence",
     "authoritative_unapplied_commit_proof",
+    "cross_document_schema_digest_resolution",
     "five_effect_exact_once_repository_replay",
     "rust_wire_schema_parity",
     "closed_request_wire_validation"

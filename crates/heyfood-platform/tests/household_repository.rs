@@ -13,10 +13,14 @@ use heyfood_application::{
     NativeHouseholdModeV1, NativeMemberAgeEvidenceV1, PortError, resolve_household_initialize_v1,
 };
 use heyfood_core::{
-    AccountId, AppliedCommitOutcomeV1, CanonicalDigestV1, CanonicalTimestampV1, CommitId,
-    DisplayName, HOUSEHOLD_STATE_SCHEMA_VERSION, HouseholdEffectV1, HouseholdOwnerV1,
-    HouseholdProfileStateV1, HouseholdRevision, HouseholdScope, HouseholdStateV1,
-    HouseholdSubjectId, ImportedCompatibilityStateV1, LegacySourceIdentityV1,
+    AccountId, AgentDisclosurePurposeV1, AgentHouseholdOperationV1, AgentHouseholdProjectionV1,
+    AgentHouseholdProposalIdV1, AppliedCommitOutcomeV1, CanonicalDigestV1, CanonicalTimestampV1,
+    CommitId, DisplayName, GenerationId, HOUSEHOLD_STATE_SCHEMA_VERSION,
+    HouseholdCommitEvidenceBindingV1, HouseholdEffectV1, HouseholdOwnerV1, HouseholdProfileStateV1,
+    HouseholdRevision, HouseholdScope, HouseholdStateV1, HouseholdSubjectId,
+    ImportedCompatibilityStateV1, LegacySourceIdentityV1, LocalHouseholdAuthoritySnapshotV1,
+    LocalHouseholdFrozenCandidateV1, LocalHouseholdProposalAuthorityV1,
+    LocalHouseholdProposalBindingV1, LocalHouseholdProposalJournalV1,
     MigrationDispositionManifestV1, MigrationProvenanceV1, OnboardingProfileInput, RelationshipV1,
     canonical_sha256_v1,
 };
@@ -687,6 +691,157 @@ async fn initialize_load_commit_and_exact_replay_are_live_and_copy_on_write() {
         .expect("reload")
         .expect("state");
     assert_eq!(reloaded.state.revision, committed.resulting_revision);
+}
+
+#[tokio::test]
+async fn commit_evidence_is_rederived_after_repository_reopen_and_ignores_synthesized_state() {
+    let prepared = prepare_repository("commit-evidence-reopen").await;
+    let native_repository = repository(&prepared, NativeHouseholdModeV1::NativeEnabled);
+    native_repository
+        .initialize(prepared.command.clone(), CancellationToken::new())
+        .await
+        .expect("initialize repository");
+    let loaded = native_repository
+        .load(&prepared.account, CancellationToken::new())
+        .await
+        .expect("load repository")
+        .expect("initialized state");
+    let proposal_ref = AgentHouseholdProposalIdV1::new();
+    let commit_id = CommitId::from_uuid(fixed_uuid("55555555-5555-4555-8555-555555555555"));
+    let command = next_commit(
+        &loaded.state,
+        &prepared.account,
+        loaded.state.revision,
+        commit_id.as_uuid(),
+        timestamp(1),
+    );
+    let evidence = native_repository
+        .reserve_agent_commit_evidence(proposal_ref, commit_id, CancellationToken::new())
+        .await
+        .expect("repository reserves evidence verifier");
+    let proposal_digest = CanonicalDigestV1::from_bytes([0x61; 32]);
+    let disclosure_digest = CanonicalDigestV1::from_bytes([0x62; 32]);
+    let lifecycle_generation = GenerationId::new(7);
+    let disclosure_generation = GenerationId::new(8);
+    let binding = LocalHouseholdProposalBindingV1::new(
+        prepared.account.clone(),
+        proposal_ref,
+        AgentHouseholdOperationV1::Scope,
+        disclosure_generation,
+        disclosure_digest,
+        AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
+        lifecycle_generation,
+        AgentHouseholdProjectionV1::ContentFree,
+        loaded.state.revision,
+        None,
+        commit_id,
+        evidence.clone(),
+        None,
+        loaded.state.active_scope.clone(),
+        CanonicalDigestV1::from_bytes([0x63; 32]),
+        CanonicalDigestV1::from_bytes([0x64; 32]),
+        timestamp(0),
+        CanonicalTimestampV1::parse("2026-07-30T12:10:00.000Z").expect("expiry"),
+    )
+    .expect("proposal binding");
+    let authority = LocalHouseholdAuthoritySnapshotV1::new(
+        prepared.account.clone(),
+        disclosure_generation,
+        disclosure_digest,
+        AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
+        true,
+        AgentHouseholdProjectionV1::ContentFree,
+        lifecycle_generation,
+        loaded.state.revision,
+        None,
+        timestamp(1),
+    );
+    let frozen = LocalHouseholdFrozenCandidateV1::new(
+        proposal_digest,
+        command.claimed_effect_fingerprint,
+        CanonicalDigestV1::from_bytes([0x65; 32]),
+        CanonicalDigestV1::from_bytes([0x66; 32]),
+        loaded.state.active_scope.clone(),
+        false,
+        timestamp(1),
+    );
+    let mut journal =
+        LocalHouseholdProposalJournalV1::new(LocalHouseholdProposalAuthorityV1::prepared(binding))
+            .expect("proposal journal");
+    let prepared_token = journal.cas_token();
+    journal
+        .freeze_for_review(&prepared_token, &authority, frozen)
+        .expect("freeze proposal");
+    let review_token = journal.cas_token();
+    journal
+        .begin_commit(&review_token, &authority, proposal_digest)
+        .expect("begin commit");
+    let committing_bytes = journal.persisted_bytes().expect("persist journal");
+
+    drop(native_repository);
+    let reopened = repository(&prepared, NativeHouseholdModeV1::NativeEnabled);
+    let unapplied = reopened
+        .prove_unapplied_agent_commit(
+            &evidence,
+            proposal_ref,
+            commit_id,
+            loaded.state.revision,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("reopened repository proves exact absence");
+    let mut absent_journal =
+        LocalHouseholdProposalJournalV1::restore(&committing_bytes).expect("restore journal");
+    let committing_token = absent_journal.cas_token();
+    absent_journal
+        .mark_reconciliation_required(&committing_token)
+        .expect("mark uncertain");
+    let reconciliation_token = absent_journal.cas_token();
+    absent_journal
+        .reconcile_unapplied_commit(&reconciliation_token, &unapplied)
+        .expect("close exact absence");
+
+    let forged = HouseholdCommitEvidenceBindingV1::from_repository_secret(
+        prepared.account.clone(),
+        proposal_ref,
+        commit_id,
+        &[0xa7; 32],
+    );
+    let mut synthesized_state = loaded.state.clone();
+    synthesized_state.updated_at = timestamp(9);
+    assert_ne!(synthesized_state.updated_at, loaded.state.updated_at);
+    let forged_error = reopened
+        .prove_unapplied_agent_commit(
+            &forged,
+            proposal_ref,
+            commit_id,
+            synthesized_state.revision,
+            CancellationToken::new(),
+        )
+        .await
+        .expect_err("proposal-created verifier cannot replace repository authority");
+    assert_eq!(forged_error.code, "household_commit_evidence_mismatch");
+
+    reopened
+        .commit(command.clone(), CancellationToken::new())
+        .await
+        .expect("commit exact proposal effect");
+    drop(reopened);
+    let reopened_after_commit = repository(&prepared, NativeHouseholdModeV1::NativeEnabled);
+    let applied = reopened_after_commit
+        .prove_applied_agent_commit(&evidence, proposal_ref, commit_id, CancellationToken::new())
+        .await
+        .expect("reopened repository proves applied ledger entry");
+    let mut committed_journal =
+        LocalHouseholdProposalJournalV1::restore(&committing_bytes).expect("restore journal");
+    let committing_token = committed_journal.cas_token();
+    committed_journal
+        .reconcile_applied_commit(&committing_token, &applied)
+        .expect("close applied commit after process-shaped restart");
+    assert_eq!(
+        committed_journal.state(),
+        heyfood_core::AgentHouseholdProposalStateV1::Committed
+    );
 }
 
 #[tokio::test]

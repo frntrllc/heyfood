@@ -9,6 +9,16 @@
     "exact_replay_after_persistence": true,
     "conflicting_fingerprint_rejected": true
   },
+  "restart_repository_evidence_test": {
+    "source": "crates/heyfood-platform/tests/household_repository.rs",
+    "name": "commit_evidence_is_rederived_after_repository_reopen_and_ignores_synthesized_state",
+    "native_repository_closed_and_reopened": true,
+    "secret_securely_rederived_from_durable_account_key": true,
+    "authoritative_ledger_read_internal": true,
+    "caller_state_input_absent": true,
+    "forged_verifier_rejected": true,
+    "exact_absence_and_applied_paths_proven": true
+  },
   "operations": [
     { "operation": "add", "effect": "create_member_with_declared_profile_and_scope", "compound_invariant": "preserves_prior_scope", "preallocated_commit_id": true, "preallocated_member_id": true, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 },
     { "operation": "edit", "effect": "replace_member_and_declared_profile", "compound_invariant": "member_and_profile_atomic", "preallocated_commit_id": true, "preallocated_member_id": false, "fingerprint_frozen_after_complete_input": true, "co_committed_revision_delta": 1 },

@@ -8,16 +8,23 @@
 use std::{fmt, sync::Arc};
 
 use heyfood_application::{
-    BoxFuture, HouseholdCommit, HouseholdCommitOutcome, HouseholdErase, HouseholdEraseOutcome,
-    HouseholdInitialize, HouseholdLoad, HouseholdMutationAuthorityPort, HouseholdReadLeaseV1,
-    HouseholdRepositoryPort, HouseholdRepositoryResolutionV1, HouseholdSession,
-    NativeHouseholdModeV1, PortError, resolve_household_commit_v1, resolve_household_initialize_v1,
+    BoxFuture, HouseholdCommit, HouseholdCommitEvidenceRepositoryPort, HouseholdCommitOutcome,
+    HouseholdErase, HouseholdEraseOutcome, HouseholdInitialize, HouseholdLoad,
+    HouseholdMutationAuthorityPort, HouseholdReadLeaseV1, HouseholdRepositoryPort,
+    HouseholdRepositoryResolutionV1, HouseholdSession, NativeHouseholdModeV1, PortError,
+    resolve_household_commit_v1, resolve_household_initialize_v1,
 };
 use heyfood_core::{
-    AccountId, AppliedCommitOutcomeV1, CommitId, HouseholdStateV1, LegacySourceIdentityV1,
-    canonical_sha256_v1, decode_canonical_household_state_v1, domain_hash_v1,
+    AccountId, AgentHouseholdContractErrorV1, AgentHouseholdProposalIdV1, AppliedCommitOutcomeV1,
+    AppliedHouseholdCommitProofV1, CommitId, HouseholdCommitEvidenceBindingV1,
+    HouseholdEffectFingerprintV1, HouseholdRevision, HouseholdStateV1, LegacySourceIdentityV1,
+    UnappliedHouseholdCommitProofV1, canonical_sha256_v1, decode_canonical_household_state_v1,
+    domain_hash_v1,
 };
+use hkdf::Hkdf;
+use sha2::Sha256;
 use tokio_util::sync::CancellationToken;
+use zeroize::Zeroizing;
 
 use crate::household_vault::HouseholdVaultStartupArtifactsV1;
 use crate::{
@@ -30,6 +37,8 @@ use crate::{
 };
 
 const ACCOUNT_DIGEST_CONTRACT: &str = "heyfood.household.account-digest.v1";
+const COMMIT_EVIDENCE_HKDF_SALT: &[u8] = b"heyfood.household.commit-evidence.hkdf.salt.v1";
+const COMMIT_EVIDENCE_HKDF_INFO: &[u8] = b"heyfood.household.commit-evidence.capability.v1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RepositoryAccessV1 {
@@ -101,6 +110,129 @@ impl NativeHouseholdRepository {
     #[must_use]
     pub fn account(&self) -> &AccountId {
         &self.account
+    }
+
+    /// Reserve the opaque verifier for one exact future proposal commit.
+    /// The corresponding secret is securely rederived from the native
+    /// repository key after restart. It is never exposed as data; a successful
+    /// observation carries it only inside a redacted, zeroizing proof.
+    pub async fn reserve_agent_commit_evidence(
+        &self,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+        cancellation: CancellationToken,
+    ) -> Result<HouseholdCommitEvidenceBindingV1, PortError> {
+        let mut vault_lease = self
+            .acquire_vault_lease(HouseholdVaultLeaseModeV1::RequireExisting, &cancellation)
+            .await?;
+        let (guard, key) = self
+            .reread_guard_and_key(&vault_lease, &cancellation)
+            .await?;
+        let _ = self
+            .load_committed_under_lease(&mut vault_lease, &guard, &key, cancellation.clone())
+            .await?;
+        check_cancelled(&cancellation)?;
+        let secret =
+            derive_commit_evidence_secret(&key.active_key, &self.account, proposal_ref, commit_id)?;
+        Ok(HouseholdCommitEvidenceBindingV1::from_repository_secret(
+            self.account.clone(),
+            proposal_ref,
+            commit_id,
+            &secret,
+        ))
+    }
+
+    /// Reopen the authoritative repository and prove that the exact commit is
+    /// present in its authenticated applied-commit ledger. No caller-provided
+    /// household state participates in this decision.
+    pub async fn prove_applied_agent_commit(
+        &self,
+        binding: &HouseholdCommitEvidenceBindingV1,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+        cancellation: CancellationToken,
+    ) -> Result<AppliedHouseholdCommitProofV1, PortError> {
+        let (state, secret) = self
+            .load_commit_evidence_state(proposal_ref, commit_id, cancellation)
+            .await?;
+        let expected_binding = HouseholdCommitEvidenceBindingV1::from_repository_secret(
+            self.account.clone(),
+            proposal_ref,
+            commit_id,
+            &secret,
+        );
+        if &expected_binding != binding {
+            return Err(commit_evidence_mismatch_error());
+        }
+        let record = state
+            .bounded_applied_commits
+            .iter()
+            .find(|record| {
+                record.commit_id == commit_id && record.outcome == AppliedCommitOutcomeV1::Committed
+            })
+            .ok_or_else(commit_evidence_mismatch_error)?;
+        binding
+            .seal_applied_repository_observation(
+                &secret,
+                HouseholdEffectFingerprintV1::from_digest(record.fingerprint),
+                record.resulting_revision,
+            )
+            .map_err(commit_evidence_contract_error)
+    }
+
+    /// Reopen the authoritative repository and prove exact absence only while
+    /// its revision remains the frozen pre-dispatch revision.
+    pub async fn prove_unapplied_agent_commit(
+        &self,
+        binding: &HouseholdCommitEvidenceBindingV1,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+        expected_revision: HouseholdRevision,
+        cancellation: CancellationToken,
+    ) -> Result<UnappliedHouseholdCommitProofV1, PortError> {
+        let (state, secret) = self
+            .load_commit_evidence_state(proposal_ref, commit_id, cancellation)
+            .await?;
+        let expected_binding = HouseholdCommitEvidenceBindingV1::from_repository_secret(
+            self.account.clone(),
+            proposal_ref,
+            commit_id,
+            &secret,
+        );
+        if &expected_binding != binding
+            || state.revision != expected_revision
+            || state
+                .bounded_applied_commits
+                .iter()
+                .any(|record| record.commit_id == commit_id)
+        {
+            return Err(commit_evidence_mismatch_error());
+        }
+        binding
+            .seal_unapplied_repository_observation(&secret, state.revision)
+            .map_err(commit_evidence_contract_error)
+    }
+
+    async fn load_commit_evidence_state(
+        &self,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+        cancellation: CancellationToken,
+    ) -> Result<(HouseholdStateV1, Zeroizing<[u8; 32]>), PortError> {
+        check_cancelled(&cancellation)?;
+        let mut vault_lease = self
+            .acquire_vault_lease(HouseholdVaultLeaseModeV1::RequireExisting, &cancellation)
+            .await?;
+        let (guard, key) = self
+            .reread_guard_and_key(&vault_lease, &cancellation)
+            .await?;
+        let loaded = self
+            .load_committed_under_lease(&mut vault_lease, &guard, &key, cancellation.clone())
+            .await?;
+        check_cancelled(&cancellation)?;
+        let secret =
+            derive_commit_evidence_secret(&key.active_key, &self.account, proposal_ref, commit_id)?;
+        Ok((loaded.state, secret))
     }
 
     /// Wrap this concrete adapter in the live application session without
@@ -1086,6 +1218,56 @@ impl HouseholdRepositoryPort for NativeHouseholdRepository {
     }
 }
 
+impl HouseholdCommitEvidenceRepositoryPort for NativeHouseholdRepository {
+    fn reserve_agent_commit_evidence(
+        &self,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<HouseholdCommitEvidenceBindingV1, PortError>> {
+        Box::pin(NativeHouseholdRepository::reserve_agent_commit_evidence(
+            self,
+            proposal_ref,
+            commit_id,
+            cancellation,
+        ))
+    }
+
+    fn prove_applied_agent_commit<'a>(
+        &'a self,
+        binding: &'a HouseholdCommitEvidenceBindingV1,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<AppliedHouseholdCommitProofV1, PortError>> {
+        Box::pin(NativeHouseholdRepository::prove_applied_agent_commit(
+            self,
+            binding,
+            proposal_ref,
+            commit_id,
+            cancellation,
+        ))
+    }
+
+    fn prove_unapplied_agent_commit<'a>(
+        &'a self,
+        binding: &'a HouseholdCommitEvidenceBindingV1,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+        expected_revision: HouseholdRevision,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<UnappliedHouseholdCommitProofV1, PortError>> {
+        Box::pin(NativeHouseholdRepository::prove_unapplied_agent_commit(
+            self,
+            binding,
+            proposal_ref,
+            commit_id,
+            expected_revision,
+            cancellation,
+        ))
+    }
+}
+
 fn require_committed_guard(guard: &HouseholdMigrationGuardDocument) -> Result<(), PortError> {
     if !matches!(
         guard.state(),
@@ -1098,6 +1280,42 @@ fn require_committed_guard(guard: &HouseholdMigrationGuardDocument) -> Result<()
         ));
     }
     Ok(())
+}
+
+fn derive_commit_evidence_secret(
+    root_key: &HouseholdKeyMaterial,
+    account: &AccountId,
+    proposal_ref: AgentHouseholdProposalIdV1,
+    commit_id: CommitId,
+) -> Result<Zeroizing<[u8; 32]>, PortError> {
+    let account_bytes = account.as_str().as_bytes();
+    let mut info =
+        Vec::with_capacity(COMMIT_EVIDENCE_HKDF_INFO.len() + 8 + account_bytes.len() + (2 * 16));
+    info.extend_from_slice(COMMIT_EVIDENCE_HKDF_INFO);
+    info.extend_from_slice(
+        &u64::try_from(account_bytes.len())
+            .map_err(|_| commit_evidence_mismatch_error())?
+            .to_be_bytes(),
+    );
+    info.extend_from_slice(account_bytes);
+    info.extend_from_slice(proposal_ref.as_uuid().as_bytes());
+    info.extend_from_slice(commit_id.as_uuid().as_bytes());
+    let hkdf = Hkdf::<Sha256>::new(Some(COMMIT_EVIDENCE_HKDF_SALT), root_key.expose());
+    let mut secret = Zeroizing::new([0_u8; 32]);
+    hkdf.expand(&info, secret.as_mut())
+        .map_err(|_| commit_evidence_mismatch_error())?;
+    Ok(secret)
+}
+
+fn commit_evidence_contract_error(_: AgentHouseholdContractErrorV1) -> PortError {
+    commit_evidence_mismatch_error()
+}
+
+fn commit_evidence_mismatch_error() -> PortError {
+    PortError::new(
+        "household_commit_evidence_mismatch",
+        "household commit evidence did not match the authoritative repository",
+    )
 }
 
 fn validate_guard_provenance(

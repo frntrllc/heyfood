@@ -5,9 +5,10 @@ use std::future::Future;
 use std::pin::Pin;
 
 use heyfood_core::{
-    AccountId, AgentEvent, BrowserUrl, CanonicalDateV1, CanonicalTimestampV1, ClientConfig,
-    CommitId, CredentialVersion, MemberId, OperationId, RefreshOutcome, RefreshRequest,
-    SessionCredentials,
+    AccountId, AgentEvent, AgentHouseholdProposalIdV1, AppliedHouseholdCommitProofV1, BrowserUrl,
+    CanonicalDateV1, CanonicalTimestampV1, ClientConfig, CommitId, CredentialVersion,
+    HouseholdCommitEvidenceBindingV1, HouseholdRevision, MemberId, OperationId, RefreshOutcome,
+    RefreshRequest, SessionCredentials, UnappliedHouseholdCommitProofV1,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -249,6 +250,36 @@ pub trait HouseholdRepositoryPort: Send + Sync {
         command: HouseholdErase,
         cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<HouseholdEraseOutcome, PortError>>;
+}
+
+/// Durable commit-evidence custody owned by the native household repository.
+/// Implementations must derive or restore authority under their secure
+/// account-bound key, read the authoritative ledger internally, and never
+/// accept a household-state DTO from the caller.
+pub trait HouseholdCommitEvidenceRepositoryPort: Send + Sync {
+    fn reserve_agent_commit_evidence(
+        &self,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<HouseholdCommitEvidenceBindingV1, PortError>>;
+
+    fn prove_applied_agent_commit<'a>(
+        &'a self,
+        binding: &'a HouseholdCommitEvidenceBindingV1,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<AppliedHouseholdCommitProofV1, PortError>>;
+
+    fn prove_unapplied_agent_commit<'a>(
+        &'a self,
+        binding: &'a HouseholdCommitEvidenceBindingV1,
+        proposal_ref: AgentHouseholdProposalIdV1,
+        commit_id: CommitId,
+        expected_revision: HouseholdRevision,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'a, Result<UnappliedHouseholdCommitProofV1, PortError>>;
 }
 
 /// Phase-0-only local household agent persistence seam.

@@ -1369,7 +1369,7 @@ mod tests {
 
 #[cfg(test)]
 mod household_phase0_contract_tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use serde_json::Value;
 
@@ -2060,5 +2060,137 @@ mod household_phase0_contract_tests {
                 .iter()
                 .all(|operation| operation["fingerprint_frozen_after_complete_input"] == true)
         );
+    }
+
+    #[test]
+    fn manifest_and_matrix_schema_digests_resolve_to_checked_in_bytes() {
+        let schemas = [
+            CONTEXT_INPUT_SCHEMA,
+            MEMBER_INPUT_SCHEMA,
+            READ_SCHEMA,
+            ACTION_SCHEMA,
+            GET_CHANGE_INPUT_SCHEMA,
+            CANCEL_INPUT_SCHEMA,
+            RECONCILE_INPUT_SCHEMA,
+            PRESENTATION_SCHEMA,
+            OUTCOME_SCHEMA,
+            LOCAL_APPROVAL_SCHEMA,
+            DISCLOSURE_SCHEMA,
+            COMPATIBILITY_SCHEMA,
+            NATIVE_STATE_SCHEMA,
+            MANIFEST_V3_SCHEMA,
+        ];
+        let by_id = schemas
+            .into_iter()
+            .map(|bytes| {
+                let document = parse(bytes);
+                (
+                    document["$id"].as_str().expect("schema $id").to_owned(),
+                    (bytes, sha256_hex(bytes.as_bytes())),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let manifest = parse(MANIFEST_V3);
+        for reference in manifest["household_contracts"]
+            .as_object()
+            .expect("household contracts")
+            .values()
+        {
+            let Some(id) = reference["id"].as_str() else {
+                continue;
+            };
+            let (_, digest) = by_id.get(id).expect("contract schema raw bytes");
+            assert_eq!(
+                reference["sha256"],
+                digest.as_str(),
+                "schema drift for {id}"
+            );
+        }
+        let manifest_tools = manifest["mcp_inventory"]["tools"]
+            .as_array()
+            .expect("manifest tool additions");
+        for tool in manifest_tools {
+            for field in ["input_schema", "result_schema"] {
+                let reference = &tool[field];
+                let id = reference["id"].as_str().expect("tool schema id");
+                let Some((_, digest)) = by_id.get(id) else {
+                    assert!(id.starts_with("urn:heyfood:mcp:v1:"));
+                    continue;
+                };
+                assert_eq!(
+                    reference["sha256"],
+                    digest.as_str(),
+                    "{} {field} drifted from {id}",
+                    tool["name"]
+                );
+            }
+        }
+
+        let matrix = parse(COMMAND_TOOL_MATRIX);
+        let path_bytes = BTreeMap::from([
+            (
+                "schemas/v1/heyfood-agent-compatibility.schema.json",
+                COMPATIBILITY_SCHEMA,
+            ),
+            (
+                "schemas/v1/agent-household-context-input.schema.json",
+                CONTEXT_INPUT_SCHEMA,
+            ),
+            (
+                "schemas/v1/agent-household-member-input.schema.json",
+                MEMBER_INPUT_SCHEMA,
+            ),
+            ("schemas/v1/agent-household-read.schema.json", READ_SCHEMA),
+        ]);
+        for command in matrix["future_v3"]["one_shot_commands"]
+            .as_array()
+            .expect("one-shot commands")
+        {
+            for (path_field, digest_field) in [
+                ("input_schema", "input_schema_sha256"),
+                ("result_schema", "result_schema_sha256"),
+            ] {
+                let Some(path) = command[path_field].as_str() else {
+                    assert!(command[digest_field].is_null());
+                    continue;
+                };
+                let bytes = path_bytes.get(path).expect("matrix schema raw bytes");
+                assert_eq!(
+                    command[digest_field],
+                    sha256_hex(bytes.as_bytes()),
+                    "{} {path_field} drifted from {path}",
+                    command["path"]
+                );
+            }
+        }
+        let manifest_tools_by_name = manifest_tools
+            .iter()
+            .map(|tool| (tool["name"].as_str().expect("tool name"), tool))
+            .collect::<BTreeMap<_, _>>();
+        for tool in matrix["future_v3"]["mcp_tools"]
+            .as_array()
+            .expect("matrix tools")
+            .iter()
+            .filter(|tool| tool["source"] == "v0.8.0_household")
+        {
+            let name = tool["name"].as_str().expect("matrix tool name");
+            let manifest_tool = manifest_tools_by_name
+                .get(name)
+                .expect("matching manifest tool");
+            for (matrix_field, manifest_field) in [
+                ("input_schema_sha256", "input_schema"),
+                ("result_schema_sha256", "result_schema"),
+            ] {
+                let reference = &manifest_tool[manifest_field];
+                let id = reference["id"].as_str().expect("manifest schema id");
+                let (_, digest) = by_id.get(id).expect("manifest schema raw bytes");
+                assert_eq!(reference["sha256"], digest.as_str());
+                assert_eq!(
+                    tool[matrix_field],
+                    digest.as_str(),
+                    "{name} {matrix_field} drifted"
+                );
+            }
+        }
     }
 }

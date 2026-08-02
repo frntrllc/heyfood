@@ -490,8 +490,10 @@ Internally, heyfood binds the proposal to:
 - expiry;
 - preallocated proposal identity, reducer commit ID, and new member ID when
   applicable;
-- a proposal/account/commit-specific verifier for a repository-held commit-
-  evidence capability that cannot be derived from household state DTO fields;
+- a proposal/account/commit-specific verifier for a commit-evidence secret
+  derived only inside the native repository from its durable account key; the
+  journal persists only the one-way verifier, while repository reopen securely
+  rederives the exact secret and household state DTOs cannot mint either proof;
 - the frozen effect fingerprint only after every local-input field is complete
   and validated; and
 - single-use local review and commit state.
@@ -591,13 +593,16 @@ repository transaction.
 After readback, the external receipt is derived from the co-committed marker.
 A crash after repository publication but before proposal-status persistence is
 reconciled from that ledger using the same identities; it never allocates a
-second member or commit. Reconciliation accepts an opaque proof issued only by
-the repository-held capability bound to that exact account, proposal, and
-commit. A committed proof verifies the exact ledger fingerprint and successor
-household revision. A proven-uncommitted proof requires the authoritative
-repository to remain at the exact pre-dispatch revision with no record for the
-commit identity. Public or caller-synthesized household state DTOs cannot mint
-either authority, and bare commit/fingerprint pairs are never accepted.
+second member or commit. Reconciliation accepts an opaque proof issued only
+after the native repository reopens its secure key custody, rederives the
+secret bound to that exact account, proposal, and commit, and reads the
+authenticated ledger while holding the repository lease. A committed proof
+verifies the exact ledger fingerprint and successor household revision. A
+proven-uncommitted proof requires the authoritative repository to remain at
+the exact pre-dispatch revision with no record for the commit identity. No
+proof API accepts public or caller-synthesized household state DTOs, arbitrary
+verifier secrets are rejected against the repository-derived binding, and
+bare commit/fingerprint pairs are never accepted.
 The legal transition table is:
 
 ```text
@@ -1012,6 +1017,9 @@ Exit gate:
   versioned from backend approval protocol v1;
 - cancel/commit races are linearizable and crash-injection fixtures reconcile
   from the co-committed applied-commit ledger;
+- commit evidence is securely rederived after a genuine native-repository
+  close/reopen, and a proposal-layer verifier plus synthesized state cannot
+  replace repository authority;
 - local-intake completion, digest/fingerprint freeze, generation advance, and
   transition to review are atomic across crash/cancel/revocation races;
 - the TUI grammar, attached-human checklist, and renderer rules are frozen;

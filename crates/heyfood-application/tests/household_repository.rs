@@ -25,13 +25,14 @@ use heyfood_core::{
     AgentHouseholdOperationV1, AgentHouseholdProjectionV1, AgentHouseholdProposalIdV1,
     AppliedCommitOutcomeV1, AppliedCommitRecordV1, CanonicalDateV1, CanonicalDigestV1,
     CanonicalJsonObjectV1, CanonicalTimestampV1, CommitId, ConsentVersionV1, DisplayName,
-    GenerationId, HOUSEHOLD_STATE_SCHEMA_VERSION, HouseholdCommitEvidenceAuthorityV1,
-    HouseholdDeclaredProfileV1, HouseholdEffectV1, HouseholdLifecycleV1, HouseholdMemberV1,
-    HouseholdOutboxId, HouseholdOutboxRecordV1, HouseholdOwnerV1, HouseholdProfileDocumentV1,
-    HouseholdProfileOutboxEntryV1, HouseholdProfileRecordV1, HouseholdProfileStateV1,
-    HouseholdRevision, HouseholdScope, HouseholdStateV1, HouseholdSubjectId,
-    ImportedCompatibilityStateV1, LastDefiniteOwnerSyncErrorV1, LegacyRemoteProfileReferenceV1,
-    LegacySourceIdentityV1, LocalHouseholdAuthoritySnapshotV1, LocalHouseholdFrozenCandidateV1,
+    GenerationId, HOUSEHOLD_STATE_SCHEMA_VERSION, HouseholdCommitEvidenceBindingV1,
+    HouseholdDeclaredProfileV1, HouseholdEffectFingerprintV1, HouseholdEffectV1,
+    HouseholdLifecycleV1, HouseholdMemberV1, HouseholdOutboxId, HouseholdOutboxRecordV1,
+    HouseholdOwnerV1, HouseholdProfileDocumentV1, HouseholdProfileOutboxEntryV1,
+    HouseholdProfileRecordV1, HouseholdProfileStateV1, HouseholdRevision, HouseholdScope,
+    HouseholdStateV1, HouseholdSubjectId, ImportedCompatibilityStateV1,
+    LastDefiniteOwnerSyncErrorV1, LegacyRemoteProfileReferenceV1, LegacySourceIdentityV1,
+    LocalHouseholdAuthoritySnapshotV1, LocalHouseholdFrozenCandidateV1,
     LocalHouseholdProposalAuthorityV1, LocalHouseholdProposalBindingV1,
     LocalHouseholdProposalJournalV1, MAX_HOUSEHOLD_MEMBERS, MigrationDispositionManifestV1,
     MigrationProvenanceV1, MinorStatusV1, OnboardingProfileInput, OutboxRevision,
@@ -2455,10 +2456,12 @@ fn phase0_agent_effects_execute_all_five_exact_once_repository_paths() {
     .expect("complete add candidate freezes its fingerprint");
     let proposal_digest = CanonicalDigestV1::from_bytes([0x51; 32]);
     let proposal_ref = AgentHouseholdProposalIdV1::new();
-    let commit_evidence = HouseholdCommitEvidenceAuthorityV1::new(
+    let repository_secret = [0x6b; 32];
+    let commit_evidence = HouseholdCommitEvidenceBindingV1::from_repository_secret(
         state.account_binding.clone(),
         proposal_ref,
         add_commit_id,
+        &repository_secret,
     );
     let binding = LocalHouseholdProposalBindingV1::new(
         state.account_binding.clone(),
@@ -2472,7 +2475,7 @@ fn phase0_agent_effects_execute_all_five_exact_once_repository_paths() {
         state.revision,
         None,
         add_commit_id,
-        commit_evidence.binding(),
+        commit_evidence.clone(),
         Some(member_id.clone()),
         original_scope.clone(),
         CanonicalDigestV1::from_bytes([0x53; 32]),
@@ -2519,7 +2522,7 @@ fn phase0_agent_effects_execute_all_five_exact_once_repository_paths() {
         .expect("durable committing journal");
 
     let unapplied_proof = commit_evidence
-        .prove_uncommitted(&state, state.revision)
+        .seal_unapplied_repository_observation(&repository_secret, state.revision)
         .expect("unchanged authoritative repository proves no commit");
     let mut unapplied_recovered =
         LocalHouseholdProposalJournalV1::restore(&crash_journal).expect("journal restart");
@@ -2553,27 +2556,39 @@ fn phase0_agent_effects_execute_all_five_exact_once_repository_paths() {
         applied.fingerprint,
         add_command.claimed_effect_fingerprint.as_digest()
     );
-    assert_eq!(
-        commit_evidence.prove_uncommitted(&after_add, state.revision),
-        Err(heyfood_core::AgentHouseholdContractErrorV1::AppliedCommitMismatch)
+    assert!(
+        after_add
+            .bounded_applied_commits
+            .iter()
+            .any(|record| record.commit_id == add_commit_id)
     );
     let mut recovered =
         LocalHouseholdProposalJournalV1::restore(&crash_journal).expect("journal restart");
     let committing_token = recovered.cas_token();
-    let forged_authority = HouseholdCommitEvidenceAuthorityV1::new(
+    let forged_secret = [0x7c; 32];
+    let forged_authority = HouseholdCommitEvidenceBindingV1::from_repository_secret(
         after_add.account_binding.clone(),
         proposal_ref,
         add_commit_id,
+        &forged_secret,
     );
     let forged_proof = forged_authority
-        .prove_committed(&after_add)
-        .expect("caller-created authority can inspect state but cannot match the journal");
+        .seal_applied_repository_observation(
+            &forged_secret,
+            HouseholdEffectFingerprintV1::from_digest(applied.fingerprint),
+            applied.resulting_revision,
+        )
+        .expect("independent authority can seal but cannot match the journal");
     assert_eq!(
         recovered.reconcile_applied_commit(&committing_token, &forged_proof),
         Err(heyfood_core::AgentHouseholdContractErrorV1::AppliedCommitMismatch)
     );
     let applied_proof = commit_evidence
-        .prove_committed(&after_add)
+        .seal_applied_repository_observation(
+            &repository_secret,
+            HouseholdEffectFingerprintV1::from_digest(applied.fingerprint),
+            applied.resulting_revision,
+        )
         .expect("repository-held authority proves the applied commit");
     recovered
         .reconcile_applied_commit(&committing_token, &applied_proof)

@@ -32,7 +32,7 @@ const PROOF_MANIFEST: &[u8] = include_bytes!(concat!(
     "/../../docs/release-evidence/agent-household-phase0/phase0-proof-manifest.json"
 ));
 const PROOF_MANIFEST_SHA256: &str =
-    "89ff996ed57210ec3e525fcc191d0562cfdae86d77e170905e6760c6dbe91461";
+    "bde609ca42d7243ad08f1a8a0a2084c2487665ca4b7b2ba9292c0840822ce966";
 
 struct FixtureHouseholdAgentPort {
     account: AccountId,
