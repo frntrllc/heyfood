@@ -1,19 +1,20 @@
 {
   "schema_version": 1,
   "phase": "agent_household_phase0",
-  "decision": "pending_independent_review",
+  "decision": "pending_exact_sha_re_review",
   "phase0_complete": false,
   "product": {
     "base_sha": "81f992040ab3567f72a1b086196fdc064083c8a5",
-    "sha": "fbfe10533bbb4df5b58927f0c626634a03a95a94",
-    "tree": "61a04b0450acb8087aaa657fe6e0b779a179f811"
+    "sha": "bc7becdd55b5559f557eff6ff670c84df2630292",
+    "tree": "ebab891aabc081fc239e4eb00401f4c1bc84cfa6",
+    "supersedes_sha": "fbfe10533bbb4df5b58927f0c626634a03a95a94"
   },
   "frozen_evidence": {
-    "plan_sha256": "8837c8ac008ca4d5c8d19c3cb754d6611d2a1d79f0114302c4f302d83ed5cbae",
-    "local_approval_contract_sha256": "9828cd19c1285f080554f9ed8b990a359287307db2ebb12192379507dc733e22",
-    "proof_manifest_sha256": "3b828c9749d778ace37776b399ace40771a790e6aa955b6e71ceb0ab47b16ddf",
-    "closed_schema_set_sha256": "cf1c372e1bc2b7558284a7b1ae05f0d12f0f4c01cb3aed82d3a45edc477abcef",
-    "fixture_set_sha256": "171f38c92d1717e46f5f471ea08ba16f572a3efd7b056510180171216bf91e27"
+    "plan_sha256": "96cd9e6a140998c224d81d16201bcf973f3909c267f94d51353c68c0f9a466f6",
+    "local_approval_schema_sha256": "c3bcbcb045f1bc5691579a1392e9adc2ee2920a4b91ff7460811f71c2b4c2946",
+    "proof_manifest_sha256": "d857e31cd297d1698ff72912cfda8aebd789bfcbb32dc4cda188d01cf11c3150",
+    "closed_schema_set_sha256": "dab06982c24ffd5662d24344553983acfed258cafd66f5fb44efd54f9ae2e473",
+    "fixture_set_sha256": "3956694d24cbd7e802014c689e96dc3767a7642530b8477edeea956851cb221a"
   },
   "public_surface_baseline": {
     "default_manifest_schema_version": 1,
@@ -30,16 +31,19 @@
     "cargo_fmt_check": "passed",
     "git_diff_check": "passed",
     "cargo_metadata_locked": "passed",
+    "dependency_dag": "passed",
     "cargo_clippy_workspace_all_targets_all_features_locked_deny_warnings": "passed",
     "cargo_test_workspace_all_features_locked": {
       "status": "passed",
-      "passed": 992,
+      "passed": 999,
       "failed": 0,
       "ignored": 6
     },
-    "targeted_household_contract_tests": 5,
+    "targeted_household_contract_tests": 7,
     "targeted_household_core_tests": 9,
-    "targeted_binary_composition_tests": 3
+    "targeted_binary_composition_tests": 7,
+    "targeted_exact_once_repository_tests": 1,
+    "qualified_at_exact_product_sha": true
   },
   "activation": {
     "phase1_authorized": false,
@@ -53,6 +57,6 @@
     "agent_integration"
   ],
   "blockers": [
-    "Independent exact-SHA specialist review is pending for the frozen product SHA."
+    "Replacement exact-SHA specialist re-review is pending for the remediated product SHA."
   ]
 }
