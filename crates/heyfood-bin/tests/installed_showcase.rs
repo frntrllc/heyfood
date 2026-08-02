@@ -33,6 +33,7 @@ const TEST_PROMPT: &str = "Plan a synthetic dinner for installed-artifact qualif
 const TEST_RESPONSE: &str = "Installed artifact first turn complete.";
 const RETURNING_PROMPT: &str = "Give me a second authenticated installed-artifact turn.";
 const RETURNING_RESPONSE: &str = "Returning installed user turn complete.";
+const READY_OWNER_SCOPE: &str = "ready · For: Me";
 const GROCERY_CANCEL_PROMPT: &str = "Prepare onion for me, then let me cancel it.";
 const GROCERY_EDIT_PROMPT: &str = "Prepare onion for me so I can edit and accept it.";
 const GROCERY_STALE_LIST_PROMPT: &str =
@@ -542,13 +543,24 @@ async fn run_installed_archive_core_release_matrix() {
     )
     .await
     .expect("open speculative browser connection");
-    let profile_saved_copy = if showcase_native_household_enabled(
+    let native_household_enabled = showcase_native_household_enabled(
         credential_backend,
         expected_target.ends_with("-windows-msvc"),
-    ) {
+    );
+    let profile_saved_copy = if native_household_enabled {
         "Saved on this device"
     } else {
         "Dietary profile saved"
+    };
+    let post_save_ready_copy = if native_household_enabled {
+        READY_OWNER_SCOPE
+    } else {
+        profile_saved_copy
+    };
+    let returning_ready_copy = if native_household_enabled {
+        READY_OWNER_SCOPE
+    } else {
+        "Ask a question when you’re ready."
     };
 
     let clean_user = run_installed_pty(
@@ -575,7 +587,7 @@ async fn run_installed_archive_core_release_matrix() {
             PtyAction::Wait("Review dietary profile".into()),
             PtyAction::Submit("save".into()),
             PtyAction::Wait(profile_saved_copy.into()),
-            PtyAction::Pause(Duration::from_millis(250)),
+            PtyAction::Wait(post_save_ready_copy.into()),
             PtyAction::Submit(TEST_PROMPT.into()),
             PtyAction::Wait(TEST_RESPONSE.into()),
             PtyAction::Pause(Duration::from_millis(250)),
@@ -601,7 +613,7 @@ async fn run_installed_archive_core_release_matrix() {
         &[],
         InstalledPtyOptions::new(80, false, credential_backend),
         vec![
-            PtyAction::Wait("hey.food".into()),
+            PtyAction::Wait(returning_ready_copy.into()),
             PtyAction::Submit(RETURNING_PROMPT.into()),
             PtyAction::Wait(RETURNING_RESPONSE.into()),
             PtyAction::Pause(Duration::from_millis(250)),
@@ -805,7 +817,7 @@ async fn run_installed_archive_core_release_matrix() {
         &[],
         InstalledPtyOptions::new(40, false, credential_backend),
         vec![
-            PtyAction::Wait("hey.food".into()),
+            PtyAction::Wait(returning_ready_copy.into()),
             PtyAction::Submit("/grocery".into()),
             PtyAction::Wait("Onion is high-FODMAP.".into()),
             PtyAction::Wait("green parts of scallion".into()),
@@ -823,7 +835,7 @@ async fn run_installed_archive_core_release_matrix() {
         &[],
         InstalledPtyOptions::new(120, true, credential_backend),
         vec![
-            PtyAction::Wait("hey.food".into()),
+            PtyAction::Wait(returning_ready_copy.into()),
             PtyAction::Submit(WIDTH_PROMPT.into()),
             PtyAction::Wait(WIDTH_RESPONSE.into()),
             PtyAction::Pause(Duration::from_millis(250)),
@@ -840,7 +852,7 @@ async fn run_installed_archive_core_release_matrix() {
         &[],
         InstalledPtyOptions::new(80, false, credential_backend),
         vec![
-            PtyAction::Wait("hey.food".into()),
+            PtyAction::Wait(returning_ready_copy.into()),
             PtyAction::CtrlC,
             PtyAction::Wait("Press Ctrl+C again to exit".into()),
             PtyAction::CtrlC,
