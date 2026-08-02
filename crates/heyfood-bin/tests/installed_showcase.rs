@@ -33,7 +33,7 @@ const TEST_PROMPT: &str = "Plan a synthetic dinner for installed-artifact qualif
 const TEST_RESPONSE: &str = "Installed artifact first turn complete.";
 const RETURNING_PROMPT: &str = "Give me a second authenticated installed-artifact turn.";
 const RETURNING_RESPONSE: &str = "Returning installed user turn complete.";
-const READY_OWNER_SCOPE: &str = "ready · For: Me";
+const READY_COMPOSER: &str = "hey.food (ready)";
 const GROCERY_CANCEL_PROMPT: &str = "Prepare onion for me, then let me cancel it.";
 const GROCERY_EDIT_PROMPT: &str = "Prepare onion for me so I can edit and accept it.";
 const GROCERY_STALE_LIST_PROMPT: &str =
@@ -564,16 +564,8 @@ async fn run_installed_archive_core_release_matrix() {
     } else {
         "Dietary profile saved"
     };
-    let post_save_ready_copy = if native_household_enabled {
-        READY_OWNER_SCOPE
-    } else {
-        profile_saved_copy
-    };
-    let returning_ready_copy = if native_household_enabled {
-        READY_OWNER_SCOPE.to_owned()
-    } else {
-        format!("heyfood {expected_version} is here!")
-    };
+    let post_save_ready_copy = READY_COMPOSER;
+    let returning_ready_copy = READY_COMPOSER.to_owned();
     let failure_copy = showcase_failure_copy(native_household_enabled);
 
     let clean_user = run_installed_pty(
