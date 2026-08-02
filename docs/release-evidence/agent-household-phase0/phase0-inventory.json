@@ -5,16 +5,19 @@
   "phase0_complete": false,
   "product": {
     "base_sha": "81f992040ab3567f72a1b086196fdc064083c8a5",
-    "sha": "2599b662adf2138b6c7e4c877551c373204bb390",
-    "tree": "200caac0a035e264d61629047ba3b80b3147b0e1",
-    "supersedes_sha": "fb20590adcee5ff3a64b580ced9c96300906849f"
+    "sha": "013f4377ffae042e8e877274640a0e7058fbab5f",
+    "tree": "af6cb1f2d6fdfc0eb588549c2d38512dd46690fd",
+    "supersedes_sha": "2599b662adf2138b6c7e4c877551c373204bb390"
   },
   "frozen_evidence": {
-    "plan_sha256": "790715eecd94a7c07b81252640d4f6ba06c29a689dc920d644f9eed64ac910dc",
-    "local_approval_schema_sha256": "c3bcbcb045f1bc5691579a1392e9adc2ee2920a4b91ff7460811f71c2b4c2946",
-    "proof_manifest_sha256": "c9beca387e62c4da3e83ab540c5b106cbf156d87d2e4ede1ecd03e7e51aac48d",
-    "closed_schema_set_sha256": "f13a5db30ce9e7b57cf4379be8d0b571750201f6bb099f136623c8fa51899edc",
-    "fixture_set_sha256": "f2968dd94727794c2a4707097c9e0b3766d79675cf4ef177a755c140ebaca5cf"
+    "plan_sha256": "a21105955cd9d6f262f8a0866f9f03369803a2b88ef08c7982b77b40301a11d0",
+    "local_approval_schema_sha256": "64433ae9a5471308d7dce51c4b43e3f72a5903311953c02e1161c63c3200b5b3",
+    "proof_manifest_sha256": "89ff996ed57210ec3e525fcc191d0562cfdae86d77e170905e6760c6dbe91461",
+    "set_digest_contract": "sha256(sorted repo-relative path + tab + sha256(raw bytes) + LF)",
+    "closed_schema_set_count": 14,
+    "closed_schema_set_sha256": "8cf24d77cdb92adb614d2f39cd96d57af8e7d519a802aa7a4f73de0cada8ec36",
+    "fixture_set_count": 23,
+    "fixture_set_sha256": "ba39925afe84efe60c3c507e21d5843ebd81f348803784db8beb34db5ee6f809"
   },
   "public_surface_baseline": {
     "default_manifest_schema_version": 1,
@@ -35,13 +38,13 @@
     "cargo_clippy_workspace_all_targets_all_features_locked_deny_warnings": "passed",
     "cargo_test_workspace_all_features_locked": {
       "status": "passed",
-      "passed": 1014,
+      "passed": 1017,
       "failed": 0,
       "ignored": 6
     },
     "targeted_household_contract_tests": 7,
-    "targeted_household_core_tests": 13,
-    "targeted_binary_composition_tests": 13,
+    "targeted_household_core_tests": 15,
+    "targeted_binary_composition_tests": 14,
     "targeted_exact_once_repository_tests": 1,
     "qualified_at_exact_product_sha": true
   },
