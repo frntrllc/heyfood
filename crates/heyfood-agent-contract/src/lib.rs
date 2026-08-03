@@ -1613,11 +1613,11 @@ mod tests {
                     "binary": {
                         "path": "/absolute/heyfood",
                         "sha256": "0".repeat(64),
-                        "version": "0.7.1"
+                        "version": "0.8.0"
                     },
                     "package": {
                         "name": "heyfood",
-                        "version": "0.7.1",
+                        "version": "0.8.0",
                         "sha256": "1".repeat(64),
                         "files": 6
                     },

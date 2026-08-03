@@ -1556,8 +1556,8 @@ fn pending_command(machine: bool) -> ExitCode {
 fn deferred_health_command(machine: bool) -> ExitCode {
     failure(
         "capability_deferred",
-        "Health integrations are deferred from the supported heyfood v0.7.1 contract.",
-        Some("Use `heyfood --help` to see the supported v0.7.1 commands."),
+        "Health integrations are deferred from the supported heyfood v0.8.0 contract.",
+        Some("Use `heyfood --help` to see the supported v0.8.0 commands."),
         machine,
         false,
     )
