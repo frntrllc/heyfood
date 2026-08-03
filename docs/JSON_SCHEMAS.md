@@ -51,7 +51,7 @@ contains a separate explicit safety assessment.
 
 ## Household evaluation contract
 
-The v0.7.1 source tree freezes the reviewed hello.food household-evaluation
+The v0.8.0 source tree freezes the reviewed hello.food household-evaluation
 contract at
 `fixtures/contracts/household-backend/v1/household-evaluation-contract.json`
 and its founding Maya menu scenario beneath the adjacent `fixtures/` directory.
@@ -77,7 +77,7 @@ pre-existing result value, while the household fields remain purely additive.
 
 ## Agent-native contracts
 
-The supported v0.7.1 release exposes its public installed contracts through
+The supported v0.8.0 release exposes its public installed contracts through
 `heyfood agent schema --list`. The public allowlist contains:
 
 - `schemas/v1/heyfood-agent-manifest.schema.json` freezes network-free
@@ -104,7 +104,7 @@ fixture is `fixtures/agent/manifest-v1-golden.json`. Self-description does not
 by itself claim MCP support; Agent Skill setup is a separately versioned,
 opt-in, receipt-bound surface.
 
-The v0.7.1 native-state boundary does not modify that closed v1 default. Bare
+The v0.8.0 native-state boundary does not modify that closed v1 default. Bare
 `heyfood agent`, `heyfood agent describe`, `heyfood agent doctor`, and the MCP
 manifest tool continue to return v1. Their schemas are named `manifest` and
 `doctor` in installed discovery, preserving already-installed v0.6.2 Agent

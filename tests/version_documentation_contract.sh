@@ -44,7 +44,7 @@ assert_contains "$ROOT/README.md" \
 assert_contains "$ROOT/README.md" \
   "installer and binary do not enforce the later native-state floor"
 assert_contains "$ROOT/docs/CAPABILITY_STATUS.md" \
-  "Supported in v$version: the human TUI adds or onboards active members atomically"
+  "Supported in v$version: complete version-1 declared profiles remain encrypted locally"
 assert_contains "$ROOT/docs/CLI_CONTRACT.md" \
   "Persistent Me/member/Everyone scope selection"
 assert_contains "$ROOT/docs/COMMAND_GRAMMAR.md" "/household add"

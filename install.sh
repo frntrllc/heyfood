@@ -7,8 +7,8 @@ readonly HEYFOOD_COMMAND="heyfood"
 readonly HEYFOOD_REPOSITORY="frntrllc/heyfood"
 readonly GITHUB_URL="https://github.com"
 readonly RELEASE_URL="$GITHUB_URL/$HEYFOOD_REPOSITORY/releases"
-readonly SUPPORTED_VERSION="0.7.1"
-readonly NATIVE_STATE_RELEASE_VERSION="0.7.1"
+readonly SUPPORTED_VERSION="0.8.0"
+readonly NATIVE_STATE_RELEASE_VERSION="0.8.0"
 readonly NATIVE_STATE_VERSION="2"
 readonly NATIVE_STATE_CAPABILITIES='["household-account-slot-v1","household-lifecycle-lock-v1","household-migration-guard-v1","household-teardown-journal-v1"]'
 

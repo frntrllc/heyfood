@@ -200,16 +200,14 @@ for subject in \
     fail "protected qualification must attest $subject"
 done
 
-grep -Fq 'os: [ubuntu-22.04, macos-15, windows-2025]' "$CANDIDATE_WORKFLOW" ||
-  fail "ordinary Windows CI must remain enabled"
-grep -Fq 'Package, smoke, and reproduce the Windows release archive' "$CANDIDATE_WORKFLOW" ||
-  fail "ordinary Windows packaging qualification must remain enabled"
-grep -Fq 'Test the default product feature set on Windows without the process-global console case' \
-  "$ROOT/.github/workflows/rust-ci.yml" ||
-  fail "ordinary Rust Windows tests must remain enabled"
-grep -Fq 'Test the process-global Windows console case in isolation' \
-  "$ROOT/.github/workflows/rust-ci.yml" ||
-  fail "ordinary Rust Windows console lifecycle tests must remain enabled"
+if grep -Eq 'windows-(latest|2025)|runner\.os.*Windows|x86_64-pc-windows-msvc' \
+  "$CANDIDATE_WORKFLOW" "$ROOT/.github/workflows/rust-ci.yml"; then
+  fail "the accelerated v0.8.0 blocking CI graph must remain macOS/Linux-only"
+fi
+if grep -Fq 'Package, smoke, and reproduce the Windows release archive' \
+  "$CANDIDATE_WORKFLOW"; then
+  fail "Windows packaging qualification must remain outside the v0.8.0 release path"
+fi
 
 distribution="$CASE_DIR/distribution"
 mkdir "$distribution"

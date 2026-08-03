@@ -4,7 +4,7 @@ Native command-line access to personalized food and dietary guidance from
 [hello.food](https://hello.food).
 
 The CLI and interactive terminal experience are implemented in Rust. The
-supported release is `0.7.1` for macOS and Linux. It includes offline
+supported release is `0.8.0` for macOS and Linux. It includes offline
 self-description, opt-in Codex and Claude Code setup, and a bounded read-only
 MCP interface, plus account-bound logout with current-device authority
 revocation. Slow turns now stay alive with truthful progress, restaurant
@@ -22,7 +22,7 @@ before evaluating the client.
 
 ## Install
 
-Install the supported native `v0.7.1` binary on macOS or Linux:
+Install the supported native `v0.8.0` binary on macOS or Linux:
 
 ```bash
 curl -fsSL https://hey.food/install.sh | bash
@@ -31,7 +31,7 @@ curl -fsSL https://hey.food/install.sh | bash
 The installer downloads the archive for the current CPU, verifies its checksum
 and exact version, verifies the matching standalone native-state verifier and
 canonical declaration, and atomically installs it under the current user
-without `sudo` or shell-profile edits. The complete public v0.7.1 set is four
+without `sudo` or shell-profile edits. The complete public v0.8.0 set is four
 product archives, four verifier archives, one declaration, and `SHA256SUMS`.
 Windows distribution remains deferred to a separately qualified future
 release.
@@ -59,7 +59,7 @@ contributors.
 
 ## Agent discovery
 
-The v0.7.1 release can explain its exact installed automation
+The v0.8.0 release can explain its exact installed automation
 contract without repository access, credentials, or a network connection:
 
 ```bash
@@ -203,14 +203,14 @@ Account connection continues into the native Rust TUI and an authenticated bare
 stream, keeps bounded process-local prompt history, and preserves conversation
 continuity only for the lifetime of the process.
 
-The bounded `v0.7.1` release provides four native product archives and four
+The bounded `v0.8.0` release provides four native product archives and four
 matching standalone-verifier archives for macOS Apple Silicon, macOS Intel,
 Linux ARM64, and Linux x64, plus one native-state declaration and
 `SHA256SUMS`.
 Windows distribution remains deferred; ordinary Windows compile, test,
 Clippy, credential, and packaging qualification remains active in CI. Health,
 item-level Menu Watch diff detail, native voice, full legacy parity, and the
-complete twelve-stage showcase are future work rather than `v0.7.1` release
+complete twelve-stage showcase are future work rather than `v0.8.0` release
 gates.
 
 Interactive controls include Enter to send, Shift+Enter or Ctrl+J for a
@@ -223,7 +223,7 @@ validated transcript in the composer for editing before submission. Use
 readiness.
 
 Grocery, Menu Watch, profile, household, location, and status panels are
-included in `v0.7.1`. Human progress labels stay separate from backend tool
+included in `v0.8.0`. Human progress labels stay separate from backend tool
 identifiers, structured restaurant recommendations and full menus retain
 prices and dietary evidence, and a slow or interrupted turn returns the
 composer to a usable state without blindly replaying accepted work.
@@ -240,7 +240,7 @@ it creates no remote member profile, sync consent, or non-owner outbox entry.
 Hosted member sync, learned graph, health/fitness data, remote erasure, and
 cross-device household state remain deferred.
 
-Health integrations are explicitly deferred from the supported `v0.7.1`
+Health integrations are explicitly deferred from the supported `v0.8.0`
 contract: `health` is absent from root help and shell
 completion, `/health` is absent from TUI discovery, and fresh grants do not
 request Health or integration-management scopes. Retained internal
@@ -256,7 +256,7 @@ and `/watch` create/list/remove or display subscriptions using the deployed
 `menu:watch` contract. The TUI renders the latest account-owned change summary
 with source, freshness, and provenance; item-level added, removed, modified,
 and price-change detail remains follow-on work. The broader installed-artifact
-showcase and real-hardware voice qualification remain post-`v0.7.1`
+showcase and real-hardware voice qualification remain post-`v0.8.0`
 conformance work. Hidden compatibility routes continue to fail closed where a
 native workflow is not complete.
 

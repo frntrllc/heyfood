@@ -45,7 +45,7 @@ identifier from `--list`; unknown names return a typed runtime error.
 
 Discovery schema v1 is the default retained for installed-skill compatibility.
 Schema v2 must be requested explicitly and adds native-state compatibility
-metadata used by the v0.7.1 installer and release verifier.
+metadata used by the v0.8.0 installer and release verifier.
 
 `agent setup` and `agent uninstall` are separate opt-in user configuration
 operations. They default to dry-run, require `--apply` to change state,
@@ -178,11 +178,11 @@ authority are never rendered.
 
 ## Deferred Health integrations
 
-Health integrations are not part of the supported `v0.7.1` command surface.
+Health integrations are not part of the supported `v0.8.0` command surface.
 They are absent from root help, shell completion, and the TUI command registry.
 The retained `health` spelling fails locally with `capability_deferred` before
 credential access or network dispatch. Oura and Apple Health integration work
-remains post-`v0.7.1`; no Health implementation or canary is required for this
+remains post-`v0.8.0`; no Health implementation or canary is required for this
 release.
 
 ## Menu Watch
@@ -261,7 +261,7 @@ contains native audio support; unavailable artifacts and insufficient scopes
 fail before microphone access. Item-level Menu Watch diff detail, real-hardware
 voice qualification, full parity, hosted household sync/learned graph/health,
 cross-device household state, and the complete twelve-stage showcase are
-post-`v0.7.1` conformance work, not release gates.
+post-`v0.8.0` conformance work, not release gates.
 
 ### Frozen future household grammar (inactive)
 

@@ -4,6 +4,22 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
+## 0.8.0 - 2026-08-03
+
+- Add manifest schema v3 with capability-derived household discovery while
+  preserving the frozen schema-v1 and schema-v2 views for older integrations.
+- Add bounded, read-only agent access to the locally encrypted household
+  roster, active scope, and explicitly authorized minimized profiles for
+  additional members through typed CLI and MCP contracts.
+- Add an offline `heyfood agent compatibility` diagnosis so an incompatible
+  skill fails closed and receives remediation from the installed binary.
+- Keep household add, edit, archive, restore, scope mutation, proposal
+  approval, commit, and TUI automation outside the agent surface. The human TUI
+  remains the complete household-management experience.
+- Limit blocking CI and distribution qualification to the four supported
+  macOS and Linux targets. Windows distribution, Windows CI, Health, native
+  voice, and agent household mutation remain deferred.
+
 ## 0.7.1 - 2026-08-02
 
 - Redesign the interactive terminal around a calm, responsive application

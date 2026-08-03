@@ -1,9 +1,9 @@
 # Native household local state
 
-The v0.7.1 native hey.food TUI keeps its household roster, selected scope, and
+The v0.8.0 native hey.food TUI keeps its household roster, selected scope, and
 declared dietary profiles in the account-bound encrypted household repository.
 Local roster management, member onboarding, and persistent scope selection are
-part of the supported v0.7.1 TUI contract. The TUI does not use the imported
+part of the supported v0.8.0 TUI contract. The TUI does not use the imported
 Python snapshot after native activation.
 
 ## Supported human workflow
@@ -49,15 +49,15 @@ cross-device roster sync, remote member profile sync, or remote erasure. Those
 capabilities remain deferred behind a separate hosted privacy and consent
 contract.
 
-Household lifecycle mutation is human-TUI-only. It is absent from agent
-manifests, one-shot machine JSON, MCP tools, redirected stdin, and command-line
-profile arguments.
-
-That statement remains the public v0.7.0 behavior. A future v0.8.0
-agent-aware design is frozen separately in
+Household lifecycle mutation remains human-TUI-only. The v0.8.0 agent surface
+is read-only and capability-derived: it can expose the active scope, the
+authorized roster projection, and an explicitly authorized minimized profile
+for one exact additional member. It cannot add, edit, archive, restore, erase,
+or select scope; it cannot approve or commit through MCP; and it cannot
+automate the TUI. Per-subject disclosure is encrypted, account-bound, and
+revocable from the human product surface. The detailed authority boundary is
+defined in
 [LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md](LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md).
-Phase 0 adds contracts and a non-routable fake-port proof only; it does not
-change the current human-only surface.
 
 ## Account and continuity binding
 
@@ -104,12 +104,12 @@ verifier executables are signed and notarized before packaging; all ten assets
 are attested and verified after public download.
 
 The immutable v0.6.2 release remains four product archives plus its checksum
-manifest and gains no verifier or declaration. A managed v0.6.2-to-v0.7.1
-upgrade must preserve the prior executable until the v0.7.1 product,
+manifest and gains no verifier or declaration. A managed v0.6.2-to-v0.8.0
+upgrade must preserve the prior executable until the v0.8.0 product,
 standalone verifier, declaration, checksum, and native-state floor all verify.
-After the floor exists, the current v0.7.1 installer invoked with
+After the floor exists, the current v0.8.0 installer invoked with
 `HEYFOOD_VERSION=0.6.2` must fail at its exact supported-version gate before
-download or executable replacement and must leave v0.7.1 and local state
+download or executable replacement and must leave v0.8.0 and local state
 unchanged. The archived v0.6.2 installer and binary do not know about the
 future floor; executing either after migration is unsupported and unprotected.
 

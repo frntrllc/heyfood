@@ -8,11 +8,11 @@ does not contain a native-state declaration or a standalone
 `heyfood-installer` verifier archive.
 
 The checked-in installer now coordinates `SUPPORTED_VERSION` and
-`NATIVE_STATE_RELEASE_VERSION` at `0.7.1`. It requires the v0.7.1 native-state
+`NATIVE_STATE_RELEASE_VERSION` at `0.8.0`. It requires the v0.8.0 native-state
 asset set and never fabricates, targets, replaces, or expects new assets on the
-immutable v0.6.2 release. The current v0.7.1 installer accepts only its exact
+immutable v0.6.2 release. The current v0.8.0 installer accepts only its exact
 supported version. Invoking it with `HEYFOOD_VERSION=0.6.2` is rejected before
-any release download or executable replacement and leaves the installed v0.7.1
+any release download or executable replacement and leaves the installed v0.8.0
 binary, compatibility floor, and account state unchanged.
 
 The archived v0.6.2 installer and binary predate the future compatibility
@@ -59,45 +59,46 @@ closed.
 
 ## Manifest compatibility
 
-The published agent manifest v1 remains closed and unchanged; its declared
-`additive_optional_fields` value remains `false`. `heyfood agent describe`,
-bare `heyfood agent`, `heyfood agent doctor`, and the MCP manifest tool keep
-returning v1 so an already-installed v0.6.2 Agent Skill continues to work after
-the binary is upgraded. Their schemas remain addressable as `manifest` and
-`doctor`.
+The published agent manifest v1 and v2 views remain closed and unchanged; the
+v1 `additive_optional_fields` value remains `false`. In v0.8.0, `heyfood agent
+describe`, bare `heyfood agent`, `heyfood agent doctor`, and the MCP manifest
+tool return the closed v3 document by default. Older integrations can request
+the frozen v1 or v2 view explicitly, while a shared Agent Skill must inspect
+the schema version before reading any capability field and fail closed on an
+unsupported version.
 
-Native-state metadata is an explicit opt-in: `heyfood agent describe
---schema-version 2` returns the closed v2 manifest containing the exact
-`native_state_compatibility` declaration, and `heyfood agent doctor
---schema-version 2` binds diagnostics to that manifest. Those schemas are
-addressable as `manifest-v2` and `doctor-v2`. The managed installer and release
-smoke request v2 explicitly; installed skills are neither silently replaced
-nor required to understand v2 during the binary upgrade.
+Native-state metadata remains available through `heyfood agent describe
+--schema-version 2`, which returns the closed v2 manifest containing the exact
+`native_state_compatibility` declaration; `heyfood agent doctor
+--schema-version 2` binds diagnostics to that view. The managed installer and
+release smoke continue to request v2 explicitly because the standalone native
+state verifier consumes that frozen contract rather than the broader v3 agent
+capability document.
 
 ## Managed-install and archived-code boundary
 
 Once the native-state floor exists, managed installation accepts only a
 candidate whose maximum native-state version and complete capability set
-satisfy that floor. The current v0.7.1 installer independently rejects every
-requested version other than v0.7.1 before download, so a request for v0.6.2
+satisfy that floor. The current v0.8.0 installer independently rejects every
+requested version other than v0.8.0 before download, so a request for v0.6.2
 cannot reach executable replacement. The compatibility floor cannot constrain
 an independently executed archived installer or binary; archived v0.6.2 code
 after migration remains unsupported and unprotected. A future supported
 rollback must use a separately qualified native-state-compatible binary in its
 native rollback-read-only mode.
 
-## Frozen future agent-household migration (inactive)
+## Agent-household native-state boundary
 
-Phase 0 freezes a future native-state v3 declaration for encrypted
-per-subject disclosure grants, the local proposal journal, and household
-reconciliation. The declaration is
+Phase 0 freezes the native-state v3 declaration for encrypted per-subject
+disclosure grants, the local proposal journal, and household reconciliation.
+The declaration is
 `schemas/v1/agent-household-native-state.schema.json` with closed cases in
 `fixtures/agent/household-phase0/native-state-migration.json`.
 
-This declaration is not in the v0.7.0 installer, compatibility floor,
-manifest v2, verifier, or public asset set. Before any v3-only write, a future
-managed installer must atomically establish the reviewed writer floor and
-complete or resume the account-bound v2→v3 migration. A managed v0.7.0
-downgrade must then be rejected before replacement. Any supported rollback is
-separately qualified, read-only, and preserves unresolved proposal/committing/
-reconciliation journals while blocking mutation.
+The v0.8.0 read-only agent surface may persist per-subject disclosure grants;
+proposal and commit records remain non-routable while lifecycle mutations are
+deferred. Before the first v3-only write, the managed installer must establish
+the reviewed writer floor and complete or resume the account-bound v2→v3
+migration. A managed v0.7.x downgrade is rejected before replacement. Any
+supported rollback is separately qualified, read-only, and preserves
+unresolved records while blocking mutation.

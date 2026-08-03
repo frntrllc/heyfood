@@ -23,7 +23,7 @@ use heyfood_platform::OwnerOnlyPath;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const PACKAGE_VERSION: &str = "0.7.1";
+const PACKAGE_VERSION: &str = "0.8.0";
 // A replacement can legitimately perform up to six sequential bounded
 // host-command/probe pairs while applying and restoring MCP state. Keep lock
 // contention bounded, but longer than that 78-second host-owned budget plus
