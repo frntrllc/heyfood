@@ -1,14 +1,13 @@
 # heyfood agent-aware household management plan
 
-**Status:** Specialist-approved plan v1 — OpenClaw owner, Rust,
-security/privacy, CLI/TUI, Agent/OpenClaw compatibility, and release reviews
-are GO with no P0–P3 findings. This approves the plan for Phase 0 planning; it
-does not authorize implementation, activation, merge, or release of an agent
-household mutation surface.
+**Status:** Active `v0.8.0` read-only release execution. Phase 0 contracts and
+the Phase 1 household-understanding slice are authorized. Agent household
+mutation preparation, approval, commit, and lifecycle activation remain
+deferred and must not be advertised.
 **Target release:** `v0.8.0`
-**Baseline release:** `v0.7.0`
-**Baseline source:** `20eb3d709995022051111cd687dcac6ef8936684`
-**Baseline tree:** `5937286579f79f584700351b891c0082c91c3204`
+**Baseline release:** `v0.7.1`
+**Baseline source:** `be2db50aef31e19d2addde542ad245c992457b3d`
+**Baseline tree:** `c1cd86ab50a55f14017145af0d30777774544859`
 **Normative companion contracts:** `docs/HOUSEHOLD_LOCAL_STATE.md`,
 `docs/CLI_CONTRACT.md`, `docs/COMMAND_GRAMMAR.md`,
 `docs/CAPABILITY_STATUS.md`, `docs/JSON_SCHEMAS.md`,
@@ -44,6 +43,28 @@ uncertain mutation.
 The existing human TUI remains the complete direct-management experience.
 Agent integrations call the same application use cases; they do not automate
 the TUI or create a second household implementation.
+
+### `v0.8.0` accelerated release boundary
+
+The owner directed an accelerated, same-day `v0.8.0` release on 2026-08-03.
+For this release the supported agent surface is deliberately limited to typed,
+read-only household understanding: the roster, active scope, and explicitly
+authorized minimized profile data for additional household members. The
+current account owner's minimized self profile is not claimed by this slice.
+Add, edit, archive, restore, scope mutation, proposal preparation, approval,
+commit, and TUI automation remain human-only or absent from agent discovery.
+
+Windows distribution and Windows CI are excluded from this release train.
+The blocking CI graph runs only on supported macOS and Linux hosts;
+platform-neutral format, contract, provenance, migration, and evidence checks
+run once on Linux. The deferred native-audio vertical is removed from ordinary
+release-blocking CI. It remains separately qualifiable before any future voice
+support claim.
+
+Qualification builds the four supported archives once. The protected macOS
+signing/notarization and Linux attestation outputs are the exact bytes used for
+installed-artifact qualification, review, and publication; the release process
+must not rebuild equivalent artifacts in a later stage.
 
 ## Verified `v0.7.0` baseline
 
@@ -827,19 +848,19 @@ derive capability claims. Release coordination therefore uses this order:
 2. build and test one skill candidate against both public `v0.7.0` and the
    exact private `v0.8.0` binary;
 3. publish the compatible skill to ClawHub;
-4. reserve at least 24 hours between publish initiation and the earliest
-   possible public binary release;
-5. independently observe that the intended skill version resolves as ClawHub
+4. independently observe that the intended skill version resolves as ClawHub
    `latest`, then repeat cold resolution from a clean host after propagation;
-6. bind that resolved skill digest and compatibility evidence into the
+5. bind that resolved skill digest and compatibility evidence into the
    `v0.8.0` release inventory; and
-7. only then authorize merge/tag/publication of the binary.
+6. only then authorize merge/tag/publication of the binary.
 
-The 24-hour reserve is scheduling slack, not an automatic approval. If ClawHub
-has not propagated, the binary waits regardless of elapsed time. If the skill
-has propagated earlier, the binary still waits until both clean-resolution
-checks and exact-candidate qualification pass. Publishing the binary first and
-accepting a transient false household handoff is prohibited.
+The former fixed 24-hour scheduling reserve is removed by the 2026-08-03 owner
+acceleration directive. This does not waive observed propagation: if ClawHub
+has not advanced, the binary waits regardless of elapsed time. Once the
+intended skill is independently observed as `latest`, both clean-resolution
+checks and exact-candidate qualification may proceed immediately. Publishing
+the binary first and accepting a transient false household handoff remains
+prohibited.
 
 An exact signed Phase 1 candidate is delivered early so the skill owner can
 implement and test the conditional rewrite without waiting for all later
@@ -1258,7 +1279,7 @@ Qualification requirements:
 - macOS Apple Silicon and Intel signed/notarized archives;
 - Linux ARM64 and x64 attested archives;
 - exact skill, manifest, schema, MCP, executable, installer, and archive digests;
-- ordinary Windows source CI without a Windows distribution claim;
+- macOS and Linux source CI for the four supported distribution targets;
 - an updated `HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md` pass on all four exact
   artifacts at compact/standard/wide widths, with `NO_COLOR`, Esc/Ctrl+C,
   restart/resume, normal/signal/failure terminal restoration, every direct
@@ -1284,7 +1305,7 @@ Rollout order:
    provide those exact candidate bytes to the OpenClaw skill owner;
 5. qualify one shared skill artifact against public `v0.7.0` first and the
    private exact `v0.8.0` candidate second;
-6. publish the skill and begin the minimum 24-hour propagation reserve;
+6. publish the skill and begin active propagation observation;
 7. prove the intended version resolves as ClawHub `latest` from two clean
    resolutions, bind its digest, and rerun the exact candidate with that skill;
 8. merge only with exact-SHA preservation. If main, tag, product, manifest,

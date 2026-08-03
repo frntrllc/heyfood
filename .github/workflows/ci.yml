@@ -79,7 +79,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-15, windows-2025]
+        os: [ubuntu-22.04, macos-15]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the Linux Secret Service fixture
@@ -92,16 +92,11 @@ jobs:
       - name: Locate the native executable
         shell: bash
         run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            echo "HEYFOOD_BIN=target/release/heyfood.exe" >> "$GITHUB_ENV"
-          else
-            echo "HEYFOOD_BIN=target/release/heyfood" >> "$GITHUB_ENV"
-          fi
+          echo "HEYFOOD_BIN=target/release/heyfood" >> "$GITHUB_ENV"
       - name: Install deterministic archive tooling
         if: runner.os == 'macOS'
         run: brew install gnu-tar
       - name: Package the exact macOS or Linux showcase archive
-        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -122,33 +117,6 @@ jobs:
             echo "HEYFOOD_SHOWCASE_TARGET=$target"
             echo "HEYFOOD_SHOWCASE_VERSION=$version"
           } >>"$GITHUB_ENV"
-      - name: Package the exact Windows showcase archive
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $version = cargo metadata --locked --no-deps --format-version 1 |
-            ConvertFrom-Json |
-            Select-Object -ExpandProperty packages |
-            Where-Object { $_.name -eq "heyfood-bin" } |
-            Select-Object -ExpandProperty version
-          $target = (rustc -vV | Select-String '^host: ').Line.Substring(6)
-          New-Item -ItemType Directory -Force showcase-dist, showcase-evidence | Out-Null
-          ./packaging/windows/package.ps1 `
-            -Binary $env:HEYFOOD_BIN `
-            -Version $version `
-            -Target $target `
-            -OutputDirectory showcase-dist
-          $archive = "heyfood-v$version-$target.zip"
-          $digest = (Get-FileHash -Algorithm SHA256 "showcase-dist/$archive").Hash.ToLowerInvariant()
-          "$digest  $archive" | Set-Content -Encoding ascii showcase-dist/SHA256SUMS
-          $root = (Get-Location).Path
-          @(
-            "HEYFOOD_SHOWCASE_ARCHIVE=$root\showcase-dist\$archive"
-            "HEYFOOD_SHOWCASE_MANIFEST=$root\showcase-dist\SHA256SUMS"
-            "HEYFOOD_SHOWCASE_EVIDENCE_DIR=$root\showcase-evidence"
-            "HEYFOOD_SHOWCASE_TARGET=$target"
-            "HEYFOOD_SHOWCASE_VERSION=$version"
-          ) | Add-Content -Encoding utf8 $env:GITHUB_ENV
       - name: Qualify the bounded recovery-release matrix from the installed archive
         run: cargo test --locked --package heyfood-bin --test installed_showcase installed_archive_core_release_matrix -- --ignored --exact
       - name: Upload installed-artifact core-matrix evidence
@@ -159,23 +127,6 @@ jobs:
           path: showcase-evidence
           if-no-files-found: warn
           retention-days: 14
-      - name: Parse every Windows release script
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          foreach ($script in Get-ChildItem packaging/windows/*.ps1) {
-            $tokens = $null
-            $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile(
-              $script.FullName,
-              [ref] $tokens,
-              [ref] $errors
-            ) | Out-Null
-            if ($errors.Count -ne 0) {
-              $errors | ForEach-Object { Write-Error $_ }
-              throw "PowerShell parser rejected $($script.FullName)"
-            }
-          }
       - name: Verify the active native command surface
         shell: bash
         run: |
@@ -196,36 +147,8 @@ jobs:
             exit 1
           fi
           test -s completion.bash
-      - name: Package, smoke, and reproduce the Windows release archive
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $version = cargo metadata --locked --no-deps --format-version 1 |
-            ConvertFrom-Json |
-            Select-Object -ExpandProperty packages |
-            Where-Object { $_.name -eq "heyfood-bin" } |
-            Select-Object -ExpandProperty version
-          ./packaging/windows/package.ps1 `
-            -Binary target/release/heyfood.exe `
-            -Version $version `
-            -Target x86_64-pc-windows-msvc `
-            -OutputDirectory dist
-          ./packaging/windows/smoke.ps1 `
-            -ReleaseDirectory dist `
-            -Version $version
-          ./packaging/windows/package.ps1 `
-            -Binary target/release/heyfood.exe `
-            -Version $version `
-            -Target x86_64-pc-windows-msvc `
-            -OutputDirectory dist-repeat
-          $archive = "heyfood-v$version-x86_64-pc-windows-msvc.zip"
-          $first = (Get-FileHash -Algorithm SHA256 "dist/$archive").Hash
-          $second = (Get-FileHash -Algorithm SHA256 "dist-repeat/$archive").Hash
-          if ($first -ne $second) {
-            throw "Windows release archive is not reproducible"
-          }
       - name: Run native CLI and composition-root tests
-        if: runner.os != 'Linux'
+        if: runner.os == 'macOS'
         run: cargo test --locked --package heyfood-cli --package heyfood-bin
       - name: Run Linux native CLI and composition-root tests
         if: runner.os == 'Linux'
