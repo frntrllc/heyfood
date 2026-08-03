@@ -63,7 +63,8 @@ There is no command fallback on this surface. If no tool matches, stop.
   a fetch you started, so on a read-only deployment that never starts one there
   is nothing to poll. Do not call it to test whether a menu exists; that is not
   what it answers.
-- `evaluate_menu`, `explain_item`, `recommend_items` — dietary assessment
+- `evaluate_menu`, `recommend_items` — dietary assessment against a captured menu
+- `explain_item` — dietary assessment of an item *name*; reads no menu
 - `draft_order_message` — phrase an order request
 - `search_recipes`, `list_saved_recipes`, `suggest_recipes` — recipes
 - `ask_dietary_question` — general dietary knowledge
@@ -86,16 +87,35 @@ If resolution is ambiguous, ask. Never assess a guess — two branches of a chai
 can carry different menus, and a confident answer about the wrong location is
 worse than a question.
 
-**One asymmetry to know.** `explain_item(item_name, restaurant_name)` takes
-plain names, while `evaluate_menu`, `recommend_items`, and
-`draft_order_message` take `restaurant_id`. So a single-dish question can be
-answered without resolution, but anything menu-wide cannot.
+**One asymmetry, and it is not a shortcut.**
+`explain_item(item_name, restaurant_name)` takes plain names, while
+`evaluate_menu`, `recommend_items`, and `draft_order_message` take
+`restaurant_id`. That is not because it resolves the restaurant for you — it is
+because **it never reads a menu at all.**
+
+`explain_item` assesses the item *name* against the dietary profile.
+`restaurant_name` is context, not evidence. Its verdict is not evidence that the
+dish exists at that restaurant, that it is described the way the user described
+it, or that the kitchen prepares it that way. It returns the same answer whether
+or not that menu has ever been captured.
+
+That makes it genuinely useful — a user can ask about a dish anywhere — and it
+makes one specific move wrong:
+
+> **After a `menu_not_captured` result, do not quietly retry with
+> `explain_item` and present what comes back as though it came from the
+> restaurant's menu.**
+
+That is the failure this product exists to prevent. The user asked what is on
+*that* menu; answering from the profile alone, in the same voice, tells them the
+kitchen was checked when it was not. You may still use it — say what it is: an
+assessment of the dish as described, not of that restaurant's version of it.
 
 **Then choose by the shape of the question:**
 
 | The user asks | Use |
 |---|---|
-| "Can I eat X here?" | `explain_item` — one dish, with reasons and conflicts |
+| "Can I eat X here?" | `explain_item` — one dish, with reasons and conflicts. Not menu-grounded: see above |
 | "What's safe on this menu?" | `evaluate_menu(restaurant_id, item_names)` |
 | "What should I order?" | `recommend_items(restaurant_id, query, …)` |
 | "Ask them to leave out the X" | `draft_order_message` |
@@ -209,9 +229,16 @@ hey.food client.
 ### Cold menus
 
 A restaurant may have no captured menu. Evaluation tools then return a typed
-"menu not found" result. That is a real answer about coverage — report it as
-such. Never present it as a safety judgement, and never infer that a dish is
-acceptable because no menu was found.
+`menu_not_captured` result — a successful call reporting coverage, not a
+failure. Report it as such. Never present it as a safety judgement, and never
+infer that a dish is acceptable because no menu was found.
+
+**Do not substitute a different tool to produce an answer anyway.**
+`explain_item` will happily return a verdict for the same dish, because it reads
+the item name and not the menu — so it is unaffected by the very thing the user
+just hit. Reaching for it here converts "we have not captured this menu" into
+what sounds like a checked answer. If you use it, say plainly that it assesses
+the dish as described and not that restaurant's version of it.
 
 ## Human experience
 
