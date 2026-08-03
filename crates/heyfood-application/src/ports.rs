@@ -5,8 +5,9 @@ use std::future::Future;
 use std::pin::Pin;
 
 use heyfood_core::{
-    AccountId, AgentEvent, AgentHouseholdProposalIdV1, AppliedHouseholdCommitProofV1, BrowserUrl,
-    CanonicalDateV1, CanonicalTimestampV1, ClientConfig, CommitId, CredentialVersion,
+    AccountId, AgentDisclosureGrantSubjectV1, AgentEvent, AgentHouseholdProjectionV1,
+    AgentHouseholdProposalIdV1, AppliedHouseholdCommitProofV1, BrowserUrl, CanonicalDateV1,
+    CanonicalTimestampV1, ClientConfig, CommitId, CredentialVersion, GenerationId,
     HouseholdCommitEvidenceBindingV1, HouseholdRevision, MemberId, OperationId, RefreshOutcome,
     RefreshRequest, SessionCredentials, UnappliedHouseholdCommitProofV1,
 };
@@ -342,6 +343,40 @@ pub trait HouseholdAgentPhase0Port: Send + Sync {
         proposal_ref: heyfood_core::AgentHouseholdProposalIdV1,
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<BoundAgentHouseholdOutcomeReceiptV1, PortError>>;
+}
+
+/// Human-attached-terminal authority for local agent disclosure controls.
+/// This port is deliberately separate from the agent read surface and cannot
+/// be reached through MCP or one-shot CLI composition.
+pub trait HouseholdAgentDisclosureControlPort: Send + Sync {
+    fn current_access(
+        &self,
+        account: AccountId,
+        subject: AgentDisclosureGrantSubjectV1,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<HouseholdAgentDisclosureAccessV1, PortError>>;
+
+    fn grant_access(
+        &self,
+        account: AccountId,
+        subject: AgentDisclosureGrantSubjectV1,
+        include_minimized_profile: bool,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<HouseholdAgentDisclosureAccessV1, PortError>>;
+
+    fn revoke_access(
+        &self,
+        account: AccountId,
+        subject: AgentDisclosureGrantSubjectV1,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<HouseholdAgentDisclosureAccessV1, PortError>>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HouseholdAgentDisclosureAccessV1 {
+    pub account: AccountId,
+    pub generation: GenerationId,
+    pub projection: AgentHouseholdProjectionV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

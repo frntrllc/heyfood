@@ -92,9 +92,11 @@ pub use one_shot_turn::{
 pub use ports::{
     AcceptedTurn, AudioCapture, AudioCapturePort, BoxEventStream, BoxFuture, BrowserPort,
     ClipboardPort, ClockPort, ConfigCommit, ConfigMutation, ConfigPort, CredentialCommit,
-    CredentialPort, EventStream, HouseholdAgentPhase0Port, HouseholdCommitEvidenceRepositoryPort,
-    HouseholdMutationAuthorityPort, HouseholdMutationAuthorityV1, HouseholdMutationPurposeV1,
-    HouseholdRepositoryPort, PortError, ServicePort,
+    CredentialPort, EventStream, HouseholdAgentDisclosureAccessV1,
+    HouseholdAgentDisclosureControlPort, HouseholdAgentPhase0Port,
+    HouseholdCommitEvidenceRepositoryPort, HouseholdMutationAuthorityPort,
+    HouseholdMutationAuthorityV1, HouseholdMutationPurposeV1, HouseholdRepositoryPort, PortError,
+    ServicePort,
 };
 pub use run_turn::{
     MAX_TURN_EVENTS, MAX_TURN_STREAM_BYTES, RefreshPolicy, RunTurn, RunTurnError, RunTurnOutcome,

@@ -16,7 +16,8 @@ use chacha20poly1305::{KeyInit as _, XChaCha20Poly1305, XNonce};
 use heyfood_application::{
     AuthorizedAgentHouseholdPrepareV1, BoundAgentHouseholdDisclosureV1,
     BoundAgentHouseholdOutcomeReceiptV1, BoundAgentHouseholdProposalV1, BoundAgentHouseholdReadV1,
-    BoundAgentHouseholdRosterAuthorityV1, BoxFuture, HouseholdAgentPhase0Port, HouseholdCommit,
+    BoundAgentHouseholdRosterAuthorityV1, BoxFuture, HouseholdAgentDisclosureAccessV1,
+    HouseholdAgentDisclosureControlPort, HouseholdAgentPhase0Port, HouseholdCommit,
     HouseholdCommitEvidenceRepositoryPort, HouseholdCommitOutcome, HouseholdErase,
     HouseholdEraseOutcome, HouseholdInitialize, HouseholdLoad, HouseholdMutationAuthorityPort,
     HouseholdReadLeaseV1, HouseholdRepositoryPort, HouseholdRepositoryResolutionV1,
@@ -37,6 +38,7 @@ use heyfood_core::{
 };
 use hkdf::Hkdf;
 use sha2::Sha256;
+use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
@@ -564,6 +566,15 @@ impl NativeHouseholdRepository {
     /// mutation session. This accessor exposes no mutation authority.
     #[must_use]
     pub fn agent_phase0_port(self: &Arc<Self>) -> Arc<dyn HouseholdAgentPhase0Port> {
+        self.clone()
+    }
+
+    /// Human-attached-terminal disclosure control kept separate from the
+    /// agent-facing read port.
+    #[must_use]
+    pub fn agent_disclosure_control_port(
+        self: &Arc<Self>,
+    ) -> Arc<dyn HouseholdAgentDisclosureControlPort> {
         self.clone()
     }
 
@@ -1613,6 +1624,89 @@ impl HouseholdAgentPhase0Port for NativeHouseholdRepository {
     }
 }
 
+impl HouseholdAgentDisclosureControlPort for NativeHouseholdRepository {
+    fn current_access(
+        &self,
+        account: AccountId,
+        subject: AgentDisclosureGrantSubjectV1,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<HouseholdAgentDisclosureAccessV1, PortError>> {
+        Box::pin(async move {
+            self.require_account(&account)?;
+            let mut lease = self
+                .acquire_vault_lease(HouseholdVaultLeaseModeV1::RequireExisting, &cancellation)
+                .await?;
+            let (guard, key) = self.reread_guard_and_key(&lease, &cancellation).await?;
+            let loaded = self
+                .load_committed_under_lease(&mut lease, &guard, &key, cancellation)
+                .await?;
+            let _ = authoritative_disclosure_subject_status(&loaded.state, &subject)?;
+            let ledger = self.load_agent_disclosure_ledger(&key)?;
+            let grants = ledger
+                .grant_set(
+                    AgentDisclosurePurposeV1::HouseholdAgentRead,
+                    agent_disclosure_now()?,
+                )
+                .map_err(agent_disclosure_contract_error)?;
+            Ok(HouseholdAgentDisclosureAccessV1 {
+                account,
+                generation: grants.generation(),
+                projection: grants.maximum_projection_for(&[subject]),
+            })
+        })
+    }
+
+    fn grant_access(
+        &self,
+        account: AccountId,
+        subject: AgentDisclosureGrantSubjectV1,
+        include_minimized_profile: bool,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<HouseholdAgentDisclosureAccessV1, PortError>> {
+        Box::pin(async move {
+            self.require_account(&account)?;
+            let generation = self
+                .grant_agent_disclosure(
+                    subject.clone(),
+                    include_minimized_profile,
+                    agent_disclosure_now()?,
+                    cancellation.clone(),
+                )
+                .await?;
+            let access = self.current_access(account, subject, cancellation).await?;
+            if access.generation != generation {
+                return Err(agent_disclosure_reconciliation_error());
+            }
+            Ok(access)
+        })
+    }
+
+    fn revoke_access(
+        &self,
+        account: AccountId,
+        subject: AgentDisclosureGrantSubjectV1,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<HouseholdAgentDisclosureAccessV1, PortError>> {
+        Box::pin(async move {
+            self.require_account(&account)?;
+            let generation = self
+                .revoke_agent_disclosure(
+                    subject.clone(),
+                    agent_disclosure_now()?,
+                    cancellation.clone(),
+                )
+                .await?;
+            let access = self.current_access(account, subject, cancellation).await?;
+            if access.generation != generation
+                || access.projection != heyfood_core::AgentHouseholdProjectionV1::ContentFree
+            {
+                return Err(agent_disclosure_reconciliation_error());
+            }
+            Ok(access)
+        })
+    }
+}
+
 impl HouseholdCommitEvidenceRepositoryPort for NativeHouseholdRepository {
     fn reserve_agent_commit_evidence(
         &self,
@@ -2011,6 +2105,22 @@ fn agent_disclosure_crypto_error() -> PortError {
     PortError::new(
         "household_agent_disclosure_crypto",
         "local household agent disclosure storage could not be authenticated",
+    )
+}
+
+fn agent_disclosure_now() -> Result<CanonicalTimestampV1, PortError> {
+    CanonicalTimestampV1::from_datetime(OffsetDateTime::now_utc()).map_err(|_| {
+        PortError::new(
+            "household_agent_disclosure_clock",
+            "local household agent disclosure time is unavailable",
+        )
+    })
+}
+
+fn agent_disclosure_reconciliation_error() -> PortError {
+    PortError::uncertain(
+        "household_agent_disclosure_reconciliation",
+        "local household agent disclosure requires reconciliation",
     )
 }
 

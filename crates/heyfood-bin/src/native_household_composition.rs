@@ -10,9 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use heyfood_application::{
-    HouseholdAgentPhase0Port, HouseholdSession, NativeHouseholdCompletionModeV1,
-    NativeHouseholdInitializationPhaseV1, NativeHouseholdModeFactsV1, NativeHouseholdModeV1,
-    PortError, resolve_native_household_mode_v1,
+    HouseholdAgentDisclosureControlPort, HouseholdAgentPhase0Port, HouseholdSession,
+    NativeHouseholdCompletionModeV1, NativeHouseholdInitializationPhaseV1,
+    NativeHouseholdModeFactsV1, NativeHouseholdModeV1, PortError, resolve_native_household_mode_v1,
 };
 use heyfood_core::{AccountId, DisplayName, NativeHouseholdRolloutV1};
 use heyfood_platform::{
@@ -42,6 +42,7 @@ pub struct PreparedNativeHouseholdV1 {
     mode: NativeHouseholdModeV1,
     household_session: Option<HouseholdSession>,
     household_agent_phase0_port: Option<Arc<dyn HouseholdAgentPhase0Port>>,
+    household_agent_disclosure_control_port: Option<Arc<dyn HouseholdAgentDisclosureControlPort>>,
 }
 
 impl PreparedNativeHouseholdV1 {
@@ -62,6 +63,13 @@ impl PreparedNativeHouseholdV1 {
     pub fn household_agent_phase0_port(&self) -> Option<Arc<dyn HouseholdAgentPhase0Port>> {
         self.household_agent_phase0_port.clone()
     }
+
+    #[must_use]
+    pub fn household_agent_disclosure_control_port(
+        &self,
+    ) -> Option<Arc<dyn HouseholdAgentDisclosureControlPort>> {
+        self.household_agent_disclosure_control_port.clone()
+    }
 }
 
 impl std::fmt::Debug for PreparedNativeHouseholdV1 {
@@ -76,6 +84,10 @@ impl std::fmt::Debug for PreparedNativeHouseholdV1 {
             .field(
                 "household_agent_phase0_port_present",
                 &self.household_agent_phase0_port.is_some(),
+            )
+            .field(
+                "household_agent_disclosure_control_port_present",
+                &self.household_agent_disclosure_control_port.is_some(),
             )
             .finish()
     }
@@ -288,6 +300,9 @@ pub async fn compose_verified_native_household_v1(
                         repository.session(Arc::new(NativeHouseholdMutationAuthorityV1::new())),
                     ),
                     household_agent_phase0_port: Some(repository.agent_phase0_port()),
+                    household_agent_disclosure_control_port: Some(
+                        repository.agent_disclosure_control_port(),
+                    ),
                 },
             ))
         }
@@ -437,6 +452,7 @@ fn native_ready(
             repository.session(Arc::new(NativeHouseholdMutationAuthorityV1::new())),
         ),
         household_agent_phase0_port: Some(repository.agent_phase0_port()),
+        household_agent_disclosure_control_port: Some(repository.agent_disclosure_control_port()),
     })
 }
 
@@ -445,6 +461,7 @@ fn legacy_ready() -> NativeHouseholdCompositionV1 {
         mode: NativeHouseholdModeV1::LegacyCompatibility,
         household_session: None,
         household_agent_phase0_port: None,
+        household_agent_disclosure_control_port: None,
     })
 }
 

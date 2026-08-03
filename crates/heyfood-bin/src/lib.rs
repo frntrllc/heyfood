@@ -22,14 +22,15 @@ use heyfood_application::{
     AudioCapturePort, AuthoritativeConsentStateV1, AuthorizedHostedContextV1, BoxFuture,
     CapabilitySnapshot, ConfirmGroceryMutation, CreateMemberWithDeclaredProfileV1, CreateMenuWatch,
     CreateMenuWatchRequest, DeployedGroceryMutationRequest, DiscoverCapabilities, EnsureSession,
-    EnsureSessionError, EnsureSessionOutcome, ExportGroceryList, GroceryExport, HouseholdLoad,
-    HouseholdSession, ListMenuWatches, NativeMemberAgeEvidenceV1, OptionalCapabilityStatus,
-    OwnerSyncTransitionEventV1, PortError, PrepareGroceryMutation, ProfileReadinessStatus,
-    ReadActiveGroceryDisplay, ReadGroceryExclusions, ReadStatus, RefreshPolicy, RemoveMenuWatch,
-    RunTurnOutcome, SaveMemberDeclaredProfileV1, SaveOwnerProfileAndSyncIntentV1,
-    SelectedHouseholdTargetV1, ServicePort, TransitionOwnerSyncIntentV1, TurnContext, TurnFailure,
-    TurnFailureKind, TurnRequest, UNRENDERABLE_AGENT_RESULT_MESSAGE, VoiceReadinessStatus,
-    execute_one_shot_turn, owner_profile_action_eligibility_v1,
+    EnsureSessionError, EnsureSessionOutcome, ExportGroceryList, GroceryExport,
+    HouseholdAgentDisclosureControlPort, HouseholdLoad, HouseholdSession, ListMenuWatches,
+    NativeMemberAgeEvidenceV1, OptionalCapabilityStatus, OwnerSyncTransitionEventV1, PortError,
+    PrepareGroceryMutation, ProfileReadinessStatus, ReadActiveGroceryDisplay,
+    ReadGroceryExclusions, ReadStatus, RefreshPolicy, RemoveMenuWatch, RunTurnOutcome,
+    SaveMemberDeclaredProfileV1, SaveOwnerProfileAndSyncIntentV1, SelectedHouseholdTargetV1,
+    ServicePort, TransitionOwnerSyncIntentV1, TurnContext, TurnFailure, TurnFailureKind,
+    TurnRequest, UNRENDERABLE_AGENT_RESULT_MESSAGE, VoiceReadinessStatus, execute_one_shot_turn,
+    owner_profile_action_eligibility_v1,
 };
 use heyfood_cli::{
     AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, MealType, MenuWatchCommand,
@@ -39,19 +40,20 @@ use heyfood_cli::{
     render_menu_watch_list,
 };
 use heyfood_core::{
-    AddItemsRequestWire, AgentConfirmationCommandWire, AgentEvent, CanonicalJsonObjectV1,
-    CanonicalTimestampV1, CommitId, CompatibilityJsonLimitsV1, DisplayName,
-    ExclusionMutationRequestWire, GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId,
-    GroceryItemInputWire, GroceryListVersion, GroceryMutationConfirmRequestWire,
-    HouseholdDeclaredProfileV1, HouseholdLifecycleV1, HouseholdProfileDocumentV1,
-    HouseholdProfileOutboxEntryV1, HouseholdProfileRecordV1, HouseholdProfileStateV1,
-    HouseholdRevision, HouseholdScope, HouseholdStateV1, HouseholdSubjectId, ImportedPythonState,
-    LastDefiniteOwnerSyncErrorV1, MAX_OWNER_SYNC_REQUEST_BODY_BYTES, MenuWatchId,
-    OnboardingProfileInput, OperationId, OwnerSyncIntentPhaseV1, OwnerSyncIntentV1,
-    ProfileRevision, RelationshipV1, RemoteProfileBaseV1, RemoteProfileExistenceV1,
-    RemoveItemsRequestWire, RestaurantId, SessionCredentials, SessionSnapshot,
-    TranscriptionPurpose, UpdateItemStateRequestWire, WatchCadenceWire, WatchHour, WatchWeekday,
-    canonical_sha256_v1, parse_bounded_typed_json_v1, terminal_safe_text,
+    AddItemsRequestWire, AgentConfirmationCommandWire, AgentDisclosureGrantSubjectV1, AgentEvent,
+    AgentHouseholdProjectionV1, CanonicalJsonObjectV1, CanonicalTimestampV1, CommitId,
+    CompatibilityJsonLimitsV1, DisplayName, ExclusionMutationRequestWire, GroceryConfirmationToken,
+    GroceryDecisionWire, GroceryEntityId, GroceryItemInputWire, GroceryListVersion,
+    GroceryMutationConfirmRequestWire, HouseholdDeclaredProfileV1, HouseholdLifecycleV1,
+    HouseholdProfileDocumentV1, HouseholdProfileOutboxEntryV1, HouseholdProfileRecordV1,
+    HouseholdProfileStateV1, HouseholdRevision, HouseholdScope, HouseholdStateV1,
+    HouseholdSubjectId, ImportedPythonState, LastDefiniteOwnerSyncErrorV1,
+    MAX_OWNER_SYNC_REQUEST_BODY_BYTES, MenuWatchId, MinorStatusV1, OnboardingProfileInput,
+    OperationId, OwnerSyncIntentPhaseV1, OwnerSyncIntentV1, ProfileRevision, RelationshipV1,
+    RemoteProfileBaseV1, RemoteProfileExistenceV1, RemoveItemsRequestWire, RestaurantId,
+    SessionCredentials, SessionSnapshot, TranscriptionPurpose, UpdateItemStateRequestWire,
+    WatchCadenceWire, WatchHour, WatchWeekday, canonical_sha256_v1, parse_bounded_typed_json_v1,
+    terminal_safe_text,
 };
 use heyfood_platform::{
     NativeSignalSource, ProtectedHouseholdReason, PythonStatePreview, SensitiveExportWriter,
@@ -59,13 +61,14 @@ use heyfood_platform::{
 };
 use heyfood_tui::{
     BoundedHouseholdMemberDraftV1, Effect, ExitReason, HouseholdAccountBindingDigestV1,
-    HouseholdAgeEvidenceInputV1, HouseholdContextApplyFailureV1, HouseholdManagementFailureV1,
-    HouseholdManagementLoadPurposeV1, HouseholdMemberPresentationV1, HouseholdModeGenerationV1,
-    HouseholdMutationFailureV1, HouseholdMutationKindV1, HouseholdOperationBindingV1,
-    HouseholdOperationIdV1, HouseholdPresentationModeV1, HouseholdReducerCorrelationV1,
-    NativeOwnerProfileSaveStatusV1, OwnerProfileActionLoadPurposeV1, OwnerProfileRetryActionV1,
-    OwnerProfileRetryEligibilityV1, OwnerProfileRetryUnavailableReasonV1, OwnerSyncIntentHandleV1,
-    PanelRequest, PresentedHouseholdContextV1, ProfileActionsLoadedV1, ProfileConsentFailureV1,
+    HouseholdAgeEvidenceInputV1, HouseholdAgentAccessDecisionV1, HouseholdAgentAccessLevelV1,
+    HouseholdContextApplyFailureV1, HouseholdManagementFailureV1, HouseholdManagementLoadPurposeV1,
+    HouseholdMemberPresentationV1, HouseholdModeGenerationV1, HouseholdMutationFailureV1,
+    HouseholdMutationKindV1, HouseholdOperationBindingV1, HouseholdOperationIdV1,
+    HouseholdPresentationModeV1, HouseholdReducerCorrelationV1, NativeOwnerProfileSaveStatusV1,
+    OwnerProfileActionLoadPurposeV1, OwnerProfileRetryActionV1, OwnerProfileRetryEligibilityV1,
+    OwnerProfileRetryUnavailableReasonV1, OwnerSyncIntentHandleV1, PanelRequest,
+    PresentedHouseholdContextV1, ProfileActionsLoadedV1, ProfileConsentFailureV1,
     ProfileConsentFinishedV1, ProfilePresentationModeV1, ProfileRetrySyncFinishedV1, RuntimeEvent,
     TuiError, VoiceAvailability,
 };
@@ -5206,6 +5209,7 @@ pub struct InteractiveTurnDriver {
     authorization_scope: Arc<str>,
     local_state: Option<Arc<ImportedPythonState>>,
     household_session: Option<HouseholdSession>,
+    household_agent_disclosure_control: Option<Arc<dyn HouseholdAgentDisclosureControlPort>>,
     profile_presentation_mode: ProfilePresentationModeV1,
     startup_notice: Option<String>,
     startup_onboarding: bool,
@@ -5280,6 +5284,7 @@ impl InteractiveTurnDriver {
             authorization_scope: Arc::from(""),
             local_state: None,
             household_session: None,
+            household_agent_disclosure_control: None,
             profile_presentation_mode: ProfilePresentationModeV1::LegacyCompatibility,
             startup_notice: None,
             startup_onboarding: false,
@@ -5317,6 +5322,15 @@ impl InteractiveTurnDriver {
     #[must_use]
     pub fn with_household_session(mut self, session: Option<HouseholdSession>) -> Self {
         self.household_session = session;
+        self
+    }
+
+    #[must_use]
+    pub fn with_household_agent_disclosure_control(
+        mut self,
+        control: Option<Arc<dyn HouseholdAgentDisclosureControlPort>>,
+    ) -> Self {
+        self.household_agent_disclosure_control = control;
         self
     }
 
@@ -5929,6 +5943,191 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
             operation_id: operation_id.get(),
             household_binding: None,
             followup_ready: completed_household_operation,
+            cancellation,
+            stop: None,
+            task,
+        });
+        Ok(())
+    }
+
+    fn start_household_agent_access_load(
+        &mut self,
+        operation_id: u64,
+        selector: String,
+        events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        self.reap_finished();
+        if self.has_blocking_interactive_work() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "interactive work is already active",
+            ));
+        }
+        let household = self.household_session.clone();
+        let control = self.household_agent_disclosure_control.clone();
+        let session = self.session.clone();
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+        let followup_ready = Arc::new(AtomicBool::new(false));
+        let task_ready = followup_ready.clone();
+        let task = self.runtime.spawn(async move {
+            let result = async {
+                let household = household.ok_or(())?;
+                let control = control.ok_or(())?;
+                let load =
+                    load_bound_native_household_v1(&household, &session, task_cancellation.clone())
+                        .await
+                        .map_err(|_| ())?;
+                let folded = selector.trim().to_lowercase();
+                let matches = load
+                    .state
+                    .members
+                    .iter()
+                    .filter(|member| {
+                        member.lifecycle == HouseholdLifecycleV1::Active
+                            && (member.member_id.as_str() == selector.trim()
+                                || member.display_name.as_str().to_lowercase() == folded)
+                    })
+                    .collect::<Vec<_>>();
+                let [member] = matches.as_slice() else {
+                    return Err(());
+                };
+                let subject = AgentDisclosureGrantSubjectV1::Member(member.member_id.clone());
+                let access = control
+                    .current_access(
+                        load.state.account_binding.clone(),
+                        subject,
+                        task_cancellation,
+                    )
+                    .await
+                    .map_err(|_| ())?;
+                let current = match access.projection {
+                    AgentHouseholdProjectionV1::ContentFree => HouseholdAgentAccessLevelV1::None,
+                    AgentHouseholdProjectionV1::Roster => HouseholdAgentAccessLevelV1::Roster,
+                    AgentHouseholdProjectionV1::Profile => HouseholdAgentAccessLevelV1::Profile,
+                };
+                Ok(RuntimeEvent::HouseholdAgentAccessLoadedV1 {
+                    operation_id,
+                    member_ref: member.member_id.clone(),
+                    display_label: member.display_name.as_str().to_owned(),
+                    minor_status: member.minor_status,
+                    current,
+                })
+            }
+            .await;
+            task_ready.store(true, AtomicOrdering::Release);
+            let _ = events
+                .send(result.unwrap_or(RuntimeEvent::HouseholdAgentAccessFailedV1 { operation_id }))
+                .await;
+        });
+        self.turns.push(OwnedInteractiveTurn {
+            operation_id,
+            household_binding: None,
+            followup_ready,
+            cancellation,
+            stop: None,
+            task,
+        });
+        Ok(())
+    }
+
+    fn start_household_agent_access_change(
+        &mut self,
+        operation_id: u64,
+        member_ref: heyfood_core::MemberId,
+        decision: HouseholdAgentAccessDecisionV1,
+        events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        self.reap_finished();
+        if self.has_blocking_interactive_work() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "interactive work is already active",
+            ));
+        }
+        let household = self.household_session.clone();
+        let control = self.household_agent_disclosure_control.clone();
+        let session = self.session.clone();
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+        let followup_ready = Arc::new(AtomicBool::new(false));
+        let task_ready = followup_ready.clone();
+        let task = self.runtime.spawn(async move {
+            let result = async {
+                let household = household.ok_or(())?;
+                let control = control.ok_or(())?;
+                let load =
+                    load_bound_native_household_v1(&household, &session, task_cancellation.clone())
+                        .await
+                        .map_err(|_| ())?;
+                let member = load
+                    .state
+                    .members
+                    .iter()
+                    .find(|member| {
+                        member.member_id == member_ref
+                            && member.lifecycle == HouseholdLifecycleV1::Active
+                    })
+                    .ok_or(())?;
+                if decision == HouseholdAgentAccessDecisionV1::GrantProfile
+                    && member.minor_status != MinorStatusV1::Adult
+                {
+                    return Err(());
+                }
+                let subject = AgentDisclosureGrantSubjectV1::Member(member_ref);
+                let access = match decision {
+                    HouseholdAgentAccessDecisionV1::GrantRoster => {
+                        control
+                            .grant_access(
+                                load.state.account_binding.clone(),
+                                subject,
+                                false,
+                                task_cancellation,
+                            )
+                            .await
+                    }
+                    HouseholdAgentAccessDecisionV1::GrantProfile => {
+                        control
+                            .grant_access(
+                                load.state.account_binding.clone(),
+                                subject,
+                                true,
+                                task_cancellation,
+                            )
+                            .await
+                    }
+                    HouseholdAgentAccessDecisionV1::Revoke => {
+                        control
+                            .revoke_access(
+                                load.state.account_binding.clone(),
+                                subject,
+                                task_cancellation,
+                            )
+                            .await
+                    }
+                }
+                .map_err(|_| ())?;
+                let level = match access.projection {
+                    AgentHouseholdProjectionV1::ContentFree => HouseholdAgentAccessLevelV1::None,
+                    AgentHouseholdProjectionV1::Roster => HouseholdAgentAccessLevelV1::Roster,
+                    AgentHouseholdProjectionV1::Profile => HouseholdAgentAccessLevelV1::Profile,
+                };
+                Ok(RuntimeEvent::HouseholdAgentAccessChangedV1 {
+                    operation_id,
+                    display_label: member.display_name.as_str().to_owned(),
+                    access: level,
+                })
+            }
+            .await;
+            task_ready.store(true, AtomicOrdering::Release);
+            let _ = events
+                .send(result.unwrap_or(RuntimeEvent::HouseholdAgentAccessFailedV1 { operation_id }))
+                .await;
+        });
+        self.turns.push(OwnedInteractiveTurn {
+            operation_id,
+            household_binding: None,
+            followup_ready,
             cancellation,
             stop: None,
             task,
@@ -8795,6 +8994,31 @@ pub trait QualifiedTurnDriver {
         ))
     }
 
+    fn start_household_agent_access_load(
+        &mut self,
+        _operation_id: u64,
+        _selector: String,
+        _events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "household agent access controls are unavailable in this driver",
+        ))
+    }
+
+    fn start_household_agent_access_change(
+        &mut self,
+        _operation_id: u64,
+        _member_ref: heyfood_core::MemberId,
+        _decision: HouseholdAgentAccessDecisionV1,
+        _events: mpsc::Sender<RuntimeEvent>,
+    ) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "household agent access controls are unavailable in this driver",
+        ))
+    }
+
     fn start_household_member_create(
         &mut self,
         _binding: HouseholdOperationBindingV1,
@@ -9026,6 +9250,24 @@ fn route_effect(
     effect: Effect,
 ) -> Result<(), CompositionError> {
     match effect {
+        Effect::LoadHouseholdAgentAccessV1 {
+            operation_id,
+            selector,
+        } => driver
+            .start_household_agent_access_load(operation_id, selector, runtime_sender.clone())
+            .map_err(CompositionError::Driver),
+        Effect::SetHouseholdAgentAccessV1 {
+            operation_id,
+            member_ref,
+            decision,
+        } => driver
+            .start_household_agent_access_change(
+                operation_id,
+                member_ref,
+                decision,
+                runtime_sender.clone(),
+            )
+            .map_err(CompositionError::Driver),
         Effect::LoadHouseholdManagementV1 {
             operation_id,
             session_mode_generation,

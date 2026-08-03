@@ -16,8 +16,8 @@ use heyfood_application::{
 use heyfood_core::{
     ActionConfirmationEnvelopeWire, AgentConfirmationCommandWire, AgentEvent,
     ConfirmationDecisionWire, ConsentVersionV1, GroceryEditPatch, HouseholdLifecycleV1,
-    HouseholdProfileStateV1, HouseholdRevision, HouseholdScope, HouseholdSubjectId,
-    OnboardingOption, OnboardingProfileInput, ProfileRevision, RelationshipV1,
+    HouseholdProfileStateV1, HouseholdRevision, HouseholdScope, HouseholdSubjectId, MemberId,
+    MinorStatusV1, OnboardingOption, OnboardingProfileInput, ProfileRevision, RelationshipV1,
     TRANSCRIPTION_MAX_TRANSCRIPT_CHARACTERS, activity_options, allergy_options, condition_options,
     cuisine_options, diet_options, required_text, terminal_safe_text,
 };
@@ -277,6 +277,37 @@ pub enum HouseholdManagementFailureV1 {
     StateChanged,
     Unavailable,
     MalformedPresentation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HouseholdAgentAccessLevelV1 {
+    None,
+    Roster,
+    Profile,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HouseholdAgentAccessDecisionV1 {
+    GrantRoster,
+    GrantProfile,
+    Revoke,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+enum PendingHouseholdAgentAccessV1 {
+    Loading {
+        operation_id: u64,
+    },
+    Choosing {
+        operation_id: u64,
+        member_ref: MemberId,
+        display_label: String,
+        minor_status: MinorStatusV1,
+        current: HouseholdAgentAccessLevelV1,
+    },
+    Applying {
+        operation_id: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -688,8 +719,8 @@ pub const SLASH_COMMAND_REGISTRY: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "/household",
         aliases: &[],
-        usage: "/household [add]",
-        description: "See your household or add someone",
+        usage: "/household | /household add | /household agent-access MEMBER",
+        description: "See your household, add someone, or control local agent access",
         kind: SlashCommandKind::Household,
     },
     SlashCommandSpec {
@@ -1484,6 +1515,7 @@ pub struct AppModel {
     pending_household_load: Option<PendingHouseholdLoadV1>,
     pending_household_mutation: Option<PendingHouseholdMutationV1>,
     pending_household_choice: Option<PendingHouseholdChoiceV1>,
+    pending_household_agent_access: Option<PendingHouseholdAgentAccessV1>,
     household_chrome_label: Option<String>,
     household_turn_gate: HouseholdTurnGateV1,
     next_household_operation_id: Option<HouseholdOperationIdV1>,
@@ -1549,6 +1581,10 @@ impl fmt::Debug for AppModel {
                 &self.pending_household_mutation,
             )
             .field("pending_household_choice", &self.pending_household_choice)
+            .field(
+                "has_pending_household_agent_access",
+                &self.pending_household_agent_access.is_some(),
+            )
             .field("household_turn_gate", &self.household_turn_gate)
             .finish()
     }
@@ -1594,6 +1630,7 @@ impl Default for AppModel {
             pending_household_load: None,
             pending_household_mutation: None,
             pending_household_choice: None,
+            pending_household_agent_access: None,
             household_chrome_label: None,
             household_turn_gate: HouseholdTurnGateV1::Legacy,
             next_household_operation_id: HouseholdOperationIdV1::new(1).ok(),
@@ -1654,6 +1691,21 @@ fn household_scope_kind(scope: &HouseholdScope) -> &'static str {
 
 #[derive(Clone, PartialEq)]
 pub enum RuntimeEvent {
+    HouseholdAgentAccessLoadedV1 {
+        operation_id: u64,
+        member_ref: MemberId,
+        display_label: String,
+        minor_status: MinorStatusV1,
+        current: HouseholdAgentAccessLevelV1,
+    },
+    HouseholdAgentAccessChangedV1 {
+        operation_id: u64,
+        display_label: String,
+        access: HouseholdAgentAccessLevelV1,
+    },
+    HouseholdAgentAccessFailedV1 {
+        operation_id: u64,
+    },
     HouseholdGenerationReadyV1 {
         session_mode_generation: HouseholdModeGenerationV1,
         mode: HouseholdPresentationModeV1,
@@ -1800,6 +1852,15 @@ pub enum RuntimeEvent {
 impl fmt::Debug for RuntimeEvent {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::HouseholdAgentAccessLoadedV1 { .. } => {
+                "RuntimeEvent::HouseholdAgentAccessLoadedV1"
+            }
+            Self::HouseholdAgentAccessChangedV1 { .. } => {
+                "RuntimeEvent::HouseholdAgentAccessChangedV1"
+            }
+            Self::HouseholdAgentAccessFailedV1 { .. } => {
+                "RuntimeEvent::HouseholdAgentAccessFailedV1"
+            }
             Self::HouseholdGenerationReadyV1 { .. } => "RuntimeEvent::HouseholdGenerationReadyV1",
             Self::HouseholdGenerationInvalidatedV1 { .. } => {
                 "RuntimeEvent::HouseholdGenerationInvalidatedV1"
@@ -1903,6 +1964,15 @@ impl fmt::Debug for Action {
 
 #[derive(Clone, Eq, PartialEq)]
 pub enum Effect {
+    LoadHouseholdAgentAccessV1 {
+        operation_id: u64,
+        selector: String,
+    },
+    SetHouseholdAgentAccessV1 {
+        operation_id: u64,
+        member_ref: MemberId,
+        decision: HouseholdAgentAccessDecisionV1,
+    },
     LoadHouseholdManagementV1 {
         operation_id: HouseholdOperationIdV1,
         session_mode_generation: HouseholdModeGenerationV1,
@@ -1988,6 +2058,8 @@ pub enum Effect {
 impl fmt::Debug for Effect {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::LoadHouseholdAgentAccessV1 { .. } => "Effect::LoadHouseholdAgentAccessV1",
+            Self::SetHouseholdAgentAccessV1 { .. } => "Effect::SetHouseholdAgentAccessV1",
             Self::LoadHouseholdManagementV1 { .. } => "Effect::LoadHouseholdManagementV1",
             Self::CreateMemberWithDeclaredProfileV1 { .. } => {
                 "Effect::CreateMemberWithDeclaredProfileV1"
@@ -2190,6 +2262,17 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
     }
     if model.draft.trim_start().starts_with('/') {
         if model.draft.trim().eq_ignore_ascii_case("/cancel")
+            && model.pending_household_agent_access.is_some()
+        {
+            model.draft.clear();
+            model.cursor = 0;
+            model.pending_household_agent_access = None;
+            model.operation = OperationState::Idle;
+            model.activity = None;
+            push_notice(model, "Agent access unchanged.");
+            return Vec::new();
+        }
+        if model.draft.trim().eq_ignore_ascii_case("/cancel")
             && (model.pending_household_choice.is_some()
                 || model
                     .onboarding
@@ -2224,6 +2307,9 @@ fn submit(model: &mut AppModel) -> Vec<Effect> {
     }
     if model.pending_household_choice.is_some() {
         return submit_household_choice(model);
+    }
+    if model.pending_household_agent_access.is_some() {
+        return submit_household_agent_access(model);
     }
     if model.onboarding.is_some() {
         return submit_onboarding(model);
@@ -3599,8 +3685,24 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
         SlashCommandKind::Household if arguments.eq_ignore_ascii_case("add") => {
             return begin_household_load(model, HouseholdLoadIntentV1::AddMember);
         }
+        SlashCommandKind::Household
+            if arguments
+                .strip_prefix("agent-access ")
+                .is_some_and(|selector| !selector.trim().is_empty()) =>
+        {
+            return begin_household_agent_access(
+                model,
+                arguments
+                    .strip_prefix("agent-access ")
+                    .expect("guarded prefix")
+                    .trim(),
+            );
+        }
         SlashCommandKind::Household => {
-            push_notice(model, "Usage: /household | /household add");
+            push_notice(
+                model,
+                "Usage: /household | /household add | /household agent-access MEMBER",
+            );
         }
         SlashCommandKind::For if arguments.is_empty() => {
             push_notice(model, &format!("Usage: {}", spec.usage));
@@ -3700,6 +3802,169 @@ fn select_household(model: &mut AppModel, selector: &str) -> Vec<Effect> {
         operation_id,
         selector: selector.to_owned(),
     }]
+}
+
+fn begin_household_agent_access(model: &mut AppModel, selector: &str) -> Vec<Effect> {
+    let native_enabled = model
+        .household_generation
+        .as_ref()
+        .is_some_and(|generation| generation.mode == HouseholdPresentationModeV1::NativeEnabled);
+    if !native_enabled {
+        push_notice(
+            model,
+            "Agent access controls require an enabled native household in this attached terminal.",
+        );
+        return Vec::new();
+    }
+    if model.operation.is_active() {
+        push_notice(
+            model,
+            "Finish or stop the active work before changing agent access.",
+        );
+        return Vec::new();
+    }
+    let operation_id = model.next_operation_id;
+    model.next_operation_id = model.next_operation_id.saturating_add(1);
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::User,
+        text: format!("/household agent-access {selector}"),
+        streaming: false,
+    });
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::Assistant,
+        text: String::new(),
+        streaming: true,
+    });
+    model.operation = OperationState::Running(operation_id);
+    model.activity = Some("Loading agent access…".into());
+    model.pending_household_agent_access =
+        Some(PendingHouseholdAgentAccessV1::Loading { operation_id });
+    follow_tail(model);
+    vec![Effect::LoadHouseholdAgentAccessV1 {
+        operation_id,
+        selector: selector.to_owned(),
+    }]
+}
+
+fn submit_household_agent_access(model: &mut AppModel) -> Vec<Effect> {
+    let answer = std::mem::take(&mut model.draft);
+    model.cursor = 0;
+    let Some(PendingHouseholdAgentAccessV1::Choosing {
+        member_ref,
+        display_label,
+        minor_status,
+        ..
+    }) = model.pending_household_agent_access.clone()
+    else {
+        return Vec::new();
+    };
+    let normalized = answer.trim().to_ascii_lowercase();
+    let decision = match minor_status {
+        MinorStatusV1::Adult => match normalized.as_str() {
+            "1" | "basics" | "roster" => Some(HouseholdAgentAccessDecisionV1::GrantRoster),
+            "2" | "profile" => Some(HouseholdAgentAccessDecisionV1::GrantProfile),
+            "3" | "revoke" => Some(HouseholdAgentAccessDecisionV1::Revoke),
+            "4" | "cancel" => None,
+            _ => {
+                push_notice(model, "Choose 1, 2, 3, or 4.");
+                return Vec::new();
+            }
+        },
+        MinorStatusV1::Minor | MinorStatusV1::Unknown => match normalized.as_str() {
+            "1" | "basics" | "roster" => Some(HouseholdAgentAccessDecisionV1::GrantRoster),
+            "2" | "revoke" => Some(HouseholdAgentAccessDecisionV1::Revoke),
+            "3" | "cancel" => None,
+            _ => {
+                push_notice(model, "Choose 1, 2, or 3.");
+                return Vec::new();
+            }
+        },
+    };
+    let Some(decision) = decision else {
+        model.pending_household_agent_access = None;
+        push_notice(model, "Agent access unchanged.");
+        return Vec::new();
+    };
+    let operation_id = model.next_operation_id;
+    model.next_operation_id = model.next_operation_id.saturating_add(1);
+    let human_choice = match decision {
+        HouseholdAgentAccessDecisionV1::GrantRoster => "Allow household basics",
+        HouseholdAgentAccessDecisionV1::GrantProfile => "Allow basics and dietary profile",
+        HouseholdAgentAccessDecisionV1::Revoke => "Revoke agent access",
+    };
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::User,
+        text: human_choice.into(),
+        streaming: false,
+    });
+    model.scrollback.push(SemanticEntry {
+        speaker: Speaker::Assistant,
+        text: String::new(),
+        streaming: true,
+    });
+    model.operation = OperationState::Running(operation_id);
+    model.activity = Some(format!("Updating agent access for {display_label}…"));
+    model.pending_household_agent_access =
+        Some(PendingHouseholdAgentAccessV1::Applying { operation_id });
+    vec![Effect::SetHouseholdAgentAccessV1 {
+        operation_id,
+        member_ref,
+        decision,
+    }]
+}
+
+fn present_household_agent_access(
+    model: &mut AppModel,
+    operation_id: u64,
+    member_ref: MemberId,
+    display_label: String,
+    minor_status: MinorStatusV1,
+    current: HouseholdAgentAccessLevelV1,
+) {
+    if !matches!(
+        model.pending_household_agent_access,
+        Some(PendingHouseholdAgentAccessV1::Loading { operation_id: pending }) if pending == operation_id
+    ) {
+        return;
+    }
+    let current_copy = match current {
+        HouseholdAgentAccessLevelV1::None => "Current access: none.",
+        HouseholdAgentAccessLevelV1::Roster => "Current access: household basics only.",
+        HouseholdAgentAccessLevelV1::Profile => {
+            "Current access: household basics and minimized dietary profile."
+        }
+    };
+    let age_copy = match minor_status {
+        MinorStatusV1::Adult => concat!(
+            "1. Allow household basics (name, relationship, and profile readiness)\n",
+            "2. Allow basics and minimized dietary profile\n",
+            "3. Revoke agent access\n",
+            "4. Cancel"
+        ),
+        MinorStatusV1::Minor => concat!(
+            "This person is under 18, so agents can receive household basics only.\n\n",
+            "1. Allow household basics\n2. Revoke agent access\n3. Cancel"
+        ),
+        MinorStatusV1::Unknown => concat!(
+            "Their age is not confirmed, so dietary profile access is unavailable.\n\n",
+            "1. Allow household basics\n2. Revoke agent access\n3. Cancel"
+        ),
+    };
+    finish_household_command_stream(
+        model,
+        format!(
+            "Agent access for {display_label}\n\n{current_copy}\n\nApps running as your operating-system user can read data you allow through heyfood and may pass it to their model providers. Revoking access stops future reads through heyfood, but it cannot recall copies already shared.\n\n{age_copy}\n\nType a number, or type `cancel` to leave access unchanged."
+        ),
+    );
+    model.operation = OperationState::Idle;
+    model.activity = None;
+    model.pending_household_agent_access = Some(PendingHouseholdAgentAccessV1::Choosing {
+        operation_id,
+        member_ref,
+        display_label,
+        minor_status,
+        current,
+    });
 }
 
 fn open_panel(model: &mut AppModel, panel: PanelRequest) -> Vec<Effect> {
@@ -4209,6 +4474,7 @@ fn submit_household_choice(model: &mut AppModel) -> Vec<Effect> {
         return Vec::new();
     }
     model.pending_household_choice = None;
+    model.pending_household_agent_access = None;
     model.scrollback.push(SemanticEntry {
         speaker: Speaker::User,
         text: format!("Choose household member #{}", index + 1),
@@ -6108,6 +6374,61 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
     }
     match runtime {
         RuntimeEvent::ExternalSignal(reason) => return begin_exit(model, reason),
+        RuntimeEvent::HouseholdAgentAccessLoadedV1 {
+            operation_id,
+            member_ref,
+            display_label,
+            minor_status,
+            current,
+        } => {
+            present_household_agent_access(
+                model,
+                operation_id,
+                member_ref,
+                terminal_safe_text(&display_label),
+                minor_status,
+                current,
+            );
+        }
+        RuntimeEvent::HouseholdAgentAccessChangedV1 {
+            operation_id,
+            display_label,
+            access,
+        } if matches!(
+            model.pending_household_agent_access,
+            Some(PendingHouseholdAgentAccessV1::Applying { operation_id: pending }) if pending == operation_id
+        ) =>
+        {
+            let access_copy = match access {
+                HouseholdAgentAccessLevelV1::None => "Agent access revoked",
+                HouseholdAgentAccessLevelV1::Roster => "Household basics allowed",
+                HouseholdAgentAccessLevelV1::Profile => {
+                    "Household basics and minimized dietary profile allowed"
+                }
+            };
+            finish_household_command_stream(
+                model,
+                format!("{access_copy} for {}.", terminal_safe_text(&display_label)),
+            );
+            model.pending_household_agent_access = None;
+            model.operation = OperationState::Idle;
+            model.activity = None;
+        }
+        RuntimeEvent::HouseholdAgentAccessFailedV1 { operation_id }
+            if matches!(
+                model.pending_household_agent_access,
+                Some(PendingHouseholdAgentAccessV1::Loading { operation_id: pending }
+                    | PendingHouseholdAgentAccessV1::Applying { operation_id: pending }) if pending == operation_id
+            ) =>
+        {
+            finish_household_command_stream(
+                model,
+                "Agent access could not be changed safely. Nothing was changed.",
+            );
+            model.pending_household_agent_access = None;
+            model.operation = OperationState::Idle;
+            model.activity = None;
+        }
         RuntimeEvent::ProfileActionsLoaded { .. }
         | RuntimeEvent::ProfileConsentRequested
         | RuntimeEvent::ProfileConsentConfirmed
@@ -6285,7 +6606,9 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
         {
             finish_household_scope(model, Err(message));
         }
-        RuntimeEvent::HouseholdGenerationReadyV1 { .. }
+        RuntimeEvent::HouseholdAgentAccessChangedV1 { .. }
+        | RuntimeEvent::HouseholdAgentAccessFailedV1 { .. }
+        | RuntimeEvent::HouseholdGenerationReadyV1 { .. }
         | RuntimeEvent::HouseholdGenerationInvalidatedV1 { .. }
         | RuntimeEvent::HouseholdManagementLoadedV1 { .. }
         | RuntimeEvent::HouseholdManagementLoadFailedV1 { .. }
@@ -12474,5 +12797,123 @@ mod tests {
         ] {
             assert!(!combined.contains(canary), "{canary} leaked through Debug");
         }
+    }
+
+    fn native_household_agent_access_model() -> AppModel {
+        let mut model = native_model();
+        model.household_generation = Some(HouseholdGenerationStateV1 {
+            session_mode_generation: HouseholdModeGenerationV1::new(1).unwrap(),
+            mode: HouseholdPresentationModeV1::NativeEnabled,
+            account_binding_digest: HouseholdAccountBindingDigestV1::from_bytes([7; 32]),
+        });
+        model.household_turn_gate = HouseholdTurnGateV1::HostedReady;
+        model
+    }
+
+    #[test]
+    fn household_agent_access_warns_before_an_adult_profile_choice() {
+        let mut model = native_household_agent_access_model();
+        let effects = submit_text(&mut model, "/household agent-access Julie");
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::LoadHouseholdAgentAccessV1 { selector, .. }] if selector == "Julie"
+        ));
+        let member_ref = MemberId::parse_preserved("member-julie").unwrap();
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::HouseholdAgentAccessLoadedV1 {
+                operation_id: 1,
+                member_ref: member_ref.clone(),
+                display_label: "Julie".into(),
+                minor_status: MinorStatusV1::Adult,
+                current: HouseholdAgentAccessLevelV1::None,
+            }),
+        );
+        let copy = &model.scrollback.entries().back().unwrap().text;
+        assert!(copy.contains("operating-system user"));
+        assert!(copy.contains("model providers"));
+        assert!(copy.contains("cannot recall copies already shared"));
+        assert!(copy.contains("Allow basics and minimized dietary profile"));
+        assert!(matches!(
+            submit_text(&mut model, "2").as_slice(),
+            [Effect::SetHouseholdAgentAccessV1 {
+                member_ref: observed,
+                decision: HouseholdAgentAccessDecisionV1::GrantProfile,
+                ..
+            }] if observed == &member_ref
+        ));
+    }
+
+    #[test]
+    fn minor_and_unknown_age_agent_access_never_offer_profile_disclosure() {
+        for (minor_status, expected_copy) in [
+            (MinorStatusV1::Minor, "under 18"),
+            (MinorStatusV1::Unknown, "age is not confirmed"),
+        ] {
+            let mut model = native_household_agent_access_model();
+            let _ = submit_text(&mut model, "/household agent-access Child");
+            let _ = dispatch(
+                &mut model,
+                Action::Runtime(RuntimeEvent::HouseholdAgentAccessLoadedV1 {
+                    operation_id: 1,
+                    member_ref: MemberId::parse_preserved("member-child").unwrap(),
+                    display_label: "Child".into(),
+                    minor_status,
+                    current: HouseholdAgentAccessLevelV1::Roster,
+                }),
+            );
+            let copy = &model.scrollback.entries().back().unwrap().text;
+            assert!(copy.contains(expected_copy));
+            assert!(!copy.contains("Allow basics and minimized dietary profile"));
+            assert!(matches!(
+                submit_text(&mut model, "1").as_slice(),
+                [Effect::SetHouseholdAgentAccessV1 {
+                    decision: HouseholdAgentAccessDecisionV1::GrantRoster,
+                    ..
+                }]
+            ));
+        }
+    }
+
+    #[test]
+    fn household_agent_access_revocation_is_explicit_and_truthful() {
+        let mut model = native_household_agent_access_model();
+        let _ = submit_text(&mut model, "/household agent-access Julie");
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::HouseholdAgentAccessLoadedV1 {
+                operation_id: 1,
+                member_ref: MemberId::parse_preserved("member-julie").unwrap(),
+                display_label: "Julie".into(),
+                minor_status: MinorStatusV1::Adult,
+                current: HouseholdAgentAccessLevelV1::Profile,
+            }),
+        );
+        assert!(matches!(
+            submit_text(&mut model, "3").as_slice(),
+            [Effect::SetHouseholdAgentAccessV1 {
+                operation_id: 2,
+                decision: HouseholdAgentAccessDecisionV1::Revoke,
+                ..
+            }]
+        ));
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::HouseholdAgentAccessChangedV1 {
+                operation_id: 2,
+                display_label: "Julie".into(),
+                access: HouseholdAgentAccessLevelV1::None,
+            }),
+        );
+        assert_eq!(model.operation, OperationState::Idle);
+        assert!(
+            model
+                .scrollback
+                .entries()
+                .back()
+                .unwrap()
+                .text
+                .contains("Agent access revoked for Julie")
+        );
     }
 }

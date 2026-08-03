@@ -1369,6 +1369,7 @@ async fn interactive(machine: bool, force_onboarding: bool) -> ExitCode {
         .with_session_provider(session_provider)
         .with_local_state(local_state)
         .with_household_session(prepared.household_session)
+        .with_household_agent_disclosure_control(prepared.household_agent_disclosure_control_port)
         .with_profile_presentation_mode(profile_presentation_mode(prepared.household_mode))
         .with_startup_notice(startup_notice)
         .with_startup_onboarding(startup_onboarding);
@@ -1603,6 +1604,8 @@ struct PreparedNativeSession {
     authorization_scope: String,
     household_mode: NativeHouseholdModeV1,
     household_session: Option<HouseholdSession>,
+    household_agent_disclosure_control_port:
+        Option<Arc<dyn heyfood_application::HouseholdAgentDisclosureControlPort>>,
 }
 
 #[cfg(feature = "native-credentials")]
@@ -1839,7 +1842,14 @@ async fn prepare_account_household(
     paths: &NativePaths,
     account: heyfood_core::AccountId,
     cancellation: CancellationToken,
-) -> Result<(NativeHouseholdModeV1, Option<HouseholdSession>), heyfood_bin::OneShotError> {
+) -> Result<
+    (
+        NativeHouseholdModeV1,
+        Option<HouseholdSession>,
+        Option<Arc<dyn heyfood_application::HouseholdAgentDisclosureControlPort>>,
+    ),
+    heyfood_bin::OneShotError,
+> {
     use heyfood_bin::native_household_composition::{
         NativeHouseholdCompositionV1, compose_native_household_v1,
         native_household_rollout_from_environment_v1,
@@ -1851,9 +1861,11 @@ async fn prepare_account_household(
         .await
         .map_err(heyfood_bin::OneShotError::from)?
     {
-        NativeHouseholdCompositionV1::Ready(prepared) => {
-            Ok((prepared.mode(), prepared.household_session().cloned()))
-        }
+        NativeHouseholdCompositionV1::Ready(prepared) => Ok((
+            prepared.mode(),
+            prepared.household_session().cloned(),
+            prepared.household_agent_disclosure_control_port(),
+        )),
         NativeHouseholdCompositionV1::LifecycleRequired(required) => {
             Err(heyfood_bin::OneShotError::new(
                 native_household_lifecycle_error_code(required.mode),
@@ -1941,31 +1953,32 @@ async fn prepare_native_session_at_with_household(
             )
         })?;
     ensure_command_scopes(capability, &auth.channel.scope)?;
-    let (household_mode, household_session) = match retained_household {
-        Some((mode, session)) => {
-            if session.account() != &auth.session.account_id {
-                return Err(heyfood_bin::OneShotError::new(
-                    "household_account_mismatch",
-                    "Native household context is bound to another account.",
-                ));
+    let (household_mode, household_session, household_agent_disclosure_control_port) =
+        match retained_household {
+            Some((mode, session)) => {
+                if session.account() != &auth.session.account_id {
+                    return Err(heyfood_bin::OneShotError::new(
+                        "household_account_mismatch",
+                        "Native household context is bound to another account.",
+                    ));
+                }
+                if mode != NativeHouseholdModeV1::NativeEnabled {
+                    return Err(heyfood_bin::OneShotError::new(
+                        "household_hosted_mode_not_authorized",
+                        "Hosted guidance is unavailable in the current native household mode.",
+                    ));
+                }
+                (mode, Some(session), None)
             }
-            if mode != NativeHouseholdModeV1::NativeEnabled {
-                return Err(heyfood_bin::OneShotError::new(
-                    "household_hosted_mode_not_authorized",
-                    "Hosted guidance is unavailable in the current native household mode.",
-                ));
+            None => {
+                prepare_account_household(
+                    &paths,
+                    auth.session.account_id.clone(),
+                    cancellation.child_token(),
+                )
+                .await?
             }
-            (mode, Some(session))
-        }
-        None => {
-            prepare_account_household(
-                &paths,
-                auth.session.account_id.clone(),
-                cancellation.child_token(),
-            )
-            .await?
-        }
-    };
+        };
 
     let (service_url, policy) = service_url().map_err(registration_to_one_shot)?;
     let now = SystemTime::now()
@@ -2070,6 +2083,7 @@ async fn prepare_native_session_at_with_household(
         authorization_scope,
         household_mode,
         household_session,
+        household_agent_disclosure_control_port,
     })
 }
 
