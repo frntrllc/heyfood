@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _, se
 use sha2::{Digest, Sha256};
 use unicode_width::UnicodeWidthChar;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::{
     AccountId, CanonicalDigestV1, CanonicalTimestampV1, CommitId, DisplayName, GenerationId,
