@@ -26,6 +26,34 @@ if (process.argv.length > 3 || (process.argv.length === 3 && !check)) {
   process.exit(2);
 }
 
+const canonicalSkill = fs.readFileSync(path.join(source, "SKILL.md"), "utf8");
+const householdWorkflow = fs.readFileSync(
+  path.join(source, "references", "workflow-selection.md"),
+  "utf8",
+);
+const requiredCompatibilityRules = [
+  [canonicalSkill, "supports manifest schemas 1 through 3"],
+  [canonicalSkill, "Never duck-type familiar fields from"],
+  [canonicalSkill, "heyfood agent compatibility --json --no-input"],
+  [householdWorkflow, "discover the exact boundary"],
+  [householdWorkflow, "The agent never approves or commits"],
+];
+for (const [document, rule] of requiredCompatibilityRules) {
+  if (!document.includes(rule)) {
+    throw new Error(`canonical skill omitted compatibility rule: ${rule}`);
+  }
+}
+for (const forbidden of [
+  "whatever `schema_version` says",
+  "None of it has an agent surface",
+  "the same six read tools",
+  "Household-scoped evaluation | ❌ **Human TUI only**",
+]) {
+  if (canonicalSkill.includes(forbidden) || householdWorkflow.includes(forbidden)) {
+    throw new Error(`canonical skill retained unconditional compatibility copy: ${forbidden}`);
+  }
+}
+
 for (const destination of destinations) {
   const existing = fs.existsSync(destination)
     ? fs

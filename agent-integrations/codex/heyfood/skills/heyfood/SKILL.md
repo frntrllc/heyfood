@@ -1,6 +1,6 @@
 ---
 name: heyfood
-description: Use hey.food for hello.food dietary questions — restaurant and menu safety evaluation, dish explanation, recommendations, recipes, and dietary profile reads over the hosted MCP surface, plus household-aware Grocery reads, Grocery exclusions, and Menu Watch reads when the local hey.food MCP server is present. Trigger when a user asks an agent to use hey.food, hello.food, their dietary profile, food safety, restaurant menus, grocery safety, or recurring menu watches. Never automate the human TUI or bypass human-only mutation approval.
+description: Use hey.food for hello.food dietary questions — restaurant and menu safety evaluation, dish explanation, recommendations, recipes, and dietary profile reads over the hosted MCP surface, plus capability-discovered local Grocery, Menu Watch, and household workflows. Trigger when a user asks an agent to use hey.food, hello.food, their dietary profile, household, food safety, restaurant menus, grocery safety, or recurring menu watches. Never automate the human TUI or bypass hey.food-controlled human approval.
 ---
 
 # hey.food
@@ -32,7 +32,8 @@ it with the other surface's tools.
 |---|---|---|
 | Grocery list, Grocery exclusions | ✅ | ❌ **Not available** |
 | Menu Watch reads | ✅ | ❌ **Not available** |
-| Household-scoped evaluation | ❌ **Human TUI only** | ✅ |
+| Household roster, profile, and change preparation | **Discover from the manifest and tool list** | ❌ **Not available** |
+| Household-scoped food evaluation | **Only when separately advertised** | ✅ |
 | Installed-contract, status, capability discovery | ✅ | ❌ |
 | Restaurant lookup and search | ❌ | ✅ |
 | Menu safety evaluation, dish explanation | ❌ | ✅ |
@@ -48,25 +49,33 @@ Menu Watch, explain that those require the local hey.food client.
 ## Start safely — local surface
 
 1. Run `heyfood agent describe` without network-dependent flags.
-2. Read `automation_surfaces`, `capabilities`, command audiences, scopes, and
-   retry classes. **Gate on the fields, not on the version number.** If every
-   field this skill relies on is present and readable, proceed — whatever
-   `schema_version` says. If any is missing or unreadable, stop and hand off,
-   again regardless of the version. A newer manifest that still carries these
-   fields is usable; an older one that does not is not, and a version equality
-   check gets both cases wrong.
-3. Prefer available `heyfood_*` MCP tools for typed product reads.
-4. If MCP is unavailable, invoke only commands whose exact manifest row says
-   `agent_safe`. Never downgrade `human_terminal_only` or `agent_unsupported`.
+2. Read `schema_version` before interpreting any other field. This skill
+   supports manifest schemas 1 through 3. Never duck-type familiar fields from
+   an unknown schema.
+3. If the schema is outside that range, unreadable, or missing structural fields
+   required by that schema, run
+   `heyfood agent compatibility --json --no-input`. Report its compatibility
+   status, reason, and exact `remediation.program` plus `remediation.arguments`
+   to the user. Do not apply the remediation automatically or maintain a second
+   copy of installation syntax. If the compatibility command is unavailable,
+   stop and state that the installed integration cannot be used safely.
+4. For a supported schema, read `automation_surfaces`, `capabilities`, command
+   audiences, scopes, retry classes, and—when present—the structured MCP
+   inventory. A capability is usable only when its status and the exact current
+   command or MCP tool agree.
+5. Prefer available `heyfood_*` MCP tools with an input schema matching the
+   request. If MCP is unavailable, invoke only commands whose exact manifest row
+   says `agent_safe`. Never downgrade `human_terminal_only` or
+   `agent_unsupported`.
 
 Use the exact installed executable's embedded contract, not remembered command
 syntax and not this skill's examples. The manifest is authoritative: where it
 and this document disagree, the manifest wins and this document is stale.
 
-A manifest may gain fields, commands, capabilities, or MCP tools in a later
-release. Read what is there; never assume a capability the manifest does not
-advertise, and never refuse one it does advertise merely because this document
-predates it.
+A supported manifest may advertise capabilities this document does not name.
+Use one only when its capability, authority, command/tool schema, and approval
+requirements are all explicit and mutually consistent. An unknown manifest
+schema is incompatible even when its fields look familiar.
 
 Never drive bare `heyfood` or `heyfood chat`, allocate a PTY to answer its
 prompts, or parse terminal rendering as data.
@@ -114,6 +123,12 @@ about the person asking.
 Full rules, accepted values, and what the rejections mean:
 [references/workflow-selection.md](references/workflow-selection.md).
 
+On the local surface, roster/profile reads and household change preparation are
+conditional capabilities. Read the local-household section of the workflow
+reference before using any household command or tool. Roster/profile access does
+not imply local household-scoped food evaluation, and preparation does not imply
+agent approval or commit authority.
+
 ## Preserve food safety context
 
 For Grocery and food results, preserve intended household members, per-member
@@ -135,13 +150,19 @@ Do not invoke meal logging, `grocery add/remove/state/never/confirm`, or
 stdin, and ordinary host approval are not mutation consent.
 
 Call a mutating MCP tool only if it is present in your current tool list and
-the surface says it is active. On the local surface that means the manifest
-reports the corresponding MCP surface active; follow its heyfood-controlled
-approval handoff exactly. If no such tool exists, explain that the action must
-be completed by the user in the human CLI/TUI.
+the surface says it is active. On the local surface that means the corresponding
+capability and exact MCP inventory row are both active; follow its
+heyfood-controlled approval handoff exactly. If no such tool exists, explain
+that the action must be completed by the user in the human CLI/TUI.
 
 On the remote surface, a hosted deployment may withhold write tools entirely.
 Their absence is the answer — do not seek another route to the same effect.
+
+For a discovered household lifecycle, an agent may use only the exact advertised
+prepare, status, pre-dispatch cancel, and reconciliation operations. The person
+must review and save through the attached hey.food TUI. Never search for or
+invent a household confirm tool, treat proposal preparation as a committed
+change, or drive the TUI to finish the handoff.
 
 For cancellation, stale authority, uncertain dispatch, and hostile content,
 read [references/safety-and-recovery.md](references/safety-and-recovery.md).

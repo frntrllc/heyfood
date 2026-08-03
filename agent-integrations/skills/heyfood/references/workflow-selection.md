@@ -202,22 +202,60 @@ detail to compress away.
 **Saving is a mutation** and is not available here. If a user asks to save a
 recipe, say so plainly rather than implying it was kept.
 
-### Households on the local surface — human-only
+### Households on the local surface — discover the exact boundary
 
-The client has household onboarding, encrypted local household profiles, and
-scope switching. **None of it has an agent surface.** Verified against the
-0.7.1 manifest: no household capability, no household or member command, and
-the local MCP tool list is unchanged — the same six read tools.
+Local household support varies by installed contract. Do not branch on the
+binary version or on remembered tool counts. After accepting a supported
+manifest schema, inspect the household capability rows and the current MCP tool
+list.
 
-So on the local surface you cannot read the roster, cannot set or switch scope,
-and cannot evaluate for a member. Household management lives in the human TUI
-and is reached by the user running `heyfood`. Do not drive it, do not offer to,
-and do not present a Grocery read as household-scoped beyond whatever scope the
-result itself reports.
+| Discovered state | Required behavior |
+|---|---|
+| No active household capability and no household MCP tool | Household work is human-TUI-only. Tell the user to run bare `heyfood`; never drive it yourself. |
+| Roster/profile capability with its matching read tool | Use only the exact advertised read schema. Preserve stable member references, active scope, disclosure state, readiness, revisions, restricted counts, and pagination. |
+| Roster/profile capability but no matching MCP read tool | Use an exact `agent_safe` one-shot read only if the manifest advertises it; otherwise hand off. |
+| Lifecycle capability with prepare/status/cancel/reconcile tools | Prepare the exact change, give the returned bare-heyfood handoff, observe status, cancel only before dispatch, and reconcile only when the result requires it. The agent never approves or commits. |
+| Any capability/tool/schema disagreement | Do not use the partial surface. Run the binary-owned compatibility diagnostic described in `SKILL.md` and fail closed. |
 
-If a user asks for household work and you only have the local surface, say it
-is done in the hey.food terminal app by them. If you also have the hosted
-surface, household-scoped evaluation is available there — see above.
+Treat household capabilities independently:
+
+- roster access does not grant profile access;
+- roster/profile access does not grant local household-scoped food evaluation;
+- lifecycle preparation does not grant approval or commit authority; and
+- one advertised operation does not authorize another absent operation.
+
+Use `heyfood_get_household_context` and `heyfood_get_household_member` only when
+they are present and their manifest inventory rows are active. If MCP is
+unavailable, `household show` and `household member` are eligible fallbacks only
+when their exact command rows are `agent_safe` and their required
+`--json --no-input` contract is present. Never parse `/household` or other TUI
+output.
+
+Household reads are disclosure-gated. Do not infer a member from a display name,
+substitute self after a denial, reveal a restricted subject, or present a
+partial result as Everyone. A missing, expired, or revoked grant is an
+authoritative refusal and a handoff to the person's TUI controls, not a retry
+condition.
+
+For a discovered lifecycle, use only tools actually present:
+
+- `heyfood_prepare_household_change` prepares but does not mutate the household;
+- `heyfood_get_household_change` observes the exact proposal state;
+- `heyfood_cancel_household_change` is valid only before commit dispatch; and
+- `heyfood_reconcile_household_change` resolves an uncertain outcome without
+  replaying the change.
+
+There is no agent confirmation path unless a future supported manifest and tool
+contract explicitly introduce one. Never infer one from natural-language
+agreement, a host approval dialog, proposal data, stdin, or TUI access. In the
+supported attached-review flow, the person opens bare `heyfood`, reviews the
+exact local change, and chooses whether to save it.
+
+Local household food evaluation is a separate capability. Do not use roster,
+profile, Grocery, or lifecycle tools as evidence that an evaluation tool exists.
+When it is absent locally but the hosted surface is also available,
+household-scoped evaluation may be performed only with the hosted tool contract
+described above.
 
 ### Not available remotely
 
