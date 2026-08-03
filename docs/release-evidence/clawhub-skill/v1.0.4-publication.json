@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "slug": "heyfood",
+  "version": "1.0.4",
+  "publication_status": "published",
+  "published_source_commit": "6e3589c06e9b687bff1ec492c4f4844634dc3372",
+  "published_source_path": "agent-integrations/skills/heyfood",
+  "payload_file_count": 5,
+  "payload_fingerprint_sha256": "2ed4b3a3c113e2bfe958da82478b244a38c35de92161fda245ecf2c776641caa",
+  "version_id": "k97c9822w108bngg62gtzvx5k58bsmn8",
+  "latest_at_publication": "1.0.3",
+  "latest_observed": false,
+  "cold_resolution_count": 0
+}
