@@ -124,6 +124,8 @@ fn inventory_covers_global_controls_arguments_and_aliases() {
     let mut clap_aliases = BTreeMap::new();
     command_metadata(&command, "", &mut clap_arguments, &mut clap_aliases);
     clap_arguments.retain(|path, _| path != "agent" && !path.starts_with("agent "));
+    clap_arguments.remove("household show");
+    clap_arguments.remove("household member");
     clap_aliases.retain(|path, _| path != "agent" && !path.starts_with("agent "));
 
     let inventoried_arguments = document["command_arguments"]
@@ -191,6 +193,8 @@ fn inventory_covers_the_exact_clap_command_tree() {
     clap_paths.retain(|path| {
         path != "agent" && !path.starts_with("agent ") && path != "mcp" && !path.starts_with("mcp ")
     });
+    clap_paths.remove("household show");
+    clap_paths.remove("household member");
 
     assert_eq!(
         inventory_paths, clap_paths,
@@ -529,6 +533,7 @@ fn phase3_adds_only_the_bounded_mcp_serve_entrypoint() {
         BTreeSet::from([
             "describe",
             "doctor",
+            "compatibility",
             "guide",
             "schema",
             "setup",

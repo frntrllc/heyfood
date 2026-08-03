@@ -17,10 +17,12 @@ use serde_json::Value;
 #[must_use]
 pub fn run(command: Option<AgentCommand>, machine: bool) -> ExitCode {
     match command.unwrap_or_else(|| AgentCommand::Describe(AgentDiscoveryArgs::default())) {
-        AgentCommand::Describe(arguments) if arguments.schema_version == 2 => {
-            write_json(&heyfood_agent_contract::manifest_v2());
-        }
-        AgentCommand::Describe(_) => write_json(&heyfood_agent_contract::manifest()),
+        AgentCommand::Describe(arguments) => write_json(&match arguments.schema_version {
+            1 => heyfood_agent_contract::manifest_v1(),
+            2 => heyfood_agent_contract::manifest_v2(),
+            3 => heyfood_agent_contract::manifest_v3(),
+            _ => unreachable!("clap limits discovery schemas to 1..=3"),
+        }),
         AgentCommand::Guide(arguments) => {
             if machine {
                 let document = if arguments.safety {
@@ -57,10 +59,15 @@ pub fn run(command: Option<AgentCommand>, machine: bool) -> ExitCode {
             };
             print!("{}", schema.document());
         }
-        AgentCommand::Doctor(arguments) if arguments.schema_version == 2 => {
-            write_json(&heyfood_agent_contract::doctor_document_v2());
+        AgentCommand::Doctor(arguments) => write_json(&match arguments.schema_version {
+            1 => heyfood_agent_contract::doctor_document_v1(),
+            2 => heyfood_agent_contract::doctor_document_v2(),
+            3 => heyfood_agent_contract::doctor_document_v3(),
+            _ => unreachable!("clap limits discovery schemas to 1..=3"),
+        }),
+        AgentCommand::Compatibility => {
+            write_json(&heyfood_agent_contract::compatibility_unknown_document());
         }
-        AgentCommand::Doctor(_) => write_json(&heyfood_agent_contract::doctor_document()),
         AgentCommand::Setup(arguments) => return setup(arguments, machine),
         AgentCommand::Uninstall(arguments) => return uninstall(arguments, machine),
     }

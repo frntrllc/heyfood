@@ -197,7 +197,7 @@ pub enum Command {
         #[command(subcommand)]
         command: MembersCommand,
     },
-    #[command(hide = true)]
+    /// Read locally authorized household context for agent integrations.
     Household {
         #[command(subcommand)]
         command: HouseholdCommand,
@@ -239,6 +239,8 @@ pub enum AgentCommand {
     Schema(AgentSchemaArgs),
     /// Run credential-free, network-free local integration diagnostics.
     Doctor(AgentDiscoveryArgs),
+    /// Diagnose installed Agent Skill compatibility without network or credentials.
+    Compatibility,
     /// Plan or install the Agent Skill and read-only MCP registration.
     Setup(AgentSetupArgs),
     /// Remove only an exact receipt-bound skill and MCP registration.
@@ -247,25 +249,25 @@ pub enum AgentCommand {
 
 #[derive(Clone, Debug, Eq, PartialEq, Args)]
 pub struct AgentDiscoveryArgs {
-    /// Explicit discovery schema; v1 remains the compatibility default.
+    /// Explicit discovery schema; v3 is the current default.
     #[arg(
         long,
-        value_name = "1|2",
-        default_value_t = 1,
-        value_parser = clap::value_parser!(u16).range(1..=2)
+        value_name = "1|2|3",
+        default_value_t = 3,
+        value_parser = clap::value_parser!(u16).range(1..=3)
     )]
     pub schema_version: u16,
 }
 
 impl Default for AgentDiscoveryArgs {
     fn default() -> Self {
-        Self { schema_version: 1 }
+        Self { schema_version: 3 }
     }
 }
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum McpCommand {
-    /// Serve the six read/discovery tools over newline-delimited stdio.
+    /// Serve the manifest-declared tools over newline-delimited stdio.
     Serve,
 }
 
@@ -833,12 +835,89 @@ legacy_subcommands!(ConfigCommand {
     Validate
 });
 legacy_subcommands!(MembersCommand { List });
-legacy_subcommands!(HouseholdCommand {
-    List,
-    Current,
-    Use,
-    Label
-});
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum HouseholdCommand {
+    /// Read the locally authorized household context as one JSON document.
+    Show(HouseholdShowArgs),
+    /// Read one locally authorized household member by stable reference.
+    Member(HouseholdMemberArgs),
+    #[command(hide = true)]
+    List(LegacyArgs),
+    #[command(hide = true)]
+    Current(LegacyArgs),
+    #[command(hide = true)]
+    Use(LegacyArgs),
+    #[command(hide = true)]
+    Label(LegacyArgs),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum HouseholdProjectionArgument {
+    #[value(name = "content_free", alias = "content-free")]
+    ContentFree,
+    Roster,
+    Profile,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct HouseholdShowArgs {
+    /// Exact subject: self, everyone, or member:MEMBER_REF. Omit for active scope.
+    #[arg(long, value_name = "SUBJECT", value_parser = parse_household_subject)]
+    pub subject: Option<String>,
+
+    /// Maximum disclosure projection requested from the local grant.
+    #[arg(long, value_enum, default_value_t = HouseholdProjectionArgument::Roster)]
+    pub projection: HouseholdProjectionArgument,
+
+    /// Disclosure generation observed by the caller; stale reads fail closed.
+    #[arg(long, value_name = "GENERATION")]
+    pub expected_disclosure_generation: u64,
+
+    /// Opaque cursor returned by the preceding page.
+    #[arg(long, value_name = "CURSOR", value_parser = parse_bounded_noncontrol::<512>)]
+    pub cursor: Option<String>,
+
+    /// Maximum records returned in this page.
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u8).range(1..=100))]
+    pub limit: u8,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct HouseholdMemberArgs {
+    /// Stable opaque member reference; display names are never accepted.
+    #[arg(long, value_name = "MEMBER_REF", value_parser = parse_bounded_noncontrol::<256>)]
+    pub member_ref: String,
+
+    /// Maximum disclosure projection requested from the local grant.
+    #[arg(long, value_enum, default_value_t = HouseholdProjectionArgument::Roster)]
+    pub projection: HouseholdProjectionArgument,
+
+    /// Disclosure generation observed by the caller; stale reads fail closed.
+    #[arg(long, value_name = "GENERATION")]
+    pub expected_disclosure_generation: u64,
+}
+
+fn parse_household_subject(value: &str) -> Result<String, String> {
+    if matches!(value, "self" | "everyone") {
+        return Ok(value.to_owned());
+    }
+    let Some(member_ref) = value.strip_prefix("member:") else {
+        return Err("subject must be `self`, `everyone`, or `member:MEMBER_REF`".to_owned());
+    };
+    parse_bounded_noncontrol::<256>(member_ref)?;
+    Ok(value.to_owned())
+}
+
+fn parse_bounded_noncontrol<const MAX: usize>(value: &str) -> Result<String, String> {
+    if value.is_empty() || value.len() > MAX {
+        return Err(format!("value must contain 1 to {MAX} UTF-8 bytes"));
+    }
+    if value.chars().any(char::is_control) {
+        return Err("value must not contain control characters".to_owned());
+    }
+    Ok(value.to_owned())
+}
 legacy_subcommands!(ConversationCommand {
     List,
     Resume,

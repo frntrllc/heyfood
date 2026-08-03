@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use clap::{Command, Parser};
-use heyfood_cli::{AgentCommand, AgentGuideFormat, CommandLine};
+use heyfood_cli::{
+    AgentCommand, AgentGuideFormat, Command as CliCommand, CommandLine, HouseholdCommand,
+    HouseholdProjectionArgument,
+};
 use serde_json::Value;
 
 const SCHEMA: &str = include_str!(concat!(
@@ -11,6 +14,10 @@ const SCHEMA: &str = include_str!(concat!(
 const V2_SCHEMA: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../schemas/v2/heyfood-agent-manifest.schema.json"
+));
+const V3_SCHEMA: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../schemas/v3/heyfood-agent-manifest.schema.json"
 ));
 const GOLDEN: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -84,18 +91,19 @@ fn manifest_schema_freezes_public_status_and_audience_vocabulary() {
 
 #[test]
 fn runtime_manifest_validates_and_exactly_matches_active_command_authority() {
-    let schema: Value = serde_json::from_str(SCHEMA).expect("manifest schema JSON");
+    let schema: Value = serde_json::from_str(V3_SCHEMA).expect("v3 manifest schema JSON");
     let proposal_schema: Value =
         serde_json::from_str(PROPOSAL_PRESENTATION_SCHEMA).expect("proposal schema JSON");
     let manifest = heyfood_agent_contract::manifest();
     validate_schema_instance(&schema, &proposal_schema, &schema, &manifest)
-        .expect("runtime manifest must validate against the embedded schema");
+        .expect("runtime manifest must validate against the embedded v3 schema");
 
     let mut active_paths = BTreeSet::new();
     visible_command_paths(&CommandLine::command_tree(), "", &mut active_paths);
     // `mcp` is a structural Clap grouping with no executable default; the
-    // manifest inventories the callable `mcp serve` surface.
+    // manifest inventories callable leaf surfaces.
     active_paths.remove("mcp");
+    active_paths.remove("household");
     let manifest_paths = manifest["commands"]
         .as_array()
         .expect("manifest commands")
@@ -280,12 +288,20 @@ fn guide_format_is_typed_and_matches_the_approved_spelling() {
 }
 
 #[test]
-fn discovery_schema_version_defaults_to_v1_and_requires_an_explicit_v2() {
+fn discovery_schema_version_defaults_to_v3_and_preserves_explicit_v1_v2() {
     for (arguments, expected) in [
-        (vec!["heyfood", "agent", "describe"], 1),
+        (vec!["heyfood", "agent", "describe"], 3),
+        (
+            vec!["heyfood", "agent", "describe", "--schema-version", "1"],
+            1,
+        ),
         (
             vec!["heyfood", "agent", "describe", "--schema-version", "2"],
             2,
+        ),
+        (
+            vec!["heyfood", "agent", "describe", "--schema-version", "3"],
+            3,
         ),
     ] {
         let parsed = CommandLine::try_parse_from(arguments).unwrap();
@@ -310,8 +326,76 @@ fn discovery_schema_version_defaults_to_v1_and_requires_an_explicit_v2() {
     assert_eq!(arguments.schema_version, 2);
 
     assert!(
-        CommandLine::try_parse_from(["heyfood", "agent", "describe", "--schema-version", "3"])
+        CommandLine::try_parse_from(["heyfood", "agent", "describe", "--schema-version", "4"])
             .is_err()
+    );
+}
+
+#[test]
+fn compatibility_and_household_read_grammar_are_typed_and_bounded() {
+    let parsed =
+        CommandLine::try_parse_from(["heyfood", "--json", "--no-input", "agent", "compatibility"])
+            .unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(CliCommand::Agent {
+            command: Some(AgentCommand::Compatibility)
+        })
+    ));
+
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "household",
+        "show",
+        "--subject",
+        "everyone",
+        "--projection",
+        "profile",
+        "--expected-disclosure-generation",
+        "7",
+        "--limit",
+        "25",
+    ])
+    .unwrap();
+    let Some(CliCommand::Household {
+        command: HouseholdCommand::Show(arguments),
+    }) = parsed.command
+    else {
+        panic!("household show must use the typed read grammar");
+    };
+    assert_eq!(arguments.subject.as_deref(), Some("everyone"));
+    assert_eq!(arguments.projection, HouseholdProjectionArgument::Profile);
+    assert_eq!(arguments.expected_disclosure_generation, 7);
+    assert_eq!(arguments.limit, 25);
+
+    let parsed = CommandLine::try_parse_from([
+        "heyfood",
+        "household",
+        "member",
+        "--member-ref",
+        "member_01HXYZ",
+        "--expected-disclosure-generation",
+        "8",
+    ])
+    .unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(CliCommand::Household {
+            command: HouseholdCommand::Member(_)
+        })
+    ));
+
+    assert!(
+        CommandLine::try_parse_from([
+            "heyfood",
+            "household",
+            "show",
+            "--subject",
+            "Julie",
+            "--expected-disclosure-generation",
+            "1"
+        ])
+        .is_err()
     );
 }
 
@@ -458,6 +542,20 @@ fn string_matches_pattern(value: &str, pattern: &str) -> bool {
                     .bytes()
                     .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
         }
+        "^[a-z][a-z0-9_]{0,127}$" => {
+            (1..=128).contains(&value.len())
+                && value.as_bytes()[0].is_ascii_lowercase()
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        }
+        "^[a-z][a-z0-9-]{0,127}$" => {
+            (1..=128).contains(&value.len())
+                && value.as_bytes()[0].is_ascii_lowercase()
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        }
         "^[a-z][a-z0-9_.-]{0,127}$" => {
             (1..=128).contains(&value.len())
                 && value.as_bytes()[0].is_ascii_lowercase()
@@ -527,7 +625,9 @@ fn string_has_format(value: &str, format: &str) -> bool {
                         .is_some_and(|suffix| suffix.contains('+') || suffix.contains('-')))
         }
         "uri" => {
-            (value.starts_with("https://") || value.starts_with("http://"))
+            (value.starts_with("https://")
+                || value.starts_with("http://")
+                || value.starts_with("urn:"))
                 && !value.chars().any(char::is_whitespace)
         }
         other => panic!("unsupported fixture-validator format {other}"),
@@ -695,7 +795,7 @@ fn closed_v1_golden_and_current_v2_manifest_freeze_the_complete_surface() {
     let proposal_schema: Value =
         serde_json::from_str(PROPOSAL_PRESENTATION_SCHEMA).expect("proposal schema JSON");
     let golden: Value = serde_json::from_str(GOLDEN).expect("golden manifest JSON");
-    let mut runtime_v1 = heyfood_agent_contract::manifest();
+    let mut runtime_v1 = heyfood_agent_contract::manifest_v1();
     runtime_v1["build"] = golden["build"].clone();
 
     validate_schema_instance(&v1_schema, &proposal_schema, &v1_schema, &golden)
@@ -727,7 +827,7 @@ fn closed_v1_golden_and_current_v2_manifest_freeze_the_complete_surface() {
     );
     assert_eq!(
         runtime_v1, golden,
-        "the default manifest must remain byte-structure-compatible with the shipped v0.6.2 v1 contract"
+        "the explicit v1 view must remain byte-structure-compatible with the shipped v0.6.2 contract"
     );
 
     let mut expected_v2 = golden.clone();

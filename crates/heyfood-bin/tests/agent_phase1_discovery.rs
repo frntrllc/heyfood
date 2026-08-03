@@ -39,14 +39,17 @@ fn describe_is_deterministic_ansi_free_and_offline() {
     assert_eq!(first.stdout, bare.stdout);
     assert!(!first.stdout.contains(&0x1b));
     let manifest: Value = serde_json::from_slice(&first.stdout).unwrap();
-    assert_eq!(manifest["schema_version"], 1);
+    assert_eq!(manifest["schema_version"], 3);
     assert_eq!(manifest["product"], "heyfood");
     assert_eq!(manifest["binary_version"], heyfood_core::VERSION);
     assert_eq!(
         manifest["automation_surfaces"]["tui_automation"],
         "unsupported"
     );
-    assert!(manifest.get("native_state_compatibility").is_none());
+    assert_eq!(
+        manifest["native_state_compatibility"]["maximum_native_state_version"],
+        3
+    );
     assert_eq!(manifest, heyfood_agent_contract::manifest());
     assert_no_network(&service);
 }
@@ -75,6 +78,42 @@ fn explicitly_versioned_describe_exposes_strict_native_state_metadata_offline() 
         })
     );
     assert_eq!(manifest, heyfood_agent_contract::manifest_v2());
+    assert_no_network(&service);
+}
+
+#[test]
+fn explicit_v1_describe_remains_a_frozen_offline_compatibility_view() {
+    let service = TcpListener::bind("127.0.0.1:0").unwrap();
+    let output = agent(&["agent", "describe", "--schema-version", "1"], &service);
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let manifest: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(manifest["schema_version"], 1);
+    assert!(manifest.get("native_state_compatibility").is_none());
+    assert_eq!(manifest, heyfood_agent_contract::manifest_v1());
+    assert_no_network(&service);
+}
+
+#[test]
+fn compatibility_bootstrap_fails_closed_without_receipts_and_stays_offline() {
+    let service = TcpListener::bind("127.0.0.1:0").unwrap();
+    let output = agent(
+        &["--json", "--no-input", "agent", "compatibility"],
+        &service,
+    );
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["schema_version"], 1);
+    assert_eq!(result["manifest_schema_version"], 3);
+    assert_eq!(result["compatible"], false);
+    assert_eq!(result["network_accessed"], false);
+    assert_eq!(result["credentials_accessed"], false);
+    assert_eq!(result["product_state_mutated"], false);
+    assert_eq!(
+        result["installations"][0]["status"],
+        "skill_identity_unknown"
+    );
     assert_no_network(&service);
 }
 
@@ -110,6 +149,10 @@ fn schemas_are_exact_embedded_bytes_without_network() {
             heyfood_agent_contract::EmbeddedSchema::ManifestV2,
         ),
         (
+            "manifest-v3",
+            heyfood_agent_contract::EmbeddedSchema::ManifestV3,
+        ),
+        (
             "schema-index",
             heyfood_agent_contract::EmbeddedSchema::SchemaIndex,
         ),
@@ -135,6 +178,22 @@ fn schemas_are_exact_embedded_bytes_without_network() {
         (
             "setup-plan",
             heyfood_agent_contract::EmbeddedSchema::SetupPlan,
+        ),
+        (
+            "agent-compatibility",
+            heyfood_agent_contract::EmbeddedSchema::AgentCompatibility,
+        ),
+        (
+            "household-context-input",
+            heyfood_agent_contract::EmbeddedSchema::HouseholdContextInput,
+        ),
+        (
+            "household-member-input",
+            heyfood_agent_contract::EmbeddedSchema::HouseholdMemberInput,
+        ),
+        (
+            "household-read",
+            heyfood_agent_contract::EmbeddedSchema::HouseholdRead,
         ),
     ];
     for (name, schema) in cases {
@@ -184,8 +243,8 @@ fn doctor_is_local_bounded_and_credential_free() {
     assert!(output.stderr.is_empty());
     assert!(output.stdout.len() < 16 * 1024);
     let doctor: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(doctor["schema_version"], 1);
-    assert_eq!(doctor["manifest_schema_version"], 1);
+    assert_eq!(doctor["schema_version"], 3);
+    assert_eq!(doctor["manifest_schema_version"], 3);
     assert_eq!(doctor["ok"], true);
     assert_eq!(doctor["network_accessed"], false);
     assert_eq!(doctor["credentials_accessed"], false);
