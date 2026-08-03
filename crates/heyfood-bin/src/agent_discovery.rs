@@ -11,7 +11,7 @@ use heyfood_cli::{
     AgentUninstallArgs,
 };
 use heyfood_core::terminal_safe_text;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// Run one local agent-discovery command before any credential or network setup.
 #[must_use]
@@ -66,12 +66,81 @@ pub fn run(command: Option<AgentCommand>, machine: bool) -> ExitCode {
             _ => unreachable!("clap limits discovery schemas to 1..=3"),
         }),
         AgentCommand::Compatibility => {
-            write_json(&heyfood_agent_contract::compatibility_unknown_document());
+            write_json(&compatibility_document());
         }
         AgentCommand::Setup(arguments) => return setup(arguments, machine),
         AgentCommand::Uninstall(arguments) => return uninstall(arguments, machine),
     }
     ExitCode::SUCCESS
+}
+
+fn compatibility_document() -> Value {
+    let options = SetupOptions {
+        target: SetupTarget::All,
+        scope: SetupScope::User,
+        project_root: None,
+        operation: SetupOperation::Install,
+        mode: SetupMode::DryRun,
+        replace: false,
+        expected_plan_sha256: None,
+    };
+    heyfood_agent_setup::execute(&options)
+        .map(|plan| compatibility_document_from_plan(&plan))
+        .unwrap_or_else(|_| heyfood_agent_contract::compatibility_unknown_document())
+}
+
+fn compatibility_document_from_plan(plan: &SetupPlan) -> Value {
+    let installations = plan
+        .hosts
+        .iter()
+        .filter(|host| host.host_executable.is_some() || host.action != "install")
+        .map(|host| {
+            let (host_name, target) = match host.host {
+                Host::Codex => ("codex", "codex"),
+                Host::Claude => ("claude-code", "claude-code"),
+            };
+            let verified = host.compatibility == "compatible"
+                && host.action == "none"
+                && host.mcp.action == "none"
+                && host.conflicts.is_empty();
+            let missing = host.compatibility == "missing" || host.action == "install";
+            json!({
+                "host": host_name,
+                "host_version": host.host_version,
+                "receipt_state": if verified { "verified" } else if missing { "missing" } else { "invalid" },
+                "skill_package_version": if verified { Some(plan.package.version) } else { None },
+                "skill_sha256": if verified { Some(plan.package.sha256.as_str()) } else { None },
+                "supported_manifest_minimum": if verified { Some(1_u16) } else { None },
+                "supported_manifest_maximum": if verified { Some(3_u16) } else { None },
+                "status": if verified { "compatible" } else if missing { "skill_identity_unknown" } else { "incompatible" },
+                "reason": if verified { "supported_manifest_range" } else if missing { "receipt_missing" } else { "receipt_invalid" },
+                "remediation": {
+                    "program": "heyfood",
+                    "arguments": ["agent", "setup", "--target", target, "--scope", "user", "--replace", "--dry-run"]
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    if installations.is_empty() {
+        return heyfood_agent_contract::compatibility_unknown_document();
+    }
+    let compatible = installations
+        .iter()
+        .all(|installation| installation["status"] == "compatible");
+    let document = json!({
+        "schema_version": 1,
+        "binary_version": env!("CARGO_PKG_VERSION"),
+        "manifest_schema_version": 3,
+        "compatible": compatible,
+        "installations": installations,
+        "network_accessed": false,
+        "credentials_accessed": false,
+        "product_state_mutated": false
+    });
+    debug_assert!(
+        heyfood_agent_contract::validate_agent_compatibility_semantics(&document).is_ok()
+    );
+    document
 }
 
 fn setup(arguments: AgentSetupArgs, machine: bool) -> ExitCode {
@@ -258,7 +327,7 @@ mod tests {
         SetupScope, SetupTarget, SkillPackageIdentity,
     };
 
-    use super::render_setup_plan;
+    use super::{compatibility_document_from_plan, render_setup_plan};
 
     #[test]
     fn human_setup_plan_is_truthful_bounded_and_terminal_safe() {
@@ -315,5 +384,66 @@ mod tests {
         assert!(!rendered.contains('\u{1b}'));
         assert!(!rendered.contains("Re-run this exact command"));
         assert!(rendered.len() < 2_048);
+    }
+
+    #[test]
+    fn compatibility_uses_verified_receipt_bound_setup_state() {
+        let plan = SetupPlan {
+            schema_version: 1,
+            operation: SetupOperation::Install,
+            mode: SetupMode::DryRun,
+            target: SetupTarget::Codex,
+            scope: SetupScope::User,
+            project_root: None,
+            binary: BinaryIdentity {
+                path: PathBuf::from("/tmp/heyfood"),
+                sha256: "a".repeat(64),
+                version: "0.8.0",
+            },
+            package: SkillPackageIdentity {
+                name: "heyfood",
+                version: "1.0.5",
+                sha256: "b".repeat(64),
+                files: 6,
+            },
+            plan_sha256: "c".repeat(64),
+            ready: true,
+            changed: false,
+            hosts: vec![HostSetupPlan {
+                host: heyfood_agent_setup::Host::Codex,
+                host_executable: Some(PathBuf::from("/usr/bin/codex")),
+                host_version: Some("codex-cli 0.145.0-alpha.18".to_owned()),
+                compatible_version: "codex-cli 0.145.0-alpha.18",
+                compatibility: "compatible",
+                skill_path: PathBuf::from("/tmp/skill"),
+                receipt_path: PathBuf::from("/tmp/receipt"),
+                mcp: McpRegistrationPlan {
+                    name: "heyfood",
+                    transport: "stdio",
+                    command: PathBuf::from("/tmp/heyfood"),
+                    arguments: vec!["mcp".to_owned(), "serve".to_owned()],
+                    environment: std::collections::BTreeMap::new(),
+                    environment_policy_sha256: "d".repeat(64),
+                    configuration_scope: "user",
+                    action: "none",
+                },
+                action: "none",
+                conflicts: Vec::new(),
+                user_actions: Vec::new(),
+            }],
+        };
+
+        let document = compatibility_document_from_plan(&plan);
+        assert_eq!(document["compatible"], true);
+        assert_eq!(document["installations"][0]["receipt_state"], "verified");
+        assert_eq!(
+            document["installations"][0]["skill_package_version"],
+            "1.0.5"
+        );
+        assert_eq!(
+            document["installations"][0]["supported_manifest_maximum"],
+            3
+        );
+        assert!(heyfood_agent_contract::validate_agent_compatibility_semantics(&document).is_ok());
     }
 }

@@ -167,9 +167,11 @@ test -s "$staging/completion.bash"
 
 "$binary" agent describe >"$staging/agent-manifest.json"
 jq -e \
-  '.schema_version == 1
+  '.schema_version == 3
    and .automation_surfaces.mcp_stdio == "active"
    and ([.commands[].path] | index("mcp serve")) != null
+   and ([.mcp_inventory.tools[].name] | index("heyfood_get_household_context")) != null
+   and ([.mcp_inventory.tools[].name] | index("heyfood_get_household_member")) != null
    and ([.capabilities[] | select(.id == "agent-mcp" and .status == "active")] | length) == 1' \
   "$staging/agent-manifest.json" >/dev/null
 if [[ "$native_state_release" == "true" ]]; then

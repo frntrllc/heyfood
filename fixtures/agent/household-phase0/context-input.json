@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "get_household_context",
   "subject": null,
-  "requested_projection": "profile",
+  "requested_projection": "roster",
   "expected_disclosure_generation": 3,
   "cursor": null,
   "limit": 10

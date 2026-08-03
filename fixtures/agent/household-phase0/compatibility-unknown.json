@@ -16,7 +16,7 @@
       "reason": "receipt_missing",
       "remediation": {
         "program": "heyfood",
-        "arguments": ["agent", "setup", "--target", "openclaw", "--scope", "user", "--apply"]
+        "arguments": ["agent", "setup", "--target", "openclaw", "--scope", "user", "--replace", "--dry-run"]
       }
     }
   ],

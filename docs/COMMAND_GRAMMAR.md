@@ -257,6 +257,8 @@ the same TUI process.
 /profile             read consent and synchronized dietary profile state
 /household           show account-bound encrypted local household context
 /household add       add one local member and complete declared profile
+/household agent-access MEMBER
+                     grant or revoke local agent reads and print an exact handoff
 /onboard --for MEMBER
                      onboard one eligible existing local member
 /for me|MEMBER|everyone
@@ -293,11 +295,16 @@ post-`v0.8.0` conformance work, not release gates.
 ### Frozen future household mutation grammar (inactive)
 
 Phase 0 freezes `/household edit <member>`, `/household archive <member>`,
-`/household restore <member>`, `/household agent-access <member>`, and
-`/household changes` for a future attached-human implementation. The complete
+`/household restore <member>`, and `/household changes` for a future
+attached-human implementation. The complete
 registry, keys, human labels, and state copy are in
 `fixtures/agent/household-phase0/tui-grammar.json`. These entries are not
 active v0.8.0 commands and must not appear in its help or completion registry.
+
+`/household agent-access MEMBER` is active in v0.8.0. It is attached-TUI-only,
+never agent-driven, and prints the exact stable-reference,
+disclosure-generation, and projection handoff needed for the authorized read.
+Revocation advances the generation and marks every earlier handoff stale.
 
 The active agent machine grammar is limited to the two read commands above and
 their two MCP equivalents. The four preparation/status/cancel/reconcile tools

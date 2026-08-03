@@ -777,6 +777,7 @@ async fn application_enforces_revoked_minor_unknown_and_cross_account_disclosure
             .await
             .expect("guardian authority permits roster only");
         assert_eq!(result.projection, AgentHouseholdProjectionV1::Roster);
+        assert_eq!(result.restricted_member_count, 1);
         assert_eq!(result.members.len(), 1);
         assert!(result.members[0].minimized_declared_profile.is_none());
     }

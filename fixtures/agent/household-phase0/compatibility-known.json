@@ -16,7 +16,7 @@
       "reason": "supported_manifest_range",
       "remediation": {
         "program": "heyfood",
-        "arguments": ["agent", "setup", "--target", "codex", "--scope", "user", "--apply"]
+        "arguments": ["agent", "setup", "--target", "codex", "--scope", "user", "--replace", "--dry-run"]
       }
     }
   ],

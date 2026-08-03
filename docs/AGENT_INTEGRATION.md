@@ -1,7 +1,7 @@
 # heyfood agent integration guide
 
-**Guide version:** 1
-**Manifest schema:** 1
+**Guide version:** 2
+**Manifest schema:** 3
 
 heyfood provides separate human and machine interfaces.
 
@@ -117,6 +117,13 @@ authorized household roster context and one exact additional household member.
 Profile projection requires a current attached-TUI disclosure grant, is limited
 to adults with known age evidence, and never claims the self profile. Missing,
 partial, expired, or revoked grants fail closed.
+
+The person grants or revokes access with `/household agent-access MEMBER` in
+the attached TUI. A successful grant prints one exact machine-readable handoff
+containing the stable member reference, current disclosure generation, and
+allowed projection. Ask the person to copy that handoff; never scrape or drive
+the TUI, guess a generation, infer a member reference, or reuse a handoff after
+revocation changes its generation.
 
 The shared skill must branch on discovered capability/tool state, not on a
 version string. When those tools are absent it must route householding to the

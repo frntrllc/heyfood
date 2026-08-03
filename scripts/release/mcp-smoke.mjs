@@ -229,6 +229,8 @@ try {
     "heyfood_get_grocery_list",
     "heyfood_get_grocery_exclusions",
     "heyfood_list_menu_watches",
+    "heyfood_get_household_context",
+    "heyfood_get_household_member",
   ];
   if (JSON.stringify(names) !== JSON.stringify(expected)) {
     throw new Error("MCP tool allowlist mismatch");
@@ -249,7 +251,7 @@ try {
   });
   if (
     manifest.result?.isError !== false ||
-    structured(manifest)?.schema_version !== 1 ||
+    structured(manifest)?.schema_version !== 3 ||
     structured(manifest)?.automation_surfaces?.mcp_stdio !== "active"
   ) {
     throw new Error("installed MCP manifest call failed");
@@ -296,7 +298,7 @@ try {
     throw new Error("MCP emitted diagnostics during the clean protocol smoke");
   }
   console.log(
-    "MCP installed-artifact smoke passed: 6 tools, closed schemas, typed auth handoff.",
+    "MCP installed-artifact smoke passed: 8 tools, closed schemas, typed auth handoff.",
   );
 } catch (error) {
   child.kill("SIGTERM");

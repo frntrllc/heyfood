@@ -6,14 +6,13 @@ TUI through a PTY, capture the terminal, take screenshots, or record household
 labels, stable IDs, profile answers, account identifiers, paths, credentials,
 tokens, vault bytes, or authorization responses.
 
-The future v0.8.0 agent-aware household qualification extends this checklist
-with direct edit/archive/restore/scope parity, per-subject agent-access grant
-creation/revocation, `/household changes`, every local proposal state,
-restart/resume, cancel/commit races, and truthful saving/reconciliation copy.
-Those additions are frozen in
+v0.8.0 activates per-subject, read-only agent-access grant and revocation in the
+attached TUI. The journey below qualifies its exact handoff and restart-safe
+revocation. Direct edit/archive/restore, `/household changes`, proposal
+preparation, approval, and commit remain frozen future work in
 [LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md](LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md)
-but are not active v0.7.0 acceptance steps. They must remain human-operated;
-the no-PTY-automation and content-free evidence rules continue to apply.
+and are not active v0.8.0 acceptance steps. The no-PTY-automation and
+content-free evidence rules continue to apply.
 
 ## Exact candidate retrieval and installer transport
 
@@ -167,6 +166,28 @@ or TUI is involved.
 12. Repeat one choice step with `NO_COLOR=1`. Confirm no color is emitted while
     focus, selection, instructions, and progress remain unambiguous.
 
+## Journey A2 — disclosure handoff, read, revocation, and restart
+
+1. In the same attached TUI, run `/household agent-access MEMBER` for the
+   synthetic adult member and choose profile access. Confirm the warning names
+   same-OS-user callers, model-provider disclosure, and the limit of revocation.
+2. Confirm success prints one exact `Agent handoff` command containing a stable
+   member reference, the new disclosure generation, and `--projection profile`.
+   It must not print dietary values, account identity, credentials, or vault
+   paths. Copy the command manually; do not automate or capture the TUI.
+3. Run that exact command in a separate shell. Confirm one JSON value identifies
+   only the granted member, reports the same generation, and contains no fields
+   beyond the granted projection. Repeat through the advertised exact-member
+   MCP tool using the same reference and generation.
+4. Exit and relaunch the TUI. Reopen `/household agent-access MEMBER`; confirm
+   the saved access and exact handoff retain the same generation.
+5. Revoke access. Confirm the TUI reports a newer generation and explicitly
+   says every earlier handoff is stale. The old CLI and MCP inputs must now fail
+   closed without returning member or profile content.
+6. Exit and relaunch again. Confirm access remains revoked and the old handoff
+   remains unusable. For a minor or unknown-age fixture, confirm the TUI never
+   offers profile access and any handoff is roster-only.
+
 ## Journey B — v0.7.1 to v0.8.0 upgrade and current-installer refusal
 
 1. In a new isolated profile, install the immutable public v0.7.1 product and
@@ -251,6 +272,11 @@ or TUI is involved.
 | `NO_COLOR` semantic parity |  | `no_color_failed` |
 | Pre-save cancellation |  | `cancellation_failed` |
 | Terminal restoration |  | `terminal_restoration_failed` |
+| Agent grant emits exact member/generation/projection handoff |  | `agent_handoff_failed` |
+| Exact CLI and MCP reads honor the granted projection |  | `agent_read_failed` |
+| Restart preserves grant and generation |  | `agent_grant_restart_failed` |
+| Revocation advances generation and invalidates old handoff |  | `agent_revocation_failed` |
+| Minor/unknown-age handoff remains roster-only |  | `agent_minor_boundary_failed` |
 | v0.7.1 to v0.8.0 atomic upgrade |  | `upgrade_failed` |
 | Native initialization preserves account binding |  | `migration_binding_failed` |
 | Current v0.8.0 installer refuses requested v0.7.1 before download |  | `managed_v071_request_refusal_failed` |

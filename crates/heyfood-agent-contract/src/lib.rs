@@ -1215,7 +1215,7 @@ pub fn manifest_v3() -> Value {
         match capability["id"].as_str() {
             Some("household-roster") => {
                 capability["summary"] = Value::from(
-                    "Agents may read authorized roster context, including self scope, without profile disclosure.",
+                    "Agents may read authorized roster fields for exact additional household members; the attached TUI supplies the stable-reference and generation handoff.",
                 );
             }
             Some("household-profile") => {
@@ -1411,7 +1411,7 @@ pub fn compatibility_unknown_document() -> Value {
             "reason": "receipt_missing",
             "remediation": {
                 "program": "heyfood",
-                "arguments": ["agent", "setup", "--target", "codex", "--scope", "user", "--apply"]
+                "arguments": ["agent", "setup", "--target", "codex", "--scope", "user", "--replace", "--dry-run"]
             }
         }],
         "network_accessed": false,
@@ -2285,7 +2285,7 @@ mod household_phase0_contract_tests {
         for (schema, expected) in [
             (
                 CONTEXT_INPUT_SCHEMA,
-                "e832c0e64e13bf3d91e59a339d795c03b1c9b45f5b2e4d6f03fe00d8dbaf8342",
+                "6f16112fcae8cef3daca9182c4264766a5216efd340e66b10f3188890114a0f0",
             ),
             (
                 MEMBER_INPUT_SCHEMA,
@@ -2329,7 +2329,7 @@ mod household_phase0_contract_tests {
             ),
             (
                 COMPATIBILITY_SCHEMA,
-                "c2fccf908a221fdce96131fbf675705b2a222a26d64cfe954d4c177785b2ae97",
+                "ae33a9f4451667dc3c272edfaf0482b43e7ff1cc4521edb8a9b3aadf9d5f2be0",
             ),
             (
                 NATIVE_STATE_SCHEMA,

@@ -77,6 +77,16 @@ asset_verifier="$ROOT/scripts/release/verify-assets.sh"
   fail "Git must record the macOS signing tool with mode 100755"
 grep -Fq '[.commands[].path] | index("mcp serve")' "$archive_smoke" ||
   fail "archive smoke must validate the documented command path field"
+grep -Fq '.schema_version == 3' "$archive_smoke" ||
+  fail "archive smoke must validate the current schema-v3 manifest"
+for household_tool in heyfood_get_household_context heyfood_get_household_member; do
+  grep -Fq "$household_tool" "$archive_smoke" ||
+    fail "archive smoke must validate $household_tool"
+  grep -Fq "$household_tool" "$mcp_smoke" ||
+    fail "MCP smoke must validate $household_tool"
+done
+grep -Fq 'schema_version !== 3' "$mcp_smoke" ||
+  fail "MCP smoke must validate the current schema-v3 manifest"
 if grep -Fq '[.commands[].name] | index("mcp serve")' "$archive_smoke"; then
   fail "archive smoke must not validate the absent command name field"
 fi

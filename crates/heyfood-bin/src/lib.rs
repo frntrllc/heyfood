@@ -6012,12 +6012,18 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                     display_label: member.display_name.as_str().to_owned(),
                     minor_status: member.minor_status,
                     current,
+                    generation: access.generation.get(),
                 })
             }
             .await;
             task_ready.store(true, AtomicOrdering::Release);
             let _ = events
-                .send(result.unwrap_or(RuntimeEvent::HouseholdAgentAccessFailedV1 { operation_id }))
+                .send(
+                    result.unwrap_or(RuntimeEvent::HouseholdAgentAccessFailedV1 {
+                        operation_id,
+                        outcome_uncertain: false,
+                    }),
+                )
                 .await;
         });
         self.turns.push(OwnedInteractiveTurn {
@@ -6054,12 +6060,12 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
         let task_ready = followup_ready.clone();
         let task = self.runtime.spawn(async move {
             let result = async {
-                let household = household.ok_or(())?;
-                let control = control.ok_or(())?;
+                let household = household.ok_or(false)?;
+                let control = control.ok_or(false)?;
                 let load =
                     load_bound_native_household_v1(&household, &session, task_cancellation.clone())
                         .await
-                        .map_err(|_| ())?;
+                        .map_err(|_| false)?;
                 let member = load
                     .state
                     .members
@@ -6068,13 +6074,13 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                         member.member_id == member_ref
                             && member.lifecycle == HouseholdLifecycleV1::Active
                     })
-                    .ok_or(())?;
+                    .ok_or(false)?;
                 if decision == HouseholdAgentAccessDecisionV1::GrantProfile
                     && member.minor_status != MinorStatusV1::Adult
                 {
-                    return Err(());
+                    return Err(false);
                 }
-                let subject = AgentDisclosureGrantSubjectV1::Member(member_ref);
+                let subject = AgentDisclosureGrantSubjectV1::Member(member_ref.clone());
                 let access = match decision {
                     HouseholdAgentAccessDecisionV1::GrantRoster => {
                         control
@@ -6106,7 +6112,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                             .await
                     }
                 }
-                .map_err(|_| ())?;
+                .map_err(|error| error.outcome_uncertain)?;
                 let level = match access.projection {
                     AgentHouseholdProjectionV1::ContentFree => HouseholdAgentAccessLevelV1::None,
                     AgentHouseholdProjectionV1::Roster => HouseholdAgentAccessLevelV1::Roster,
@@ -6114,14 +6120,21 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 };
                 Ok(RuntimeEvent::HouseholdAgentAccessChangedV1 {
                     operation_id,
+                    member_ref,
                     display_label: member.display_name.as_str().to_owned(),
                     access: level,
+                    generation: access.generation.get(),
                 })
             }
             .await;
             task_ready.store(true, AtomicOrdering::Release);
             let _ = events
-                .send(result.unwrap_or(RuntimeEvent::HouseholdAgentAccessFailedV1 { operation_id }))
+                .send(result.unwrap_or_else(|outcome_uncertain| {
+                    RuntimeEvent::HouseholdAgentAccessFailedV1 {
+                        operation_id,
+                        outcome_uncertain,
+                    }
+                }))
                 .await;
         });
         self.turns.push(OwnedInteractiveTurn {

@@ -237,6 +237,13 @@ partial result as Everyone. A missing, expired, or revoked grant is an
 authoritative refusal and a handoff to the person's TUI controls, not a retry
 condition.
 
+For the first read, ask the person to run `/household agent-access MEMBER` in
+the attached TUI and copy the exact `Agent handoff` command it prints after the
+grant. That handoff is the authority for the stable member reference,
+disclosure generation, and maximum projection. Never scrape or automate the
+TUI, guess either value, broaden the projection, or reuse the command after a
+revocation reports that the earlier handoff is stale.
+
 For a discovered lifecycle, use only tools actually present:
 
 - `heyfood_prepare_household_change` prepares but does not mutate the household;

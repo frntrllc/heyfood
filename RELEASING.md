@@ -49,11 +49,9 @@ Releases. The legacy Python/PyPI channel is not a release authority.
   `HEYFOOD_APPROVED_CANDIDATE_SHA256SUMS_SHA256` binds the exact
   `SHA256SUMS` bytes, which in turn bind all nine non-manifest assets. Missing,
   malformed, expired, mismatched, or stale bindings fail before publication.
-- Windows distribution remains deferred to a separately qualified future
-  release. Ordinary Windows compile,
-  test, Clippy, credential-backend, and deterministic packaging CI remains
-  required, but no Windows asset or signing credential participates in the
-  macOS/Linux publication path.
+- Windows CI and distribution are deferred to a separately qualified future
+  release. No Windows job, asset, or signing credential participates in the
+  v0.8.0 macOS/Linux qualification and publication path.
 - Four product archives are named `heyfood-vVERSION-TARGET.tar.gz` and contain
   one bare regular executable named `heyfood`. Four verifier archives are named
   `heyfood-installer-vVERSION-TARGET.tar.gz` and contain one bare regular

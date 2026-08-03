@@ -97,10 +97,22 @@ fn explicit_v1_describe_remains_a_frozen_offline_compatibility_view() {
 #[test]
 fn compatibility_bootstrap_fails_closed_without_receipts_and_stays_offline() {
     let service = TcpListener::bind("127.0.0.1:0").unwrap();
-    let output = agent(
-        &["--json", "--no-input", "agent", "compatibility"],
-        &service,
-    );
+    let isolated_home = std::env::temp_dir().join(format!(
+        "heyfood-agent-compatibility-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&isolated_home).unwrap();
+    let address = service.local_addr().expect("local fixture address");
+    let output = Command::new(env!("CARGO_BIN_EXE_heyfood"))
+        .args(["--json", "--no-input", "agent", "compatibility"])
+        .env("HOME", &isolated_home)
+        .env("CODEX_HOME", isolated_home.join(".codex"))
+        .env("PATH", "")
+        .env("HEYFOOD_API_URL", format!("http://{address}/"))
+        .env("HEYFOOD_AUTH_URL", format!("http://{address}/"))
+        .output()
+        .expect("run isolated compatibility command");
+    std::fs::remove_dir_all(&isolated_home).unwrap();
 
     assert!(output.status.success(), "{:?}", output.stderr);
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();

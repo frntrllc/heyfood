@@ -79,9 +79,9 @@ heyfood --json agent setup --target all --scope user --dry-run
 
 See [Agent Skill setup](docs/AGENT_SETUP.md) for digest-bound apply, update,
 project-scope, MCP registration, and receipt-bound uninstall behavior. The
-release exposes exactly six typed read/discovery MCP tools; it
-exposes no agent mutation, shell, file, raw API, credential, or TUI-control
-tool.
+release exposes exactly eight typed read/discovery MCP tools, including two
+disclosure-gated household reads. It exposes no agent mutation, shell, file,
+raw API, credential, or TUI-control tool.
 
 ## Connect an account
 

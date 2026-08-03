@@ -16,7 +16,7 @@
         { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "everyone" } } }
       ]
     },
-    "requested_projection": { "enum": ["content_free", "roster", "profile"] },
+    "requested_projection": { "enum": ["content_free", "roster"] },
     "expected_disclosure_generation": { "type": "integer", "minimum": 0 },
     "cursor": { "type": ["string", "null"], "minLength": 1, "maxLength": 512 },
     "limit": { "type": "integer", "minimum": 1, "maximum": 100 }

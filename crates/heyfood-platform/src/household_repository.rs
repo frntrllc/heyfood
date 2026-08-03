@@ -1670,16 +1670,31 @@ impl HouseholdAgentDisclosureControlPort for NativeHouseholdRepository {
     ) -> BoxFuture<'_, Result<HouseholdAgentDisclosureAccessV1, PortError>> {
         Box::pin(async move {
             self.require_account(&account)?;
-            let generation = self
+            let desired_projection = if include_minimized_profile {
+                heyfood_core::AgentHouseholdProjectionV1::Profile
+            } else {
+                heyfood_core::AgentHouseholdProjectionV1::Roster
+            };
+            let write = self
                 .grant_agent_disclosure(
                     subject.clone(),
                     include_minimized_profile,
                     agent_disclosure_now()?,
                     cancellation.clone(),
                 )
-                .await?;
-            let access = self.current_access(account, subject, cancellation).await?;
-            if access.generation != generation {
+                .await;
+            let expected_generation = match write {
+                Ok(generation) => Some(generation),
+                Err(error) if error.outcome_uncertain => None,
+                Err(error) => return Err(error),
+            };
+            let access = self
+                .current_access(account, subject, CancellationToken::new())
+                .await
+                .map_err(|_| agent_disclosure_reconciliation_error())?;
+            if expected_generation.is_some_and(|generation| access.generation != generation)
+                || access.projection != desired_projection
+            {
                 return Err(agent_disclosure_reconciliation_error());
             }
             Ok(access)
@@ -1694,15 +1709,23 @@ impl HouseholdAgentDisclosureControlPort for NativeHouseholdRepository {
     ) -> BoxFuture<'_, Result<HouseholdAgentDisclosureAccessV1, PortError>> {
         Box::pin(async move {
             self.require_account(&account)?;
-            let generation = self
+            let write = self
                 .revoke_agent_disclosure(
                     subject.clone(),
                     agent_disclosure_now()?,
                     cancellation.clone(),
                 )
-                .await?;
-            let access = self.current_access(account, subject, cancellation).await?;
-            if access.generation != generation
+                .await;
+            let expected_generation = match write {
+                Ok(generation) => Some(generation),
+                Err(error) if error.outcome_uncertain => None,
+                Err(error) => return Err(error),
+            };
+            let access = self
+                .current_access(account, subject, CancellationToken::new())
+                .await
+                .map_err(|_| agent_disclosure_reconciliation_error())?;
+            if expected_generation.is_some_and(|generation| access.generation != generation)
                 || access.projection != heyfood_core::AgentHouseholdProjectionV1::ContentFree
             {
                 return Err(agent_disclosure_reconciliation_error());

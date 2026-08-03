@@ -169,31 +169,34 @@
       "type": "array",
       "prefixItems": [
         { "const": "agent" }, { "const": "setup" }, { "const": "--target" },
-        { "const": "codex" }, { "const": "--scope" }, { "const": "user" }, { "const": "--apply" }
+        { "const": "codex" }, { "const": "--scope" }, { "const": "user" },
+        { "const": "--replace" }, { "const": "--dry-run" }
       ],
       "items": false,
-      "minItems": 7,
-      "maxItems": 7
+      "minItems": 8,
+      "maxItems": 8
     },
     "claude_arguments": {
       "type": "array",
       "prefixItems": [
         { "const": "agent" }, { "const": "setup" }, { "const": "--target" },
-        { "const": "claude-code" }, { "const": "--scope" }, { "const": "user" }, { "const": "--apply" }
+        { "const": "claude-code" }, { "const": "--scope" }, { "const": "user" },
+        { "const": "--replace" }, { "const": "--dry-run" }
       ],
       "items": false,
-      "minItems": 7,
-      "maxItems": 7
+      "minItems": 8,
+      "maxItems": 8
     },
     "openclaw_arguments": {
       "type": "array",
       "prefixItems": [
         { "const": "agent" }, { "const": "setup" }, { "const": "--target" },
-        { "const": "openclaw" }, { "const": "--scope" }, { "const": "user" }, { "const": "--apply" }
+        { "const": "openclaw" }, { "const": "--scope" }, { "const": "user" },
+        { "const": "--replace" }, { "const": "--dry-run" }
       ],
       "items": false,
-      "minItems": 7,
-      "maxItems": 7
+      "minItems": 8,
+      "maxItems": 8
     }
   }
 }

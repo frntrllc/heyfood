@@ -1697,14 +1697,18 @@ pub enum RuntimeEvent {
         display_label: String,
         minor_status: MinorStatusV1,
         current: HouseholdAgentAccessLevelV1,
+        generation: u64,
     },
     HouseholdAgentAccessChangedV1 {
         operation_id: u64,
+        member_ref: MemberId,
         display_label: String,
         access: HouseholdAgentAccessLevelV1,
+        generation: u64,
     },
     HouseholdAgentAccessFailedV1 {
         operation_id: u64,
+        outcome_uncertain: bool,
     },
     HouseholdGenerationReadyV1 {
         session_mode_generation: HouseholdModeGenerationV1,
@@ -3920,6 +3924,7 @@ fn present_household_agent_access(
     display_label: String,
     minor_status: MinorStatusV1,
     current: HouseholdAgentAccessLevelV1,
+    generation: u64,
 ) {
     if !matches!(
         model.pending_household_agent_access,
@@ -3932,6 +3937,20 @@ fn present_household_agent_access(
         HouseholdAgentAccessLevelV1::Roster => "Current access: household basics only.",
         HouseholdAgentAccessLevelV1::Profile => {
             "Current access: household basics and minimized dietary profile."
+        }
+    };
+    let current_handoff = match current {
+        HouseholdAgentAccessLevelV1::None => String::new(),
+        HouseholdAgentAccessLevelV1::Roster | HouseholdAgentAccessLevelV1::Profile => {
+            let projection = match current {
+                HouseholdAgentAccessLevelV1::Roster => "roster",
+                HouseholdAgentAccessLevelV1::Profile => "profile",
+                HouseholdAgentAccessLevelV1::None => unreachable!(),
+            };
+            format!(
+                "\n\nAgent handoff (copy exactly):\nheyfood --json --no-input household member --member-ref {} --expected-disclosure-generation {generation} --projection {projection}",
+                member_ref.as_str()
+            )
         }
     };
     let age_copy = match minor_status {
@@ -3953,7 +3972,7 @@ fn present_household_agent_access(
     finish_household_command_stream(
         model,
         format!(
-            "Agent access for {display_label}\n\n{current_copy}\n\nApps running as your operating-system user can read data you allow through heyfood and may pass it to their model providers. Revoking access stops future reads through heyfood, but it cannot recall copies already shared.\n\n{age_copy}\n\nType a number, or type `cancel` to leave access unchanged."
+            "Agent access for {display_label}\n\n{current_copy}\nAccess generation: {generation}.{current_handoff}\n\nApps running as your operating-system user can read data you allow through heyfood and may pass it to their model providers. Revoking access stops future reads through heyfood, but it cannot recall copies already shared.\n\n{age_copy}\n\nType a number, or type `cancel` to leave access unchanged."
         ),
     );
     model.operation = OperationState::Idle;
@@ -6380,6 +6399,7 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
             display_label,
             minor_status,
             current,
+            generation,
         } => {
             present_household_agent_access(
                 model,
@@ -6388,12 +6408,15 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
                 terminal_safe_text(&display_label),
                 minor_status,
                 current,
+                generation,
             );
         }
         RuntimeEvent::HouseholdAgentAccessChangedV1 {
             operation_id,
+            member_ref,
             display_label,
             access,
+            generation,
         } if matches!(
             model.pending_household_agent_access,
             Some(PendingHouseholdAgentAccessV1::Applying { operation_id: pending }) if pending == operation_id
@@ -6406,25 +6429,48 @@ fn runtime_event(model: &mut AppModel, runtime: RuntimeEvent) -> Vec<Effect> {
                     "Household basics and minimized dietary profile allowed"
                 }
             };
+            let handoff = match access {
+                HouseholdAgentAccessLevelV1::None => format!(
+                    "Access generation: {generation}. Any earlier agent handoff is now stale."
+                ),
+                HouseholdAgentAccessLevelV1::Roster | HouseholdAgentAccessLevelV1::Profile => {
+                    let projection = match access {
+                        HouseholdAgentAccessLevelV1::Roster => "roster",
+                        HouseholdAgentAccessLevelV1::Profile => "profile",
+                        HouseholdAgentAccessLevelV1::None => unreachable!(),
+                    };
+                    format!(
+                        "Agent handoff (copy exactly):\nheyfood --json --no-input household member --member-ref {} --expected-disclosure-generation {generation} --projection {projection}",
+                        member_ref.as_str()
+                    )
+                }
+            };
             finish_household_command_stream(
                 model,
-                format!("{access_copy} for {}.", terminal_safe_text(&display_label)),
+                format!(
+                    "{access_copy} for {}.\n\n{handoff}",
+                    terminal_safe_text(&display_label)
+                ),
             );
             model.pending_household_agent_access = None;
             model.operation = OperationState::Idle;
             model.activity = None;
         }
-        RuntimeEvent::HouseholdAgentAccessFailedV1 { operation_id }
-            if matches!(
-                model.pending_household_agent_access,
-                Some(PendingHouseholdAgentAccessV1::Loading { operation_id: pending }
-                    | PendingHouseholdAgentAccessV1::Applying { operation_id: pending }) if pending == operation_id
-            ) =>
+        RuntimeEvent::HouseholdAgentAccessFailedV1 {
+            operation_id,
+            outcome_uncertain,
+        } if matches!(
+            model.pending_household_agent_access,
+            Some(PendingHouseholdAgentAccessV1::Loading { operation_id: pending }
+                | PendingHouseholdAgentAccessV1::Applying { operation_id: pending }) if pending == operation_id
+        ) =>
         {
-            finish_household_command_stream(
-                model,
-                "Agent access could not be changed safely. Nothing was changed.",
-            );
+            let copy = if outcome_uncertain {
+                "hey.food couldn’t verify whether agent access changed. Reopen `/household agent-access MEMBER` to reconcile the current setting before relying on any handoff."
+            } else {
+                "Agent access could not be changed safely. Nothing was changed."
+            };
+            finish_household_command_stream(model, copy);
             model.pending_household_agent_access = None;
             model.operation = OperationState::Idle;
             model.activity = None;
@@ -12827,6 +12873,7 @@ mod tests {
                 display_label: "Julie".into(),
                 minor_status: MinorStatusV1::Adult,
                 current: HouseholdAgentAccessLevelV1::None,
+                generation: 3,
             }),
         );
         let copy = &model.scrollback.entries().back().unwrap().text;
@@ -12834,14 +12881,30 @@ mod tests {
         assert!(copy.contains("model providers"));
         assert!(copy.contains("cannot recall copies already shared"));
         assert!(copy.contains("Allow basics and minimized dietary profile"));
+        let effects = submit_text(&mut model, "2");
         assert!(matches!(
-            submit_text(&mut model, "2").as_slice(),
+            effects.as_slice(),
             [Effect::SetHouseholdAgentAccessV1 {
                 member_ref: observed,
                 decision: HouseholdAgentAccessDecisionV1::GrantProfile,
                 ..
             }] if observed == &member_ref
         ));
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::HouseholdAgentAccessChangedV1 {
+                operation_id: 2,
+                member_ref,
+                display_label: "Julie".into(),
+                access: HouseholdAgentAccessLevelV1::Profile,
+                generation: 4,
+            }),
+        );
+        let copy = &model.scrollback.entries().back().unwrap().text;
+        assert!(copy.contains("Agent handoff (copy exactly):"));
+        assert!(copy.contains("--member-ref member-julie"));
+        assert!(copy.contains("--expected-disclosure-generation 4"));
+        assert!(copy.contains("--projection profile"));
     }
 
     #[test]
@@ -12860,6 +12923,7 @@ mod tests {
                     display_label: "Child".into(),
                     minor_status,
                     current: HouseholdAgentAccessLevelV1::Roster,
+                    generation: 5,
                 }),
             );
             let copy = &model.scrollback.entries().back().unwrap().text;
@@ -12887,6 +12951,7 @@ mod tests {
                 display_label: "Julie".into(),
                 minor_status: MinorStatusV1::Adult,
                 current: HouseholdAgentAccessLevelV1::Profile,
+                generation: 7,
             }),
         );
         assert!(matches!(
@@ -12901,8 +12966,10 @@ mod tests {
             &mut model,
             Action::Runtime(RuntimeEvent::HouseholdAgentAccessChangedV1 {
                 operation_id: 2,
+                member_ref: MemberId::parse_preserved("member-julie").unwrap(),
                 display_label: "Julie".into(),
                 access: HouseholdAgentAccessLevelV1::None,
+                generation: 8,
             }),
         );
         assert_eq!(model.operation, OperationState::Idle);
@@ -12913,7 +12980,36 @@ mod tests {
                 .back()
                 .unwrap()
                 .text
-                .contains("Agent access revoked for Julie")
+                .contains("Any earlier agent handoff is now stale")
         );
+    }
+
+    #[test]
+    fn uncertain_agent_access_change_requires_authoritative_reconciliation() {
+        let mut model = native_household_agent_access_model();
+        let _ = submit_text(&mut model, "/household agent-access Julie");
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::HouseholdAgentAccessLoadedV1 {
+                operation_id: 1,
+                member_ref: MemberId::parse_preserved("member-julie").unwrap(),
+                display_label: "Julie".into(),
+                minor_status: MinorStatusV1::Adult,
+                current: HouseholdAgentAccessLevelV1::None,
+                generation: 3,
+            }),
+        );
+        let _ = submit_text(&mut model, "1");
+        let _ = dispatch(
+            &mut model,
+            Action::Runtime(RuntimeEvent::HouseholdAgentAccessFailedV1 {
+                operation_id: 2,
+                outcome_uncertain: true,
+            }),
+        );
+        let copy = &model.scrollback.entries().back().unwrap().text;
+        assert!(copy.contains("couldn’t verify whether agent access changed"));
+        assert!(copy.contains("/household agent-access MEMBER"));
+        assert!(!copy.contains("Nothing was changed"));
     }
 }

@@ -2067,23 +2067,20 @@ mod tests {
             Arc::new(FakeSessions),
         )
         .with_household(household.clone());
-        let profile: Value = serde_json::from_str(include_str!(
+        let mut profile: Value = serde_json::from_str(include_str!(
             "../../../fixtures/agent/household-phase0/context-input.json"
         ))
         .unwrap();
-        let result = server
+        profile["projection"] = Value::from("profile");
+        let error = server
             .execute(
                 CallToolRequestParams::new(TOOL_GET_HOUSEHOLD_CONTEXT)
                     .with_arguments(profile.as_object().unwrap().clone()),
                 CancellationToken::new(),
             )
             .await
-            .unwrap();
-        assert_eq!(result.is_error, Some(true));
-        assert_eq!(
-            result.structured_content.unwrap()["error"]["code"],
-            "household_agent_self_profile_unsupported"
-        );
+            .expect_err("context profile projection must be rejected by its schema");
+        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
 
         let mut unclosed: Value = serde_json::from_str(include_str!(
             "../../../fixtures/agent/household-phase0/member-input.json"

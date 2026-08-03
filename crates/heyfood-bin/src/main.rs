@@ -26,20 +26,22 @@ use heyfood_application::{
 use heyfood_application::{
     CredentialCommit, CredentialPort, HouseholdEraseOutcome, Logout, LogoutLocalPort, LogoutOutcome,
 };
-use heyfood_cli::{
-    Cli, Command, HouseholdCommand, HouseholdProjectionArgument, OutputMode,
-    RegistrationResultDocument,
-};
+use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
+#[cfg(feature = "native-credentials")]
+use heyfood_cli::{HouseholdCommand, HouseholdProjectionArgument};
 use heyfood_core::AuthCredentialBundle;
 #[cfg(feature = "native-credentials")]
 use heyfood_core::CommitId;
 #[cfg(any(feature = "native-credentials", all(test, not(windows))))]
 use heyfood_core::SessionCredentials;
+#[cfg(feature = "native-credentials")]
 use heyfood_core::{
     AGENT_HOUSEHOLD_CONTRACT_VERSION, AgentHouseholdContextInputKindV1,
     AgentHouseholdContextInputV1, AgentHouseholdMemberInputKindV1, AgentHouseholdMemberInputV1,
-    AgentHouseholdProjectionV1, AgentHouseholdSubjectV1, BrowserUrl, GenerationId,
-    HouseholdProfileStateV1, MemberId, NativeHouseholdRolloutV1, NetworkPolicy, OperationId,
+    AgentHouseholdProjectionV1, AgentHouseholdSubjectV1, GenerationId, MemberId,
+};
+use heyfood_core::{
+    BrowserUrl, HouseholdProfileStateV1, NativeHouseholdRolloutV1, NetworkPolicy, OperationId,
     ProfileStatus, SensitiveString, ServiceUrl, SessionSnapshot, terminal_safe_text,
 };
 #[cfg(feature = "native-credentials")]

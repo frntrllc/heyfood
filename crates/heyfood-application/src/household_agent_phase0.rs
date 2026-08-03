@@ -285,6 +285,24 @@ impl HouseholdAgentPhase0Proof {
         );
         let mut snapshot = result.snapshot.filtered_to(allowed);
         snapshot.disclosure_generation = disclosure.grants.generation();
+        snapshot.restricted_member_count = u16::try_from(
+            subjects
+                .iter()
+                .filter(|subject| {
+                    projection_rank(
+                        disclosure
+                            .grants
+                            .maximum_projection_for(std::slice::from_ref(subject)),
+                    ) < projection_rank(request.requested_projection)
+                })
+                .count(),
+        )
+        .map_err(|_| {
+            phase0_error(
+                "household_agent_read_contract",
+                "restricted household count exceeded the closed contract",
+            )
+        })?;
         validate_filtered_read(&request, &snapshot)?;
         Ok(snapshot)
     }
