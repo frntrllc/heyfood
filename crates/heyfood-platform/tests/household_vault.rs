@@ -78,6 +78,7 @@ fn initializing_bundle(
         [0x5a; 32],
         write.plaintext_sha256(),
     )
+    .expect("valid initializing bundle")
 }
 
 fn stable_bundle(
@@ -92,6 +93,7 @@ fn stable_bundle(
         key_id,
         key,
     )
+    .expect("valid stable bundle")
 }
 
 fn corrupt(path: &Path) {
@@ -304,7 +306,7 @@ async fn lifecycle_lease_is_retained_and_abort_preserves_exact_resumable_or_comm
     let key = HouseholdKeyMaterial::from_bytes([0x19; 32]);
     let initializing = initializing_bundle(&vault, key_id, key, &state);
     let initialization_id = initializing
-        .initialization_id
+        .initialization_id()
         .expect("initialization identifier");
     let mut vault_lease = vault
         .acquire_vault_lease(
@@ -608,7 +610,8 @@ async fn key_rotation_rewrites_both_generations_and_the_journal_before_old_key_r
         KeyBundleRevision::new(1).expect("revision"),
         old_key_id,
         old_key,
-    );
+    )
+    .expect("valid stable bundle");
     let rewriting = HouseholdKeyBundle::rewriting(
         vault.account_slot(),
         KeyBundleRevision::new(2).expect("revision"),

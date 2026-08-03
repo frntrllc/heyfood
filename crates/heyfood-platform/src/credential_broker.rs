@@ -277,21 +277,21 @@ impl fmt::Debug for HouseholdKeyMaterial {
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct HouseholdKeyBundle {
-    pub account_digest: [u8; 32],
-    pub native_root_instance_digest: [u8; 32],
-    pub account_locator_digest: [u8; 32],
-    pub revision: KeyBundleRevision,
-    pub active_key_id: KeyId,
-    pub active_key: HouseholdKeyMaterial,
+    pub(crate) account_digest: [u8; 32],
+    pub(crate) native_root_instance_digest: [u8; 32],
+    pub(crate) account_locator_digest: [u8; 32],
+    pub(crate) revision: KeyBundleRevision,
+    pub(crate) active_key_id: KeyId,
+    pub(crate) active_key: HouseholdKeyMaterial,
     commit_evidence_key: HouseholdKeyMaterial,
     commit_evidence_records: Vec<HouseholdCommitEvidenceRecordV1>,
-    pub previous_key: Option<(KeyId, HouseholdKeyMaterial)>,
-    pub initialization_id: Option<Uuid>,
-    pub initial_commit_id: Option<Uuid>,
-    pub initial_effect_fingerprint: Option<[u8; 32]>,
-    pub initial_state_digest: Option<[u8; 32]>,
-    pub rotation_id: Option<Uuid>,
-    pub phase: HouseholdKeyBundlePhase,
+    pub(crate) previous_key: Option<(KeyId, HouseholdKeyMaterial)>,
+    pub(crate) initialization_id: Option<Uuid>,
+    pub(crate) initial_commit_id: Option<Uuid>,
+    pub(crate) initial_effect_fingerprint: Option<[u8; 32]>,
+    pub(crate) initial_state_digest: Option<[u8; 32]>,
+    pub(crate) rotation_id: Option<Uuid>,
+    pub(crate) phase: HouseholdKeyBundlePhase,
 }
 
 impl HouseholdKeyBundle {
@@ -305,9 +305,9 @@ impl HouseholdKeyBundle {
         initial_commit_id: Uuid,
         initial_effect_fingerprint: [u8; 32],
         initial_state_digest: [u8; 32],
-    ) -> Self {
+    ) -> Result<Self, PortError> {
         let commit_evidence_key = derive_commit_evidence_root_key(&active_key);
-        Self {
+        let bundle = Self {
             account_digest: slot.account_digest(),
             native_root_instance_digest: slot.native_root_instance_digest(),
             account_locator_digest: slot.account_locator_digest(),
@@ -323,7 +323,9 @@ impl HouseholdKeyBundle {
             initial_state_digest: Some(initial_state_digest),
             rotation_id: None,
             phase: HouseholdKeyBundlePhase::Initializing,
-        }
+        };
+        bundle.validate_for(slot)?;
+        Ok(bundle)
     }
 
     pub fn stable(
@@ -331,9 +333,9 @@ impl HouseholdKeyBundle {
         revision: KeyBundleRevision,
         active_key_id: KeyId,
         active_key: HouseholdKeyMaterial,
-    ) -> Self {
+    ) -> Result<Self, PortError> {
         let commit_evidence_key = derive_commit_evidence_root_key(&active_key);
-        Self {
+        let bundle = Self {
             account_digest: slot.account_digest(),
             native_root_instance_digest: slot.native_root_instance_digest(),
             account_locator_digest: slot.account_locator_digest(),
@@ -349,7 +351,9 @@ impl HouseholdKeyBundle {
             initial_state_digest: None,
             rotation_id: None,
             phase: HouseholdKeyBundlePhase::Stable,
-        }
+        };
+        bundle.validate_for(slot)?;
+        Ok(bundle)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -370,7 +374,13 @@ impl HouseholdKeyBundle {
                 "household key rotation requires the exact stable predecessor",
             ));
         }
-        Ok(Self {
+        if active_key_id == previous.active_key_id || active_key == previous.active_key {
+            return Err(PortError::new(
+                "household_key_bundle_invalid",
+                "household key rotation requires a distinct active key",
+            ));
+        }
+        let bundle = Self {
             account_digest: slot.account_digest(),
             native_root_instance_digest: slot.native_root_instance_digest(),
             account_locator_digest: slot.account_locator_digest(),
@@ -386,7 +396,9 @@ impl HouseholdKeyBundle {
             initial_state_digest: None,
             rotation_id: Some(rotation_id),
             phase: HouseholdKeyBundlePhase::Rewriting,
-        })
+        };
+        bundle.validate_for(slot)?;
+        Ok(bundle)
     }
 
     /// Finalize initialization or rotation without replacing the durable,
@@ -408,7 +420,7 @@ impl HouseholdKeyBundle {
                 "household key stabilization requires the exact non-stable predecessor",
             ));
         }
-        Ok(Self {
+        let bundle = Self {
             account_digest: slot.account_digest(),
             native_root_instance_digest: slot.native_root_instance_digest(),
             account_locator_digest: slot.account_locator_digest(),
@@ -424,7 +436,59 @@ impl HouseholdKeyBundle {
             initial_state_digest: None,
             rotation_id: None,
             phase: HouseholdKeyBundlePhase::Stable,
-        })
+        };
+        bundle.validate_for(slot)?;
+        Ok(bundle)
+    }
+
+    #[must_use]
+    pub const fn revision(&self) -> KeyBundleRevision {
+        self.revision
+    }
+
+    #[must_use]
+    pub const fn active_key_id(&self) -> KeyId {
+        self.active_key_id
+    }
+
+    #[must_use]
+    pub const fn active_key(&self) -> &HouseholdKeyMaterial {
+        &self.active_key
+    }
+
+    #[must_use]
+    pub const fn phase(&self) -> HouseholdKeyBundlePhase {
+        self.phase
+    }
+
+    #[must_use]
+    pub const fn has_previous_key(&self) -> bool {
+        self.previous_key.is_some()
+    }
+
+    #[must_use]
+    pub const fn initialization_id(&self) -> Option<Uuid> {
+        self.initialization_id
+    }
+
+    #[must_use]
+    pub const fn initial_commit_id(&self) -> Option<Uuid> {
+        self.initial_commit_id
+    }
+
+    #[must_use]
+    pub const fn initial_effect_fingerprint(&self) -> Option<[u8; 32]> {
+        self.initial_effect_fingerprint
+    }
+
+    #[must_use]
+    pub const fn initial_state_digest(&self) -> Option<[u8; 32]> {
+        self.initial_state_digest
+    }
+
+    #[must_use]
+    pub const fn rotation_id(&self) -> Option<Uuid> {
+        self.rotation_id
     }
 
     pub(crate) fn reserve_commit_evidence(
@@ -442,8 +506,11 @@ impl HouseholdKeyBundle {
         }
         let mut replacement = self.clone();
         replacement.commit_evidence_records.retain(|record| {
-            record.expires_at_unix_seconds > now_unix_seconds
-                && !applied_commit_ids.contains(&record.commit_id)
+            record.state == HouseholdCommitEvidenceStateV1::Denied
+                || (record
+                    .reservation_expires_at_unix_seconds
+                    .is_some_and(|expires_at| expires_at > now_unix_seconds)
+                    && !applied_commit_ids.contains(&record.commit_id))
         });
         if let Some(state) =
             replacement.commit_evidence_record(proposal_ref, commit_id, now_unix_seconds)
@@ -484,9 +551,11 @@ impl HouseholdKeyBundle {
                 proposal_ref_hash,
                 commit_id,
                 state: HouseholdCommitEvidenceStateV1::Reserved,
-                expires_at_unix_seconds: now_unix_seconds
-                    .checked_add(COMMIT_EVIDENCE_RETENTION_SECONDS)
-                    .ok_or_else(commit_evidence_retention_error)?,
+                reservation_expires_at_unix_seconds: Some(
+                    now_unix_seconds
+                        .checked_add(COMMIT_EVIDENCE_RETENTION_SECONDS)
+                        .ok_or_else(commit_evidence_retention_error)?,
+                ),
             });
         replacement.commit_evidence_records.sort_by(|left, right| {
             left.commit_id
@@ -507,7 +576,10 @@ impl HouseholdKeyBundle {
         let Some(index) = self.commit_evidence_records.iter().position(|record| {
             record.proposal_ref_hash == proposal_ref_hash
                 && record.commit_id == commit_id
-                && record.expires_at_unix_seconds > now_unix_seconds
+                && record.state == HouseholdCommitEvidenceStateV1::Reserved
+                && record
+                    .reservation_expires_at_unix_seconds
+                    .is_some_and(|expires_at| expires_at > now_unix_seconds)
         }) else {
             return Err(commit_evidence_record_mismatch_error());
         };
@@ -517,6 +589,7 @@ impl HouseholdKeyBundle {
         let mut replacement = self.clone();
         replacement.revision = self.revision.checked_next()?;
         replacement.commit_evidence_records[index].state = HouseholdCommitEvidenceStateV1::Denied;
+        replacement.commit_evidence_records[index].reservation_expires_at_unix_seconds = None;
         Ok(replacement)
     }
 
@@ -536,16 +609,17 @@ impl HouseholdKeyBundle {
             .find(|record| {
                 record.proposal_ref_hash == proposal_ref_hash
                     && record.commit_id == commit_id
-                    && record.expires_at_unix_seconds > now_unix_seconds
+                    && (record.state == HouseholdCommitEvidenceStateV1::Denied
+                        || record
+                            .reservation_expires_at_unix_seconds
+                            .is_some_and(|expires_at| expires_at > now_unix_seconds))
             })
             .map(|record| record.state)
     }
 
-    pub(crate) fn denies_commit(&self, commit_id: CommitId, now_unix_seconds: u64) -> bool {
+    pub(crate) fn denies_commit(&self, commit_id: CommitId, _now_unix_seconds: u64) -> bool {
         self.commit_evidence_records.iter().any(|record| {
-            record.commit_id == commit_id
-                && record.state == HouseholdCommitEvidenceStateV1::Denied
-                && record.expires_at_unix_seconds > now_unix_seconds
+            record.commit_id == commit_id && record.state == HouseholdCommitEvidenceStateV1::Denied
         })
     }
 
@@ -597,7 +671,14 @@ impl HouseholdKeyBundle {
             || self.commit_evidence_records.iter().any(|record| {
                 record.proposal_ref_hash == [0_u8; 32]
                     || record.commit_id.as_uuid().is_nil()
-                    || record.expires_at_unix_seconds == 0
+                    || match record.state {
+                        HouseholdCommitEvidenceStateV1::Reserved => record
+                            .reservation_expires_at_unix_seconds
+                            .is_none_or(|expires_at| expires_at == 0),
+                        HouseholdCommitEvidenceStateV1::Denied => {
+                            record.reservation_expires_at_unix_seconds.is_some()
+                        }
+                    }
             })
             || self
                 .commit_evidence_records
@@ -726,7 +807,7 @@ struct HouseholdCommitEvidenceRecordV1 {
     proposal_ref_hash: [u8; 32],
     commit_id: CommitId,
     state: HouseholdCommitEvidenceStateV1,
-    expires_at_unix_seconds: u64,
+    reservation_expires_at_unix_seconds: Option<u64>,
 }
 
 fn commit_evidence_proposal_ref_hash(proposal_ref: Uuid) -> [u8; 32] {
@@ -3117,7 +3198,7 @@ mod native {
         #[serde(rename = "s")]
         state: String,
         #[serde(rename = "x")]
-        expires_at_unix_seconds: u64,
+        reservation_expires_at_unix_seconds: Option<u64>,
     }
 
     #[derive(Clone, Deserialize, Serialize)]
@@ -3163,7 +3244,8 @@ mod native {
                             HouseholdCommitEvidenceStateV1::Denied => "denied",
                         }
                         .to_owned(),
-                        expires_at_unix_seconds: record.expires_at_unix_seconds,
+                        reservation_expires_at_unix_seconds: record
+                            .reservation_expires_at_unix_seconds,
                     })
                     .collect(),
                 initial_commit_id: bundle.initial_commit_id,
@@ -3236,7 +3318,15 @@ mod native {
                             proposal_ref_hash: decode_lower_hex_32(&record.proposal_ref_hash)?,
                             commit_id: CommitId::from_uuid(record.commit_id),
                             state,
-                            expires_at_unix_seconds: record.expires_at_unix_seconds,
+                            // Draft v2 documents encoded denied records with the former
+                            // reservation deadline. Normalize those records to the durable
+                            // absence fence rather than allowing time to reopen the commit.
+                            reservation_expires_at_unix_seconds: match state {
+                                HouseholdCommitEvidenceStateV1::Reserved => {
+                                    record.reservation_expires_at_unix_seconds
+                                }
+                                HouseholdCommitEvidenceStateV1::Denied => None,
+                            },
                         })
                     })
                     .collect::<Result<Vec<_>, PortError>>()?,
@@ -5508,6 +5598,7 @@ mod native {
                 KeyId::from_uuid(Uuid::parse_str("41414141-4141-4141-8141-414141414141").unwrap()),
                 HouseholdKeyMaterial::from_bytes([0x42; 32]),
             )
+            .expect("stable bundle")
             .reserve_commit_evidence(
                 Uuid::parse_str("42424242-4242-4242-8242-424242424242").unwrap(),
                 CommitId::from_uuid(
@@ -5528,7 +5619,8 @@ mod native {
                 KeyBundleRevision::new(1).expect("revision"),
                 KeyId::from_uuid(Uuid::parse_str("44444444-4444-4444-8444-444444444444").unwrap()),
                 HouseholdKeyMaterial::from_bytes([0x45; 32]),
-            );
+            )
+            .expect("stable bundle");
             let mut legacy_value =
                 serde_json::to_value(HouseholdKeyBundleWire::from_bundle(&legacy))
                     .expect("legacy value");
@@ -5544,7 +5636,69 @@ mod native {
 
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         #[test]
-        fn evidence_records_are_hashed_bounded_releasable_and_expiry_pruned() {
+        fn key_bundle_constructors_reject_invalid_ids_and_non_rotations() {
+            let (root, vault, _, _) = legacy_wire_fixture();
+            let slot = vault.account_slot();
+            let revision = KeyBundleRevision::new(1).expect("revision");
+            let active_key_id = KeyId::new();
+            let active_key = HouseholdKeyMaterial::from_bytes([0x51; 32]);
+
+            let nil_key = HouseholdKeyBundle::stable(
+                slot,
+                revision,
+                KeyId::from_uuid(Uuid::nil()),
+                active_key.clone(),
+            )
+            .expect_err("nil key IDs are invalid");
+            assert_eq!(nil_key.code, "household_key_bundle_invalid");
+
+            let nil_initialization = HouseholdKeyBundle::initializing(
+                slot,
+                revision,
+                active_key_id,
+                active_key.clone(),
+                Uuid::nil(),
+                Uuid::new_v4(),
+                [0x52; 32],
+                [0x53; 32],
+            )
+            .expect_err("nil initialization IDs are invalid");
+            assert_eq!(nil_initialization.code, "household_key_bundle_invalid");
+
+            let previous =
+                HouseholdKeyBundle::stable(slot, revision, active_key_id, active_key.clone())
+                    .expect("stable predecessor");
+            let next_revision = revision.checked_next().expect("next revision");
+            for (next_key_id, next_key, rotation_id) in [
+                (
+                    active_key_id,
+                    HouseholdKeyMaterial::from_bytes([0x54; 32]),
+                    Uuid::new_v4(),
+                ),
+                (KeyId::new(), active_key.clone(), Uuid::new_v4()),
+                (
+                    KeyId::new(),
+                    HouseholdKeyMaterial::from_bytes([0x55; 32]),
+                    Uuid::nil(),
+                ),
+            ] {
+                let error = HouseholdKeyBundle::rewriting(
+                    slot,
+                    next_revision,
+                    next_key_id,
+                    next_key,
+                    &previous,
+                    rotation_id,
+                )
+                .expect_err("invalid rotation transition");
+                assert_eq!(error.code, "household_key_bundle_invalid");
+            }
+            let _ = std::fs::remove_dir_all(root);
+        }
+
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[test]
+        fn evidence_records_are_hashed_bounded_and_keep_deny_fences_after_reservation_expiry() {
             let (root, vault, _, _) = legacy_wire_fixture();
             let now = 1_785_700_800;
             let mut bundle = HouseholdKeyBundle::stable(
@@ -5552,7 +5706,8 @@ mod native {
                 KeyBundleRevision::new(1).expect("revision"),
                 KeyId::new(),
                 HouseholdKeyMaterial::from_bytes([0x46; 32]),
-            );
+            )
+            .expect("stable bundle");
             let mut identities = Vec::new();
             for _ in 0..crate::credential_broker::MAX_HOUSEHOLD_COMMIT_EVIDENCE_RECORDS {
                 let proposal_ref = Uuid::new_v4();
@@ -5600,11 +5755,11 @@ mod native {
             );
 
             let after_retention = now + crate::credential_broker::COMMIT_EVIDENCE_RETENTION_SECONDS;
-            assert!(!bundle.denies_commit(denied_commit, after_retention));
+            assert!(bundle.denies_commit(denied_commit, after_retention));
             bundle = bundle
                 .reserve_commit_evidence(Uuid::new_v4(), CommitId::new(), after_retention, &[])
-                .expect("expired orphan and terminal records are pruned");
-            assert_eq!(bundle.commit_evidence_records.len(), 1);
+                .expect("expired reservations are pruned without reopening a deny fence");
+            assert_eq!(bundle.commit_evidence_records.len(), 2);
             let encoded = serde_json::to_vec(&HouseholdKeyBundleWire::from_bundle(&bundle))
                 .expect("pruned key bundle wire");
             assert!(encoded.len() <= MAX_BROKER_DOCUMENT_BYTES);

@@ -24,6 +24,7 @@ use heyfood_application::{
     HouseholdSession, NativeHouseholdModeV1, PortError, resolve_household_commit_v1,
     resolve_household_initialize_v1,
 };
+use heyfood_core::agent_household::HouseholdCommitEvidenceRepositoryAuthorityV1;
 use heyfood_core::{
     AGENT_HOUSEHOLD_CONTRACT_VERSION, AGENT_HOUSEHOLD_MAX_MEMBERS_PER_PAGE, AccountId,
     AgentDisclosureGrantSubjectV1, AgentDisclosureLedgerV1, AgentDisclosurePurposeV1,
@@ -270,7 +271,8 @@ impl NativeHouseholdRepository {
     /// Reserve the opaque verifier for one exact future proposal commit.
     /// The corresponding secret is securely rederived from the native
     /// repository key after restart. It is never exposed as data; a successful
-    /// observation carries it only inside a redacted, zeroizing proof.
+    /// observation carries only its tuple-bound verifier inside a redacted
+    /// proof.
     pub async fn reserve_agent_commit_evidence(
         &self,
         proposal_ref: AgentHouseholdProposalIdV1,
@@ -323,12 +325,15 @@ impl NativeHouseholdRepository {
             )
             .await?;
         }
-        Ok(HouseholdCommitEvidenceBindingV1::from_repository_secret(
-            self.account.clone(),
-            proposal_ref,
-            commit_id,
-            &secret,
-        ))
+        Ok(
+            HouseholdCommitEvidenceRepositoryAuthorityV1::from_repository_secret(
+                self.account.clone(),
+                proposal_ref,
+                commit_id,
+                &secret,
+            )
+            .binding(),
+        )
     }
 
     /// Remove an exact reservation after the durable proposal journal has
@@ -369,13 +374,13 @@ impl NativeHouseholdRepository {
             proposal_ref,
             commit_id,
         )?;
-        let expected_binding = HouseholdCommitEvidenceBindingV1::from_repository_secret(
+        let authority = HouseholdCommitEvidenceRepositoryAuthorityV1::from_repository_secret(
             self.account.clone(),
             proposal_ref,
             commit_id,
             &secret,
         );
-        if &expected_binding != binding {
+        if &authority.binding() != binding {
             return Err(commit_evidence_mismatch_error());
         }
         let replacement =
@@ -416,13 +421,13 @@ impl NativeHouseholdRepository {
             proposal_ref,
             commit_id,
         )?;
-        let expected_binding = HouseholdCommitEvidenceBindingV1::from_repository_secret(
+        let authority = HouseholdCommitEvidenceRepositoryAuthorityV1::from_repository_secret(
             self.account.clone(),
             proposal_ref,
             commit_id,
             &secret,
         );
-        if &expected_binding != binding {
+        if &authority.binding() != binding {
             return Err(commit_evidence_mismatch_error());
         }
         let record = loaded
@@ -433,9 +438,9 @@ impl NativeHouseholdRepository {
                 record.commit_id == commit_id && record.outcome == AppliedCommitOutcomeV1::Committed
             })
             .ok_or_else(commit_evidence_mismatch_error)?;
-        binding
+        authority
             .seal_applied_repository_observation(
-                &secret,
+                binding,
                 HouseholdEffectFingerprintV1::from_digest(record.fingerprint),
                 record.resulting_revision,
             )
@@ -475,13 +480,13 @@ impl NativeHouseholdRepository {
             proposal_ref,
             commit_id,
         )?;
-        let expected_binding = HouseholdCommitEvidenceBindingV1::from_repository_secret(
+        let authority = HouseholdCommitEvidenceRepositoryAuthorityV1::from_repository_secret(
             self.account.clone(),
             proposal_ref,
             commit_id,
             &secret,
         );
-        if &expected_binding != binding
+        if &authority.binding() != binding
             || loaded.state.revision != expected_revision
             || loaded
                 .state
@@ -502,8 +507,8 @@ impl NativeHouseholdRepository {
             )
             .await?;
         }
-        binding
-            .seal_unapplied_repository_observation(&secret, loaded.state.revision)
+        authority
+            .seal_unapplied_repository_observation(binding, loaded.state.revision)
             .map_err(commit_evidence_contract_error)
     }
 
@@ -883,7 +888,7 @@ impl NativeHouseholdRepository {
                 .initial_effect_fingerprint()
                 .ok_or_else(initialization_protocol_error)?,
             state_digest,
-        );
+        )?;
         let initialize = HouseholdKeyStore::initialize(
             self.secure_store.as_ref(),
             vault_lease,

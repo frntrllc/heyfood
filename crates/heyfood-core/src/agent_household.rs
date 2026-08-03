@@ -9,7 +9,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _, se
 use sha2::{Digest, Sha256};
 use unicode_width::UnicodeWidthChar;
 use uuid::Uuid;
-use zeroize::Zeroizing;
 
 use crate::{
     AccountId, CanonicalDigestV1, CanonicalTimestampV1, CommitId, DisplayName, GenerationId,
@@ -2032,10 +2031,23 @@ pub struct HouseholdCommitEvidenceBindingV1 {
     commit_id: CommitId,
 }
 
-impl HouseholdCommitEvidenceBindingV1 {
-    /// Adapter-only constructor used after the native repository derives the
-    /// tuple-specific secret from its durable account key. Knowing an
-    /// arbitrary secret cannot satisfy a journal containing another verifier.
+/// Tuple-bound proof authority reconstructed only by the native repository
+/// from its durable secret. A persisted binding contains only the verifier,
+/// so callers that obtain a journal cannot recover this capability or mint a
+/// repository proof.
+#[doc(hidden)]
+#[derive(Clone, Eq, PartialEq)]
+pub struct HouseholdCommitEvidenceRepositoryAuthorityV1 {
+    verifier: CanonicalDigestV1,
+    account: AccountId,
+    proposal_ref: AgentHouseholdProposalIdV1,
+    commit_id: CommitId,
+}
+
+impl HouseholdCommitEvidenceRepositoryAuthorityV1 {
+    /// Repository-adapter boundary. The secret must be derived from the
+    /// durable account-bound evidence key after the exact reservation has
+    /// been authenticated by the native repository.
     #[doc(hidden)]
     #[must_use]
     pub fn from_repository_secret(
@@ -2054,6 +2066,62 @@ impl HouseholdCommitEvidenceBindingV1 {
         }
     }
 
+    #[must_use]
+    pub fn binding(&self) -> HouseholdCommitEvidenceBindingV1 {
+        HouseholdCommitEvidenceBindingV1 {
+            verifier: self.verifier,
+            account: self.account.clone(),
+            proposal_ref: self.proposal_ref,
+            commit_id: self.commit_id,
+        }
+    }
+
+    pub fn seal_applied_repository_observation(
+        &self,
+        binding: &HouseholdCommitEvidenceBindingV1,
+        effect_fingerprint: HouseholdEffectFingerprintV1,
+        resulting_revision: HouseholdRevision,
+    ) -> Result<AppliedHouseholdCommitProofV1, AgentHouseholdContractErrorV1> {
+        if binding != &self.binding() {
+            return Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch);
+        }
+        Ok(AppliedHouseholdCommitProofV1 {
+            repository_verifier: self.verifier,
+            account: self.account.clone(),
+            proposal_ref: self.proposal_ref,
+            commit_id: self.commit_id,
+            effect_fingerprint,
+            resulting_revision,
+        })
+    }
+
+    pub fn seal_unapplied_repository_observation(
+        &self,
+        binding: &HouseholdCommitEvidenceBindingV1,
+        observed_revision: HouseholdRevision,
+    ) -> Result<UnappliedHouseholdCommitProofV1, AgentHouseholdContractErrorV1> {
+        if binding != &self.binding() {
+            return Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch);
+        }
+        Ok(UnappliedHouseholdCommitProofV1 {
+            repository_verifier: self.verifier,
+            account: self.account.clone(),
+            proposal_ref: self.proposal_ref,
+            commit_id: self.commit_id,
+            observed_revision,
+        })
+    }
+}
+
+impl fmt::Debug for HouseholdCommitEvidenceRepositoryAuthorityV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HouseholdCommitEvidenceRepositoryAuthorityV1")
+            .finish_non_exhaustive()
+    }
+}
+
+impl HouseholdCommitEvidenceBindingV1 {
     fn matches(
         &self,
         account: &AccountId,
@@ -2063,57 +2131,8 @@ impl HouseholdCommitEvidenceBindingV1 {
         &self.account == account && self.proposal_ref == proposal_ref && self.commit_id == commit_id
     }
 
-    fn matches_repository_secret(&self, repository_secret: &[u8; 32]) -> bool {
-        self.verifier
-            == commit_evidence_verifier(
-                repository_secret,
-                &self.account,
-                self.proposal_ref,
-                self.commit_id,
-            )
-    }
-
-    /// Seal an already-authenticated repository ledger observation. This does
-    /// not accept a household-state DTO; the native adapter must perform the
-    /// authoritative read while holding its repository lease.
-    #[doc(hidden)]
-    pub fn seal_applied_repository_observation(
-        &self,
-        repository_secret: &[u8; 32],
-        effect_fingerprint: HouseholdEffectFingerprintV1,
-        resulting_revision: HouseholdRevision,
-    ) -> Result<AppliedHouseholdCommitProofV1, AgentHouseholdContractErrorV1> {
-        if !self.matches_repository_secret(repository_secret) {
-            return Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch);
-        }
-        Ok(AppliedHouseholdCommitProofV1 {
-            repository_secret: Zeroizing::new(*repository_secret),
-            account: self.account.clone(),
-            proposal_ref: self.proposal_ref,
-            commit_id: self.commit_id,
-            effect_fingerprint,
-            resulting_revision,
-        })
-    }
-
-    /// Seal an authoritative exact-absence observation made by the native
-    /// repository. The adapter, not a proposal DTO, establishes absence.
-    #[doc(hidden)]
-    pub fn seal_unapplied_repository_observation(
-        &self,
-        repository_secret: &[u8; 32],
-        observed_revision: HouseholdRevision,
-    ) -> Result<UnappliedHouseholdCommitProofV1, AgentHouseholdContractErrorV1> {
-        if !self.matches_repository_secret(repository_secret) {
-            return Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch);
-        }
-        Ok(UnappliedHouseholdCommitProofV1 {
-            repository_secret: Zeroizing::new(*repository_secret),
-            account: self.account.clone(),
-            proposal_ref: self.proposal_ref,
-            commit_id: self.commit_id,
-            observed_revision,
-        })
+    fn matches_repository_verifier(&self, repository_verifier: CanonicalDigestV1) -> bool {
+        self.verifier == repository_verifier
     }
 }
 
@@ -2606,7 +2625,7 @@ pub struct LocalHouseholdProposalCasTokenV1 {
 /// reads one exact committed record from the native applied-commit ledger.
 #[derive(Clone, Eq, PartialEq)]
 pub struct AppliedHouseholdCommitProofV1 {
-    repository_secret: Zeroizing<[u8; 32]>,
+    repository_verifier: CanonicalDigestV1,
     account: AccountId,
     proposal_ref: AgentHouseholdProposalIdV1,
     commit_id: CommitId,
@@ -2627,7 +2646,7 @@ impl fmt::Debug for AppliedHouseholdCommitProofV1 {
 /// pre-dispatch revision and no record for this commit identity.
 #[derive(Clone, Eq, PartialEq)]
 pub struct UnappliedHouseholdCommitProofV1 {
-    repository_secret: Zeroizing<[u8; 32]>,
+    repository_verifier: CanonicalDigestV1,
     account: AccountId,
     proposal_ref: AgentHouseholdProposalIdV1,
     commit_id: CommitId,
@@ -2830,7 +2849,7 @@ impl LocalHouseholdProposalJournalV1 {
                 .authority
                 .binding
                 .commit_evidence_binding
-                .matches_repository_secret(&proof.repository_secret)
+                .matches_repository_verifier(proof.repository_verifier)
             || frozen.effect_fingerprint != proof.effect_fingerprint
             || proof.resulting_revision != expected_resulting_revision
         {
@@ -2860,7 +2879,7 @@ impl LocalHouseholdProposalJournalV1 {
                 .authority
                 .binding
                 .commit_evidence_binding
-                .matches_repository_secret(&proof.repository_secret)
+                .matches_repository_verifier(proof.repository_verifier)
             || self.authority.binding.expected_household_revision != proof.observed_revision
         {
             return Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch);
@@ -3343,17 +3362,22 @@ mod tests {
         disclosure_generation: GenerationId,
         profile_revision: Option<ProfileRevision>,
         member_id: Option<MemberId>,
-    ) -> (LocalHouseholdProposalBindingV1, [u8; 32]) {
+    ) -> (
+        LocalHouseholdProposalBindingV1,
+        HouseholdCommitEvidenceRepositoryAuthorityV1,
+    ) {
         let account = AccountId::parse("phase0-proposal-account").expect("account");
         let proposal_ref = AgentHouseholdProposalIdV1::new();
         let commit_id = CommitId::new();
         let repository_secret = [0x3d; 32];
-        let commit_evidence = HouseholdCommitEvidenceBindingV1::from_repository_secret(
-            account.clone(),
-            proposal_ref,
-            commit_id,
-            &repository_secret,
-        );
+        let repository_authority =
+            HouseholdCommitEvidenceRepositoryAuthorityV1::from_repository_secret(
+                account.clone(),
+                proposal_ref,
+                commit_id,
+                &repository_secret,
+            );
+        let commit_evidence = repository_authority.binding();
         LocalHouseholdProposalBindingV1::new(
             account,
             proposal_ref,
@@ -3381,7 +3405,7 @@ mod tests {
             timestamp(),
             CanonicalTimestampV1::parse("2026-08-02T12:10:00.000Z").expect("expiry"),
         )
-        .map(|binding| (binding, repository_secret))
+        .map(|binding| (binding, repository_authority))
         .expect("binding")
     }
 
@@ -3572,7 +3596,7 @@ mod tests {
 
     #[test]
     fn durable_journal_cas_survives_restart_and_binds_the_applied_fingerprint() {
-        let (primary_binding, repository_secret) = binding_with_evidence(
+        let (primary_binding, repository_authority) = binding_with_evidence(
             AgentHouseholdOperationV1::Edit,
             GenerationId::new(4),
             ProfileRevision::new(2).ok(),
@@ -3580,12 +3604,7 @@ mod tests {
         );
         let proposal_ref = primary_binding.proposal_ref();
         let commit_id = primary_binding.commit_id();
-        let evidence_binding = HouseholdCommitEvidenceBindingV1::from_repository_secret(
-            AccountId::parse("phase0-proposal-account").expect("account"),
-            proposal_ref,
-            commit_id,
-            &repository_secret,
-        );
+        let evidence_binding = repository_authority.binding();
         let current = snapshot(GenerationId::new(4), ProfileRevision::new(2).ok());
         let proposal_digest = CanonicalDigestV1::from_bytes([31; 32]);
         let effect_fingerprint =
@@ -3654,15 +3673,16 @@ mod tests {
         let mut crash_recovered =
             LocalHouseholdProposalJournalV1::restore(&committing_bytes).expect("crash recovery");
         let committing_token = crash_recovered.cas_token();
-        let wrong_binding = HouseholdCommitEvidenceBindingV1::from_repository_secret(
+        let wrong_authority = HouseholdCommitEvidenceRepositoryAuthorityV1::from_repository_secret(
             AccountId::parse("phase0-proposal-account").expect("account"),
             proposal_ref,
             commit_id,
             &[0x99; 32],
         );
-        let wrong_proof = wrong_binding
+        let wrong_binding = wrong_authority.binding();
+        let wrong_proof = wrong_authority
             .seal_applied_repository_observation(
-                &[0x99; 32],
+                &wrong_binding,
                 HouseholdEffectFingerprintV1::from_digest(CanonicalDigestV1::from_bytes([99; 32])),
                 HouseholdRevision::new(8).expect("resulting revision"),
             )
@@ -3671,9 +3691,9 @@ mod tests {
             crash_recovered.reconcile_applied_commit(&committing_token, &wrong_proof),
             Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch)
         );
-        let skipped_revision_proof = evidence_binding
+        let skipped_revision_proof = repository_authority
             .seal_applied_repository_observation(
-                &repository_secret,
+                &evidence_binding,
                 effect_fingerprint,
                 HouseholdRevision::new(9).expect("resulting revision"),
             )
@@ -3682,9 +3702,9 @@ mod tests {
             crash_recovered.reconcile_applied_commit(&committing_token, &skipped_revision_proof),
             Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch)
         );
-        let exact_proof = evidence_binding
+        let exact_proof = repository_authority
             .seal_applied_repository_observation(
-                &repository_secret,
+                &evidence_binding,
                 effect_fingerprint,
                 HouseholdRevision::new(8).expect("resulting revision"),
             )
@@ -3823,7 +3843,7 @@ mod tests {
 
     #[test]
     fn reconciliation_requires_bound_authority_to_prove_no_commit() {
-        let (binding, repository_secret) = binding_with_evidence(
+        let (binding, repository_authority) = binding_with_evidence(
             AgentHouseholdOperationV1::Edit,
             GenerationId::new(4),
             ProfileRevision::new(2).ok(),
@@ -3831,12 +3851,7 @@ mod tests {
         );
         let proposal_ref = binding.proposal_ref();
         let commit_id = binding.commit_id();
-        let evidence_binding = HouseholdCommitEvidenceBindingV1::from_repository_secret(
-            AccountId::parse("phase0-proposal-account").expect("account"),
-            proposal_ref,
-            commit_id,
-            &repository_secret,
-        );
+        let evidence_binding = repository_authority.binding();
         let mut journal = LocalHouseholdProposalJournalV1::new(
             LocalHouseholdProposalAuthorityV1::prepared(binding),
         )
@@ -3865,21 +3880,30 @@ mod tests {
             .mark_reconciliation_required(&committing)
             .expect("uncertain outcome");
         let reconciliation = journal.cas_token();
-        let wrong_binding = HouseholdCommitEvidenceBindingV1::from_repository_secret(
+        let wrong_authority = HouseholdCommitEvidenceRepositoryAuthorityV1::from_repository_secret(
             AccountId::parse("phase0-proposal-account").expect("account"),
             proposal_ref,
             commit_id,
             &[0x99; 32],
         );
-        let wrong_authority = wrong_binding
-            .seal_unapplied_repository_observation(&[0x99; 32], revision())
-            .expect("independent repository proof");
+        let wrong_binding = wrong_authority.binding();
         assert_eq!(
-            journal.reconcile_unapplied_commit(&reconciliation, &wrong_authority),
+            wrong_authority.seal_unapplied_repository_observation(&evidence_binding, revision()),
             Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch)
         );
-        let exact = evidence_binding
-            .seal_unapplied_repository_observation(&repository_secret, revision())
+        assert_eq!(
+            repository_authority.seal_unapplied_repository_observation(&wrong_binding, revision()),
+            Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch)
+        );
+        let wrong_proof = wrong_authority
+            .seal_unapplied_repository_observation(&wrong_binding, revision())
+            .expect("independent repository proof");
+        assert_eq!(
+            journal.reconcile_unapplied_commit(&reconciliation, &wrong_proof),
+            Err(AgentHouseholdContractErrorV1::AppliedCommitMismatch)
+        );
+        let exact = repository_authority
+            .seal_unapplied_repository_observation(&evidence_binding, revision())
             .expect("bound repository proof");
         journal
             .reconcile_unapplied_commit(&reconciliation, &exact)

@@ -4496,7 +4496,8 @@ mod tests {
             initial_commit,
             *command.claimed_effect_fingerprint.as_digest().as_bytes(),
             write.plaintext_sha256(),
-        );
+        )
+        .expect("valid initializing bundle");
         (root, vault, ready, key, write, semantic_candidate)
     }
 
@@ -4677,7 +4678,8 @@ mod tests {
             guard.initial_commit_id(),
             guard.initial_effect_fingerprint().unwrap(),
             guard.initial_state_digest().unwrap(),
-        );
+        )
+        .expect("valid initializing bundle");
         assert!(
             vault
                 .recover_uncommitted_initialization_write(
@@ -4821,7 +4823,8 @@ mod tests {
             state.commit_id,
             [0x92; 32],
             state.plaintext_sha256(),
-        );
+        )
+        .expect("valid initializing bundle");
 
         {
             let cancellation = CancellationToken::new();
@@ -4917,7 +4920,8 @@ mod tests {
             state.commit_id,
             [0x82; 32],
             state.plaintext_sha256(),
-        );
+        )
+        .expect("valid initializing bundle");
         let lifecycle = vault
             .acquire_lifecycle_lease(CancellationToken::new())
             .await
@@ -5009,7 +5013,8 @@ mod tests {
             state.commit_id,
             [0x84; 32],
             state.plaintext_sha256(),
-        );
+        )
+        .expect("valid initializing bundle");
         let lifecycle = vault
             .acquire_lifecycle_lease(CancellationToken::new())
             .await
@@ -5195,7 +5200,8 @@ mod tests {
             state.commit_id,
             [0xa2; 32],
             state.plaintext_sha256(),
-        );
+        )
+        .expect("valid initializing bundle");
         let lifecycle_lease = vault
             .acquire_lifecycle_lease(CancellationToken::new())
             .await
@@ -5387,7 +5393,8 @@ mod tests {
                 state.commit_id,
                 [0xb1; 32],
                 state.plaintext_sha256(),
-            );
+            )
+            .expect("valid initializing bundle");
             let lifecycle_lease = vault
                 .acquire_lifecycle_lease(CancellationToken::new())
                 .await
@@ -5658,7 +5665,8 @@ mod tests {
             state.commit_id,
             [0xc1; 32],
             state.plaintext_sha256(),
-        );
+        )
+        .expect("valid initializing bundle");
         let lifecycle_lease = vault
             .acquire_lifecycle_lease(CancellationToken::new())
             .await

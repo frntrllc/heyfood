@@ -390,13 +390,15 @@ async fn in_memory_key_and_guard_stores_are_account_bound_cancellable_and_cas_on
         initial_commit_id,
         [0x11; 32],
         [0x22; 32],
-    );
+    )
+    .expect("valid initializing bundle");
     let invalid_initial = HouseholdKeyBundle::stable(
         &slot,
         KeyBundleRevision::new(1).expect("revision"),
         key_id,
         key.clone(),
-    );
+    )
+    .expect("valid stable bundle");
     let invalid_first_guard = HouseholdMigrationGuardStore::compare_exchange(
         &store,
         &mut vault_lease,
@@ -476,7 +478,8 @@ async fn in_memory_key_and_guard_stores_are_account_bound_cancellable_and_cas_on
         KeyBundleRevision::new(2).expect("revision"),
         key_id,
         key,
-    );
+    )
+    .expect("valid stable bundle");
     HouseholdKeyStore::compare_exchange(
         &store,
         &mut vault_lease,
@@ -579,7 +582,8 @@ async fn aborting_guard_blocks_key_remint_before_and_after_exact_key_abort() {
         commit_id,
         [0x52; 32],
         [0x53; 32],
-    );
+    )
+    .expect("valid initializing bundle");
     HouseholdKeyStore::initialize(
         &store,
         &mut vault_lease,
@@ -622,7 +626,7 @@ async fn aborting_guard_blocks_key_remint_before_and_after_exact_key_abort() {
     HouseholdKeyStore::abort_initialization_and_verify(
         &store,
         &mut vault_lease,
-        bundle.revision,
+        bundle.revision(),
         initialization_id,
         aborting.clone(),
         CancellationToken::new(),
@@ -708,7 +712,8 @@ fn secure_values_are_redacted_in_diagnostics() {
         KeyBundleRevision::new(1).expect("revision"),
         KeyId::new(),
         HouseholdKeyMaterial::from_bytes([0xab; 32]),
-    );
+    )
+    .expect("valid stable bundle");
     let debug = format!("{bundle:?}");
     assert!(!debug.contains(&"ab".repeat(32)));
     assert!(!debug.contains("acct_example_01"));

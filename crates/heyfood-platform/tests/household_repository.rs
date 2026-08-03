@@ -12,6 +12,7 @@ use heyfood_application::{
     HouseholdErase, HouseholdInitialize, HouseholdRepositoryPort, HouseholdRepositoryResolutionV1,
     NativeHouseholdModeV1, NativeMemberAgeEvidenceV1, PortError, resolve_household_initialize_v1,
 };
+use heyfood_core::agent_household::HouseholdCommitEvidenceRepositoryAuthorityV1;
 use heyfood_core::{
     AGENT_HOUSEHOLD_CONTRACT_VERSION, AccountId, AgentDisclosureGrantSubjectV1,
     AgentDisclosurePurposeV1, AgentHouseholdOperationV1, AgentHouseholdProjectionV1,
@@ -370,7 +371,8 @@ async fn prepare_repository_with(
         commit_id.as_uuid(),
         *command.claimed_effect_fingerprint.as_digest().as_bytes(),
         state_digest,
-    );
+    )
+    .expect("valid initializing bundle");
     HouseholdKeyStore::initialize(
         store.as_ref(),
         &mut lease,
@@ -469,13 +471,13 @@ async fn rotate_and_finalize_household_key(prepared: &PreparedRepository) -> (Ke
     .await
     .expect("key load")
     .expect("stable key");
-    assert_eq!(previous.phase, HouseholdKeyBundlePhase::Stable);
-    let old_key_id = previous.active_key_id;
+    assert_eq!(previous.phase(), HouseholdKeyBundlePhase::Stable);
+    let old_key_id = previous.active_key_id();
     let new_key_id = KeyId::new();
     let rewriting = HouseholdKeyBundle::rewriting(
         prepared.vault.account_slot(),
         previous
-            .revision
+            .revision()
             .checked_next()
             .expect("rewriting revision"),
         new_key_id,
@@ -487,7 +489,7 @@ async fn rotate_and_finalize_household_key(prepared: &PreparedRepository) -> (Ke
     HouseholdKeyStore::compare_exchange(
         prepared.store.as_ref(),
         &mut lease,
-        previous.revision,
+        previous.revision(),
         rewriting.clone(),
         CancellationToken::new(),
     )
@@ -501,20 +503,23 @@ async fn rotate_and_finalize_household_key(prepared: &PreparedRepository) -> (Ke
     let finalized = rewriting
         .stabilized(
             prepared.vault.account_slot(),
-            rewriting.revision.checked_next().expect("stable revision"),
+            rewriting
+                .revision()
+                .checked_next()
+                .expect("stable revision"),
         )
         .expect("stable rotated key bundle");
     HouseholdKeyStore::compare_exchange(
         prepared.store.as_ref(),
         &mut lease,
-        rewriting.revision,
+        rewriting.revision(),
         finalized.clone(),
         CancellationToken::new(),
     )
     .await
     .expect("finalize rotated key bundle");
-    assert_eq!(finalized.phase, HouseholdKeyBundlePhase::Stable);
-    assert!(finalized.previous_key.is_none());
+    assert_eq!(finalized.phase(), HouseholdKeyBundlePhase::Stable);
+    assert!(!finalized.has_previous_key());
     (old_key_id, new_key_id)
 }
 
@@ -544,8 +549,8 @@ async fn delete_initializing_key(prepared: &PreparedRepository) -> HouseholdKeyB
     HouseholdKeyStore::delete_and_verify(
         prepared.store.as_ref(),
         &mut lease,
-        key.revision,
-        key.active_key_id,
+        key.revision(),
+        key.active_key_id(),
         CancellationToken::new(),
     )
     .await
@@ -593,14 +598,15 @@ async fn commit_ready_vault(prepared: &PreparedRepository, stabilize_key: bool) 
     if stabilize_key {
         let stable = HouseholdKeyBundle::stable(
             prepared.vault.account_slot(),
-            key.revision.checked_next().expect("next key revision"),
-            key.active_key_id,
-            key.active_key.clone(),
-        );
+            key.revision().checked_next().expect("next key revision"),
+            key.active_key_id(),
+            key.active_key().clone(),
+        )
+        .expect("valid stable bundle");
         HouseholdKeyStore::compare_exchange(
             prepared.store.as_ref(),
             &mut lease,
-            key.revision,
+            key.revision(),
             stable,
             CancellationToken::new(),
         )
@@ -875,12 +881,13 @@ async fn commit_evidence_is_rederived_after_repository_reopen_and_ignores_synthe
         .reconcile_unapplied_commit(&reconciliation_token, &unapplied)
         .expect("close exact absence");
 
-    let forged = HouseholdCommitEvidenceBindingV1::from_repository_secret(
+    let forged = HouseholdCommitEvidenceRepositoryAuthorityV1::from_repository_secret(
         prepared.account.clone(),
         proposal_ref,
         commit_id,
         &[0xa7; 32],
-    );
+    )
+    .binding();
     let mut synthesized_state = loaded.state.clone();
     synthesized_state.updated_at = timestamp(9);
     assert_ne!(synthesized_state.updated_at, loaded.state.updated_at);
@@ -983,8 +990,8 @@ async fn commit_evidence_reservations_survive_finalized_key_rotation_for_both_ou
     assert_ne!(old_key_id, new_key_id);
     let (_, finalized_key) = secure_documents(&prepared).await;
     let finalized_key = finalized_key.expect("finalized key");
-    assert_eq!(finalized_key.active_key_id, new_key_id);
-    assert!(finalized_key.previous_key.is_none());
+    assert_eq!(finalized_key.active_key_id(), new_key_id);
+    assert!(!finalized_key.has_previous_key());
 
     let reopened = repository(&prepared, NativeHouseholdModeV1::NativeEnabled);
     let _absence = reopened
@@ -1657,7 +1664,7 @@ async fn restart_finalizes_the_exact_committed_initialization_without_rewrite() 
         guard.state(),
         HouseholdMigrationGuardStateV1::InitializedNoSource
     );
-    assert_eq!(key.phase, HouseholdKeyBundlePhase::Stable);
+    assert_eq!(key.phase(), HouseholdKeyBundlePhase::Stable);
 }
 
 #[tokio::test]
@@ -1701,14 +1708,15 @@ async fn restart_finishes_ready_guard_after_key_was_already_stabilized() {
         .expect("commit initialization");
     let stable = HouseholdKeyBundle::stable(
         prepared.vault.account_slot(),
-        key.revision.checked_next().expect("next key revision"),
-        key.active_key_id,
-        key.active_key.clone(),
-    );
+        key.revision().checked_next().expect("next key revision"),
+        key.active_key_id(),
+        key.active_key().clone(),
+    )
+    .expect("valid stable bundle");
     HouseholdKeyStore::compare_exchange(
         prepared.store.as_ref(),
         &mut lease,
-        key.revision,
+        key.revision(),
         stable,
         CancellationToken::new(),
     )
@@ -1814,8 +1822,8 @@ async fn ready_guard_with_missing_key_mints_once_and_completes_in_both_modes() {
         assert_eq!(outcome.outcome, AppliedCommitOutcomeV1::Initialized);
         let first_documents = secure_documents(&prepared).await;
         let first_key = first_documents.1.as_ref().expect("stable key");
-        assert_eq!(first_key.phase, HouseholdKeyBundlePhase::Stable);
-        assert_ne!(first_key.active_key_id, deleted.active_key_id);
+        assert_eq!(first_key.phase(), HouseholdKeyBundlePhase::Stable);
+        assert_ne!(first_key.active_key_id(), deleted.active_key_id());
         let first_artifacts = artifact_bytes(&prepared.vault.household_directory());
 
         assert_eq!(
@@ -2167,37 +2175,41 @@ async fn ready_guard_accepts_only_initial_revision_one_or_stable_revision_two_co
                 "initializing-revision-two" => HouseholdKeyBundle::initializing(
                     prepared.vault.account_slot(),
                     KeyBundleRevision::new(2).expect("revision"),
-                    key.active_key_id,
-                    key.active_key.clone(),
+                    key.active_key_id(),
+                    key.active_key().clone(),
                     guard.initialization_id(),
                     guard.initial_commit_id(),
                     guard.initial_effect_fingerprint().expect("fingerprint"),
                     guard.initial_state_digest().expect("state digest"),
-                ),
+                )
+                .expect("valid initializing bundle"),
                 "stable-revision-one" => HouseholdKeyBundle::stable(
                     prepared.vault.account_slot(),
                     KeyBundleRevision::new(1).expect("revision"),
-                    key.active_key_id,
-                    key.active_key.clone(),
-                ),
+                    key.active_key_id(),
+                    key.active_key().clone(),
+                )
+                .expect("valid stable bundle"),
                 "stable-revision-three" => HouseholdKeyBundle::stable(
                     prepared.vault.account_slot(),
                     KeyBundleRevision::new(3).expect("revision"),
-                    key.active_key_id,
-                    key.active_key.clone(),
-                ),
+                    key.active_key_id(),
+                    key.active_key().clone(),
+                )
+                .expect("valid stable bundle"),
                 "rewriting" => {
                     let previous = HouseholdKeyBundle::stable(
                         prepared.vault.account_slot(),
                         KeyBundleRevision::new(1).expect("revision"),
                         KeyId::new(),
                         HouseholdKeyMaterial::from_bytes([0x7b; 32]),
-                    );
+                    )
+                    .expect("valid stable predecessor");
                     HouseholdKeyBundle::rewriting(
                         prepared.vault.account_slot(),
                         KeyBundleRevision::new(2).expect("revision"),
-                        key.active_key_id,
-                        key.active_key.clone(),
+                        key.active_key_id(),
+                        key.active_key().clone(),
                         &previous,
                         fixed_uuid("99999999-9999-4999-8999-999999999999"),
                     )
@@ -2209,9 +2221,10 @@ async fn ready_guard_accepts_only_initial_revision_one_or_stable_revision_two_co
                     HouseholdKeyBundle::stable(
                         prepared.vault.account_slot(),
                         KeyBundleRevision::new(2).expect("revision"),
-                        key.active_key_id,
-                        key.active_key.clone(),
+                        key.active_key_id(),
+                        key.active_key().clone(),
                     )
+                    .expect("valid stable bundle")
                 }
                 _ => unreachable!("closed adversarial key cases"),
             };

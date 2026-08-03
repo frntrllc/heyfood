@@ -249,7 +249,8 @@ async fn committed_native_fixture(
         commit_id.as_uuid(),
         *command.claimed_effect_fingerprint.as_digest().as_bytes(),
         state_digest,
-    );
+    )
+    .expect("valid initializing key bundle");
     HouseholdKeyStore::initialize(
         store.as_ref(),
         &mut lease,
@@ -281,14 +282,15 @@ async fn committed_native_fixture(
         NativeFixtureCompletionV1::Completed => {
             let stable = HouseholdKeyBundle::stable(
                 vault.account_slot(),
-                key.revision.checked_next().expect("next key revision"),
-                key.active_key_id,
-                key.active_key.clone(),
-            );
+                key.revision().checked_next().expect("next key revision"),
+                key.active_key_id(),
+                key.active_key().clone(),
+            )
+            .expect("valid stable key bundle");
             HouseholdKeyStore::compare_exchange(
                 store.as_ref(),
                 &mut lease,
-                key.revision,
+                key.revision(),
                 stable,
                 CancellationToken::new(),
             )
