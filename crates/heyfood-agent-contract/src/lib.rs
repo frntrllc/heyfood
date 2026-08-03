@@ -1235,6 +1235,12 @@ pub fn manifest_v3() -> Value {
         "Eight bounded discovery and read tools, including two household reads, are available over local stdio with native account credentials.",
     );
     agent_mcp["contract_version"] = Value::from("v2");
+    let windows_distribution = capabilities
+        .iter_mut()
+        .find(|capability| capability["id"] == "windows-distribution")
+        .expect("Windows distribution capability");
+    windows_distribution["summary"] =
+        Value::from("Windows CI and public distribution are outside the v0.8.0 release contract.");
 
     debug_assert!(canonical_json(&manifest).len() <= MAX_MANIFEST_BYTES);
     manifest

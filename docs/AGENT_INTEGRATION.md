@@ -98,27 +98,28 @@ removing a manifest field requires a new manifest schema version. A consumer
 must fail with an upgrade instruction when the installed manifest is outside
 its declared compatibility range.
 
-The default `agent describe`, `agent doctor`, and MCP manifest responses remain
-schema v1 across the v0.6.2 to v0.7.1 binary upgrade. Agents following this
-guide should keep using those defaults. The explicit `--schema-version 2`
-forms expose native-state release compatibility metadata for installer and
-diagnostic tooling; they are not a prerequisite for an installed v0.6.2 Skill.
+v0.8.0 defaults `agent describe`, `agent doctor`, and the MCP manifest response
+to schema v3. Explicit `--schema-version 1` and `--schema-version 2` retain the
+frozen compatibility views and intentionally omit the household agent surface.
+Consumers must branch on the discovered capability and tool inventory, not on
+the binary version or a permanently assumed tool count. Use
+`heyfood agent compatibility --json --no-input` for an offline, binary-owned
+remediation when the installed Agent Skill is incompatible.
 
 This guide describes only the exact binary that embeds it. Public support
 claims require installed-artifact qualification for the named host, version,
 platform, and tool set.
 
-## Future household contract (inactive Phase 0)
+## Household agent contract
 
-The source tree contains a reviewed Phase 0 contract for future agent-aware
-householding. It is not part of this embedded v0.7.0 guide or public manifest.
-Do not infer household commands from source files or release plans. Continue
-to route household management to bare `heyfood` unless the exact installed
-manifest advertises the capability and exact tools.
+The schema-v3 manifest may advertise two account-bound local read tools:
+authorized household roster context and one exact additional household member.
+Profile projection requires a current attached-TUI disclosure grant, is limited
+to adults with known age evidence, and never claims the self profile. Missing,
+partial, expired, or revoked grants fail closed.
 
-The future shared skill must branch on discovered capability/tool state, not
-on a version string. Its v0.7.0 branch remains the current human-TUI handoff.
-Its future branch may use disclosed reads and prepare/status/cancel/reconcile,
-but never approval or commit. The binary-owned, offline compatibility command
-is `heyfood agent compatibility --json --no-input`; it becomes callable only
-in a separately authorized phase.
+The shared skill must branch on discovered capability/tool state, not on a
+version string. When those tools are absent it must route householding to the
+human TUI. When present it may use only the advertised reads. Adding, editing,
+removing, or changing household scope remains human-TUI-only; no agent approval
+or commit tool exists in v0.8.0.

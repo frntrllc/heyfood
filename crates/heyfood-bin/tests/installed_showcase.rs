@@ -3306,7 +3306,7 @@ fn installed_harness_inventory_matches_core_release_contract() {
     );
     assert_eq!(
         contract["distribution"]["ordinary_windows_ci_required"],
-        true
+        false
     );
     let observed = contract["groups"]
         .as_array()

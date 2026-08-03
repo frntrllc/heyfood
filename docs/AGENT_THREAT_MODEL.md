@@ -1,9 +1,9 @@
 # heyfood agent integration threat model
 
-**Status:** v0.7.1 read/discovery integration qualified and public; agent
-mutations remain absent and separately gated. Agent-aware household Phase 0
-contracts are frozen in source but not routed or advertised.
-**Release source:** `80d0b4b3defeb4ded45b890cd0b4bab85193e587`
+**Status:** v0.8.0 release candidate. Read-only household context and exact
+additional-member profile reads are active only when the attached TUI has
+saved the corresponding local disclosure grant. Agent household lifecycle
+mutations remain absent and separately gated.
 
 ## Assets and trust boundaries
 
@@ -84,20 +84,20 @@ hard failure.
 
 ## Residual risks and deferred authority
 
-- Public macOS/Linux installed-archive qualification is complete. Windows
-  `CONIN$`/`CONOUT$` remains covered by ordinary source CI only; no Windows
-  archive or support claim ships in v0.7.1.
+- Public macOS/Linux installed-archive qualification is required for v0.8.0.
+  Windows CI and distribution are outside this release contract.
 - The application boundaries, exact-host setup matrix, Agent Skill, setup, and
   read-only MCP implementation passed independent exact-SHA and exact-artifact
-  review for v0.7.1.
+  review for the previous release. The v0.8.0 household additions require the
+  same exact-source and exact-artifact gates.
 - Phase 4 mutation endpoints and tools remain absent. The frozen hello.food
   out-of-band approval protocol still requires its separate security,
   implementation, and production qualification before any mutation tool can
   be advertised.
-- The future local household contract is independently versioned from that
-  hosted approval protocol. Phase 0 proves only a fake-port read and
-  non-mutating prepare/status/cancel seam. It does not activate a command,
-  MCP tool, disclosure grant UI, proposal journal, commit path, or release.
+- The local household contract is independently versioned from that hosted
+  approval protocol. v0.8.0 activates only disclosure-gated reads. The frozen
+  prepare/status/cancel/reconcile and commit designs do not activate an agent
+  lifecycle command, mutation MCP tool, or model-controlled approval path.
   See [LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md](LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md).
 
 The machine-readable Phase 0 inventory distinguishes Phase 0 review and

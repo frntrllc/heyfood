@@ -566,11 +566,10 @@ fn assert_internal_manifest() {
 }
 
 #[test]
-fn phase0_does_not_expand_the_public_manifest_schema_index_or_mcp_inventory() {
-    let manifest = heyfood_agent_contract::manifest();
+fn phase0_legacy_public_surface_remains_frozen_after_read_activation() {
+    let manifest = heyfood_agent_contract::manifest_v1();
     assert_eq!(manifest["schema_version"], 1);
     assert_eq!(manifest["commands"].as_array().map(Vec::len), Some(30));
-    assert_eq!(heyfood_agent_contract::PUBLIC_SCHEMAS.len(), 11);
     let encoded = heyfood_agent_contract::canonical_json(&manifest);
     assert!(!encoded.contains("heyfood_get_household"));
     assert!(!encoded.contains("prepare_household_change"));
@@ -579,7 +578,7 @@ fn phase0_does_not_expand_the_public_manifest_schema_index_or_mcp_inventory() {
         (
             "heyfood_get_manifest",
             "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
-            "3e56ca65de2344f97641314242e6a81695de934351aeb00d39e46ef29ea8451c",
+            "7a866f9f96cfa46318b5f95f043b72501f706dd2a2402ce3f48c22568a0bad69",
         ),
         (
             "heyfood_get_status",
@@ -608,8 +607,8 @@ fn phase0_does_not_expand_the_public_manifest_schema_index_or_mcp_inventory() {
         ),
     ];
     let tools = heyfood_mcp::HeyfoodMcpServer::tools();
-    assert_eq!(tools.len(), expected.len());
-    for (tool, (name, input_sha256, result_sha256)) in tools.iter().zip(expected) {
+    assert_eq!(tools.len(), 8);
+    for (tool, (name, input_sha256, result_sha256)) in tools.iter().take(6).zip(expected) {
         assert_eq!(tool.name, name);
         let input = serde_json::to_vec(tool.input_schema.as_ref()).expect("tool input schema");
         let result = serde_json::to_vec(tool.output_schema.as_deref().expect("tool result schema"))
@@ -617,6 +616,8 @@ fn phase0_does_not_expand_the_public_manifest_schema_index_or_mcp_inventory() {
         assert_eq!(format!("{:x}", Sha256::digest(input)), input_sha256);
         assert_eq!(format!("{:x}", Sha256::digest(result)), result_sha256);
     }
+    assert_eq!(tools[6].name, "heyfood_get_household_context");
+    assert_eq!(tools[7].name, "heyfood_get_household_member");
 }
 
 #[tokio::test]

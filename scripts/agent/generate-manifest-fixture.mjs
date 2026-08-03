@@ -24,12 +24,16 @@ if (process.argv.length > 3 || (process.argv.length === 3 && !check)) {
 if (!fs.existsSync(executable)) {
   throw new Error(`build heyfood-bin before generating the manifest: ${executable}`);
 }
-const stdout = childProcess.execFileSync(executable, ["agent", "describe"], {
-  cwd: root,
-  encoding: "utf8",
-  env: { ...process.env, NO_COLOR: "1" },
-  maxBuffer: 2 * 1024 * 1024,
-});
+const stdout = childProcess.execFileSync(
+  executable,
+  ["agent", "describe", "--schema-version", "1"],
+  {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+    maxBuffer: 2 * 1024 * 1024,
+  },
+);
 const document = JSON.parse(stdout);
 if (fs.existsSync(fixture)) {
   const checkedIn = JSON.parse(fs.readFileSync(fixture, "utf8"));
