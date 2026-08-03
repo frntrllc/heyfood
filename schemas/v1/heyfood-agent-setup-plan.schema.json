@@ -105,7 +105,7 @@
           "$ref": "#/$defs/sha256"
         },
         "version": {
-          "const": "0.7.1"
+          "const": "0.8.0"
         }
       }
     },
@@ -123,7 +123,7 @@
           "const": "heyfood"
         },
         "version": {
-          "const": "0.7.1"
+          "const": "0.8.0"
         },
         "sha256": {
           "$ref": "#/$defs/sha256"

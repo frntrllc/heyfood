@@ -4,7 +4,7 @@
     "one_shot_json": "active",
     "tui_automation": "unsupported"
   },
-  "binary_version": "0.7.1",
+  "binary_version": "0.8.0",
   "build": {
     "build_input_digest_sha256": "4792b986e3f6b7f6da866aba9fa69edbb5963423d8d3f437542cbd0b15e12133",
     "dirty": true,

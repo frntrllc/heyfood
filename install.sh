@@ -253,7 +253,7 @@ readonly TARGET="$TARGET_ARCH-$TARGET_OS"
 
 VERSION="${HEYFOOD_VERSION:-$SUPPORTED_VERSION}"
 validate_version "$VERSION" ||
-  fail "HEYFOOD_VERSION must be an exact release such as 0.7.1"
+  fail "HEYFOOD_VERSION must be an exact release such as 0.8.0"
 [[ "$VERSION" == "$SUPPORTED_VERSION" ]] ||
   fail "this installer supports heyfood $SUPPORTED_VERSION; requested $VERSION"
 readonly VERSION
