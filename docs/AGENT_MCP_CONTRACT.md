@@ -1,6 +1,6 @@
 # heyfood local MCP contract
 
-**Status:** v1 read/discovery contract supported in the qualified public
+**Status:** v2 eight-tool read/discovery contract supported in the qualified public
 `v0.8.0` release
 
 ## Transport
@@ -58,7 +58,17 @@ heyfood_get_capabilities
 heyfood_get_grocery_list
 heyfood_get_grocery_exclusions
 heyfood_list_menu_watches
+heyfood_get_household_context
+heyfood_get_household_member
 ```
+
+The two household tools are local, account-bound reads. They call the same
+application controller as the one-shot household commands, never acquire the
+remote-operation semaphore, and never perform hosted dispatch. Context reads
+are limited to content-free or roster projection. Minimized profile disclosure
+requires `heyfood_get_household_member` with an exact stable additional-member
+reference and a current disclosure generation; self-profile reads are not
+supported.
 
 There is no generic shell, command runner, arbitrary URL fetch, raw API proxy,
 credential read, file read, or TUI-control tool.
@@ -82,14 +92,14 @@ full state machine. Tool names in planning documents are not advertisements.
 | Records per page | 100 |
 
 The ninth request receives a typed overloaded error and is not queued.
-Network-free manifest/schema reads may run while one remote operation is in
-flight, but total outstanding work remains eight. Slow readers cannot create
+Network-free manifest and household reads may run while one remote operation
+is in flight, but total outstanding work remains eight. Slow readers cannot create
 an unbounded channel. The transport admits the initialization notification
 once and at most one cancellation notification for each active request.
 Duplicate lifecycle notifications and client notification classes this server
 does not consume are dropped before the SDK can spawn handler work.
 
-The three collection tools accept a closed optional input object with
+The three hosted collection tools accept a closed optional input object with
 `limit` (1 through 100) and an opaque, snapshot-bound `cursor`. Results include
 a `page` object with `returned` and `next_cursor`. Each page is a fresh
 authenticated read; changed collection bytes produce `mcp_cursor_stale`, and
@@ -118,8 +128,9 @@ behind.
 - Service failure is not converted into an empty list or success.
 - Account data never appears in diagnostics or evidence.
 - Credential rotation is separately declared from product-state mutation.
-- A tool is not annotated read-only unless the implementation proves it
-  changes neither product nor environment state.
+- Manifest and household tools are annotated read-only because they change
+  neither product nor environment state. Hosted reads are not annotated
+  read-only because credential rotation can persist authentication state.
 
 ## Required conformance
 

@@ -38,17 +38,16 @@ authoritative allowlist: internal approval/commit schemas are deliberately not
 exposed. `agent doctor` reports only bounded build/contract facts and never
 prints a user-specific executable or configuration path.
 
-Bare `agent`, `agent describe`, and `agent doctor` retain their closed schema-v1
-outputs for compatibility with Agent Skills installed by v0.6.2. The explicit
-`agent describe --schema-version 2` and `agent doctor --schema-version 2`
-forms expose the v0.8.0 native-state-aware contracts. Unsupported schema
-versions fail during argument parsing before credentials or network access.
+Bare `agent`, `agent describe`, and `agent doctor` return schema v3. Explicit
+`--schema-version 1` and `--schema-version 2` retain the frozen compatibility
+views and omit household agent claims. Unsupported schema versions fail during
+argument parsing before credentials or network access.
 
-Phase 0 source also freezes future `household show`, `household member`, and
-`agent compatibility` process contracts plus manifest schema v3. They are not
-Clap routes, help entries, completion entries, public schemas, or supported
-commands in v0.8.0. Their later activation requires separate authorization,
-default-manifest/skill coordination, and exact-SHA review.
+`agent compatibility` is a version-invariant offline bootstrap. `household
+show` and `household member` are active machine-only, disclosure-gated local
+reads requiring `--json --no-input`. They call the same application controller
+as the two household MCP tools, perform no hosted dispatch or mutation, reject
+display-name resolution, and do not expose a self profile.
 
 Health integrations are deferred from the supported `v0.8.0` contract.
 `health` is hidden from root help and generated shell completion, `/health` is

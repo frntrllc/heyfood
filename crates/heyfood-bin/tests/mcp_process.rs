@@ -154,6 +154,36 @@ fn one_shot_and_human_output_modifiers_never_start_mcp_stdout() {
 
 #[cfg(feature = "native-credentials")]
 #[test]
+fn household_cli_reads_are_public_machine_routes_not_placeholders() {
+    let root = TempRoot::new();
+    let output = command()
+        .args([
+            "--json",
+            "--no-input",
+            "household",
+            "show",
+            "--expected-disclosure-generation",
+            "0",
+        ])
+        .env("HOME", &root.0)
+        .env("USERPROFILE", &root.0)
+        .env("XDG_CONFIG_HOME", root.0.join("config"))
+        .env("XDG_DATA_HOME", root.0.join("data"))
+        .env("XDG_CACHE_HOME", root.0.join("cache"))
+        .env("APPDATA", root.0.join("AppData").join("Roaming"))
+        .env("LOCALAPPDATA", root.0.join("AppData").join("Local"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+    let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["ok"], false);
+    assert_ne!(document["error"]["type"], "command_unavailable");
+    assert_ne!(document["error"]["type"], "command_not_available");
+}
+
+#[cfg(feature = "native-credentials")]
+#[test]
 fn clean_profile_discovers_the_exact_protocol_and_gets_a_typed_auth_handoff() {
     let root = TempRoot::new();
     let mut command = command();
@@ -224,6 +254,8 @@ fn clean_profile_discovers_the_exact_protocol_and_gets_a_typed_auth_handoff() {
             "heyfood_get_grocery_list",
             "heyfood_get_grocery_exclusions",
             "heyfood_list_menu_watches",
+            "heyfood_get_household_context",
+            "heyfood_get_household_member",
         ]
     );
 
@@ -234,12 +266,12 @@ fn clean_profile_discovers_the_exact_protocol_and_gets_a_typed_auth_handoff() {
         json!({"name": "heyfood_get_manifest", "arguments": {}}),
     );
     let manifest = response(&receiver, 3, Duration::from_secs(5));
-    assert_eq!(manifest["result"]["structuredContent"]["schema_version"], 1);
-    assert!(
-        manifest["result"]["structuredContent"]
-            .get("native_state_compatibility")
-            .is_none(),
-        "MCP must retain the closed v1 default used by installed v0.6.2 skills"
+    assert_eq!(manifest["result"]["structuredContent"]["schema_version"], 3);
+    assert_eq!(
+        manifest["result"]["structuredContent"]["mcp_inventory"]["tools"]
+            .as_array()
+            .map(Vec::len),
+        Some(8)
     );
     assert_eq!(manifest["result"]["isError"], false);
 

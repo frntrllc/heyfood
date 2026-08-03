@@ -1062,6 +1062,16 @@ pub fn manifest_v3() -> Value {
     .expect("the frozen v3 overlay is valid JSON");
     let mut manifest = manifest_v2();
     manifest["schema_version"] = Value::from(3);
+    for command in manifest["commands"]
+        .as_array_mut()
+        .expect("manifest commands are an array")
+    {
+        if command["path"].as_str() == Some("mcp serve") {
+            command["purpose"] = Value::from(
+                "Serve eight manifest-declared read/discovery tools over local MCP stdio.",
+            );
+        }
+    }
     manifest["compatibility"] = overlay["compatibility"].clone();
     manifest["native_state_compatibility"] = overlay["native_state_compatibility"].clone();
     manifest["native_state_compatibility"]["binary_version"] =

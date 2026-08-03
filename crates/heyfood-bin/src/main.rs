@@ -26,18 +26,27 @@ use heyfood_application::{
 use heyfood_application::{
     CredentialCommit, CredentialPort, HouseholdEraseOutcome, Logout, LogoutLocalPort, LogoutOutcome,
 };
-use heyfood_cli::{Cli, Command, OutputMode, RegistrationResultDocument};
+use heyfood_cli::{
+    Cli, Command, HouseholdCommand, HouseholdProjectionArgument, OutputMode,
+    RegistrationResultDocument,
+};
 use heyfood_core::AuthCredentialBundle;
 #[cfg(feature = "native-credentials")]
 use heyfood_core::CommitId;
 #[cfg(any(feature = "native-credentials", all(test, not(windows))))]
 use heyfood_core::SessionCredentials;
 use heyfood_core::{
-    BrowserUrl, HouseholdProfileStateV1, NativeHouseholdRolloutV1, NetworkPolicy, OperationId,
+    AGENT_HOUSEHOLD_CONTRACT_VERSION, AgentHouseholdContextInputKindV1,
+    AgentHouseholdContextInputV1, AgentHouseholdMemberInputKindV1, AgentHouseholdMemberInputV1,
+    AgentHouseholdProjectionV1, AgentHouseholdSubjectV1, BrowserUrl, GenerationId,
+    HouseholdProfileStateV1, MemberId, NativeHouseholdRolloutV1, NetworkPolicy, OperationId,
     ProfileStatus, SensitiveString, ServiceUrl, SessionSnapshot, terminal_safe_text,
 };
 #[cfg(feature = "native-credentials")]
-use heyfood_mcp::{HeyfoodMcpServer, McpSessionContext, McpSessionProvider};
+use heyfood_mcp::{
+    AccountBoundHouseholdReads, HeyfoodMcpServer, HouseholdReadService, McpSessionContext,
+    McpSessionProvider,
+};
 #[cfg(feature = "native-credentials")]
 use heyfood_platform::CredentialBrokerStore;
 #[cfg(all(not(windows), not(feature = "native-credentials")))]
@@ -806,6 +815,16 @@ async fn main() -> ExitCode {
         Some(Command::Chat(_)) => chat(machine).await,
         Some(Command::Onboard(_)) => onboard(machine).await,
         Some(Command::Health { .. }) => deferred_health_command(machine),
+        #[cfg(feature = "native-credentials")]
+        Some(Command::Household { command }) => household_read(command, machine, no_input).await,
+        #[cfg(not(feature = "native-credentials"))]
+        Some(Command::Household { .. }) => failure(
+            "household_agent_unavailable",
+            "Household agent reads require native credential support in this build.",
+            None,
+            machine,
+            false,
+        ),
         Some(command) if is_native_one_shot(&command) => {
             one_shot(command, output_mode, machine, no_input).await
         }
@@ -844,6 +863,40 @@ struct NativeMcpSessionState {
     ensure_session: Arc<EnsureSession>,
     snapshot: SessionSnapshot,
     authorization_scope: String,
+}
+
+#[cfg(feature = "native-credentials")]
+struct NativeMcpHouseholdReads {
+    paths: NativePaths,
+}
+
+#[cfg(feature = "native-credentials")]
+impl HouseholdReadService for NativeMcpHouseholdReads {
+    fn context(
+        &self,
+        input: AgentHouseholdContextInputV1,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<heyfood_core::AgentHouseholdReadSnapshotV1, PortError>> {
+        Box::pin(async move {
+            let reads = prepare_local_household_reads(&self.paths, cancellation.child_token())
+                .await
+                .map_err(mcp_prepare_error)?;
+            reads.context(input, cancellation).await
+        })
+    }
+
+    fn member(
+        &self,
+        input: AgentHouseholdMemberInputV1,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<heyfood_core::AgentHouseholdReadSnapshotV1, PortError>> {
+        Box::pin(async move {
+            let reads = prepare_local_household_reads(&self.paths, cancellation.child_token())
+                .await
+                .map_err(mcp_prepare_error)?;
+            reads.member(input, cancellation).await
+        })
+    }
 }
 
 #[cfg(feature = "native-credentials")]
@@ -955,7 +1008,10 @@ async fn mcp_serve(modifier_used: bool) -> ExitCode {
     let sessions = Arc::new(NativeMcpSessions {
         state: tokio::sync::Mutex::new(None),
     });
-    let server = HeyfoodMcpServer::new(service, sessions);
+    let mut server = HeyfoodMcpServer::new(service, sessions);
+    if let Ok(paths) = NativePaths::discover_platform_default() {
+        server = server.with_household(Arc::new(NativeMcpHouseholdReads { paths }));
+    }
     match heyfood_mcp::serve_stdio(server).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -963,6 +1019,214 @@ async fn mcp_serve(modifier_used: bool) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+#[cfg(feature = "native-credentials")]
+async fn prepare_local_household_reads(
+    paths: &NativePaths,
+    cancellation: CancellationToken,
+) -> Result<Arc<dyn HouseholdReadService>, heyfood_bin::OneShotError> {
+    use heyfood_bin::native_household_composition::{
+        NativeHouseholdCompositionV1, native_household_rollout_from_environment_v1,
+        open_existing_native_household_for_review_v1,
+    };
+
+    let auth_store =
+        NativeAuthStore::open(paths.config_dir()).map_err(heyfood_bin::OneShotError::from)?;
+    let credential_store = CredentialBrokerStore::open(paths.config_dir(), Duration::from_secs(15))
+        .map_err(heyfood_bin::OneShotError::from)?;
+    let auth = auth_store
+        .load_account_bound(&credential_store)
+        .map_err(heyfood_bin::OneShotError::from)?
+        .ok_or_else(|| {
+            heyfood_bin::OneShotError::new(
+                "login_required",
+                "No native hello.food account is connected. Run `heyfood login` first.",
+            )
+        })?;
+    let account = auth.session.account_id.clone();
+    let rollout =
+        native_household_rollout_from_environment_v1().map_err(heyfood_bin::OneShotError::from)?;
+    let prepared =
+        open_existing_native_household_for_review_v1(paths, account.clone(), rollout, cancellation)
+            .await
+            .map_err(heyfood_bin::OneShotError::from)?;
+    let NativeHouseholdCompositionV1::Ready(prepared) = prepared else {
+        return Err(heyfood_bin::OneShotError::new(
+            "household_agent_unavailable",
+            "Native household state must be initialized in the attached heyfood TUI before agent reads are available.",
+        ));
+    };
+    let port = prepared.household_agent_phase0_port().ok_or_else(|| {
+        heyfood_bin::OneShotError::new(
+            "household_agent_unavailable",
+            "The active household source does not expose the native agent read contract.",
+        )
+    })?;
+    Ok(Arc::new(AccountBoundHouseholdReads::new(account, port)))
+}
+
+#[cfg(feature = "native-credentials")]
+async fn household_read(command: HouseholdCommand, machine: bool, no_input: bool) -> ExitCode {
+    if !machine || !no_input {
+        return failure(
+            "household_agent_machine_contract",
+            "Household agent reads require both --json and --no-input.",
+            Some(
+                "Use `heyfood --json --no-input household show --expected-disclosure-generation GENERATION`.",
+            ),
+            machine,
+            false,
+        );
+    }
+    let paths = match NativePaths::discover() {
+        Ok(paths) => paths,
+        Err(error) => return household_read_error(heyfood_bin::OneShotError::from(error)),
+    };
+    let service = match prepare_local_household_reads(&paths, CancellationToken::new()).await {
+        Ok(service) => service,
+        Err(error) => {
+            return failure(
+                error.code,
+                &terminal_safe_text(&error.message),
+                None,
+                true,
+                error.outcome_uncertain,
+            );
+        }
+    };
+    let cancellation = CancellationToken::new();
+    let result = match command {
+        HouseholdCommand::Show(arguments) => {
+            let subject = match arguments.subject.as_deref().map(parse_household_subject) {
+                Some(Ok(subject)) => Some(subject),
+                Some(Err(error)) => return household_read_error(error),
+                None => None,
+            };
+            service
+                .context(
+                    AgentHouseholdContextInputV1 {
+                        schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
+                        kind: AgentHouseholdContextInputKindV1::GetHouseholdContext,
+                        subject,
+                        requested_projection: map_household_projection(arguments.projection),
+                        expected_disclosure_generation: GenerationId::new(
+                            arguments.expected_disclosure_generation,
+                        ),
+                        cursor: arguments.cursor,
+                        limit: u16::from(arguments.limit),
+                    },
+                    cancellation,
+                )
+                .await
+        }
+        HouseholdCommand::Member(arguments) => {
+            let member_ref = match MemberId::parse_preserved(arguments.member_ref) {
+                Ok(member_ref) => member_ref,
+                Err(_) => {
+                    return household_read_error(heyfood_bin::OneShotError::new(
+                        "household_agent_member_ref",
+                        "The household member reference is invalid.",
+                    ));
+                }
+            };
+            service
+                .member(
+                    AgentHouseholdMemberInputV1 {
+                        schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
+                        kind: AgentHouseholdMemberInputKindV1::GetHouseholdMember,
+                        member_ref,
+                        requested_projection: map_household_projection(arguments.projection),
+                        expected_disclosure_generation: GenerationId::new(
+                            arguments.expected_disclosure_generation,
+                        ),
+                    },
+                    cancellation,
+                )
+                .await
+        }
+        HouseholdCommand::List(_)
+        | HouseholdCommand::Current(_)
+        | HouseholdCommand::Use(_)
+        | HouseholdCommand::Label(_) => {
+            return failure(
+                "household_legacy_command",
+                "This legacy household command is unavailable.",
+                Some(
+                    "Use `heyfood --json --no-input household show --expected-disclosure-generation GENERATION`.",
+                ),
+                true,
+                false,
+            );
+        }
+    };
+    match result {
+        Ok(snapshot) => match serde_json::to_string(&snapshot) {
+            Ok(document) => {
+                println!("{document}");
+                ExitCode::SUCCESS
+            }
+            Err(_) => household_read_error(heyfood_bin::OneShotError::new(
+                "household_agent_result",
+                "The typed household result could not be serialized.",
+            )),
+        },
+        Err(error) => household_read_error(if error.outcome_uncertain {
+            uncertain_one_shot(error.code, error.message)
+        } else {
+            heyfood_bin::OneShotError::new(error.code, error.message)
+        }),
+    }
+}
+
+#[cfg(feature = "native-credentials")]
+fn parse_household_subject(
+    value: &str,
+) -> Result<AgentHouseholdSubjectV1, heyfood_bin::OneShotError> {
+    match value {
+        "self" => Ok(AgentHouseholdSubjectV1::Self_),
+        "everyone" => Ok(AgentHouseholdSubjectV1::Everyone),
+        _ => value
+            .strip_prefix("member:")
+            .ok_or_else(|| {
+                heyfood_bin::OneShotError::new(
+                    "household_agent_subject",
+                    "The household subject is invalid.",
+                )
+            })
+            .and_then(|member_ref| {
+                MemberId::parse_preserved(member_ref.to_owned())
+                    .map(AgentHouseholdSubjectV1::Member)
+                    .map_err(|_| {
+                        heyfood_bin::OneShotError::new(
+                            "household_agent_member_ref",
+                            "The household member reference is invalid.",
+                        )
+                    })
+            }),
+    }
+}
+
+#[cfg(feature = "native-credentials")]
+const fn map_household_projection(
+    value: HouseholdProjectionArgument,
+) -> AgentHouseholdProjectionV1 {
+    match value {
+        HouseholdProjectionArgument::ContentFree => AgentHouseholdProjectionV1::ContentFree,
+        HouseholdProjectionArgument::Roster => AgentHouseholdProjectionV1::Roster,
+        HouseholdProjectionArgument::Profile => AgentHouseholdProjectionV1::Profile,
+    }
+}
+
+#[cfg(feature = "native-credentials")]
+fn household_read_error(error: heyfood_bin::OneShotError) -> ExitCode {
+    failure(
+        error.code,
+        &terminal_safe_text(&error.message),
+        None,
+        true,
+        error.outcome_uncertain,
+    )
 }
 
 #[cfg(feature = "native-credentials")]

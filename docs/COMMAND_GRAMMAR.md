@@ -8,6 +8,7 @@ legacy Python behavior or hidden compatibility topology.
 ```text
 agent         inspect the exact installed agent integration contract offline
 mcp           serve the bounded local read/discovery MCP protocol
+household     read disclosure-gated local household context for agents
 register      create and connect a hello.food account
 login         connect an existing account or replace this machine's authorization
 logout        revoke this device's hosted authority and clear local credentials
@@ -24,13 +25,18 @@ completion    print shell completion syntax
 
 ```bash
 heyfood agent describe
+heyfood agent describe --schema-version 1
 heyfood agent describe --schema-version 2
+heyfood agent describe --schema-version 3
 heyfood agent guide --format markdown
 heyfood agent guide --format markdown --safety
 heyfood agent schema --list
 heyfood agent schema manifest
 heyfood agent doctor
+heyfood agent doctor --schema-version 1
 heyfood agent doctor --schema-version 2
+heyfood agent doctor --schema-version 3
+heyfood agent compatibility --json --no-input
 heyfood agent setup --target codex|claude|all --scope user|project \
   [--project-root /absolute/path] [--dry-run|--apply] \
   [--plan-sha256 REVIEWED_SHA256] [--replace]
@@ -43,9 +49,10 @@ These commands do not read credentials, contact hello.food, mutate product
 state, or start the TUI. Schema lookup accepts only a public name or exact
 identifier from `--list`; unknown names return a typed runtime error.
 
-Discovery schema v1 is the default retained for installed-skill compatibility.
-Schema v2 must be requested explicitly and adds native-state compatibility
-metadata used by the v0.8.0 installer and release verifier.
+Discovery schema v3 is the default. Explicit schema v1 and v2 remain frozen
+compatibility views and omit the v3 household agent surface. The offline
+compatibility command fails closed when it cannot verify a receipt-bound skill
+identity and returns the binary-owned remediation command.
 
 `agent setup` and `agent uninstall` are separate opt-in user configuration
 operations. They default to dry-run, require `--apply` to change state,
@@ -61,11 +68,31 @@ heyfood mcp serve
 ```
 
 This long-lived stdio JSON-RPC process is the sole exception to the one-value
-CLI stdout contract. It exposes exactly six typed read/discovery tools and no
+CLI stdout contract. It exposes exactly eight typed read/discovery tools and no
 mutation, generic command, shell, file, raw API, credential, or TUI-control
 surface. It uses only account-bound native credentials and the compiled
 production service origin. Human/one-shot modifiers and every inherited
 `HEYFOOD_*` variable fail before credential access or protocol startup.
+
+## Agent household reads
+
+```bash
+heyfood --json --no-input household show \
+  --expected-disclosure-generation GENERATION \
+  [--subject self|everyone|member:MEMBER_REF] \
+  [--projection content_free|roster] [--cursor CURSOR] [--limit 1..100]
+
+heyfood --json --no-input household member \
+  --member-ref MEMBER_REF \
+  --expected-disclosure-generation GENERATION \
+  [--projection content_free|roster|profile]
+```
+
+Both commands use the same local, account-bound read controller as their MCP
+equivalents. They perform no hosted dispatch or mutation. Context reads do not
+support profile projection; an agent may request a minimized profile only for
+an exact additional-member reference covered by a current disclosure grant.
+Display-name resolution and self-profile reads are not supported.
 
 ## Text input
 
@@ -263,26 +290,26 @@ voice qualification, full parity, hosted household sync/learned graph/health,
 cross-device household state, and the complete twelve-stage showcase are
 post-`v0.8.0` conformance work, not release gates.
 
-### Frozen future household grammar (inactive)
+### Frozen future household mutation grammar (inactive)
 
 Phase 0 freezes `/household edit <member>`, `/household archive <member>`,
 `/household restore <member>`, `/household agent-access <member>`, and
 `/household changes` for a future attached-human implementation. The complete
 registry, keys, human labels, and state copy are in
 `fixtures/agent/household-phase0/tui-grammar.json`. These entries are not
-active v0.7.0 commands and must not appear in its help or completion registry.
+active v0.8.0 commands and must not appear in its help or completion registry.
 
-The future agent machine grammar is separately limited to `household show`,
-`household member`, and the six typed household MCP tools frozen in the Phase
-0 command/tool matrix. It includes no one-shot mutation, confirm, commit,
-erasure, generic shell, or TUI-control route.
+The active agent machine grammar is limited to the two read commands above and
+their two MCP equivalents. The four preparation/status/cancel/reconcile tools
+frozen in the Phase 0 matrix remain inactive. There is no one-shot mutation,
+confirm, commit, erasure, generic shell, or TUI-control route.
 
 ## Unavailable compatibility topology
 
 Health integrations, profile editing, restaurant search, recommendation, menu,
-recipe, top-level one-shot household management, voice device configuration,
+recipe, top-level one-shot household mutation, voice device configuration,
 diagnostics, and account management are not active Rust process commands. The
-local household lifecycle is available only in the attached TUI described
+local household mutation lifecycle is available only in the attached TUI described
 above. Some names remain hidden for migration topology only. Health returns
 `capability_deferred`; unfinished compatibility topology returns
 `command_not_available`.

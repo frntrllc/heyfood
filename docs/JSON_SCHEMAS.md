@@ -104,26 +104,33 @@ fixture is `fixtures/agent/manifest-v1-golden.json`. Self-description does not
 by itself claim MCP support; Agent Skill setup is a separately versioned,
 opt-in, receipt-bound surface.
 
-The v0.8.0 native-state boundary does not modify that closed v1 default. Bare
-`heyfood agent`, `heyfood agent describe`, `heyfood agent doctor`, and the MCP
-manifest tool continue to return v1. Their schemas are named `manifest` and
-`doctor` in installed discovery, preserving already-installed v0.6.2 Agent
-Skills.
+The v0.8.0 agent boundary makes manifest and doctor schema v3 the default.
+Explicit v1 and v2 remain frozen compatibility views, preserving their exact
+fields and omitting the v3 household agent surface.
 
 The explicit `--schema-version 2` discovery option uses
 `schemas/v2/heyfood-agent-manifest.schema.json` and
 `schemas/v2/heyfood-agent-doctor.schema.json`, named `manifest-v2` and
 `doctor-v2`. The v2 manifest adds the exact top-level
 `native_state_compatibility` declaration for the managed installer and release
-verifier; a consumer receives it only by requesting v2.
+verifier; a consumer receives that frozen view only by requesting v2.
 
-## Agent-aware household Phase 0 schemas
+Schema v3 adds the compatibility bootstrap, structured eight-tool MCP
+inventory, and the two active household read commands/tools. Public discovery
+also embeds the closed compatibility, household-context input,
+household-member input, and household-read result schemas. Context profile
+reads are rejected; minimized profile disclosure requires an exact additional
+member reference.
 
-The following closed schemas are frozen for implementation review but are not
-embedded in v0.7.0 public schema discovery and do not activate a route:
+## Agent-aware household schemas
+
+The following closed schemas define the v0.8.0 read boundary and the separately
+deferred mutation boundary:
 
 - `schemas/v3/heyfood-agent-manifest.schema.json`;
 - `schemas/v1/heyfood-agent-compatibility.schema.json`;
+- `schemas/v1/agent-household-context-input.schema.json`;
+- `schemas/v1/agent-household-member-input.schema.json`;
 - `schemas/v1/agent-household-read.schema.json`;
 - `schemas/v1/agent-household-action.schema.json`;
 - `schemas/v1/agent-household-proposal-presentation.schema.json`;
@@ -135,7 +142,8 @@ embedded in v0.7.0 public schema discovery and do not activate a route:
 The v3 schema is a structural successor, not an additive v2 edit. Explicit
 v1/v2 views remain frozen and omit household agent claims. Proposal and
 outcome schemas contain lookup/status evidence only and forbid commit
-authority. The local approval protocol is distinct from the existing hosted
+authority; they remain deferred and are not active MCP tool contracts. The
+local approval protocol is distinct from the existing hosted
 `agent-approval-protocol` schema. Fixtures and binding digests are under
 `fixtures/agent/household-phase0/`; validation runs in the
 `heyfood-agent-contract` test suite.
