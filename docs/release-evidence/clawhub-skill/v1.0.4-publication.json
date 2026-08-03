@@ -9,6 +9,14 @@
   "payload_fingerprint_sha256": "2ed4b3a3c113e2bfe958da82478b244a38c35de92161fda245ecf2c776641caa",
   "version_id": "k97c9822w108bngg62gtzvx5k58bsmn8",
   "latest_at_publication": "1.0.3",
-  "latest_observed": false,
-  "cold_resolution_count": 0
+  "latest_observed": true,
+  "cold_resolution_count": 2,
+  "resolved_registry_fingerprint": "cf334ceae1dde13d4ee15f0bbf5f8c4d5e57799e8eab156a933dd66ddbc289c0",
+  "resolved_skill_sha256": "f0dac02792e4ea23c4169b531cbb4a74a533accaeb2e00459dbc6e25ff241e27",
+  "resolved_reference_sha256": {
+    "authentication-and-capabilities.md": "0b5dd2441f01b91f6b3f685045bbaf99ab464f6c22469faeb84c827bc9215409",
+    "grocery.md": "403eeedc138e2be2256ec9ca2ad246578665774d7bfcc0478fc3282efb949759",
+    "safety-and-recovery.md": "95a7a3a848b4dce45f0755b37530c605b9b4c7d77c7e6ace60d5f957bc633f90",
+    "workflow-selection.md": "84bfe6dc017eadaa384062d34e298163faeab2f984942e8083b8d74d2e573c8f"
+  }
 }
