@@ -24,6 +24,28 @@ use heyfood_core::{decode_lower_hex_32, domain_hash_v1, encode_lower_hex};
 use heyfood_windows_file::AtomicOwnerOnlyFile;
 
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+thread_local! {
+    static ATOMIC_FILE_TEST_FAILPOINTS: std::cell::RefCell<std::collections::BTreeSet<&'static str>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+}
+
+#[cfg(test)]
+fn set_atomic_file_test_failpoints(names: &[&'static str]) {
+    ATOMIC_FILE_TEST_FAILPOINTS.with(|failpoints| {
+        failpoints.borrow_mut().extend(names.iter().copied());
+    });
+}
+
+#[cfg(test)]
+fn hit_atomic_file_test_failpoint(name: &'static str) -> bool {
+    ATOMIC_FILE_TEST_FAILPOINTS.with(|failpoints| failpoints.borrow_mut().remove(name))
+}
+
+#[cfg(not(test))]
+const fn hit_atomic_file_test_failpoint(_name: &'static str) -> bool {
+    false
+}
 #[cfg(windows)]
 static WINDOWS_CURRENT_USER_SID: OnceLock<String> = OnceLock::new();
 #[cfg(all(windows, feature = "native-credentials"))]
@@ -231,6 +253,11 @@ impl AtomicFile {
             staging.sync_all()?;
             fs::rename(&staging_path, path)?;
             replaced = true;
+            if hit_atomic_file_test_failpoint("after_rename_before_directory_sync") {
+                return Err(std::io::Error::other(
+                    "injected failure after rename before directory sync",
+                ));
+            }
             #[cfg(windows)]
             remember_windows_owner_acl(path, false)?;
             sync_directory(parent)?;
@@ -5385,6 +5412,25 @@ mod credential_write_verification_tests {
     use std::collections::VecDeque;
 
     use super::*;
+
+    #[test]
+    #[cfg(not(windows))]
+    fn post_rename_failure_is_visible_but_remains_outcome_uncertain() {
+        let root = std::env::temp_dir().join(format!(
+            "heyfood-atomic-post-rename-{}-{}",
+            std::process::id(),
+            STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let _cleanup = Cleanup(root.clone());
+        let path = root.join("disclosure-ledger");
+        AtomicFile::replace(&path, b"prior").unwrap();
+        set_atomic_file_test_failpoints(&["after_rename_before_directory_sync"]);
+        let error = AtomicFile::replace(&path, b"visible-but-unproven")
+            .expect_err("post-rename sync failure must remain uncertain");
+        assert!(error.outcome_uncertain);
+        assert_eq!(fs::read(path).unwrap(), b"visible-but-unproven");
+    }
 
     #[cfg(not(windows))]
     struct Cleanup(PathBuf);

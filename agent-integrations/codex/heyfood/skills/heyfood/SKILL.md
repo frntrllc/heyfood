@@ -53,12 +53,13 @@ Menu Watch, explain that those require the local hey.food client.
    supports manifest schemas 1 through 3. Never duck-type familiar fields from
    an unknown schema.
 3. If the schema is outside that range, unreadable, or missing structural fields
-   required by that schema, run
-   `heyfood agent compatibility --json --no-input`. Report its compatibility
-   status, reason, and exact `remediation.program` plus `remediation.arguments`
-   to the user. Do not apply the remediation automatically or maintain a second
-   copy of installation syntax. If the compatibility command is unavailable,
-   stop and state that the installed integration cannot be used safely.
+   required by that schema, fail closed. For receipt-bound Codex or Claude Code
+   installations, run `heyfood agent compatibility --json --no-input` and
+   report its status, reason, and exact `remediation.program` plus
+   `remediation.arguments`. That command does not diagnose a ClawHub-managed
+   OpenClaw installation; in OpenClaw, stop and ask the user to update the
+   `heyfood` skill through their host. Never apply remediation automatically or
+   maintain a second copy of installation syntax.
 4. For a supported schema, read `automation_surfaces`, `capabilities`, command
    audiences, scopes, retry classes, and—when present—the structured MCP
    inventory. A capability is usable only when its status and the exact current

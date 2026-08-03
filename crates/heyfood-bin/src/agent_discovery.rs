@@ -97,7 +97,7 @@ fn compatibility_document_from_plan(plan: &SetupPlan) -> Value {
         .map(|host| {
             let (host_name, target) = match host.host {
                 Host::Codex => ("codex", "codex"),
-                Host::Claude => ("claude-code", "claude-code"),
+                Host::Claude => ("claude-code", "claude"),
             };
             let verified = host.compatibility == "compatible"
                 && host.action == "none"
@@ -322,6 +322,7 @@ fn failure(
 mod tests {
     use std::path::PathBuf;
 
+    use clap::Parser as _;
     use heyfood_agent_setup::{
         BinaryIdentity, HostSetupPlan, McpRegistrationPlan, SetupMode, SetupOperation, SetupPlan,
         SetupScope, SetupTarget, SkillPackageIdentity,
@@ -388,7 +389,7 @@ mod tests {
 
     #[test]
     fn compatibility_uses_verified_receipt_bound_setup_state() {
-        let plan = SetupPlan {
+        let mut plan = SetupPlan {
             schema_version: 1,
             operation: SetupOperation::Install,
             mode: SetupMode::DryRun,
@@ -445,5 +446,22 @@ mod tests {
             3
         );
         assert!(heyfood_agent_contract::validate_agent_compatibility_semantics(&document).is_ok());
+
+        plan.hosts[0].host = heyfood_agent_setup::Host::Claude;
+        plan.hosts[0].host_executable = Some(PathBuf::from("/usr/bin/claude"));
+        plan.hosts[0].host_version = Some("2.1.128 (Claude Code)".to_owned());
+        plan.hosts[0].compatible_version = "2.1.128 (Claude Code)";
+        let document = compatibility_document_from_plan(&plan);
+        let remediation = document["installations"][0]["remediation"]["arguments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(remediation[3], "claude");
+        let mut argv = vec!["heyfood"];
+        argv.extend(remediation);
+        heyfood_cli::CommandLine::try_parse_from(argv)
+            .expect("every emitted Claude remediation must parse as a real dry-run command");
     }
 }

@@ -71,7 +71,7 @@
         "remediation"
       ],
       "properties": {
-        "host": { "enum": ["codex", "claude-code", "openclaw"] },
+        "host": { "enum": ["codex", "claude-code"] },
         "host_version": { "type": ["string", "null"], "maxLength": 128 },
         "receipt_state": { "enum": ["verified", "missing", "invalid"] },
         "skill_package_version": { "type": ["string", "null"], "maxLength": 64 },
@@ -113,10 +113,6 @@
         {
           "if": { "properties": { "host": { "const": "claude-code" } }, "required": ["host"] },
           "then": { "properties": { "remediation": { "$ref": "#/$defs/claude_remediation" } } }
-        },
-        {
-          "if": { "properties": { "host": { "const": "openclaw" } }, "required": ["host"] },
-          "then": { "properties": { "remediation": { "$ref": "#/$defs/openclaw_remediation" } } }
         }
       ]
     },
@@ -140,8 +136,7 @@
     "remediation": {
       "oneOf": [
         { "$ref": "#/$defs/codex_remediation" },
-        { "$ref": "#/$defs/claude_remediation" },
-        { "$ref": "#/$defs/openclaw_remediation" }
+        { "$ref": "#/$defs/claude_remediation" }
       ]
     },
     "codex_remediation": {
@@ -151,10 +146,6 @@
     "claude_remediation": {
       "$ref": "#/$defs/remediation_base",
       "properties": { "arguments": { "$ref": "#/$defs/claude_arguments" } }
-    },
-    "openclaw_remediation": {
-      "$ref": "#/$defs/remediation_base",
-      "properties": { "arguments": { "$ref": "#/$defs/openclaw_arguments" } }
     },
     "remediation_base": {
       "type": "object",
@@ -180,18 +171,7 @@
       "type": "array",
       "prefixItems": [
         { "const": "agent" }, { "const": "setup" }, { "const": "--target" },
-        { "const": "claude-code" }, { "const": "--scope" }, { "const": "user" },
-        { "const": "--replace" }, { "const": "--dry-run" }
-      ],
-      "items": false,
-      "minItems": 8,
-      "maxItems": 8
-    },
-    "openclaw_arguments": {
-      "type": "array",
-      "prefixItems": [
-        { "const": "agent" }, { "const": "setup" }, { "const": "--target" },
-        { "const": "openclaw" }, { "const": "--scope" }, { "const": "user" },
+        { "const": "claude" }, { "const": "--scope" }, { "const": "user" },
         { "const": "--replace" }, { "const": "--dry-run" }
       ],
       "items": false,

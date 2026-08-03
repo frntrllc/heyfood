@@ -693,17 +693,6 @@ fn disclosure_subjects_for_read(
                 everyone_subjects
             }
         };
-    if let Some(active_scope) = snapshot.active_scope.as_ref() {
-        match active_scope {
-            HouseholdScope::Subject(HouseholdSubjectId::Self_) => {
-                subjects.push(AgentDisclosureGrantSubjectV1::Self_);
-            }
-            HouseholdScope::Subject(HouseholdSubjectId::Member(member)) => {
-                subjects.push(AgentDisclosureGrantSubjectV1::Member(member.clone()));
-            }
-            HouseholdScope::Everyone => {}
-        }
-    }
     subjects.sort();
     subjects.dedup();
     Ok(subjects)

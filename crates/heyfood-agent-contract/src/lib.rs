@@ -2329,7 +2329,7 @@ mod household_phase0_contract_tests {
             ),
             (
                 COMPATIBILITY_SCHEMA,
-                "ae33a9f4451667dc3c272edfaf0482b43e7ff1cc4521edb8a9b3aadf9d5f2be0",
+                "bebb3373c175ae42ba61b2d7b31e155017fa089c2acb28eb574fb11bbe99f41b",
             ),
             (
                 NATIVE_STATE_SCHEMA,

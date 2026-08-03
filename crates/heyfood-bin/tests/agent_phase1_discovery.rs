@@ -112,8 +112,6 @@ fn compatibility_bootstrap_fails_closed_without_receipts_and_stays_offline() {
         .env("HEYFOOD_AUTH_URL", format!("http://{address}/"))
         .output()
         .expect("run isolated compatibility command");
-    std::fs::remove_dir_all(&isolated_home).unwrap();
-
     assert!(output.status.success(), "{:?}", output.stderr);
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["schema_version"], 1);
@@ -126,6 +124,25 @@ fn compatibility_bootstrap_fails_closed_without_receipts_and_stays_offline() {
         result["installations"][0]["status"],
         "skill_identity_unknown"
     );
+    let remediation = result["installations"][0]["remediation"]["arguments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect::<Vec<_>>();
+    let remediation_output = Command::new(env!("CARGO_BIN_EXE_heyfood"))
+        .args(remediation)
+        .env("HOME", &isolated_home)
+        .env("CODEX_HOME", isolated_home.join(".codex"))
+        .env("PATH", "")
+        .output()
+        .expect("run emitted compatibility remediation");
+    assert!(
+        remediation_output.status.success(),
+        "emitted remediation must be an executable dry-run: {:?}",
+        remediation_output.stderr
+    );
+    std::fs::remove_dir_all(&isolated_home).unwrap();
     assert_no_network(&service);
 }
 

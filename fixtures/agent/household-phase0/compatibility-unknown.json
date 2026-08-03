@@ -5,7 +5,7 @@
   "compatible": false,
   "installations": [
     {
-      "host": "openclaw",
+      "host": "claude-code",
       "host_version": null,
       "receipt_state": "missing",
       "skill_package_version": null,
@@ -16,7 +16,7 @@
       "reason": "receipt_missing",
       "remediation": {
         "program": "heyfood",
-        "arguments": ["agent", "setup", "--target", "openclaw", "--scope", "user", "--replace", "--dry-run"]
+        "arguments": ["agent", "setup", "--target", "claude", "--scope", "user", "--replace", "--dry-run"]
       }
     }
   ],

@@ -22,7 +22,7 @@
         "input_schema": null,
         "input_schema_sha256": null,
         "result_schema": "schemas/v1/heyfood-agent-compatibility.schema.json",
-        "result_schema_sha256": "ae33a9f4451667dc3c272edfaf0482b43e7ff1cc4521edb8a9b3aadf9d5f2be0",
+        "result_schema_sha256": "bebb3373c175ae42ba61b2d7b31e155017fa089c2acb28eb574fb11bbe99f41b",
         "network": false,
         "product_state_mutation": false,
         "retry": "safe_read"

@@ -348,7 +348,7 @@ impl HouseholdAgentPhase0Port for FixtureHouseholdAgentPort {
                     projection: AgentHouseholdProjectionV1::Profile,
                     resolved_subject: Some(resolved_subject),
                     resolved_from_active_scope: request.subject.is_none(),
-                    active_scope: Some(active_scope),
+                    active_scope: request.subject.is_none().then_some(active_scope),
                     household_revision: self.current_revision(),
                     disclosure_generation: self.current_generation(),
                     eligible_member_count: if self.invalid_read_count_wire.load(Ordering::SeqCst) {
@@ -918,8 +918,9 @@ async fn application_rejects_authorized_a_with_returned_b_for_reads_and_prepare(
             CancellationToken::new(),
         )
         .await
-        .expect("ungranted active-scope identity downgrades the complete result");
-    assert_eq!(result.projection, AgentHouseholdProjectionV1::ContentFree);
+        .expect("explicit member authority is independent of the unrelated active scope");
+    assert_eq!(result.projection, AgentHouseholdProjectionV1::Profile);
+    assert_eq!(result.members.len(), 1);
     assert!(result.active_scope.is_none());
 }
 

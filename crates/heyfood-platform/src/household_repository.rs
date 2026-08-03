@@ -1683,11 +1683,7 @@ impl HouseholdAgentDisclosureControlPort for NativeHouseholdRepository {
                     cancellation.clone(),
                 )
                 .await;
-            let expected_generation = match write {
-                Ok(generation) => Some(generation),
-                Err(error) if error.outcome_uncertain => None,
-                Err(error) => return Err(error),
-            };
+            let expected_generation = Some(require_durable_disclosure_write(write)?);
             let access = self
                 .current_access(account, subject, CancellationToken::new())
                 .await
@@ -1716,11 +1712,7 @@ impl HouseholdAgentDisclosureControlPort for NativeHouseholdRepository {
                     cancellation.clone(),
                 )
                 .await;
-            let expected_generation = match write {
-                Ok(generation) => Some(generation),
-                Err(error) if error.outcome_uncertain => None,
-                Err(error) => return Err(error),
-            };
+            let expected_generation = Some(require_durable_disclosure_write(write)?);
             let access = self
                 .current_access(account, subject, CancellationToken::new())
                 .await
@@ -1898,7 +1890,7 @@ fn project_agent_household_read(
         projection: heyfood_core::AgentHouseholdProjectionV1::Profile,
         resolved_subject: Some(resolved_subject),
         resolved_from_active_scope,
-        active_scope: Some(state.active_scope.clone()),
+        active_scope: resolved_from_active_scope.then(|| state.active_scope.clone()),
         household_revision: state.revision,
         // The application controller replaces this placeholder with the
         // independently loaded encrypted ledger generation before returning.
@@ -2152,6 +2144,12 @@ fn agent_disclosure_reconciliation_error() -> PortError {
     )
 }
 
+fn require_durable_disclosure_write(
+    write: Result<GenerationId, PortError>,
+) -> Result<GenerationId, PortError> {
+    write
+}
+
 fn agent_household_read_contract_error() -> PortError {
     PortError::new(
         "household_agent_read_contract",
@@ -2370,4 +2368,22 @@ fn state_error(error: impl fmt::Display) -> PortError {
         "household_state_invalid",
         "canonical household state is invalid",
     )
+}
+
+#[cfg(test)]
+mod disclosure_write_tests {
+    use super::*;
+
+    #[test]
+    fn grant_and_revoke_never_convert_uncertain_durability_into_success() {
+        for code in ["grant_after_rename", "revoke_after_rename"] {
+            let error = require_durable_disclosure_write(Err(PortError::uncertain(
+                code,
+                "directory sync did not complete",
+            )))
+            .expect_err("visible readback cannot prove durable disclosure authority");
+            assert_eq!(error.code, code);
+            assert!(error.outcome_uncertain);
+        }
+    }
 }

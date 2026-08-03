@@ -106,7 +106,9 @@ schema-v3 document for the complete current platform and capability contract.
 Consumers must branch on the discovered capability and tool inventory, not on
 the binary version or a permanently assumed tool count. Use
 `heyfood agent compatibility --json --no-input` for an offline, binary-owned
-remediation when the installed Agent Skill is incompatible.
+diagnosis of receipt-bound Codex and Claude Code installations when the
+installed Agent Skill is incompatible. OpenClaw remains host/ClawHub-managed;
+the binary does not emit a fictitious OpenClaw setup command.
 
 This guide describes only the exact binary that embeds it. Public support
 claims require installed-artifact qualification for the named host, version,
