@@ -100,7 +100,8 @@ pub enum AgentDisclosurePurposeV1 {
 
 /// A disclosure grant is always scoped to one exact person. `Everyone` is a
 /// request-time aggregation that must prove a grant for every included person.
-#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentDisclosureGrantSubjectV1 {
     Self_,
     Member(MemberId),
@@ -404,6 +405,283 @@ impl AgentDisclosureGrantSetV1 {
             AgentHouseholdProjectionV1::Roster
         } else {
             AgentHouseholdProjectionV1::ContentFree
+        }
+    }
+}
+
+/// Encrypted-at-rest disclosure authority owned by the local household
+/// repository. This document is deliberately not `Serialize`: callers can
+/// only obtain purpose-filtered grant sets, while persistence uses the closed
+/// canonical codec below.
+#[derive(Clone, Eq, PartialEq)]
+pub struct AgentDisclosureLedgerV1 {
+    account: AccountId,
+    generation: GenerationId,
+    grants: Vec<AgentDisclosureGrantV1>,
+}
+
+impl fmt::Debug for AgentDisclosureLedgerV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AgentDisclosureLedgerV1")
+            .field("generation", &self.generation)
+            .field("grant_count", &self.grants.len())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentDisclosureLedgerWireV1 {
+    schema_version: u16,
+    account: AccountId,
+    generation: GenerationId,
+    grants: Vec<AgentDisclosureGrantWireV1>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentDisclosureGrantWireV1 {
+    subject: AgentDisclosureGrantSubjectV1,
+    subject_minor_status: MinorStatusV1,
+    data_classes: Vec<AgentDisclosureDataClassV1>,
+    purpose: AgentDisclosurePurposeV1,
+    granting_authority: AgentDisclosureGrantingAuthorityV1,
+    revision: u64,
+    state: AgentDisclosureGrantStateV1,
+    issued_at: CanonicalTimestampV1,
+    expires_at: Option<CanonicalTimestampV1>,
+}
+
+impl AgentDisclosureLedgerV1 {
+    const SCHEMA_VERSION: u16 = 1;
+    const MAX_CANONICAL_BYTES: usize = 256 * 1024;
+
+    #[must_use]
+    pub fn empty(account: AccountId) -> Self {
+        Self {
+            account,
+            generation: GenerationId::new(1),
+            grants: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn generation(&self) -> GenerationId {
+        self.generation
+    }
+
+    #[must_use]
+    pub fn account_matches(&self, account: &AccountId) -> bool {
+        &self.account == account
+    }
+
+    pub fn grant(
+        &mut self,
+        subject: AgentDisclosureGrantSubjectV1,
+        minor_status: MinorStatusV1,
+        include_minimized_profile: bool,
+        issued_at: CanonicalTimestampV1,
+    ) -> Result<(), AgentHouseholdContractErrorV1> {
+        if include_minimized_profile && minor_status != MinorStatusV1::Adult {
+            return Err(AgentHouseholdContractErrorV1::InvalidDisclosureGrant);
+        }
+        self.advance_generation()?;
+        let classes = if include_minimized_profile {
+            vec![
+                AgentDisclosureDataClassV1::Roster,
+                AgentDisclosureDataClassV1::MinimizedDeclaredProfile,
+            ]
+        } else {
+            vec![AgentDisclosureDataClassV1::Roster]
+        };
+        let authority = if minor_status == MinorStatusV1::Adult {
+            AgentDisclosureGrantingAuthorityV1::AccountOwnerAdultAuthorization
+        } else {
+            AgentDisclosureGrantingAuthorityV1::AuthorizedGuardianRosterOnly
+        };
+        for purpose in [
+            AgentDisclosurePurposeV1::HouseholdAgentRead,
+            AgentDisclosurePurposeV1::HouseholdAgentProposalStatus,
+        ] {
+            let revision = self
+                .grants
+                .iter()
+                .find(|grant| grant.subject == subject && grant.purpose == purpose)
+                .map_or(1, |grant| grant.revision.saturating_add(1));
+            let replacement = AgentDisclosureGrantV1::new(
+                self.account.clone(),
+                subject.clone(),
+                minor_status,
+                classes.clone(),
+                purpose,
+                authority,
+                revision,
+                self.generation,
+                AgentDisclosureGrantStateV1::Active,
+                issued_at.clone(),
+                None,
+            )?;
+            self.replace_grant(replacement);
+        }
+        self.sort_and_validate()
+    }
+
+    pub fn revoke(
+        &mut self,
+        subject: &AgentDisclosureGrantSubjectV1,
+        revoked_at: CanonicalTimestampV1,
+    ) -> Result<bool, AgentHouseholdContractErrorV1> {
+        if !self.grants.iter().any(|grant| &grant.subject == subject) {
+            return Ok(false);
+        }
+        self.advance_generation()?;
+        for grant in self
+            .grants
+            .iter_mut()
+            .filter(|grant| &grant.subject == subject)
+        {
+            grant.generation = self.generation;
+            grant.revision = grant.revision.saturating_add(1);
+            grant.state = AgentDisclosureGrantStateV1::Revoked;
+            grant.issued_at = revoked_at.clone();
+            grant.expires_at = None;
+        }
+        self.sort_and_validate()?;
+        Ok(true)
+    }
+
+    pub fn grant_set(
+        &self,
+        purpose: AgentDisclosurePurposeV1,
+        observed_at: CanonicalTimestampV1,
+    ) -> Result<AgentDisclosureGrantSetV1, AgentHouseholdContractErrorV1> {
+        AgentDisclosureGrantSetV1::new(
+            self.account.clone(),
+            self.generation,
+            purpose,
+            observed_at,
+            self.grants
+                .iter()
+                .filter(|grant| grant.purpose == purpose)
+                .cloned()
+                .collect(),
+        )
+    }
+
+    pub fn encode_canonical(&self) -> Result<Zeroizing<Vec<u8>>, AgentHouseholdContractErrorV1> {
+        self.validate()?;
+        let wire = AgentDisclosureLedgerWireV1 {
+            schema_version: Self::SCHEMA_VERSION,
+            account: self.account.clone(),
+            generation: self.generation,
+            grants: self
+                .grants
+                .iter()
+                .map(|grant| AgentDisclosureGrantWireV1 {
+                    subject: grant.subject.clone(),
+                    subject_minor_status: grant.subject_minor_status,
+                    data_classes: grant.data_classes.clone(),
+                    purpose: grant.purpose,
+                    granting_authority: grant.granting_authority,
+                    revision: grant.revision,
+                    state: grant.state,
+                    issued_at: grant.issued_at.clone(),
+                    expires_at: grant.expires_at.clone(),
+                })
+                .collect(),
+        };
+        let bytes = serde_json::to_vec(&wire)
+            .map_err(|_| AgentHouseholdContractErrorV1::InvalidDisclosureGrantSet)?;
+        if bytes.len() > Self::MAX_CANONICAL_BYTES {
+            return Err(AgentHouseholdContractErrorV1::InvalidDisclosureGrantSet);
+        }
+        Ok(Zeroizing::new(bytes))
+    }
+
+    pub fn decode_canonical(
+        bytes: &[u8],
+        expected_account: &AccountId,
+    ) -> Result<Self, AgentHouseholdContractErrorV1> {
+        if bytes.len() > Self::MAX_CANONICAL_BYTES {
+            return Err(AgentHouseholdContractErrorV1::InvalidDisclosureGrantSet);
+        }
+        let wire: AgentDisclosureLedgerWireV1 = serde_json::from_slice(bytes)
+            .map_err(|_| AgentHouseholdContractErrorV1::InvalidDisclosureGrantSet)?;
+        if wire.schema_version != Self::SCHEMA_VERSION || &wire.account != expected_account {
+            return Err(AgentHouseholdContractErrorV1::InvalidDisclosureGrantSet);
+        }
+        let grants = wire
+            .grants
+            .into_iter()
+            .map(|grant| {
+                AgentDisclosureGrantV1::new(
+                    wire.account.clone(),
+                    grant.subject,
+                    grant.subject_minor_status,
+                    grant.data_classes,
+                    grant.purpose,
+                    grant.granting_authority,
+                    grant.revision,
+                    wire.generation,
+                    grant.state,
+                    grant.issued_at,
+                    grant.expires_at,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let ledger = Self {
+            account: wire.account,
+            generation: wire.generation,
+            grants,
+        };
+        ledger.validate()?;
+        Ok(ledger)
+    }
+
+    fn advance_generation(&mut self) -> Result<(), AgentHouseholdContractErrorV1> {
+        let next = self
+            .generation
+            .get()
+            .checked_add(1)
+            .ok_or(AgentHouseholdContractErrorV1::InvalidDisclosureGrantSet)?;
+        self.generation = GenerationId::new(next);
+        for grant in &mut self.grants {
+            grant.generation = self.generation;
+        }
+        Ok(())
+    }
+
+    fn replace_grant(&mut self, replacement: AgentDisclosureGrantV1) {
+        self.grants.retain(|grant| {
+            grant.subject != replacement.subject || grant.purpose != replacement.purpose
+        });
+        self.grants.push(replacement);
+    }
+
+    fn sort_and_validate(&mut self) -> Result<(), AgentHouseholdContractErrorV1> {
+        self.grants.sort_by(|left, right| {
+            left.subject
+                .cmp(&right.subject)
+                .then((left.purpose as u8).cmp(&(right.purpose as u8)))
+        });
+        self.validate()
+    }
+
+    fn validate(&self) -> Result<(), AgentHouseholdContractErrorV1> {
+        if self.generation.get() == 0
+            || self.grants.len() > 200
+            || self.grants.windows(2).any(|pair| {
+                pair[0].subject == pair[1].subject && pair[0].purpose == pair[1].purpose
+            })
+            || self
+                .grants
+                .iter()
+                .any(|grant| grant.account != self.account || grant.generation != self.generation)
+        {
+            Err(AgentHouseholdContractErrorV1::InvalidDisclosureGrantSet)
+        } else {
+            Ok(())
         }
     }
 }
@@ -2976,6 +3254,73 @@ mod tests {
 
     fn timestamp() -> CanonicalTimestampV1 {
         CanonicalTimestampV1::parse("2026-08-02T12:00:00.000Z").expect("timestamp")
+    }
+
+    #[test]
+    fn disclosure_ledger_round_trips_and_revocation_advances_generation() {
+        let account = AccountId::parse("disclosure-ledger-account").expect("account");
+        let member = MemberId::parse_preserved("member-disclosure").expect("member");
+        let subject = AgentDisclosureGrantSubjectV1::Member(member);
+        let mut ledger = AgentDisclosureLedgerV1::empty(account.clone());
+        ledger
+            .grant(subject.clone(), MinorStatusV1::Adult, true, timestamp())
+            .expect("adult profile grant");
+        assert_eq!(ledger.generation(), GenerationId::new(2));
+        let encoded = ledger.encode_canonical().expect("canonical ledger");
+        let decoded = AgentDisclosureLedgerV1::decode_canonical(&encoded, &account)
+            .expect("decode canonical ledger");
+        let read_grants = decoded
+            .grant_set(AgentDisclosurePurposeV1::HouseholdAgentRead, timestamp())
+            .expect("read grants");
+        assert_eq!(
+            read_grants.maximum_projection_for(std::slice::from_ref(&subject)),
+            AgentHouseholdProjectionV1::Profile
+        );
+
+        let mut revoked = decoded;
+        assert!(
+            revoked
+                .revoke(
+                    &subject,
+                    CanonicalTimestampV1::parse("2026-08-02T12:01:00.000Z")
+                        .expect("revocation timestamp"),
+                )
+                .expect("revoke")
+        );
+        assert_eq!(revoked.generation(), GenerationId::new(3));
+        let revoked_grants = revoked
+            .grant_set(AgentDisclosurePurposeV1::HouseholdAgentRead, timestamp())
+            .expect("revoked grants");
+        assert_eq!(
+            revoked_grants.maximum_projection_for(&[subject]),
+            AgentHouseholdProjectionV1::ContentFree
+        );
+        let foreign = AccountId::parse("foreign-disclosure-account").expect("foreign account");
+        assert!(AgentDisclosureLedgerV1::decode_canonical(&encoded, &foreign).is_err());
+    }
+
+    #[test]
+    fn disclosure_ledger_denies_profile_grants_for_minors() {
+        let account = AccountId::parse("minor-disclosure-ledger-account").expect("account");
+        let mut ledger = AgentDisclosureLedgerV1::empty(account);
+        let subject = AgentDisclosureGrantSubjectV1::Member(
+            MemberId::parse_preserved("member-minor").expect("member"),
+        );
+        assert_eq!(
+            ledger.grant(subject.clone(), MinorStatusV1::Minor, true, timestamp()),
+            Err(AgentHouseholdContractErrorV1::InvalidDisclosureGrant)
+        );
+        assert_eq!(ledger.generation(), GenerationId::new(1));
+        ledger
+            .grant(subject.clone(), MinorStatusV1::Minor, false, timestamp())
+            .expect("guardian roster grant");
+        let grants = ledger
+            .grant_set(AgentDisclosurePurposeV1::HouseholdAgentRead, timestamp())
+            .expect("minor grants");
+        assert_eq!(
+            grants.maximum_projection_for(&[subject]),
+            AgentHouseholdProjectionV1::Roster
+        );
     }
 
     fn binding(

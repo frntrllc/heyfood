@@ -478,6 +478,10 @@ async fn committed_state_classifies_enabled_and_rollback_with_live_sessions() {
             panic!("committed state must be ready");
         };
         assert_eq!(prepared.mode(), expected_mode);
+        assert!(
+            prepared.household_agent_phase0_port().is_some(),
+            "committed native composition must retain its account-bound agent read port"
+        );
         let session = prepared
             .household_session()
             .expect("live household session");

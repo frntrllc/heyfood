@@ -8,13 +8,15 @@ use std::sync::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use heyfood_application::{
-    BoxFuture, CreateMemberWithDeclaredProfileV1, HouseholdCommit, HouseholdErase,
-    HouseholdInitialize, HouseholdRepositoryPort, HouseholdRepositoryResolutionV1,
+    BoxFuture, CreateMemberWithDeclaredProfileV1, HouseholdAgentPhase0Proof, HouseholdCommit,
+    HouseholdErase, HouseholdInitialize, HouseholdRepositoryPort, HouseholdRepositoryResolutionV1,
     NativeHouseholdModeV1, NativeMemberAgeEvidenceV1, PortError, resolve_household_initialize_v1,
 };
 use heyfood_core::{
-    AccountId, AgentDisclosurePurposeV1, AgentHouseholdOperationV1, AgentHouseholdProjectionV1,
-    AgentHouseholdProposalIdV1, AppliedCommitOutcomeV1, CanonicalDigestV1, CanonicalTimestampV1,
+    AGENT_HOUSEHOLD_CONTRACT_VERSION, AccountId, AgentDisclosureGrantSubjectV1,
+    AgentDisclosurePurposeV1, AgentHouseholdOperationV1, AgentHouseholdProjectionV1,
+    AgentHouseholdProposalIdV1, AgentHouseholdReadRequestKindV1, AgentHouseholdReadRequestV1,
+    AgentHouseholdSubjectV1, AppliedCommitOutcomeV1, CanonicalDigestV1, CanonicalTimestampV1,
     CommitId, DisplayName, GenerationId, HOUSEHOLD_STATE_SCHEMA_VERSION,
     HouseholdCommitEvidenceBindingV1, HouseholdEffectV1, HouseholdOwnerV1, HouseholdProfileStateV1,
     HouseholdRevision, HouseholdScope, HouseholdStateV1, HouseholdSubjectId,
@@ -1246,6 +1248,224 @@ async fn encrypted_member_profile_and_selected_scope_survive_repository_reconstr
                         .any(|ingredient| ingredient == "encrypted restart canary")
                 })
     }));
+}
+
+#[tokio::test]
+async fn agent_disclosure_is_encrypted_persistent_revocable_and_profile_minimized() {
+    let prepared = prepare_repository("agent-disclosure").await;
+    repository(&prepared, NativeHouseholdModeV1::NativeEnabled)
+        .initialize(prepared.command.clone(), CancellationToken::new())
+        .await
+        .expect("initialize");
+    let session = repository(&prepared, NativeHouseholdModeV1::NativeEnabled)
+        .into_session(Arc::new(NativeHouseholdMutationAuthorityV1::new()));
+    let created = session
+        .create_member_with_declared_profile(
+            CreateMemberWithDeclaredProfileV1 {
+                expected_household_revision: HouseholdRevision::new(1).expect("revision"),
+                display_name: DisplayName::parse("Disclosure canary").expect("display name"),
+                relationship: RelationshipV1::Partner,
+                age_evidence: NativeMemberAgeEvidenceV1::Age18Plus,
+                declared_profile: OnboardingProfileInput {
+                    diet_style_ids: vec!["vegan".to_owned()],
+                    custom_restrictions: vec!["private restriction".to_owned()],
+                    avoid_ingredients: vec!["private ingredient".to_owned()],
+                    notes: Some("must never enter the agent projection".to_owned()),
+                    ..OnboardingProfileInput::default()
+                },
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect("create adult member");
+    drop(session);
+
+    let native_repository = Arc::new(repository(&prepared, NativeHouseholdModeV1::NativeEnabled));
+    let subject = AgentDisclosureGrantSubjectV1::Member(created.member_id.clone());
+    let generation = native_repository
+        .grant_agent_disclosure(
+            subject.clone(),
+            true,
+            timestamp(3),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("grant profile disclosure");
+    assert_eq!(generation.get(), 2);
+
+    let encrypted = std::fs::read(
+        prepared
+            .vault
+            .household_directory()
+            .join("agent-disclosure.hfa"),
+    )
+    .expect("encrypted disclosure ledger");
+    for forbidden in [
+        "Disclosure canary",
+        "private restriction",
+        "private ingredient",
+        created.member_id.as_str(),
+    ] {
+        assert!(
+            !encrypted
+                .windows(forbidden.len())
+                .any(|window| window == forbidden.as_bytes()),
+            "encrypted disclosure ledger leaked {forbidden}"
+        );
+    }
+
+    let proof = HouseholdAgentPhase0Proof::new(native_repository.clone());
+    let active_scope = proof
+        .read(
+            prepared.account.clone(),
+            AgentHouseholdReadRequestV1 {
+                schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
+                kind: AgentHouseholdReadRequestKindV1::HouseholdReadRequest,
+                subject: None,
+                requested_projection: AgentHouseholdProjectionV1::Roster,
+                expected_disclosure_generation: generation,
+                cursor: None,
+                limit: 1,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect("active scope read");
+    assert!(active_scope.resolved_from_active_scope);
+    assert_eq!(
+        active_scope.resolved_subject,
+        Some(AgentHouseholdSubjectV1::Member(created.member_id.clone()))
+    );
+    assert_eq!(active_scope.projection, AgentHouseholdProjectionV1::Roster);
+
+    let request = AgentHouseholdReadRequestV1 {
+        schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
+        kind: AgentHouseholdReadRequestKindV1::HouseholdReadRequest,
+        subject: Some(AgentHouseholdSubjectV1::Member(created.member_id.clone())),
+        requested_projection: AgentHouseholdProjectionV1::Profile,
+        expected_disclosure_generation: generation,
+        cursor: None,
+        limit: 1,
+    };
+    let read = proof
+        .read(
+            prepared.account.clone(),
+            request.clone(),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("authorized minimized profile read");
+    let projected = read.members.first().expect("one projected member");
+    let profile = projected
+        .minimized_declared_profile
+        .as_ref()
+        .expect("minimized declared profile");
+    assert_eq!(profile.diet_styles, ["vegan"]);
+    assert_eq!(profile.restrictions, ["private restriction"]);
+    assert_eq!(profile.avoid_ingredients, ["private ingredient"]);
+    let serialized = serde_json::to_string(&read).expect("serialize safe projection");
+    assert!(!serialized.contains("must never enter the agent projection"));
+
+    let reconstructed = Arc::new(repository(&prepared, NativeHouseholdModeV1::NativeEnabled));
+    HouseholdAgentPhase0Proof::new(reconstructed.clone())
+        .read(
+            prepared.account.clone(),
+            request.clone(),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("disclosure survives repository reconstruction");
+
+    let revoked_generation = reconstructed
+        .revoke_agent_disclosure(subject, timestamp(4), CancellationToken::new())
+        .await
+        .expect("revoke disclosure");
+    assert_eq!(revoked_generation.get(), 3);
+    let mut revoked_request = request;
+    revoked_request.expected_disclosure_generation = revoked_generation;
+    let revoked = HouseholdAgentPhase0Proof::new(reconstructed)
+        .read(
+            prepared.account.clone(),
+            revoked_request,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("revoked read fails closed to content-free");
+    assert_eq!(revoked.projection, AgentHouseholdProjectionV1::ContentFree);
+    assert!(revoked.resolved_subject.is_none());
+    assert!(revoked.members.is_empty());
+}
+
+#[tokio::test]
+async fn minor_disclosure_is_roster_only_and_foreign_accounts_fail_closed() {
+    let prepared = prepare_repository("agent-minor-disclosure").await;
+    repository(&prepared, NativeHouseholdModeV1::NativeEnabled)
+        .initialize(prepared.command.clone(), CancellationToken::new())
+        .await
+        .expect("initialize");
+    let session = repository(&prepared, NativeHouseholdModeV1::NativeEnabled)
+        .into_session(Arc::new(NativeHouseholdMutationAuthorityV1::new()));
+    let created = session
+        .create_member_with_declared_profile(
+            CreateMemberWithDeclaredProfileV1 {
+                expected_household_revision: HouseholdRevision::new(1).expect("revision"),
+                display_name: DisplayName::parse("Minor canary").expect("display name"),
+                relationship: RelationshipV1::Child,
+                age_evidence: NativeMemberAgeEvidenceV1::Age13_17,
+                declared_profile: OnboardingProfileInput {
+                    allergy_ids: vec!["peanuts".to_owned()],
+                    ..OnboardingProfileInput::default()
+                },
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect("create minor member");
+    drop(session);
+    let repository = Arc::new(repository(&prepared, NativeHouseholdModeV1::NativeEnabled));
+    let subject = AgentDisclosureGrantSubjectV1::Member(created.member_id.clone());
+    let error = repository
+        .grant_agent_disclosure(
+            subject.clone(),
+            true,
+            timestamp(3),
+            CancellationToken::new(),
+        )
+        .await
+        .expect_err("minor profile disclosure denied");
+    assert_eq!(error.code, "household_agent_disclosure_invalid");
+    let generation = repository
+        .grant_agent_disclosure(subject, false, timestamp(3), CancellationToken::new())
+        .await
+        .expect("minor roster disclosure");
+    let read = HouseholdAgentPhase0Proof::new(repository.clone())
+        .read(
+            prepared.account.clone(),
+            AgentHouseholdReadRequestV1 {
+                schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
+                kind: AgentHouseholdReadRequestKindV1::HouseholdReadRequest,
+                subject: Some(AgentHouseholdSubjectV1::Member(created.member_id)),
+                requested_projection: AgentHouseholdProjectionV1::Profile,
+                expected_disclosure_generation: generation,
+                cursor: None,
+                limit: 1,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect("minor roster read");
+    assert_eq!(read.projection, AgentHouseholdProjectionV1::Roster);
+    assert!(read.members[0].minimized_declared_profile.is_none());
+
+    let foreign = AccountId::parse("foreign-agent-account").expect("foreign account");
+    let error = heyfood_application::HouseholdAgentPhase0Port::eligible_roster(
+        repository.as_ref(),
+        foreign,
+        CancellationToken::new(),
+    )
+    .await
+    .expect_err("foreign account denied");
+    assert_eq!(error.code, "household_account_mismatch");
 }
 
 #[tokio::test]

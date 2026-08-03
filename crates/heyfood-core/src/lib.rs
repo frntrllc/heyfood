@@ -28,6 +28,7 @@ pub use agent_household::{
     AGENT_HOUSEHOLD_CONTRACT_VERSION, AGENT_HOUSEHOLD_MAX_MEMBERS_PER_PAGE,
     AGENT_HOUSEHOLD_REVIEW_MAXIMUM_WIDTH, AGENT_HOUSEHOLD_REVIEW_MINIMUM_WIDTH,
     AgentDisclosureDataClassV1, AgentDisclosureGrantSetV1, AgentDisclosureGrantStateV1,
+    AgentDisclosureLedgerV1,
     AgentDisclosureGrantSubjectV1, AgentDisclosureGrantV1, AgentDisclosureGrantingAuthorityV1,
     AgentDisclosurePurposeV1, AgentHouseholdChangeFieldV1, AgentHouseholdChangeV1,
     AgentHouseholdConsequenceV1, AgentHouseholdContextInputKindV1, AgentHouseholdContextInputV1,

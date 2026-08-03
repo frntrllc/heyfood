@@ -6,22 +6,32 @@
 //! semantic replay/conflict resolution to `heyfood-application`.
 
 use std::{
-    fmt,
+    fmt, fs,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use chacha20poly1305::aead::{Aead as _, Generate as _, Payload};
+use chacha20poly1305::{KeyInit as _, XChaCha20Poly1305, XNonce};
 use heyfood_application::{
-    BoxFuture, HouseholdCommit, HouseholdCommitEvidenceRepositoryPort, HouseholdCommitOutcome,
-    HouseholdErase, HouseholdEraseOutcome, HouseholdInitialize, HouseholdLoad,
-    HouseholdMutationAuthorityPort, HouseholdReadLeaseV1, HouseholdRepositoryPort,
-    HouseholdRepositoryResolutionV1, HouseholdSession, NativeHouseholdModeV1, PortError,
-    resolve_household_commit_v1, resolve_household_initialize_v1,
+    AuthorizedAgentHouseholdPrepareV1, BoundAgentHouseholdDisclosureV1,
+    BoundAgentHouseholdOutcomeReceiptV1, BoundAgentHouseholdProposalV1, BoundAgentHouseholdReadV1,
+    BoundAgentHouseholdRosterAuthorityV1, BoxFuture, HouseholdAgentPhase0Port, HouseholdCommit,
+    HouseholdCommitEvidenceRepositoryPort, HouseholdCommitOutcome, HouseholdErase,
+    HouseholdEraseOutcome, HouseholdInitialize, HouseholdLoad, HouseholdMutationAuthorityPort,
+    HouseholdReadLeaseV1, HouseholdRepositoryPort, HouseholdRepositoryResolutionV1,
+    HouseholdSession, NativeHouseholdModeV1, PortError, resolve_household_commit_v1,
+    resolve_household_initialize_v1,
 };
 use heyfood_core::{
-    AccountId, AgentHouseholdContractErrorV1, AgentHouseholdProposalIdV1, AppliedCommitOutcomeV1,
-    AppliedHouseholdCommitProofV1, CommitId, HouseholdCommitEvidenceBindingV1,
-    HouseholdEffectFingerprintV1, HouseholdRevision, HouseholdStateV1, LegacySourceIdentityV1,
+    AGENT_HOUSEHOLD_CONTRACT_VERSION, AGENT_HOUSEHOLD_MAX_MEMBERS_PER_PAGE, AccountId,
+    AgentDisclosureGrantSubjectV1, AgentDisclosureLedgerV1, AgentDisclosurePurposeV1,
+    AgentHouseholdContractErrorV1, AgentHouseholdMemberProjectionV1, AgentHouseholdProposalIdV1,
+    AgentHouseholdReadResultKindV1, AgentHouseholdReadSnapshotV1, AgentHouseholdSubjectV1,
+    AgentMinimizedDeclaredProfileV1, AppliedCommitOutcomeV1, AppliedHouseholdCommitProofV1,
+    CanonicalTimestampV1, CommitId, GenerationId, HouseholdCommitEvidenceBindingV1,
+    HouseholdEffectFingerprintV1, HouseholdLifecycleV1, HouseholdRevision, HouseholdScope,
+    HouseholdStateV1, HouseholdSubjectId, LegacySourceIdentityV1, MinorStatusV1,
     UnappliedHouseholdCommitProofV1, canonical_sha256_v1, decode_canonical_household_state_v1,
     domain_hash_v1,
 };
@@ -33,17 +43,24 @@ use zeroize::Zeroizing;
 use crate::credential_broker::HouseholdCommitEvidenceStateV1;
 use crate::household_vault::HouseholdVaultStartupArtifactsV1;
 use crate::{
-    HouseholdKeyBundle, HouseholdKeyBundlePhase, HouseholdKeyMaterial, HouseholdKeyStore,
-    HouseholdMigrationGuardDocument, HouseholdMigrationGuardStateV1, HouseholdMigrationGuardStore,
-    HouseholdMigrationInitializationPhaseV1, HouseholdSecureStore, HouseholdVault,
-    HouseholdVaultLease, HouseholdVaultLeaseModeV1, HouseholdVaultLoad, HouseholdVaultWrite,
-    KeyBundleRevision, KeyId, KeyStoreExpectation, MigrationGuardExpectation, NativePaths,
-    household_teardown_barrier_present_v1,
+    AtomicFile, HouseholdKeyBundle, HouseholdKeyBundlePhase, HouseholdKeyMaterial,
+    HouseholdKeyStore, HouseholdMigrationGuardDocument, HouseholdMigrationGuardStateV1,
+    HouseholdMigrationGuardStore, HouseholdMigrationInitializationPhaseV1, HouseholdSecureStore,
+    HouseholdVault, HouseholdVaultLease, HouseholdVaultLeaseModeV1, HouseholdVaultLoad,
+    HouseholdVaultWrite, KeyBundleRevision, KeyId, KeyStoreExpectation, MigrationGuardExpectation,
+    NativePaths, household_teardown_barrier_present_v1,
 };
 
 const ACCOUNT_DIGEST_CONTRACT: &str = "heyfood.household.account-digest.v1";
 const COMMIT_EVIDENCE_HKDF_SALT: &[u8] = b"heyfood.household.commit-evidence.hkdf.salt.v1";
 const COMMIT_EVIDENCE_HKDF_INFO: &[u8] = b"heyfood.household.commit-evidence.capability.v1";
+const AGENT_DISCLOSURE_MAGIC: &[u8; 8] = b"HFAGENT1";
+const AGENT_DISCLOSURE_HKDF_SALT: &[u8] = b"heyfood.household.agent-disclosure.salt.v1";
+const AGENT_DISCLOSURE_HKDF_INFO: &[u8] = b"heyfood.household.agent-disclosure.key.v1";
+const MAX_AGENT_DISCLOSURE_ENVELOPE_BYTES: usize = 320 * 1024;
+const AGENT_DISCLOSURE_ENVELOPE_VERSION: u16 = 1;
+const AGENT_DISCLOSURE_HEADER_BYTES: usize = 8 + 2 + 24 + 4;
+const AGENT_DISCLOSURE_FILE: &str = "agent-disclosure.hfa";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RepositoryAccessV1 {
@@ -115,6 +132,137 @@ impl NativeHouseholdRepository {
     #[must_use]
     pub fn account(&self) -> &AccountId {
         &self.account
+    }
+
+    /// Persist explicit local disclosure authority for one exact subject.
+    /// Profile disclosure is accepted only for an authoritative adult subject;
+    /// minors can receive roster-only authority.
+    pub async fn grant_agent_disclosure(
+        &self,
+        subject: AgentDisclosureGrantSubjectV1,
+        include_minimized_profile: bool,
+        issued_at: CanonicalTimestampV1,
+        cancellation: CancellationToken,
+    ) -> Result<GenerationId, PortError> {
+        if self.access != RepositoryAccessV1::ReadWrite {
+            return Err(read_only_error());
+        }
+        let mut lease = self
+            .acquire_vault_lease(HouseholdVaultLeaseModeV1::RequireExisting, &cancellation)
+            .await?;
+        let (guard, key) = self.reread_guard_and_key(&lease, &cancellation).await?;
+        let loaded = self
+            .load_committed_under_lease(&mut lease, &guard, &key, cancellation.clone())
+            .await?;
+        let minor_status = authoritative_disclosure_subject_status(&loaded.state, &subject)?;
+        let mut ledger = self.load_agent_disclosure_ledger(&key)?;
+        ledger
+            .grant(subject, minor_status, include_minimized_profile, issued_at)
+            .map_err(agent_disclosure_contract_error)?;
+        check_cancelled(&cancellation)?;
+        self.persist_agent_disclosure_ledger(&key, &ledger)?;
+        Ok(ledger.generation())
+    }
+
+    /// Revoke all read and proposal-status disclosure authority for one exact
+    /// subject. A missing grant is an idempotent no-op.
+    pub async fn revoke_agent_disclosure(
+        &self,
+        subject: AgentDisclosureGrantSubjectV1,
+        revoked_at: CanonicalTimestampV1,
+        cancellation: CancellationToken,
+    ) -> Result<GenerationId, PortError> {
+        if self.access != RepositoryAccessV1::ReadWrite {
+            return Err(read_only_error());
+        }
+        let mut lease = self
+            .acquire_vault_lease(HouseholdVaultLeaseModeV1::RequireExisting, &cancellation)
+            .await?;
+        let (guard, key) = self.reread_guard_and_key(&lease, &cancellation).await?;
+        let _ = self
+            .load_committed_under_lease(&mut lease, &guard, &key, cancellation.clone())
+            .await?;
+        let mut ledger = self.load_agent_disclosure_ledger(&key)?;
+        if ledger
+            .revoke(&subject, revoked_at)
+            .map_err(agent_disclosure_contract_error)?
+        {
+            check_cancelled(&cancellation)?;
+            self.persist_agent_disclosure_ledger(&key, &ledger)?;
+        }
+        Ok(ledger.generation())
+    }
+
+    fn agent_disclosure_path(&self) -> std::path::PathBuf {
+        self.vault.household_directory().join(AGENT_DISCLOSURE_FILE)
+    }
+
+    fn load_agent_disclosure_ledger(
+        &self,
+        key: &HouseholdKeyBundle,
+    ) -> Result<AgentDisclosureLedgerV1, PortError> {
+        let path = self.agent_disclosure_path();
+        let bytes = match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if !metadata.file_type().is_file()
+                    || metadata.file_type().is_symlink()
+                    || usize::try_from(metadata.len()).map_or(true, |length| {
+                        !(AGENT_DISCLOSURE_HEADER_BYTES + 16..=MAX_AGENT_DISCLOSURE_ENVELOPE_BYTES)
+                            .contains(&length)
+                    })
+                {
+                    return Err(agent_disclosure_format_error());
+                }
+                let bytes = fs::read(&path).map_err(|_| agent_disclosure_format_error())?;
+                if !(AGENT_DISCLOSURE_HEADER_BYTES + 16..=MAX_AGENT_DISCLOSURE_ENVELOPE_BYTES)
+                    .contains(&bytes.len())
+                {
+                    return Err(agent_disclosure_format_error());
+                }
+                bytes
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(AgentDisclosureLedgerV1::empty(self.account.clone()));
+            }
+            Err(_) => return Err(agent_disclosure_format_error()),
+        };
+        decrypt_agent_disclosure_envelope(
+            &bytes,
+            key.commit_evidence_key(),
+            &self.account,
+            self.vault.account_slot().account_digest(),
+            self.vault.account_slot().native_root_instance_digest(),
+        )
+    }
+
+    fn persist_agent_disclosure_ledger(
+        &self,
+        key: &HouseholdKeyBundle,
+        ledger: &AgentDisclosureLedgerV1,
+    ) -> Result<(), PortError> {
+        if !ledger.account_matches(&self.account) {
+            return Err(account_mismatch_error());
+        }
+        let envelope = encrypt_agent_disclosure_envelope(
+            ledger,
+            key.commit_evidence_key(),
+            &self.account,
+            self.vault.account_slot().account_digest(),
+            self.vault.account_slot().native_root_instance_digest(),
+        )?;
+        AtomicFile::replace(&self.agent_disclosure_path(), &envelope)
+    }
+
+    async fn load_agent_household_state(
+        &self,
+        cancellation: CancellationToken,
+    ) -> Result<HouseholdLoad, PortError> {
+        let mut lease = self
+            .acquire_vault_lease(HouseholdVaultLeaseModeV1::RequireExisting, &cancellation)
+            .await?;
+        let (guard, key) = self.reread_guard_and_key(&lease, &cancellation).await?;
+        self.load_committed_under_lease(&mut lease, &guard, &key, cancellation)
+            .await
     }
 
     /// Reserve the opaque verifier for one exact future proposal commit.
@@ -409,6 +557,14 @@ impl NativeHouseholdRepository {
     ) -> HouseholdSession {
         let repository: Arc<dyn HouseholdRepositoryPort> = self.clone();
         HouseholdSession::new(self.account.clone(), repository, mutation_authority)
+    }
+
+    /// Retain the concrete account-bound repository as the read/disclosure
+    /// adapter while application composition separately builds its household
+    /// mutation session. This accessor exposes no mutation authority.
+    #[must_use]
+    pub fn agent_phase0_port(self: &Arc<Self>) -> Arc<dyn HouseholdAgentPhase0Port> {
+        self.clone()
     }
 
     async fn acquire_vault_lease(
@@ -1374,6 +1530,89 @@ impl HouseholdRepositoryPort for NativeHouseholdRepository {
     }
 }
 
+impl HouseholdAgentPhase0Port for NativeHouseholdRepository {
+    fn eligible_roster(
+        &self,
+        account: AccountId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<BoundAgentHouseholdRosterAuthorityV1, PortError>> {
+        Box::pin(async move {
+            self.require_account(&account)?;
+            let loaded = self.load_agent_household_state(cancellation).await?;
+            let eligible_subjects = eligible_agent_subjects(&loaded.state)?;
+            Ok(BoundAgentHouseholdRosterAuthorityV1 {
+                account,
+                household_revision: loaded.state.revision,
+                eligible_subjects,
+            })
+        })
+    }
+
+    fn disclosure(
+        &self,
+        account: AccountId,
+        purpose: AgentDisclosurePurposeV1,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<BoundAgentHouseholdDisclosureV1, PortError>> {
+        Box::pin(async move {
+            self.require_account(&account)?;
+            let mut lease = self
+                .acquire_vault_lease(HouseholdVaultLeaseModeV1::RequireExisting, &cancellation)
+                .await?;
+            let (guard, key) = self.reread_guard_and_key(&lease, &cancellation).await?;
+            let loaded = self
+                .load_committed_under_lease(&mut lease, &guard, &key, cancellation)
+                .await?;
+            let ledger = self.load_agent_disclosure_ledger(&key)?;
+            let grants = ledger
+                .grant_set(purpose, loaded.state.updated_at)
+                .map_err(agent_disclosure_contract_error)?;
+            Ok(BoundAgentHouseholdDisclosureV1 { account, grants })
+        })
+    }
+
+    fn read(
+        &self,
+        account: AccountId,
+        request: heyfood_core::AgentHouseholdReadRequestV1,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<BoundAgentHouseholdReadV1, PortError>> {
+        Box::pin(async move {
+            self.require_account(&account)?;
+            let loaded = self.load_agent_household_state(cancellation).await?;
+            let snapshot = project_agent_household_read(&loaded.state, &request)?;
+            Ok(BoundAgentHouseholdReadV1 { account, snapshot })
+        })
+    }
+
+    fn prepare(
+        &self,
+        _account: AccountId,
+        _request: AuthorizedAgentHouseholdPrepareV1,
+        _cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<BoundAgentHouseholdProposalV1, PortError>> {
+        Box::pin(async { Err(agent_household_lifecycle_unavailable_error()) })
+    }
+
+    fn status(
+        &self,
+        _account: AccountId,
+        _proposal_ref: AgentHouseholdProposalIdV1,
+        _cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<BoundAgentHouseholdProposalV1, PortError>> {
+        Box::pin(async { Err(agent_household_lifecycle_unavailable_error()) })
+    }
+
+    fn cancel(
+        &self,
+        _account: AccountId,
+        _proposal_ref: AgentHouseholdProposalIdV1,
+        _cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<BoundAgentHouseholdOutcomeReceiptV1, PortError>> {
+        Box::pin(async { Err(agent_household_lifecycle_unavailable_error()) })
+    }
+}
+
 impl HouseholdCommitEvidenceRepositoryPort for NativeHouseholdRepository {
     fn reserve_agent_commit_evidence(
         &self,
@@ -1440,6 +1679,360 @@ impl HouseholdCommitEvidenceRepositoryPort for NativeHouseholdRepository {
             cancellation,
         ))
     }
+}
+
+fn eligible_agent_subjects(
+    state: &HouseholdStateV1,
+) -> Result<Vec<AgentDisclosureGrantSubjectV1>, PortError> {
+    let mut subjects = vec![AgentDisclosureGrantSubjectV1::Self_];
+    subjects.extend(
+        state
+            .members
+            .iter()
+            .filter(|member| member.lifecycle == HouseholdLifecycleV1::Active)
+            .map(|member| AgentDisclosureGrantSubjectV1::Member(member.member_id.clone())),
+    );
+    if subjects.len() > usize::from(AGENT_HOUSEHOLD_MAX_MEMBERS_PER_PAGE) {
+        return Err(PortError::new(
+            "household_agent_roster_too_large",
+            "the active household roster exceeds the closed agent read contract",
+        ));
+    }
+    Ok(subjects)
+}
+
+fn authoritative_disclosure_subject_status(
+    state: &HouseholdStateV1,
+    subject: &AgentDisclosureGrantSubjectV1,
+) -> Result<MinorStatusV1, PortError> {
+    match subject {
+        AgentDisclosureGrantSubjectV1::Self_ => Ok(MinorStatusV1::Adult),
+        AgentDisclosureGrantSubjectV1::Member(member_ref) => state
+            .members
+            .iter()
+            .find(|member| {
+                member.member_id == *member_ref && member.lifecycle == HouseholdLifecycleV1::Active
+            })
+            .map(|member| member.minor_status)
+            .ok_or_else(|| {
+                PortError::new(
+                    "household_agent_subject_unavailable",
+                    "agent disclosure requires an active authoritative household subject",
+                )
+            }),
+    }
+}
+
+fn project_agent_household_read(
+    state: &HouseholdStateV1,
+    request: &heyfood_core::AgentHouseholdReadRequestV1,
+) -> Result<AgentHouseholdReadSnapshotV1, PortError> {
+    request
+        .validate_wire_shape()
+        .map_err(|_| agent_household_read_contract_error())?;
+    if request.cursor.is_some() {
+        return Err(PortError::new(
+            "household_agent_cursor_unsupported",
+            "the native household roster is returned atomically and does not accept a cursor",
+        ));
+    }
+    let eligible = eligible_agent_subjects(state)?;
+    let resolved_from_active_scope = request.subject.is_none();
+    let resolved_subject = request
+        .subject
+        .clone()
+        .unwrap_or_else(|| agent_subject_from_scope(&state.active_scope));
+    let members = match &resolved_subject {
+        AgentHouseholdSubjectV1::Self_ => Vec::new(),
+        AgentHouseholdSubjectV1::Member(member_ref) => vec![
+            state
+                .members
+                .iter()
+                .find(|member| {
+                    member.member_id == *member_ref
+                        && member.lifecycle == HouseholdLifecycleV1::Active
+                })
+                .ok_or_else(agent_household_subject_unavailable_error)
+                .and_then(|member| project_agent_member(state, member))?,
+        ],
+        AgentHouseholdSubjectV1::Everyone => state
+            .members
+            .iter()
+            .filter(|member| member.lifecycle == HouseholdLifecycleV1::Active)
+            .map(|member| project_agent_member(state, member))
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+    if members.len() > usize::from(request.limit) {
+        return Err(PortError::new(
+            "household_agent_read_limit",
+            "the requested limit cannot represent the complete household read safely",
+        ));
+    }
+    let eligible_member_count =
+        u16::try_from(eligible.len()).map_err(|_| agent_household_read_contract_error())?;
+    let snapshot = AgentHouseholdReadSnapshotV1 {
+        schema_version: AGENT_HOUSEHOLD_CONTRACT_VERSION,
+        kind: AgentHouseholdReadResultKindV1::HouseholdReadResult,
+        projection: heyfood_core::AgentHouseholdProjectionV1::Profile,
+        resolved_subject: Some(resolved_subject),
+        resolved_from_active_scope,
+        active_scope: Some(state.active_scope.clone()),
+        household_revision: state.revision,
+        // The application controller replaces this placeholder with the
+        // independently loaded encrypted ledger generation before returning.
+        disclosure_generation: GenerationId::new(1),
+        eligible_member_count,
+        restricted_member_count: 0,
+        members,
+        next_cursor: None,
+    };
+    snapshot
+        .validate_wire_shape()
+        .map_err(|_| agent_household_read_contract_error())?;
+    Ok(snapshot)
+}
+
+fn agent_subject_from_scope(scope: &HouseholdScope) -> AgentHouseholdSubjectV1 {
+    match scope {
+        HouseholdScope::Subject(HouseholdSubjectId::Self_) => AgentHouseholdSubjectV1::Self_,
+        HouseholdScope::Subject(HouseholdSubjectId::Member(member)) => {
+            AgentHouseholdSubjectV1::Member(member.clone())
+        }
+        HouseholdScope::Everyone => AgentHouseholdSubjectV1::Everyone,
+    }
+}
+
+fn project_agent_member(
+    state: &HouseholdStateV1,
+    member: &heyfood_core::HouseholdMemberV1,
+) -> Result<AgentHouseholdMemberProjectionV1, PortError> {
+    let subject = HouseholdSubjectId::member(member.member_id.clone());
+    let profile = state
+        .profiles
+        .iter()
+        .find(|profile| profile.subject == subject);
+    let minimized_declared_profile = profile
+        .and_then(|profile| profile.document.declared_profile.as_ref())
+        .map(minimize_declared_profile)
+        .transpose()?;
+    Ok(AgentHouseholdMemberProjectionV1 {
+        member_ref: member.member_id.clone(),
+        display_label: member.display_name.clone(),
+        relationship: member.relationship,
+        lifecycle: member.lifecycle,
+        profile_state: member.profile_state,
+        profile_schema_version: profile.map(|profile| profile.document.schema_version),
+        profile_revision: profile.map(|profile| profile.profile_revision),
+        profile_complete: minimized_declared_profile.is_some(),
+        minimized_declared_profile,
+    })
+}
+
+fn minimize_declared_profile(
+    profile: &heyfood_core::HouseholdDeclaredProfileV1,
+) -> Result<AgentMinimizedDeclaredProfileV1, PortError> {
+    fn combined(left: &[String], right: &[String]) -> Vec<String> {
+        let mut values = Vec::with_capacity(left.len() + right.len());
+        for value in left.iter().chain(right) {
+            if !values.contains(value) {
+                values.push(value.clone());
+            }
+        }
+        values
+    }
+    let minimized = AgentMinimizedDeclaredProfileV1 {
+        diet_styles: combined(&profile.diet_style_ids, &profile.custom_diet_styles),
+        allergies: profile.allergy_ids.clone(),
+        restrictions: profile.custom_restrictions.clone(),
+        health_conditions: combined(
+            &profile.health_condition_ids,
+            &profile.custom_health_conditions,
+        ),
+        avoid_ingredients: profile.avoid_ingredients.clone(),
+    };
+    minimized
+        .validate_wire_shape()
+        .map_err(|_| agent_household_read_contract_error())?;
+    Ok(minimized)
+}
+
+fn agent_disclosure_aad(
+    account: &AccountId,
+    account_digest: &[u8; 32],
+    native_root_digest: &[u8; 32],
+    header: &[u8],
+) -> Result<Vec<u8>, PortError> {
+    let account_bytes = account.as_str().as_bytes();
+    let account_length =
+        u32::try_from(account_bytes.len()).map_err(|_| account_mismatch_error())?;
+    let mut aad = Vec::with_capacity(
+        AGENT_DISCLOSURE_HKDF_INFO.len()
+            + 4
+            + account_bytes.len()
+            + account_digest.len()
+            + native_root_digest.len()
+            + header.len(),
+    );
+    aad.extend_from_slice(AGENT_DISCLOSURE_HKDF_INFO);
+    aad.extend_from_slice(&account_length.to_be_bytes());
+    aad.extend_from_slice(account_bytes);
+    aad.extend_from_slice(account_digest);
+    aad.extend_from_slice(native_root_digest);
+    aad.extend_from_slice(header);
+    Ok(aad)
+}
+
+fn derive_agent_disclosure_key(
+    root_key: &HouseholdKeyMaterial,
+    account: &AccountId,
+    account_digest: &[u8; 32],
+    native_root_digest: &[u8; 32],
+) -> Result<Zeroizing<[u8; 32]>, PortError> {
+    let mut info =
+        Vec::with_capacity(AGENT_DISCLOSURE_HKDF_INFO.len() + account.as_str().len() + 64);
+    info.extend_from_slice(AGENT_DISCLOSURE_HKDF_INFO);
+    info.extend_from_slice(account.as_str().as_bytes());
+    info.extend_from_slice(account_digest);
+    info.extend_from_slice(native_root_digest);
+    let hkdf = Hkdf::<Sha256>::new(Some(AGENT_DISCLOSURE_HKDF_SALT), root_key.expose());
+    let mut key = Zeroizing::new([0_u8; 32]);
+    hkdf.expand(&info, key.as_mut())
+        .map_err(|_| agent_disclosure_crypto_error())?;
+    Ok(key)
+}
+
+fn encrypt_agent_disclosure_envelope(
+    ledger: &AgentDisclosureLedgerV1,
+    root_key: &HouseholdKeyMaterial,
+    account: &AccountId,
+    account_digest: [u8; 32],
+    native_root_digest: [u8; 32],
+) -> Result<Zeroizing<Vec<u8>>, PortError> {
+    let plaintext = ledger
+        .encode_canonical()
+        .map_err(agent_disclosure_contract_error)?;
+    let nonce = XNonce::try_generate().map_err(|_| agent_disclosure_crypto_error())?;
+    let ciphertext_length = plaintext
+        .len()
+        .checked_add(16)
+        .and_then(|length| u32::try_from(length).ok())
+        .ok_or_else(agent_disclosure_format_error)?;
+    let mut header = Vec::with_capacity(AGENT_DISCLOSURE_HEADER_BYTES);
+    header.extend_from_slice(AGENT_DISCLOSURE_MAGIC);
+    header.extend_from_slice(&AGENT_DISCLOSURE_ENVELOPE_VERSION.to_be_bytes());
+    header.extend_from_slice(&nonce);
+    header.extend_from_slice(&ciphertext_length.to_be_bytes());
+    let aad = agent_disclosure_aad(account, &account_digest, &native_root_digest, &header)?;
+    let key = derive_agent_disclosure_key(root_key, account, &account_digest, &native_root_digest)?;
+    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+        .map_err(|_| agent_disclosure_crypto_error())?;
+    let ciphertext = cipher
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: &plaintext,
+                aad: &aad,
+            },
+        )
+        .map_err(|_| agent_disclosure_crypto_error())?;
+    let mut envelope = Zeroizing::new(header);
+    envelope.extend_from_slice(&ciphertext);
+    if envelope.len() > MAX_AGENT_DISCLOSURE_ENVELOPE_BYTES {
+        return Err(agent_disclosure_format_error());
+    }
+    Ok(envelope)
+}
+
+fn decrypt_agent_disclosure_envelope(
+    envelope: &[u8],
+    root_key: &HouseholdKeyMaterial,
+    account: &AccountId,
+    account_digest: [u8; 32],
+    native_root_digest: [u8; 32],
+) -> Result<AgentDisclosureLedgerV1, PortError> {
+    if envelope.len() < AGENT_DISCLOSURE_HEADER_BYTES + 16
+        || envelope.len() > MAX_AGENT_DISCLOSURE_ENVELOPE_BYTES
+        || &envelope[..8] != AGENT_DISCLOSURE_MAGIC
+        || u16::from_be_bytes(
+            envelope[8..10]
+                .try_into()
+                .map_err(|_| agent_disclosure_format_error())?,
+        ) != AGENT_DISCLOSURE_ENVELOPE_VERSION
+    {
+        return Err(agent_disclosure_format_error());
+    }
+    let nonce = XNonce::from(
+        <[u8; 24]>::try_from(&envelope[10..34]).map_err(|_| agent_disclosure_format_error())?,
+    );
+    let ciphertext_length = usize::try_from(u32::from_be_bytes(
+        envelope[34..38]
+            .try_into()
+            .map_err(|_| agent_disclosure_format_error())?,
+    ))
+    .map_err(|_| agent_disclosure_format_error())?;
+    if ciphertext_length != envelope.len() - AGENT_DISCLOSURE_HEADER_BYTES {
+        return Err(agent_disclosure_format_error());
+    }
+    let header = &envelope[..AGENT_DISCLOSURE_HEADER_BYTES];
+    let aad = agent_disclosure_aad(account, &account_digest, &native_root_digest, header)?;
+    let key = derive_agent_disclosure_key(root_key, account, &account_digest, &native_root_digest)?;
+    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+        .map_err(|_| agent_disclosure_crypto_error())?;
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(
+                &nonce,
+                Payload {
+                    msg: &envelope[AGENT_DISCLOSURE_HEADER_BYTES..],
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| agent_disclosure_crypto_error())?,
+    );
+    AgentDisclosureLedgerV1::decode_canonical(&plaintext, account)
+        .map_err(agent_disclosure_contract_error)
+}
+
+fn agent_disclosure_contract_error(_: AgentHouseholdContractErrorV1) -> PortError {
+    PortError::new(
+        "household_agent_disclosure_invalid",
+        "local household agent disclosure authority is invalid",
+    )
+}
+
+fn agent_disclosure_format_error() -> PortError {
+    PortError::new(
+        "household_agent_disclosure_format",
+        "local household agent disclosure storage is invalid",
+    )
+}
+
+fn agent_disclosure_crypto_error() -> PortError {
+    PortError::new(
+        "household_agent_disclosure_crypto",
+        "local household agent disclosure storage could not be authenticated",
+    )
+}
+
+fn agent_household_read_contract_error() -> PortError {
+    PortError::new(
+        "household_agent_read_contract",
+        "native household data cannot be represented by the closed agent read contract",
+    )
+}
+
+fn agent_household_subject_unavailable_error() -> PortError {
+    PortError::new(
+        "household_agent_subject_unavailable",
+        "the requested active household subject is unavailable",
+    )
+}
+
+fn agent_household_lifecycle_unavailable_error() -> PortError {
+    PortError::new(
+        "household_agent_lifecycle_unavailable",
+        "agent household lifecycle operations are not active in this release phase",
+    )
 }
 
 fn commit_evidence_now_unix_seconds() -> Result<u64, PortError> {

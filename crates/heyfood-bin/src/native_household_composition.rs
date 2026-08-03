@@ -10,8 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use heyfood_application::{
-    HouseholdSession, NativeHouseholdCompletionModeV1, NativeHouseholdInitializationPhaseV1,
-    NativeHouseholdModeFactsV1, NativeHouseholdModeV1, PortError, resolve_native_household_mode_v1,
+    HouseholdAgentPhase0Port, HouseholdSession, NativeHouseholdCompletionModeV1,
+    NativeHouseholdInitializationPhaseV1, NativeHouseholdModeFactsV1, NativeHouseholdModeV1,
+    PortError, resolve_native_household_mode_v1,
 };
 use heyfood_core::{AccountId, DisplayName, NativeHouseholdRolloutV1};
 use heyfood_platform::{
@@ -40,6 +41,7 @@ struct OpenedHouseholdSecureStoreV1 {
 pub struct PreparedNativeHouseholdV1 {
     mode: NativeHouseholdModeV1,
     household_session: Option<HouseholdSession>,
+    household_agent_phase0_port: Option<Arc<dyn HouseholdAgentPhase0Port>>,
 }
 
 impl PreparedNativeHouseholdV1 {
@@ -52,6 +54,14 @@ impl PreparedNativeHouseholdV1 {
     pub fn household_session(&self) -> Option<&HouseholdSession> {
         self.household_session.as_ref()
     }
+
+    /// Account-bound agent read/disclosure adapter retained from the same
+    /// concrete repository as the household session. The trait exposes no
+    /// household mutation authority.
+    #[must_use]
+    pub fn household_agent_phase0_port(&self) -> Option<Arc<dyn HouseholdAgentPhase0Port>> {
+        self.household_agent_phase0_port.clone()
+    }
 }
 
 impl std::fmt::Debug for PreparedNativeHouseholdV1 {
@@ -62,6 +72,10 @@ impl std::fmt::Debug for PreparedNativeHouseholdV1 {
             .field(
                 "household_session_present",
                 &self.household_session.is_some(),
+            )
+            .field(
+                "household_agent_phase0_port_present",
+                &self.household_agent_phase0_port.is_some(),
             )
             .finish()
     }
@@ -261,15 +275,19 @@ pub async fn compose_verified_native_household_v1(
     match mode {
         NativeHouseholdModeV1::LegacyCompatibility => Ok(legacy_ready()),
         NativeHouseholdModeV1::NativeEnabled | NativeHouseholdModeV1::NativeRollbackReadOnly => {
-            let repository =
-                NativeHouseholdRepository::from_vault(account, vault, secure_store, mode)?;
+            let repository = Arc::new(NativeHouseholdRepository::from_vault(
+                account,
+                vault,
+                secure_store,
+                mode,
+            )?);
             Ok(NativeHouseholdCompositionV1::Ready(
                 PreparedNativeHouseholdV1 {
                     mode,
                     household_session: Some(
-                        repository
-                            .into_session(Arc::new(NativeHouseholdMutationAuthorityV1::new())),
+                        repository.session(Arc::new(NativeHouseholdMutationAuthorityV1::new())),
                     ),
+                    household_agent_phase0_port: Some(repository.agent_phase0_port()),
                 },
             ))
         }
@@ -412,11 +430,13 @@ fn native_ready(
     mode: NativeHouseholdModeV1,
     repository: NativeHouseholdRepository,
 ) -> NativeHouseholdCompositionV1 {
+    let repository = Arc::new(repository);
     NativeHouseholdCompositionV1::Ready(PreparedNativeHouseholdV1 {
         mode,
         household_session: Some(
-            repository.into_session(Arc::new(NativeHouseholdMutationAuthorityV1::new())),
+            repository.session(Arc::new(NativeHouseholdMutationAuthorityV1::new())),
         ),
+        household_agent_phase0_port: Some(repository.agent_phase0_port()),
     })
 }
 
@@ -424,6 +444,7 @@ fn legacy_ready() -> NativeHouseholdCompositionV1 {
     NativeHouseholdCompositionV1::Ready(PreparedNativeHouseholdV1 {
         mode: NativeHouseholdModeV1::LegacyCompatibility,
         household_session: None,
+        household_agent_phase0_port: None,
     })
 }
 
