@@ -208,7 +208,8 @@ matching standalone-verifier archives for macOS Apple Silicon, macOS Intel,
 Linux ARM64, and Linux x64, plus one native-state declaration and
 `SHA256SUMS`.
 Windows distribution remains deferred; ordinary Windows compile, test,
-Clippy, credential, and packaging qualification remains active in CI. Health,
+Clippy, credential, packaging, and installed-artifact CI is also deferred from
+the current release path. Health,
 item-level Menu Watch diff detail, native voice, full legacy parity, and the
 complete twelve-stage showcase are future work rather than `v0.8.0` release
 gates.

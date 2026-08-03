@@ -99,8 +99,10 @@ must fail with an upgrade instruction when the installed manifest is outside
 its declared compatibility range.
 
 v0.8.0 defaults `agent describe`, `agent doctor`, and the MCP manifest response
-to schema v3. Explicit `--schema-version 1` and `--schema-version 2` retain the
-frozen compatibility views and intentionally omit the household agent surface.
+to schema v3. Explicit `--schema-version 1` and `--schema-version 2` retain their
+frozen structure and command routes, intentionally omit the household agent
+surface, and carry the corrected current Windows deferral. Use the default
+schema-v3 document for the complete current platform and capability contract.
 Consumers must branch on the discovered capability and tool inventory, not on
 the binary version or a permanently assumed tool count. Use
 `heyfood agent compatibility --json --no-input` for an offline, binary-owned

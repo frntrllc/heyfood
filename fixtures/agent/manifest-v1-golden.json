@@ -59,7 +59,7 @@
       "contract_version": null,
       "id": "windows-distribution",
       "status": "deferred",
-      "summary": "Windows source CI is active; public Windows distribution is deferred."
+      "summary": "Windows CI and public Windows distribution are deferred."
     }
   ],
   "commands": [

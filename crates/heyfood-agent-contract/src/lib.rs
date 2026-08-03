@@ -981,7 +981,7 @@ pub fn manifest_v1() -> Value {
             {"id": "agent-mcp", "status": "active", "summary": "Six bounded read/discovery tools are available over local stdio with native account credentials.", "contract_version": "v1"},
             {"id": "health", "status": "deferred", "summary": "Health is outside the supported release contract.", "contract_version": null},
             {"id": "native-voice", "status": "deferred", "summary": "Native voice is not enabled in the default artifact.", "contract_version": null},
-            {"id": "windows-distribution", "status": "deferred", "summary": "Windows source CI is active; public Windows distribution is deferred.", "contract_version": null}
+            {"id": "windows-distribution", "status": "deferred", "summary": "Windows CI and public Windows distribution are deferred.", "contract_version": null}
         ],
         "commands": commands()
     });

@@ -132,4 +132,20 @@ for source in "$ROOT/README.md" "$ROOT/docs/CAPABILITY_STATUS.md"; do
   fi
 done
 
+for source in "$ROOT/README.md" "$ROOT/docs/SHOWCASE_CONFORMANCE.md"; do
+  if grep -Eiq 'Windows (compile|source CI).*\b(active|required)|Windows.*CI remains (active|required)|CI runs.*Windows' "$source"; then
+    fail "$source must not claim Windows CI is active or required for v$version"
+  fi
+done
+
+assert_contains "$ROOT/docs/AGENT_INTEGRATION.md" \
+  "carry the corrected current Windows deferral"
+assert_contains "$ROOT/docs/AGENT_INTEGRATION.md" \
+  "schema-v3 document for the complete current"
+if grep -Fq 'Windows source CI is active' \
+  "$ROOT/crates/heyfood-agent-contract/src/lib.rs" \
+  "$ROOT/fixtures/agent/manifest-v1-golden.json"; then
+  fail "explicit compatibility discovery views must not claim Windows CI is active"
+fi
+
 printf 'version documentation contract: v%s coordinated\n' "$version"

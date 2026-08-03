@@ -54,9 +54,8 @@ landing-page inventory. Its machine-readable contract is
 
 - distribution is limited to macOS Apple Silicon, macOS Intel, Linux ARM64,
   and Linux x64. Windows distribution is deferred to a separately qualified
-  future release, while ordinary
-  Windows compile, test, Clippy, credential, packaging, and installed-harness CI
-  remains required;
+  future release; Windows compile, test, Clippy, credential, packaging, and
+  installed-harness CI is not part of the current release path;
 
 - clean-user registration, missing-profile onboarding and consent, and a first
   authenticated TUI turn;
@@ -180,10 +179,9 @@ cards now have bounded installed-artifact proof; production-canary proof
 remains.
 
 Ordinary Native CLI CI runs the bounded `0.8.0` behavior matrix from packaged
-fixtures on macOS, Linux, and Windows. Windows execution is source
-qualification for a future release, not a `v0.8.0` distribution claim. The protected
-candidate and public release matrices run only the four authorized macOS/Linux
-archives. The harness verifies the checksum and one-executable archive policy,
+fixtures on macOS and Linux. Windows source qualification and distribution are
+deferred together. The protected candidate and public release matrices run only
+the four authorized macOS/Linux archives. The harness verifies the checksum and one-executable archive policy,
 extracts into a clean temporary user environment, drives registration and
 onboarding through a real PTY, exits and starts a returning-user process,
 exercises household Grocery confirmation and conflict paths, checks
