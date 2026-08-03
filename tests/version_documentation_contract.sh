@@ -61,7 +61,7 @@ assert_contains "$ROOT/docs/RELEASE_SIGNING.md" \
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
   "Journey A — clean v$version install and household lifecycle"
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
-  "Journey B — v0.6.2 to v$version upgrade and current-installer refusal"
+  "Journey B — v0.7.1 to v$version upgrade and current-installer refusal"
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
   "Journey C — authorization rollover without household rebinding"
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \

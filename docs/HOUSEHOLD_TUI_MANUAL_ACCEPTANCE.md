@@ -77,7 +77,7 @@ HOME="$journey_home" \
 HEYFOOD_BIN_DIR="$journey_bin_directory" \
 HEYFOOD_STATE_DIR="$journey_state_directory" \
 scripts/release/candidate-transport.sh \
-  --expect-no-download 0.6.2 \
+  --expect-no-download 0.7.1 \
   "$candidate_directory" \
   0.8.0 \
   "$approved_manifest_sha256" \
@@ -85,7 +85,7 @@ scripts/release/candidate-transport.sh \
 ```
 
 The expected result is exit status 1 with exactly
-`heyfood installer: this installer supports heyfood 0.8.0; requested 0.6.2`
+`heyfood installer: this installer supports heyfood 0.8.0; requested 0.7.1`
 on stderr and no stdout. In this mode the network-free verifier checks the
 approved candidate binding, and the fixture refuses every installer `curl`
 invocation before serving bytes. It also fails if the installer accepts the
@@ -102,7 +102,7 @@ or TUI is involved.
   `scripts/release/candidate-transport.sh` fixture using the exact invocation
   above. It substitutes transport only and must not be used to automate the
   TUI.
-- Retain the immutable public v0.6.2 installer and host product archive only to
+- Retain the immutable public v0.7.1 installer and host product archive only to
   prepare the pre-migration side of the upgrade journey; do not alter that
   release and do not execute its installer or binary after native migration.
 - On macOS, use the signed and notarized candidate. On Linux, use the exact
@@ -167,9 +167,9 @@ or TUI is involved.
 12. Repeat one choice step with `NO_COLOR=1`. Confirm no color is emitted while
     focus, selection, instructions, and progress remain unambiguous.
 
-## Journey B — v0.6.2 to v0.8.0 upgrade and current-installer refusal
+## Journey B — v0.7.1 to v0.8.0 upgrade and current-installer refusal
 
-1. In a new isolated profile, install the immutable public v0.6.2 product and
+1. In a new isolated profile, install the immutable public v0.7.1 product and
    connect a disposable account. Launch and exit normally so its supported
    local account state exists.
 2. Upgrade with the reviewed v0.8.0 installer. Confirm the old executable
@@ -182,11 +182,11 @@ or TUI is involved.
    member, restart, and confirm its local declared profile and selected scope
    persist.
 4. After the native-state compatibility floor exists, invoke the current
-   v0.8.0 installer with the exact `--expect-no-download 0.6.2` candidate
+   v0.8.0 installer with the exact `--expect-no-download 0.7.1` candidate
    transport command above. Confirm its exact supported-version gate refuses
    the request before any release download or executable replacement, leaves
    v0.8.0 installed, and leaves the floor and encrypted household state
-   unchanged. Do not run the archived v0.6.2 installer or binary: neither
+   unchanged. Do not run the archived v0.7.1 installer or binary: neither
    knows about the future floor, and either is unsupported and unprotected
    after migration.
 
@@ -251,9 +251,9 @@ or TUI is involved.
 | `NO_COLOR` semantic parity |  | `no_color_failed` |
 | Pre-save cancellation |  | `cancellation_failed` |
 | Terminal restoration |  | `terminal_restoration_failed` |
-| v0.6.2 to v0.8.0 atomic upgrade |  | `upgrade_failed` |
+| v0.7.1 to v0.8.0 atomic upgrade |  | `upgrade_failed` |
 | Native initialization preserves account binding |  | `migration_binding_failed` |
-| Current v0.8.0 installer refuses requested v0.6.2 before download |  | `managed_v062_request_refusal_failed` |
+| Current v0.8.0 installer refuses requested v0.7.1 before download |  | `managed_v071_request_refusal_failed` |
 | Expired-authority rollover preserves household |  | `authorization_rollover_failed` |
 | Same-account login replacement preserves household |  | `authorization_replacement_failed` |
 | Member authority rollover preserves exact household context |  | `member_rollover_context_failed` |
