@@ -8,11 +8,11 @@ does not contain a native-state declaration or a standalone
 `heyfood-installer` verifier archive.
 
 The checked-in installer now coordinates `SUPPORTED_VERSION` and
-`NATIVE_STATE_RELEASE_VERSION` at `0.8.0`. It requires the v0.8.0 native-state
+`NATIVE_STATE_RELEASE_VERSION` at `0.9.0`. It requires the v0.9.0 native-state
 asset set and never fabricates, targets, replaces, or expects new assets on the
-immutable v0.6.2 release. The current v0.8.0 installer accepts only its exact
+immutable v0.6.2 release. The current v0.9.0 installer accepts only its exact
 supported version. Invoking it with `HEYFOOD_VERSION=0.6.2` is rejected before
-any release download or executable replacement and leaves the installed v0.8.0
+any release download or executable replacement and leaves the installed v0.9.0
 binary, compatibility floor, and account state unchanged.
 
 The archived v0.6.2 installer and binary predate the future compatibility
@@ -60,7 +60,7 @@ closed.
 ## Manifest compatibility
 
 The published agent manifest v1 and v2 views remain closed and unchanged; the
-v1 `additive_optional_fields` value remains `false`. In v0.8.0, `heyfood agent
+v1 `additive_optional_fields` value remains `false`. In v0.9.0, `heyfood agent
 describe`, bare `heyfood agent`, `heyfood agent doctor`, and the MCP manifest
 tool return the closed v3 document by default. Older integrations can request
 the frozen v1 or v2 view explicitly, while a shared Agent Skill must inspect
@@ -79,8 +79,8 @@ capability document.
 
 Once the native-state floor exists, managed installation accepts only a
 candidate whose maximum native-state version and complete capability set
-satisfy that floor. The current v0.8.0 installer independently rejects every
-requested version other than v0.8.0 before download, so a request for v0.6.2
+satisfy that floor. The current v0.9.0 installer independently rejects every
+requested version other than v0.9.0 before download, so a request for v0.6.2
 cannot reach executable replacement. The compatibility floor cannot constrain
 an independently executed archived installer or binary; archived v0.6.2 code
 after migration remains unsupported and unprotected. A future supported
@@ -95,7 +95,7 @@ The declaration is
 `schemas/v1/agent-household-native-state.schema.json` with closed cases in
 `fixtures/agent/household-phase0/native-state-migration.json`.
 
-The v0.8.0 read-only agent surface may persist per-subject disclosure grants;
+The v0.9.0 read-only agent surface may persist per-subject disclosure grants;
 proposal and commit records remain non-routable while lifecycle mutations are
 deferred. Before the first v3-only write, the managed installer must establish
 the reviewed writer floor and complete or resume the account-bound v2→v3

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "release": "0.8.0",
+  "release": "0.9.0",
   "description": "Bounded installed-artifact release matrix. This contract does not import the twelve landing-page marketing stages.",
   "distribution": {
     "release_targets": [
@@ -41,6 +41,16 @@
         "first process exits completely",
         "second installed process reloads credentials without registration",
         "second authenticated TUI turn"
+      ]
+    },
+    {
+      "id": "diet-guide",
+      "requirements": [
+        "authenticated Diet catalog read after exact diet:v1 discovery",
+        "exact case-sensitive guide detail",
+        "terminal-native TUI presentation with evidence level",
+        "diet guidance remains subordinate to dietary safety",
+        "no profile mutation"
       ]
     },
     {
@@ -95,9 +105,10 @@
     "remote_member_erasure"
   ],
   "manual_release_gates": [
-    "clean_v0_8_0_install",
-    "v0_7_1_to_v0_8_0_upgrade",
-    "current_v0_8_0_installer_refuses_v0_7_1_request",
+    "clean_v0_9_0_install",
+    "v0_8_0_to_v0_9_0_upgrade",
+    "current_v0_9_0_installer_refuses_v0_8_0_request",
+    "authenticated_diet_list_detail_and_tui_presentation",
     "authorization_rollover_preserves_household_binding",
     "rotated_session_logout_refreshes_resumes_teardown_removes_vault_key_and_preserves_global_floor"
   ],

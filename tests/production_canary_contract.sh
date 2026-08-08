@@ -91,6 +91,10 @@ if [[ "$args" == *" grocery list "* ]]; then
     created_at: "2026-07-26T00:00:00Z",
     updated_at: "2026-07-26T00:00:00Z"
   }'
+elif [[ "$args" == *" diet list "* ]]; then
+  printf '%s\n' '{"corpus_available":true,"diets":[{"id":"synthetic","label":"Synthetic diet","tier":1,"evidence_level":"strong","covered":true,"summary":"fixture"}],"count":1}'
+elif [[ "$args" == *" diet show synthetic "* ]]; then
+  printf '%s\n' '{"id":"synthetic","label":"Synthetic diet","tier":1,"evidence_level":"strong","covered":true,"detail_status":"covered","summary":"fixture","sections":{"safety":["fixture"]},"citations":[],"contraindicated_conditions":[]}'
 elif [[ "$args" == *" ask "* ]]; then
   cat >/dev/null
   printf '%s\n' '{"message":"synthetic acknowledgement"}'
@@ -124,11 +128,12 @@ jq -e '
   .mutation_policy.decision == null and
   .mutation_policy.non_mutation_verified == true and
   .mutation_policy.accept_permitted == false and
-  (.operations | length == 3) and
+  (.operations | length == 5) and
+  ([.operations[].id] == ["grocery_read", "agent_turn", "diet_catalog", "diet_detail", "grocery_nonmutation"]) and
   .privacy.raw_requests_retained == false and
   .privacy.raw_responses_retained == false
 ' "$success" >/dev/null
-if grep -Eq 'synthetic acknowledgement|00000000-0000-4000-8000-000000000030' \
+if grep -Eq 'synthetic acknowledgement|synthetic diet|00000000-0000-4000-8000-000000000030' \
   "$success"; then
   echo "privacy-safe evidence retained private journey content" >&2
   exit 1

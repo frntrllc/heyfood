@@ -15,7 +15,7 @@ const MAX_DECLARATION_BYTES: usize = 4 * 1024;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 // This verifier is distributed with the currently supported public installer.
 // Candidate workspace version bumps must not silently cut that installer over.
-const DEFAULT_SUPPORTED_RELEASE_VERSION: &str = "0.8.0";
+const DEFAULT_SUPPORTED_RELEASE_VERSION: &str = "0.9.0";
 const SUPPORTED_RELEASE_VERSION: &str = match option_env!("HEYFOOD_INSTALLER_RELEASE_VERSION") {
     Some(version) => version,
     None => DEFAULT_SUPPORTED_RELEASE_VERSION,

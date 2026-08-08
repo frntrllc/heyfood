@@ -51,7 +51,7 @@ Releases. The legacy Python/PyPI channel is not a release authority.
   malformed, expired, mismatched, or stale bindings fail before publication.
 - Windows CI and distribution are deferred to a separately qualified future
   release. No Windows job, asset, or signing credential participates in the
-  v0.8.0 macOS/Linux qualification and publication path.
+  v0.9.0 macOS/Linux qualification and publication path.
 - Four product archives are named `heyfood-vVERSION-TARGET.tar.gz` and contain
   one bare regular executable named `heyfood`. Four verifier archives are named
   `heyfood-installer-vVERSION-TARGET.tar.gz` and contain one bare regular

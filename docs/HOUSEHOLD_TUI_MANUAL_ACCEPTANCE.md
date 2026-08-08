@@ -1,17 +1,17 @@
 # Native household TUI manual acceptance
 
-This is the required human-attached-terminal acceptance pass for the v0.8.0
+This is the required human-attached-terminal acceptance pass for the v0.9.0
 native household lifecycle and managed-install boundary. Do not automate the
 TUI through a PTY, capture the terminal, take screenshots, or record household
 labels, stable IDs, profile answers, account identifiers, paths, credentials,
 tokens, vault bytes, or authorization responses.
 
-v0.8.0 activates per-subject, read-only agent-access grant and revocation in the
+v0.9.0 activates per-subject, read-only agent-access grant and revocation in the
 attached TUI. The journey below qualifies its exact handoff and restart-safe
 revocation. Direct edit/archive/restore, `/household changes`, proposal
 preparation, approval, and commit remain frozen future work in
 [LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md](LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md)
-and are not active v0.8.0 acceptance steps. The no-PTY-automation and
+and are not active v0.9.0 acceptance steps. The no-PTY-automation and
 content-free evidence rules continue to apply.
 
 ## Exact candidate retrieval and installer transport
@@ -49,7 +49,7 @@ transport fixture whenever a journey invokes the reviewed installer:
 ```bash
 scripts/release/candidate-transport.sh \
   "$candidate_directory" \
-  0.8.0 \
+  0.9.0 \
   "$approved_manifest_sha256" \
   ./install.sh
 ```
@@ -67,24 +67,24 @@ contents. `HOME`, `HEYFOOD_BIN_DIR`, and `HEYFOOD_STATE_DIR` still select the
 isolated profile for the journey.
 
 The approved candidate version and an installer-request version are separate
-inputs. The ordinary form above requests the approved `0.8.0` candidate. For
+inputs. The ordinary form above requests the approved `0.9.0` candidate. For
 Journey B's post-migration refusal, run this exact command against that same
-approved candidate set and the isolated profile that now contains v0.8.0:
+approved candidate set and the isolated profile that now contains v0.9.0:
 
 ```bash
 HOME="$journey_home" \
 HEYFOOD_BIN_DIR="$journey_bin_directory" \
 HEYFOOD_STATE_DIR="$journey_state_directory" \
 scripts/release/candidate-transport.sh \
-  --expect-no-download 0.7.1 \
+  --expect-no-download 0.8.0 \
   "$candidate_directory" \
-  0.8.0 \
+  0.9.0 \
   "$approved_manifest_sha256" \
   ./install.sh
 ```
 
 The expected result is exit status 1 with exactly
-`heyfood installer: this installer supports heyfood 0.8.0; requested 0.7.1`
+`heyfood installer: this installer supports heyfood 0.9.0; requested 0.8.0`
 on stderr and no stdout. In this mode the network-free verifier checks the
 approved candidate binding, and the fixture refuses every installer `curl`
 invocation before serving bytes. It also fails if the installer accepts the
@@ -94,14 +94,14 @@ or TUI is involved.
 ## Preconditions
 
 - Use isolated local OS profiles and disposable hello.food test accounts.
-- Use the exact protected v0.8.0 candidate product/verifier pair, declaration,
+- Use the exact protected v0.9.0 candidate product/verifier pair, declaration,
   and `SHA256SUMS` intended for publication. Record only the candidate version
   and approved digest.
 - Before publication, route installer downloads through the checked-in
   `scripts/release/candidate-transport.sh` fixture using the exact invocation
   above. It substitutes transport only and must not be used to automate the
   TUI.
-- Retain the immutable public v0.7.1 installer and host product archive only to
+- Retain the immutable public v0.8.0 installer and host product archive only to
   prepare the pre-migration side of the upgrade journey; do not alter that
   release and do not execute its installer or binary after native migration.
 - On macOS, use the signed and notarized candidate. On Linux, use the exact
@@ -117,12 +117,12 @@ or TUI is involved.
 - For each evidence row, record only `PASS`, `FAIL`, or its allowed content-free
   failure category. Never attach terminal output.
 
-## Journey A — clean v0.8.0 install and household lifecycle
+## Journey A — clean v0.9.0 install and household lifecycle
 
-1. From an empty isolated installation and state root, run the reviewed v0.8.0
+1. From an empty isolated installation and state root, run the reviewed v0.9.0
    installer. Confirm it verifies the checksum-bound product archive,
    target-matched standalone verifier, and canonical declaration before the
-   executable appears. Confirm `heyfood --version` reports `0.8.0`.
+   executable appears. Confirm `heyfood --version` reports `0.9.0`.
 2. Launch the TUI, connect the disposable account, and complete owner
    onboarding if requested. Run `/household`; confirm the owner and current
    context agree with the TUI chrome.
@@ -188,32 +188,32 @@ or TUI is involved.
    remains unusable. For a minor or unknown-age fixture, confirm the TUI never
    offers profile access and any handoff is roster-only.
 
-## Journey B — v0.7.1 to v0.8.0 upgrade and current-installer refusal
+## Journey B — v0.8.0 to v0.9.0 upgrade and current-installer refusal
 
-1. In a new isolated profile, install the immutable public v0.7.1 product and
+1. In a new isolated profile, install the immutable public v0.8.0 product and
    connect a disposable account. Launch and exit normally so its supported
    local account state exists.
-2. Upgrade with the reviewed v0.8.0 installer. Confirm the old executable
-   remains available until the v0.8.0 product, verifier, declaration, checksum,
+2. Upgrade with the reviewed v0.9.0 installer. Confirm the old executable
+   remains available until the v0.9.0 product, verifier, declaration, checksum,
    and candidate manifest pass verification; then confirm one atomic
-   replacement and `heyfood --version` reports `0.8.0`.
-3. Launch v0.8.0 and allow native household initialization/migration to finish.
+   replacement and `heyfood --version` reports `0.9.0`.
+3. Launch v0.9.0 and allow native household initialization/migration to finish.
    Confirm `/household` shows the account-bound owner exactly once and no
    repair or imported-snapshot fallback is reported. Add and save one synthetic
    member, restart, and confirm its local declared profile and selected scope
    persist.
 4. After the native-state compatibility floor exists, invoke the current
-   v0.8.0 installer with the exact `--expect-no-download 0.7.1` candidate
+   v0.9.0 installer with the exact `--expect-no-download 0.8.0` candidate
    transport command above. Confirm its exact supported-version gate refuses
    the request before any release download or executable replacement, leaves
-   v0.8.0 installed, and leaves the floor and encrypted household state
-   unchanged. Do not run the archived v0.7.1 installer or binary: neither
+   v0.9.0 installed, and leaves the floor and encrypted household state
+   unchanged. Do not run the archived v0.8.0 installer or binary: neither
    knows about the future floor, and either is unsupported and unprotected
    after migration.
 
 ## Journey C — authorization rollover without household rebinding
 
-1. In a qualified v0.8.0 profile with a committed synthetic member, select
+1. In a qualified v0.9.0 profile with a committed synthetic member, select
    `/for me`. Use the content-free test control to expire the application
    session while leaving its authorized refresh path valid.
 2. Submit one owner operation. Confirm authority refresh/rollover completes,
@@ -253,6 +253,22 @@ or TUI is involved.
 4. Launch `heyfood`. Confirm account connection is required and no prior owner,
    member, profile, or selected scope can be rendered before a new login.
 
+## Journey E — authenticated Diet guide
+
+1. In a connected v0.9.0 session, run `heyfood diet list --json`. Confirm the
+   request succeeds only after the deployment advertises exactly `diet:v1`
+   and the grant contains `knowledge:read`. Record no guide content.
+2. Choose one exact ID returned by that list and run
+   `heyfood diet show DIET_ID --json`. Confirm the bounded result preserves the
+   authored ordering and evidence level without changing the account profile.
+3. Launch the attached TUI and run `/diet DIET_ID`. Confirm the same guide is
+   presented as readable terminal-native sections with no raw JSON, UUIDs,
+   backend tool names, or claim that evidence strength guarantees safety.
+4. Confirm food-safety language remains visibly authoritative over Diet
+   alignment, the composer remains usable, and normal exit restores the
+   terminal. Missing or unknown Diet capability must fail closed rather than
+   fall back to invented or cached guidance.
+
 ## Content-free result record
 
 | Evidence row | Result | Allowed failure category |
@@ -277,9 +293,9 @@ or TUI is involved.
 | Restart preserves grant and generation |  | `agent_grant_restart_failed` |
 | Revocation advances generation and invalidates old handoff |  | `agent_revocation_failed` |
 | Minor/unknown-age handoff remains roster-only |  | `agent_minor_boundary_failed` |
-| v0.7.1 to v0.8.0 atomic upgrade |  | `upgrade_failed` |
+| v0.8.0 to v0.9.0 atomic upgrade |  | `upgrade_failed` |
 | Native initialization preserves account binding |  | `migration_binding_failed` |
-| Current v0.8.0 installer refuses requested v0.7.1 before download |  | `managed_v071_request_refusal_failed` |
+| Current v0.9.0 installer refuses requested v0.8.0 before download |  | `managed_v080_request_refusal_failed` |
 | Expired-authority rollover preserves household |  | `authorization_rollover_failed` |
 | Same-account login replacement preserves household |  | `authorization_replacement_failed` |
 | Member authority rollover preserves exact household context |  | `member_rollover_context_failed` |
@@ -289,6 +305,8 @@ or TUI is involved.
 | Rotated-session logout refreshes, resumes teardown, removes vault/key, and retains floor |  | `rotated_session_logout_failed` |
 | Unrelated non-credential state retained |  | `teardown_scope_failed` |
 | Post-logout launch exposes no prior household |  | `post_logout_isolation_failed` |
+| Authenticated Diet list and exact detail |  | `diet_read_failed` |
+| Diet TUI presentation and safety subordination |  | `diet_presentation_failed` |
 
 The candidate is not release-ready until every row is `PASS`. A failure record
 contains only the allowed category, candidate version, and approved digest. It

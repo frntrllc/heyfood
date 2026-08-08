@@ -149,4 +149,4 @@ The shared skill must branch on discovered capability/tool state, not on a
 version string. When those tools are absent it must route householding to the
 human TUI. When present it may use only the advertised reads. Adding, editing,
 removing, or changing household scope remains human-TUI-only; no agent approval
-or commit tool exists in v0.8.0 or the v0.9.0 source candidate.
+or commit tool exists in v0.9.0.

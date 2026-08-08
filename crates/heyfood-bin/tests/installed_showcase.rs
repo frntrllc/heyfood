@@ -75,9 +75,10 @@ const CTRL_C_IDEMPOTENCY_KEY: &str = "00000000-0000-4000-8000-000000000042";
 const FULL_SCOPE: &str = "account:link account:delete knowledge:read menu:read menu:watch recommend:read recipes:read recipes:write claims:read_derived profile:read profile:write meals:read meals:write audio:transcribe grocery:read grocery:write";
 // The v1 release contract still inventories the historical household group.
 // The installed PTY smoke deliberately substitutes owner-only Grocery coverage.
-const CORE_RELEASE_CONTRACT_GROUPS: [&str; 5] = [
+const CORE_RELEASE_CONTRACT_GROUPS: [&str; 6] = [
     "clean-user",
     "returning-user",
+    "diet-guide",
     "household-grocery",
     "failure-safety",
     "artifact-behavior",
@@ -3290,7 +3291,7 @@ fn installed_harness_inventory_matches_core_release_contract() {
     ))
     .expect("decode installed core release contract");
     assert_eq!(contract["schema_version"], 1);
-    assert_eq!(contract["release"], "0.8.0");
+    assert_eq!(contract["release"], "0.9.0");
     assert_eq!(
         contract["distribution"]["release_targets"],
         json!([

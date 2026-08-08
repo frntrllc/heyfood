@@ -81,7 +81,7 @@ assert_contains "$ROOT/docs/RELEASE_SIGNING.md" \
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
   "Journey A — clean v$version install and household lifecycle"
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
-  "Journey B — v0.7.1 to v$version upgrade and current-installer refusal"
+  "Journey B — v0.8.0 to v$version upgrade and current-installer refusal"
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
   "Journey C — authorization rollover without household rebinding"
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" \
@@ -104,6 +104,11 @@ assert_contains "$ROOT/docs/NATIVE_STATE_COMPATIBILITY.md" \
   "archived v0.6.2 installer and binary"
 assert_contains "$ROOT/docs/JSON_SCHEMAS.md" "supported v$version release"
 assert_contains "$ROOT/docs/SHOWCASE_CONFORMANCE.md" "\`$version\` bounded release matrix"
+assert_contains "$ROOT/README.md" "exactly ten typed read/discovery MCP tools"
+assert_contains "$ROOT/docs/CAPABILITY_STATUS.md" "Supported read-only v$version capability"
+assert_contains "$ROOT/docs/CLI_CONTRACT.md" "Bare \`agent\`, \`agent describe\`, and \`agent doctor\` return schema v4"
+assert_contains "$ROOT/docs/COMMAND_GRAMMAR.md" "Discovery schema v4 is the default"
+assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" "Journey E — authenticated Diet guide"
 assert_contains "$ROOT/tests/installer_contract.sh" "SUPPORTED_VERSION=\"$version\""
 assert_contains "$ROOT/.github/workflows/ci.yml" "bounded v$version release scope"
 assert_contains "$ROOT/.github/workflows/continuous-tui-eval.yml" "default: \"$version\""

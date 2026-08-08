@@ -1,6 +1,6 @@
 # heyfood agent integration threat model
 
-**Status:** v0.8.0 release candidate. Read-only household context and exact
+**Status:** v0.9.0 release. Read-only household context and exact
 additional-member profile reads are active only when the attached TUI has
 saved the corresponding local disclosure grant. Agent household lifecycle
 mutations remain absent and separately gated.
@@ -84,18 +84,19 @@ hard failure.
 
 ## Residual risks and deferred authority
 
-- Public macOS/Linux installed-archive qualification is required for v0.8.0.
+- Public macOS/Linux installed-archive qualification is required for v0.9.0.
   Windows CI and distribution are outside this release contract.
 - The application boundaries, exact-host setup matrix, Agent Skill, setup, and
   read-only MCP implementation passed independent exact-SHA and exact-artifact
-  review for the previous release. The v0.8.0 household additions require the
-  same exact-source and exact-artifact gates.
+  review for the previous release. The v0.9.0 Diet additions require the same
+  exact-source and exact-artifact gates.
 - Phase 4 mutation endpoints and tools remain absent. The frozen hello.food
   out-of-band approval protocol still requires its separate security,
   implementation, and production qualification before any mutation tool can
   be advertised.
 - The local household contract is independently versioned from that hosted
-  approval protocol. v0.8.0 activates only disclosure-gated reads. The frozen
+  approval protocol. v0.9.0 activates only disclosure-gated household reads
+  and capability-gated Diet reads. The frozen
   prepare/status/cancel/reconcile and commit designs do not activate an agent
   lifecycle command, mutation MCP tool, or model-controlled approval path.
   See [LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md](LOCAL_HOUSEHOLD_APPROVAL_CONTRACT.md).

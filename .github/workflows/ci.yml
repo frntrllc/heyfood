@@ -59,7 +59,7 @@ jobs:
       - name: Test release documentation coordination
         shell: bash
         run: bash tests/version_documentation_contract.sh
-      - name: Test the bounded v0.8.0 release scope
+      - name: Test the bounded v0.9.0 release scope
         if: runner.os == 'Linux'
         shell: bash
         run: bash tests/release_scope_contract.sh
@@ -138,12 +138,12 @@ jobs:
           "$HEYFOOD_BIN" ask --help
           "$HEYFOOD_BIN" grocery --help
           if "$HEYFOOD_BIN" --help | grep -Eq '^  health[[:space:]]'; then
-            echo "health must not appear in the supported v0.8.0 help surface"
+            echo "health must not appear in the supported v0.9.0 help surface"
             exit 1
           fi
           "$HEYFOOD_BIN" completion bash > completion.bash
           if grep -Eq '(^|[^[:alpha:]])health([^[:alpha:]]|$)' completion.bash; then
-            echo "health must not appear in the supported v0.8.0 completion surface"
+            echo "health must not appear in the supported v0.9.0 completion surface"
             exit 1
           fi
           test -s completion.bash

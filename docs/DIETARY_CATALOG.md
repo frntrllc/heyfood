@@ -19,9 +19,9 @@ guidance.
 - The profile-writable catalog contains 26 selectable diet options. It is not
   the same contract as the 22 authored guides currently returned by the Diet
   v1 service.
-- The next source candidate adds read-only `heyfood diet`, `diet list`, `diet
-  show DIET_ID` (plus the single-ID short form), and TUI `/diet [DIET_ID]`.
-  These commands are not part of the public v0.8.0 binary.
+- The public v0.9.0 release includes read-only `heyfood diet`, `diet list`,
+  `diet show DIET_ID` (plus the single-ID short form), and TUI
+  `/diet [DIET_ID]`.
 - Diet-guide reads require exact `diet:v1` capability discovery and the
   `knowledge:read` scope. Runtime guide IDs are case-sensitive and are used
   exactly as the service lists them.

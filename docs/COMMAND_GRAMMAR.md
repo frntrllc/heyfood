@@ -18,12 +18,11 @@ log           log a meal through the hosted agent
 item          assess a food or menu item
 grocery       read, prepare, export, and confirm Grocery operations
 watch         create, list, and remove recurring Menu Watch subscriptions
-diet          browse the read-only hosted Diet guide (source candidate)
+diet          browse the read-only hosted Diet guide
 completion    print shell completion syntax
 ```
 
-`diet` is present in the next source candidate, not the installed public
-`v0.8.0` release.
+`diet` is part of the installed public `v0.9.0` release.
 
 ## Offline agent discovery
 
@@ -32,6 +31,7 @@ heyfood agent describe
 heyfood agent describe --schema-version 1
 heyfood agent describe --schema-version 2
 heyfood agent describe --schema-version 3
+heyfood agent describe --schema-version 4
 heyfood agent guide --format markdown
 heyfood agent guide --format markdown --safety
 heyfood agent schema --list
@@ -40,6 +40,7 @@ heyfood agent doctor
 heyfood agent doctor --schema-version 1
 heyfood agent doctor --schema-version 2
 heyfood agent doctor --schema-version 3
+heyfood agent doctor --schema-version 4
 heyfood agent compatibility --json --no-input
 heyfood agent setup --target codex|claude|all --scope user|project \
   [--project-root /absolute/path] [--dry-run|--apply] \
@@ -53,8 +54,8 @@ These commands do not read credentials, contact hello.food, mutate product
 state, or start the TUI. Schema lookup accepts only a public name or exact
 identifier from `--list`; unknown names return a typed runtime error.
 
-Discovery schema v3 is the default. Explicit schema v1 and v2 remain frozen
-compatibility views and omit the v3 household agent surface. The offline
+Discovery schema v4 is the default. Explicit schema v1, v2, and v3 remain
+frozen compatibility views. The offline
 compatibility command fails closed when it cannot verify a receipt-bound skill
 identity and returns the binary-owned remediation command.
 
@@ -72,7 +73,7 @@ heyfood mcp serve
 ```
 
 This long-lived stdio JSON-RPC process is the sole exception to the one-value
-CLI stdout contract. It exposes exactly eight typed read/discovery tools and no
+CLI stdout contract. It exposes exactly ten typed read/discovery tools and no
 mutation, generic command, shell, file, raw API, credential, or TUI-control
 surface. It uses only account-bound native credentials and the compiled
 production service origin. Human/one-shot modifiers and every inherited
@@ -209,11 +210,11 @@ authority are never rendered.
 
 ## Deferred Health integrations
 
-Health integrations are not part of the supported `v0.8.0` command surface.
+Health integrations are not part of the supported `v0.9.0` command surface.
 They are absent from root help, shell completion, and the TUI command registry.
 The retained `health` spelling fails locally with `capability_deferred` before
 credential access or network dispatch. Oura and Apple Health integration work
-remains post-`v0.8.0`; no Health implementation or canary is required for this
+remains post-`v0.9.0`; no Health implementation or canary is required for this
 release.
 
 ## Menu Watch
@@ -237,7 +238,7 @@ removal requires `REMOVE` on the controlling terminal. The creation review
 includes `--confirm-menu-url` because that flag is the human's explicit menu
 identity assertion.
 
-## Diet guide (source candidate)
+## Diet guide
 
 ```bash
 heyfood diet
@@ -322,7 +323,7 @@ contains native audio support; unavailable artifacts and insufficient scopes
 fail before microphone access. Item-level Menu Watch diff detail, real-hardware
 voice qualification, full parity, hosted household sync/learned graph/health,
 cross-device household state, and the complete twelve-stage showcase are
-post-`v0.8.0` conformance work, not release gates.
+post-`v0.9.0` conformance work, not release gates.
 
 ### Frozen future household mutation grammar (inactive)
 
@@ -331,9 +332,9 @@ Phase 0 freezes `/household edit <member>`, `/household archive <member>`,
 attached-human implementation. The complete
 registry, keys, human labels, and state copy are in
 `fixtures/agent/household-phase0/tui-grammar.json`. These entries are not
-active v0.8.0 commands and must not appear in its help or completion registry.
+active v0.9.0 commands and must not appear in its help or completion registry.
 
-`/household agent-access MEMBER` is active in v0.8.0. It is attached-TUI-only,
+`/household agent-access MEMBER` is active in v0.9.0. It is attached-TUI-only,
 never agent-driven, and prints the exact stable-reference,
 disclosure-generation, and projection handoff needed for the authorized read.
 Revocation advances the generation and marks every earlier handoff stale.

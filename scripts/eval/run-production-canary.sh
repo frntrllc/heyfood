@@ -269,6 +269,45 @@ if ! jq -e '
   exit 1
 fi
 
+diet_catalog="$scratch/diet-catalog.json"
+run_operation diet_catalog "$diet_catalog" "" "${common[@]}" diet list
+if ! jq -e '
+  .corpus_available == true and
+  (.count | type == "number" and . >= 1 and floor == .) and
+  (.diets | type == "array") and
+  ((.diets | length) == .count) and
+  all(.diets[];
+    (.id | type == "string" and length >= 1 and length <= 80) and
+    (.label | type == "string" and length >= 1) and
+    (.evidence_level == "strong" or
+     .evidence_level == "moderate" or
+     .evidence_level == "limited") and
+    (.covered | type == "boolean")
+  )
+' "$diet_catalog" >/dev/null; then
+  write_report "failed" "contract" "diet_catalog" "diet_catalog_contract"
+  exit 1
+fi
+diet_id=$(jq -er '.diets[0].id' "$diet_catalog")
+
+diet_detail="$scratch/diet-detail.json"
+run_operation diet_detail "$diet_detail" "" \
+  "${common[@]}" diet show "$diet_id"
+if ! jq -e \
+  --arg id "$diet_id" '
+  .id == $id and
+  (.label | type == "string" and length >= 1) and
+  (.covered | type == "boolean") and
+  (.evidence_level == "strong" or
+   .evidence_level == "moderate" or
+   .evidence_level == "limited") and
+  (.detail_status == "covered" or .detail_status == "not_covered") and
+  (.sections | type == "object")
+' "$diet_detail" >/dev/null; then
+  write_report "failed" "contract" "diet_detail" "diet_detail_contract"
+  exit 1
+fi
+
 after="$scratch/grocery-after.json"
 run_operation grocery_nonmutation "$after" "" "${common[@]}" grocery list
 if ! jq -e \

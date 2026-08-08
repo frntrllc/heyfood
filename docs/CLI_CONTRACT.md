@@ -1,15 +1,15 @@
 # heyfood native CLI contract
 
-This document defines the process interface for the current Rust public cut
-and identifies additions that exist only in the next source candidate. The
-supported `v0.8.0` product commands are `agent`, `register`, `login`, `logout`,
-`chat`, `onboard`, `ask`, `reply`, `log`, `item`, `grocery`, and `watch`. An
+This document defines the process interface for the current Rust public cut.
+The supported `v0.9.0` product commands are `agent`, `register`, `login`,
+`logout`, `chat`, `onboard`, `ask`, `reply`, `log`, `item`, `diet`, `grocery`,
+and `watch`. An
 interactive bare `heyfood`
 invocation opens the same native TUI as `heyfood chat`.
 Human rendering may improve between compatible releases; machine-facing changes
 follow the compatibility policy below.
 
-The supported `v0.8.0` contract includes local native household roster
+The supported `v0.9.0` contract includes local native household roster
 management and complete declared-profile onboarding for members. Persistent Me/member/Everyone scope selection
 is stored in an account-bound encrypted repository.
 
@@ -29,7 +29,7 @@ The following commands perform native product work:
 | `reply` | Runs one hosted-agent turn and requires `--conversation-id`. |
 | `log` | Sends meal-log text through the hosted-agent turn endpoint. |
 | `item` | Sends a food or menu-item assessment through the hosted-agent turn endpoint. |
-| `diet` | Source-candidate, read-only access to the hosted Diet v1 catalog and authored guide detail. This command is not included in the public v0.8.0 binary. |
+| `diet` | Read-only access to the hosted Diet v1 catalog and authored guide detail after exact capability and scope discovery. |
 | `grocery` | Reads, prepares, exports, and explicitly confirms Grocery v1 operations after capability discovery. |
 | `watch` | Creates, lists, and removes recurring Menu Watch subscriptions. |
 
@@ -40,9 +40,9 @@ authoritative allowlist: internal approval/commit schemas are deliberately not
 exposed. `agent doctor` reports only bounded build/contract facts and never
 prints a user-specific executable or configuration path.
 
-Bare `agent`, `agent describe`, and `agent doctor` return schema v3. Explicit
-`--schema-version 1` and `--schema-version 2` retain the frozen compatibility
-views and omit household agent claims. Unsupported schema versions fail during
+Bare `agent`, `agent describe`, and `agent doctor` return schema v4. Explicit
+`--schema-version 1`, `--schema-version 2`, and `--schema-version 3` retain the
+frozen compatibility views. Unsupported schema versions fail during
 argument parsing before credentials or network access.
 
 `agent compatibility` is a version-invariant offline bootstrap. `household
@@ -51,7 +51,7 @@ reads requiring `--json --no-input`. They call the same application controller
 as the two household MCP tools, perform no hosted dispatch or mutation, reject
 display-name resolution, and do not expose a self profile.
 
-Health integrations are deferred from the supported `v0.8.0` contract.
+Health integrations are deferred from the supported `v0.9.0` contract.
 `health` is hidden from root help and generated shell completion, `/health` is
 absent from the TUI command registry, and new grants do not request
 `health:read` or `integrations:manage`. The retained top-level spelling returns
@@ -59,7 +59,7 @@ absent from the TUI command registry, and new grants do not request
 provider-neutral types, transports, and frozen fixtures are not a support claim
 and require no additional implementation or production canary for this release.
 
-The source-candidate Diet surface uses `heyfood diet`, `heyfood diet list`,
+The supported Diet surface uses `heyfood diet`, `heyfood diet list`,
 `heyfood diet show DIET_ID`, and the equivalent short form `heyfood diet
 DIET_ID`. It dispatches only after capability discovery reports the exact value
 `application_capabilities.diet == "v1"` and the account grant contains
@@ -75,7 +75,7 @@ description of its sources, not a safety or clinical guarantee. The authored
 guidance for an uncovered diet. Optional item-level `diet_alignment` is
 rendered only as a subordinate explanation and cannot alter safety status,
 badge, color, ordering, filtering, or mutation state. Profile diet set/clear is
-not exposed in this candidate because its write contract remains pending in
+not exposed in this release because its write contract remains pending in
 [hellofood #261](https://github.com/frntrllc/hellofood/issues/261).
 
 Native household management is a human-attached-TUI surface. In

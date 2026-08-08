@@ -1,9 +1,9 @@
 # Native household local state
 
-The v0.8.0 native hey.food TUI keeps its household roster, selected scope, and
+The v0.9.0 native hey.food TUI keeps its household roster, selected scope, and
 declared dietary profiles in the account-bound encrypted household repository.
 Local roster management, member onboarding, and persistent scope selection are
-part of the supported v0.8.0 TUI contract. The TUI does not use the imported
+part of the supported v0.9.0 TUI contract. The TUI does not use the imported
 Python snapshot after native activation.
 
 ## Supported human workflow
@@ -49,7 +49,7 @@ cross-device roster sync, remote member profile sync, or remote erasure. Those
 capabilities remain deferred behind a separate hosted privacy and consent
 contract.
 
-Household lifecycle mutation remains human-TUI-only. The v0.8.0 agent surface
+Household lifecycle mutation remains human-TUI-only. The v0.9.0 agent surface
 is read-only and capability-derived: it can expose the active scope, the
 authorized roster projection, and an explicitly authorized minimized profile
 for one exact additional member. It cannot add, edit, archive, restore, erase,
@@ -104,12 +104,12 @@ verifier executables are signed and notarized before packaging; all ten assets
 are attested and verified after public download.
 
 The immutable v0.6.2 release remains four product archives plus its checksum
-manifest and gains no verifier or declaration. A managed v0.6.2-to-v0.8.0
-upgrade must preserve the prior executable until the v0.8.0 product,
+manifest and gains no verifier or declaration. A managed v0.6.2-to-v0.9.0
+upgrade must preserve the prior executable until the v0.9.0 product,
 standalone verifier, declaration, checksum, and native-state floor all verify.
-After the floor exists, the current v0.8.0 installer invoked with
+After the floor exists, the current v0.9.0 installer invoked with
 `HEYFOOD_VERSION=0.6.2` must fail at its exact supported-version gate before
-download or executable replacement and must leave v0.8.0 and local state
+download or executable replacement and must leave v0.9.0 and local state
 unchanged. The archived v0.6.2 installer and binary do not know about the
 future floor; executing either after migration is unsupported and unprotected.
 

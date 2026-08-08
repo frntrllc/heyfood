@@ -4,7 +4,7 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
-## 0.9.0 - Unreleased
+## 0.9.0 - 2026-08-08
 
 - Add capability-gated, read-only Diet catalog and guide detail across the
   one-shot CLI, interactive TUI, and local MCP integration.

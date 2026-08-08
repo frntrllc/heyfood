@@ -77,7 +77,7 @@ pre-existing result value, while the household fields remain purely additive.
 
 ## Agent-native contracts
 
-The supported v0.8.0 release exposes its public installed contracts through
+The supported v0.9.0 release exposes its public installed contracts through
 `heyfood agent schema --list`. The public allowlist contains:
 
 - `schemas/v1/heyfood-agent-manifest.schema.json` freezes network-free
@@ -94,6 +94,8 @@ The supported v0.8.0 release exposes its public installed contracts through
 - `schemas/v1/heyfood-agent-setup-plan.schema.json` freezes the opt-in
   dry-run/apply/uninstall plan, exact binary and package identities, qualified
   host observations, conflicts, and typed user handoffs.
+- `schemas/v2/heyfood-agent-setup-plan.schema.json` is the current setup plan
+  used by schema v4 discovery while the v1 setup plan remains frozen.
 - `schemas/v1/heyfood-output.schema.json` remains the existing public result
   family contract.
 
@@ -104,9 +106,9 @@ fixture is `fixtures/agent/manifest-v1-golden.json`. Self-description does not
 by itself claim MCP support; Agent Skill setup is a separately versioned,
 opt-in, receipt-bound surface.
 
-The v0.8.0 agent boundary makes manifest and doctor schema v3 the default.
-Explicit v1 and v2 remain frozen compatibility views, preserving their exact
-fields and omitting the v3 household agent surface.
+The v0.9.0 agent boundary makes manifest and doctor schema v4 the default.
+Explicit v1, v2, and v3 remain frozen compatibility views, preserving their
+exact fields and command/tool inventories.
 
 The explicit `--schema-version 2` discovery option uses
 `schemas/v2/heyfood-agent-manifest.schema.json` and
@@ -121,6 +123,11 @@ also embeds the closed compatibility, household-context input,
 household-member input, and household-read result schemas. Context profile
 reads are rejected; minimized profile disclosure requires an exact additional
 member reference.
+
+Schema v4 retains the schema-v3 household surface and adds only the two
+capability-gated, read-only Diet tools plus their closed input and result
+schemas. The default manifest therefore advertises ten MCP tools. Diet reads
+require exact `diet:v1` discovery and never expose profile mutation.
 
 ## Agent-aware household schemas
 

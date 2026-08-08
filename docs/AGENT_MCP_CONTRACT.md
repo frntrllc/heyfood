@@ -1,11 +1,10 @@
 # heyfood local MCP contract
 
-**Status:** v3 ten-tool read/discovery contract for the Diet-capable candidate;
-the v2 eight-tool inventory remains frozen in manifest schema v3
+**Status:** v0.9.0 ten-tool read/discovery contract; the v0.8.0 eight-tool
+inventory remains frozen in manifest schema v3
 
-The supported `v0.8.0` release remains on the frozen eight-tool surface; this
-ten-tool contract is not a public release claim until the candidate is
-qualified and the installer is deliberately cut over.
+The supported `v0.9.0` release uses this ten-tool contract. The prior `v0.8.0`
+release remains on its frozen eight-tool schema-v3 surface.
 
 ## Transport
 
