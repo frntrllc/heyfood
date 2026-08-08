@@ -108,6 +108,8 @@ assert_contains "$ROOT/README.md" "exactly ten typed read/discovery MCP tools"
 assert_contains "$ROOT/docs/CAPABILITY_STATUS.md" "Supported read-only v$version capability"
 assert_contains "$ROOT/docs/CLI_CONTRACT.md" "Bare \`agent\`, \`agent describe\`, and \`agent doctor\` return schema v4"
 assert_contains "$ROOT/docs/COMMAND_GRAMMAR.md" "Discovery schema v4 is the default"
+assert_contains "$ROOT/docs/NATIVE_STATE_COMPATIBILITY.md" \
+  "tool return the closed v4 document by default"
 assert_contains "$ROOT/docs/HOUSEHOLD_TUI_MANUAL_ACCEPTANCE.md" "Journey E — authenticated Diet guide"
 assert_contains "$ROOT/tests/installer_contract.sh" "SUPPORTED_VERSION=\"$version\""
 assert_contains "$ROOT/.github/workflows/ci.yml" "bounded v$version release scope"

@@ -59,20 +59,20 @@ closed.
 
 ## Manifest compatibility
 
-The published agent manifest v1 and v2 views remain closed and unchanged; the
-v1 `additive_optional_fields` value remains `false`. In v0.9.0, `heyfood agent
+The published agent manifest v1, v2, and v3 views remain closed and unchanged;
+the v1 `additive_optional_fields` value remains `false`. In v0.9.0, `heyfood agent
 describe`, bare `heyfood agent`, `heyfood agent doctor`, and the MCP manifest
-tool return the closed v3 document by default. Older integrations can request
-the frozen v1 or v2 view explicitly, while a shared Agent Skill must inspect
-the schema version before reading any capability field and fail closed on an
-unsupported version.
+tool return the closed v4 document by default. Older integrations can request
+the frozen v1, v2, or v3 view explicitly, while a shared Agent Skill must
+inspect the schema version before reading any capability field and fail closed
+on an unsupported version.
 
 Native-state metadata remains available through `heyfood agent describe
 --schema-version 2`, which returns the closed v2 manifest containing the exact
 `native_state_compatibility` declaration; `heyfood agent doctor
 --schema-version 2` binds diagnostics to that view. The managed installer and
 release smoke continue to request v2 explicitly because the standalone native
-state verifier consumes that frozen contract rather than the broader v3 agent
+state verifier consumes that frozen contract rather than the broader v4 agent
 capability document.
 
 ## Managed-install and archived-code boundary
