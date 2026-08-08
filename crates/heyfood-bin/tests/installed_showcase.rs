@@ -962,6 +962,7 @@ async fn run_installed_archive_core_release_matrix() {
     let remaining_release_gates = if signed_candidate_native_backend_proven {
         vec![
             "manual_attached_terminal_household_lifecycle",
+            "manual_attached_terminal_diet_guide",
             "production_registration_and_grocery_canaries",
             "production_heartbeat_and_terminal_recovery_journeys",
             "production_human_presentation_journeys",
@@ -972,6 +973,7 @@ async fn run_installed_archive_core_release_matrix() {
     } else {
         vec![
             "manual_attached_terminal_household_lifecycle",
+            "manual_attached_terminal_diet_guide",
             "production_registration_and_grocery_canaries",
             "production_heartbeat_and_terminal_recovery_journeys",
             "production_human_presentation_journeys",
@@ -1026,7 +1028,8 @@ async fn run_installed_archive_core_release_matrix() {
             "installed_pty": "non_household_only",
             "installed_household_cli": "noninteractive_read_only_synthetic_contract",
             "owner_grocery": "self_scope_only",
-            "household_lifecycle": "manual_attached_terminal_required"
+            "household_lifecycle": "manual_attached_terminal_required",
+            "diet_guide": "manual_attached_terminal_required"
         },
         "core_matrix": [
             {
@@ -1047,6 +1050,17 @@ async fn run_installed_archive_core_release_matrix() {
                     "second_installed_process_reloaded_credentials",
                     "registration_not_repeated",
                     "second_authenticated_turn_completed"
+                ]
+            },
+            {
+                "id": "diet-guide",
+                "status": "manual-required",
+                "assertions": [
+                    "not_exercised_by_installed_pty",
+                    "authenticated_list_detail_and_tui_presentation_required"
+                ],
+                "remaining": [
+                    "manual_attached_terminal_diet_guide"
                 ]
             },
             {
@@ -3327,8 +3341,20 @@ fn installed_harness_inventory_matches_core_release_contract() {
         "installed PTY smoke must not claim automated household coverage"
     );
     assert!(
+        !INSTALLED_PTY_SMOKE_GROUPS.contains(&"diet-guide"),
+        "installed PTY smoke must not claim automated Diet TUI coverage"
+    );
+    assert!(
         INSTALLED_PTY_SMOKE_GROUPS.contains(&"owner-grocery"),
         "installed PTY smoke retains only self-scoped Grocery coverage"
+    );
+    assert!(
+        contract["manual_release_gates"]
+            .as_array()
+            .expect("manual release gates")
+            .iter()
+            .any(|gate| gate == "authenticated_diet_list_detail_and_tui_presentation"),
+        "the signed-archive contract must retain the human Diet qualification gate"
     );
     assert_eq!(
         contract["explicit_non_gates"],
