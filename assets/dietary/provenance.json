@@ -11,8 +11,8 @@
   "export_tool": "scripts/phase0/export_contract_freeze.py",
   "export_tool_version": 2,
   "review": {
-    "status": "pending",
-    "reviewer": null,
-    "reviewed_commit_sha": null
+    "status": "approved",
+    "reviewer": "codex-rust-specialists",
+    "reviewed_commit_sha": "7986179e5af81ccde70d0f732fba2f0607559b01"
   }
 }
