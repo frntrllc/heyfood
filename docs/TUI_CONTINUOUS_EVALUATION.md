@@ -93,6 +93,13 @@ installs a Kroger or Health provider token. Proposal review and cancellation
 remain part of the human experience session because both require a fresh
 decision on an independently attached controlling terminal.
 
+The Linux evaluator supplies the same native Secret Service boundary as a
+supported desktop session. Each job creates an ephemeral D-Bus session and an
+unlocked, job-local GNOME keyring before starting the public binary. The
+keyring exists only inside the disposable runner and is destroyed with that
+runner; the canary does not disable native household protection or introduce a
+file-backed household key.
+
 Only bounded status, latency, endpoint class, public version, archive digest,
 and sanitized error type enter uploaded evidence. Raw prompts, responses,
 names, emails, dietary details, tokens, conversation IDs, household IDs, and
