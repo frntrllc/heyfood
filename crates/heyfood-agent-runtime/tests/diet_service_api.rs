@@ -207,6 +207,7 @@ async fn detail_ids_are_exactly_path_encoded_and_typed_errors_are_bounded() {
     ))["rest"]["expected_error"]
         .clone();
     unknown["details"]["diet_id"] = Value::from("Keto / DASH");
+    unknown["details"]["accepted"][0] = Value::from("plant-based");
     let expected_details = unknown["details"].clone();
     let (listener, service) = fixture_service().await;
     let server = tokio::spawn(async move {

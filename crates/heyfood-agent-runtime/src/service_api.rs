@@ -16,10 +16,10 @@ use heyfood_core::{
     GroceryMutationConfirmRequestWire, GroceryMutationProposalWire, GroceryMutationResultWire,
     HealthContextWire, IntegrationAuthorizeRequestWire, IntegrationAuthorizeResponseWire,
     IntegrationDisconnectResponseWire, IntegrationListWire, IntegrationRedirectTargetWire,
-    IntegrationSyncResponseWire, MAX_OWNER_SYNC_REQUEST_BODY_BYTES, MenuWatchCreateRequestWire,
-    MenuWatchId, MenuWatchListResponseWire, MenuWatchResponseWire, OperationId,
-    RemoveItemsRequestWire, SelfRegistrationStatusWire, SessionCredentials, TRANSCRIPTION_CHANNELS,
-    TRANSCRIPTION_CLIENT_ERROR_KINDS, TRANSCRIPTION_MAX_AUDIO_BYTES,
+    IntegrationSyncResponseWire, MAX_DIET_CATALOG_ENTRIES, MAX_OWNER_SYNC_REQUEST_BODY_BYTES,
+    MenuWatchCreateRequestWire, MenuWatchId, MenuWatchListResponseWire, MenuWatchResponseWire,
+    OperationId, RemoveItemsRequestWire, SelfRegistrationStatusWire, SessionCredentials,
+    TRANSCRIPTION_CHANNELS, TRANSCRIPTION_CLIENT_ERROR_KINDS, TRANSCRIPTION_MAX_AUDIO_BYTES,
     TRANSCRIPTION_MAX_DURATION_SECONDS, TRANSCRIPTION_MAX_LANGUAGE_CHARACTERS,
     TRANSCRIPTION_MAX_REQUEST_BYTES, TRANSCRIPTION_SAMPLE_WIDTH_BYTES,
     TRANSCRIPTION_WAV_HEADER_BYTES, Transcription, TranscriptionPurpose, TranscriptionWire,
@@ -1726,13 +1726,11 @@ fn diet_http_error(
                 );
             };
             let accepted_is_valid = !accepted.is_empty()
-                && accepted.len() <= 64
+                && accepted.len() <= MAX_DIET_CATALOG_ENTRIES
                 && accepted.iter().all(|value| {
                     !value.is_empty()
-                        && value.len() <= 64
-                        && value.bytes().all(|byte| {
-                            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
-                        })
+                        && value.chars().count() <= 64
+                        && !value.chars().any(char::is_control)
                 })
                 && accepted
                     .iter()

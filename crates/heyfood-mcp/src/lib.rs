@@ -1035,11 +1035,12 @@ fn tool_error_output_schema(diet_error_details: bool) -> Value {
                 "accepted": {
                     "type": "array",
                     "minItems": 1,
-                    "maxItems": 64,
+                    "maxItems": 30,
                     "uniqueItems": true,
                     "items": {
                         "type": "string",
-                        "pattern": "^[a-z0-9_]{1,64}$"
+                        "minLength": 1,
+                        "maxLength": 64
                     }
                 }
             }
@@ -2030,7 +2031,7 @@ mod tests {
                         .with_details(json!({
                             "reason": "unknown_diet",
                             "diet_id": diet_id,
-                            "accepted": ["keto", "mediterranean"]
+                            "accepted": ["keto", "mediterranean", "plant-based"]
                         })));
                 }
                 Ok(diet_detail_fixture())
@@ -2387,7 +2388,7 @@ mod tests {
         assert_eq!(unknown["error"]["details"]["diet_id"], "not_a_diet");
         assert_eq!(
             unknown["error"]["details"]["accepted"],
-            json!(["keto", "mediterranean"])
+            json!(["keto", "mediterranean", "plant-based"])
         );
 
         let invalid = server()

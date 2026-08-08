@@ -1477,14 +1477,14 @@ pub fn manifest_v4() -> Value {
             "urn:heyfood:mcp:v1:list-diets:input",
             "urn:heyfood:mcp:v1:list-diets:result",
             "5125c1a7d77fb5a748f1008689b52612a94bf6d3c64264d15c0a6edb7f6e596b",
-            "689d4a046b40b8811674c8013e133a7d0c9fbdfb26e119bae64b247187bfe225",
+            "9e0975020ede21ca28a585420483d849e1cb91cb8b3fc74d1ee40e395a7960b9",
         ),
         diet_mcp_inventory_row(
             "heyfood_get_diet",
             "urn:heyfood:mcp:v1:get-diet:input",
             "urn:heyfood:mcp:v1:get-diet:result",
             "bee96c1626e080faa34427e6e5b16415c6ed5da2fb3f3113aa87b8388ce14fef",
-            "5877e0d94688abfccf98627231687c04c86c2b16d407d335bb410eb893ffcb2f",
+            "91637b8b0dc849f49a12cc2ae95f6f5acadf00fa6786204cafef11b5149154fd",
         ),
     ]);
 
