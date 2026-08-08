@@ -12,7 +12,10 @@ WORKSPACE_VERSION=$(cargo metadata --locked --no-deps --format-version 1 \
   --manifest-path "$ROOT/Cargo.toml" | jq -er \
   '.packages[] | select(.name == "heyfood-bin") | .version')
 readonly WORKSPACE_VERSION
-CURRENT_GATE_VERSION="v${WORKSPACE_VERSION//./_}"
+SUPPORTED_RELEASE_VERSION=$(jq -er '.release' \
+  "$ROOT/tests/showcase/core-release-matrix.v1.json")
+readonly SUPPORTED_RELEASE_VERSION
+CURRENT_GATE_VERSION="v${SUPPORTED_RELEASE_VERSION//./_}"
 readonly CURRENT_GATE_VERSION
 readonly PREVIOUS_GATE_VERSION="v0_7_1"
 CASE_DIR=$(mktemp -d)
@@ -708,5 +711,5 @@ jq -e '
   "$ROOT/tests/showcase/core-release-matrix.v1.json" >/dev/null ||
   fail "the core matrix must preserve the bounded distribution and non-gates"
 
-printf 'release scope contract: complete v%s native-state set; macOS/Linux CI only\n' \
-  "$WORKSPACE_VERSION"
+printf 'release scope contract: public v%s; candidate v%s; macOS/Linux CI only\n' \
+  "$SUPPORTED_RELEASE_VERSION" "$WORKSPACE_VERSION"

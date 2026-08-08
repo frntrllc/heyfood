@@ -17,12 +17,32 @@ assert_contains() {
     fail "$source must contain: $expected"
 }
 
-version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' "$ROOT/Cargo.toml" | head -1)
-readonly version
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+candidate_version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' "$ROOT/Cargo.toml" | head -1)
+release_version=$(sed -n 's/^readonly SUPPORTED_VERSION="\([^"]*\)"$/\1/p' "$ROOT/install.sh")
+readonly candidate_version release_version
+[[ "$candidate_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
   fail "Cargo.toml must declare an exact workspace version"
+[[ "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  fail "install.sh must declare an exact supported release version"
+
+# Public release surfaces remain bound to the hosted installer until an
+# independently qualified candidate is authorized for cutover. Source
+# candidates may advance Cargo and integration-package metadata without
+# rewriting those public claims early.
+version=$release_version
+readonly version
+
+if [[ "$candidate_version" != "$release_version" ]]; then
+  assert_contains "$ROOT/CHANGELOG.md" "## $candidate_version - Unreleased"
+  assert_contains "$ROOT/docs/CAPABILITY_STATUS.md" \
+    "| Native v$candidate_version source candidate | Under development; not released |"
+  assert_contains "$ROOT/docs/CAPABILITY_STATUS.md" \
+    "The public installer remains on v$release_version until candidate qualification"
+fi
 
 assert_contains "$ROOT/install.sh" "SUPPORTED_VERSION=\"$version\""
+assert_contains "$ROOT/crates/heyfood-installer/src/main.rs" \
+  "const SUPPORTED_RELEASE_VERSION: &str = \"$version\";"
 assert_contains "$ROOT/README.md" "supported release is \`$version\`"
 assert_contains "$ROOT/README.md" "supported native \`v$version\` binary"
 assert_contains "$ROOT/docs/CAPABILITY_STATUS.md" \
@@ -89,9 +109,9 @@ assert_contains "$ROOT/.github/workflows/ci.yml" "bounded v$version release scop
 assert_contains "$ROOT/.github/workflows/continuous-tui-eval.yml" "default: \"$version\""
 assert_contains "$ROOT/.github/workflows/production-tui-canary.yml" "default: \"$version\""
 assert_contains "$ROOT/agent-integrations/codex/heyfood/.codex-plugin/plugin.json" \
-  "\"version\": \"$version\""
+  "\"version\": \"$candidate_version\""
 assert_contains "$ROOT/agent-integrations/claude/heyfood/.claude-plugin/plugin.json" \
-  "\"version\": \"$version\""
+  "\"version\": \"$candidate_version\""
 assert_contains "$ROOT/crates/heyfood-bin/tests/installed_showcase.rs" \
   'format!("not enabled in the default {expected_version} artifact")'
 assert_contains "$ROOT/crates/heyfood-bin/tests/installed_showcase.rs" \
@@ -139,13 +159,14 @@ for source in "$ROOT/README.md" "$ROOT/docs/SHOWCASE_CONFORMANCE.md"; do
 done
 
 assert_contains "$ROOT/docs/AGENT_INTEGRATION.md" \
-  "carry the corrected current Windows deferral"
-assert_contains "$ROOT/docs/AGENT_INTEGRATION.md" \
-  "schema-v3 document for the complete current"
+  "default schema-v4 document for the complete current"
+assert_contains "$ROOT/crates/heyfood-agent-contract/src/lib.rs" \
+  "Windows CI and public distribution are outside this release contract."
 if grep -Fq 'Windows source CI is active' \
   "$ROOT/crates/heyfood-agent-contract/src/lib.rs" \
   "$ROOT/fixtures/agent/manifest-v1-golden.json"; then
   fail "explicit compatibility discovery views must not claim Windows CI is active"
 fi
 
-printf 'version documentation contract: v%s coordinated\n' "$version"
+printf 'version documentation contract: public v%s; candidate v%s coordinated\n' \
+  "$release_version" "$candidate_version"

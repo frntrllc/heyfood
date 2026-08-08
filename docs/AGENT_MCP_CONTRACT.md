@@ -3,6 +3,10 @@
 **Status:** v3 ten-tool read/discovery contract for the Diet-capable candidate;
 the v2 eight-tool inventory remains frozen in manifest schema v3
 
+The supported `v0.8.0` release remains on the frozen eight-tool surface; this
+ten-tool contract is not a public release claim until the candidate is
+qualified and the installer is deliberately cut over.
+
 ## Transport
 
 The initial server is local stdio:

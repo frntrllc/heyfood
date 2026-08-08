@@ -13,6 +13,9 @@ use serde_json::{Map, Number, Value};
 const MAX_FLOOR_BYTES: usize = 4 * 1024;
 const MAX_DECLARATION_BYTES: usize = 4 * 1024;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
+// This verifier is distributed with the currently supported public installer.
+// Candidate workspace version bumps must not silently cut that installer over.
+const SUPPORTED_RELEASE_VERSION: &str = "0.8.0";
 const NATIVE_STATE_VERSION: u64 = 2;
 const CAPABILITIES: &str = concat!(
     "[\"household-account-slot-v1\",",
@@ -28,7 +31,7 @@ fn main() -> ExitCode {
         return usage();
     };
     if command == "--version" {
-        println!("heyfood-installer {}", env!("CARGO_PKG_VERSION"));
+        println!("heyfood-installer {SUPPORTED_RELEASE_VERSION}");
         return ExitCode::SUCCESS;
     }
     if command == "native-state-declaration" {
