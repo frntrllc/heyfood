@@ -102,14 +102,25 @@ export LOCALAPPDATA="$home/AppData/Local"
 export HEYFOOD_STATE_DIR="$state"
 export PATH="$host_bin:$PATH"
 
+schema_index=$("$binary" agent schema --list)
+expected_setup_schema=$(jq -er \
+  '[.schemas[].name
+    | if . == "setup-plan" then 1
+      elif test("^setup-plan-v[0-9]+$") then
+        capture("^setup-plan-v(?<version>[0-9]+)$").version | tonumber
+      else empty
+      end]
+   | if length == 0 then error("no setup-plan schemas") else max end' \
+  <<<"$schema_index")
+
 dry_run=$(
   "$binary" --json agent setup \
     --target all \
     --scope user \
     --dry-run
 )
-jq -e '
-  .schema_version == 1
+jq -e --argjson expected_schema "$expected_setup_schema" '
+  .schema_version == $expected_schema
   and .ready == true
   and .changed == false
   and (.plan_sha256 | test("^[0-9a-f]{64}$"))
@@ -127,7 +138,9 @@ applied=$(
     --apply \
     --plan-sha256 "$plan_sha256"
 )
-jq -e '.ready == true and .changed == true' <<<"$applied" >/dev/null
+jq -e --argjson expected_schema "$expected_setup_schema" \
+  '.schema_version == $expected_schema and .ready == true and .changed == true' \
+  <<<"$applied" >/dev/null
 test -f "$home/.agents/skills/heyfood/SKILL.md"
 test -f "$home/.claude/skills/heyfood/SKILL.md"
 test -f "$home/.codex-heyfood-mcp"
@@ -141,8 +154,9 @@ unchanged=$(
     --scope user \
     --dry-run
 )
-jq -e '
-  .ready == true
+jq -e --argjson expected_schema "$expected_setup_schema" '
+  .schema_version == $expected_schema
+  and .ready == true
   and .changed == false
   and ([.hosts[].action] == ["none", "none"])
   and ([.hosts[].mcp.action] == ["none", "none"])
@@ -154,8 +168,9 @@ uninstall=$(
     --scope user \
     --dry-run
 )
-jq -e '
-  .ready == true
+jq -e --argjson expected_schema "$expected_setup_schema" '
+  .schema_version == $expected_schema
+  and .ready == true
   and ([.hosts[].action] == ["uninstall", "uninstall"])
   and ([.hosts[].mcp.action] == ["uninstall", "uninstall"])
 ' <<<"$uninstall" >/dev/null

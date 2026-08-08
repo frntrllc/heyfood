@@ -165,14 +165,29 @@ test "$("$binary" --version)" = "heyfood $version"
 "$binary" completion bash >"$staging/completion.bash"
 test -s "$staging/completion.bash"
 
+"$binary" agent schema --list >"$staging/agent-schema-index.json"
+expected_agent_manifest_schema=$(jq -er \
+  '[.schemas[].name
+    | if . == "manifest" then 1
+      elif test("^manifest-v[0-9]+$") then
+        capture("^manifest-v(?<version>[0-9]+)$").version | tonumber
+      else empty
+      end]
+   | if length == 0 then error("no manifest schemas") else max end' \
+  "$staging/agent-schema-index.json")
 "$binary" agent describe >"$staging/agent-manifest.json"
-jq -e \
-  '.schema_version == 3
+jq -e --argjson expected_schema "$expected_agent_manifest_schema" \
+  '.schema_version == $expected_schema
    and .automation_surfaces.mcp_stdio == "active"
    and ([.commands[].path] | index("mcp serve")) != null
    and ([.mcp_inventory.tools[].name] | index("heyfood_get_household_context")) != null
    and ([.mcp_inventory.tools[].name] | index("heyfood_get_household_member")) != null
-   and ([.capabilities[] | select(.id == "agent-mcp" and .status == "active")] | length) == 1' \
+   and ([.capabilities[] | select(.id == "agent-mcp" and .status == "active")] | length) == 1
+   and (if $expected_schema >= 4 then
+     ([.mcp_inventory.tools[].name] | index("heyfood_list_diets")) != null
+     and ([.mcp_inventory.tools[].name] | index("heyfood_get_diet")) != null
+     and ([.capabilities[] | select(.id == "diet-guidance" and .status == "active")] | length) == 1
+   else true end)' \
   "$staging/agent-manifest.json" >/dev/null
 if [[ "$native_state_release" == "true" ]]; then
   test "$("$verifier" --version)" = "heyfood-installer $version"

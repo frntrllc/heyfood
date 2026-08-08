@@ -102,6 +102,52 @@ try {
   process.exit(1);
 }
 
+function loadExpectedManifest() {
+  const result = spawnSync(binary, ["agent", "describe"], {
+    env: environment,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 2 * 1024 * 1024,
+  });
+  if (result.status !== 0 || result.signal !== null) {
+    throw new Error("could not read the installed binary agent manifest");
+  }
+  const manifest = JSON.parse(result.stdout);
+  const names = manifest?.mcp_inventory?.tools?.map((tool) => tool.name);
+  if (
+    !Number.isSafeInteger(manifest?.schema_version) ||
+    manifest.schema_version < 3 ||
+    manifest?.automation_surfaces?.mcp_stdio !== "active" ||
+    !Array.isArray(names) ||
+    names.length === 0 ||
+    new Set(names).size !== names.length
+  ) {
+    throw new Error("installed binary agent manifest is not release-smoke compatible");
+  }
+  if (
+    manifest.schema_version >= 4 &&
+    (!names.includes("heyfood_list_diets") ||
+      !names.includes("heyfood_get_diet") ||
+      !manifest.capabilities?.some(
+        (capability) =>
+          capability.id === "diet-guidance" && capability.status === "active",
+      ))
+  ) {
+    throw new Error("schema-v4 agent manifest omitted the Diet read surface");
+  }
+  return { manifest, names };
+}
+
+let installedDiscovery;
+try {
+  installedDiscovery = loadExpectedManifest();
+} catch (error) {
+  console.error(`MCP installed-artifact smoke failed: ${error.message}`);
+  process.exit(1);
+}
+const expectedManifest = installedDiscovery.manifest;
+const expectedToolNames = installedDiscovery.names;
+
 const child = spawn(binary, ["mcp", "serve"], {
   env: environment,
   stdio: ["pipe", "pipe", "pipe"],
@@ -222,17 +268,7 @@ try {
 
   const listed = await request("tools/list", {});
   const names = listed.result?.tools?.map((tool) => tool.name);
-  const expected = [
-    "heyfood_get_manifest",
-    "heyfood_get_status",
-    "heyfood_get_capabilities",
-    "heyfood_get_grocery_list",
-    "heyfood_get_grocery_exclusions",
-    "heyfood_list_menu_watches",
-    "heyfood_get_household_context",
-    "heyfood_get_household_member",
-  ];
-  if (JSON.stringify(names) !== JSON.stringify(expected)) {
+  if (JSON.stringify(names) !== JSON.stringify(expectedToolNames)) {
     throw new Error("MCP tool allowlist mismatch");
   }
   for (const tool of listed.result.tools) {
@@ -251,8 +287,7 @@ try {
   });
   if (
     manifest.result?.isError !== false ||
-    structured(manifest)?.schema_version !== 3 ||
-    structured(manifest)?.automation_surfaces?.mcp_stdio !== "active"
+    JSON.stringify(structured(manifest)) !== JSON.stringify(expectedManifest)
   ) {
     throw new Error("installed MCP manifest call failed");
   }
@@ -298,7 +333,7 @@ try {
     throw new Error("MCP emitted diagnostics during the clean protocol smoke");
   }
   console.log(
-    "MCP installed-artifact smoke passed: 8 tools, closed schemas, typed auth handoff.",
+    `MCP installed-artifact smoke passed: ${expectedToolNames.length} manifest-derived tools, closed schemas, typed auth handoff.`,
   );
 } catch (error) {
   child.kill("SIGTERM");
