@@ -92,6 +92,7 @@ pub struct OneShotError {
     pub code: &'static str,
     pub message: String,
     pub outcome_uncertain: bool,
+    pub details: Option<Box<Value>>,
 }
 
 impl fmt::Debug for OneShotError {
@@ -101,6 +102,7 @@ impl fmt::Debug for OneShotError {
             .field("code", &self.code)
             .field("message", &"[REDACTED]")
             .field("outcome_uncertain", &self.outcome_uncertain)
+            .field("details", &self.details.as_ref().map(|_| "[REDACTED]"))
             .finish()
     }
 }
@@ -119,6 +121,7 @@ impl From<heyfood_application::PortError> for OneShotError {
             code: value.code,
             message: value.message,
             outcome_uncertain: value.outcome_uncertain,
+            details: value.details,
         }
     }
 }
@@ -142,6 +145,7 @@ impl From<EnsureSessionError> for OneShotError {
             code,
             message: terminal_safe_text(&value.to_string()),
             outcome_uncertain,
+            details: None,
         }
     }
 }
@@ -3332,6 +3336,7 @@ impl OneShotError {
             code,
             message: message.into(),
             outcome_uncertain: false,
+            details: None,
         }
     }
 }
@@ -9763,6 +9768,7 @@ mod tests {
             code: "agent_error",
             message: "A server-selected explanation.".to_owned(),
             outcome_uncertain: true,
+            details: None,
         };
 
         let sanitized = sanitize_household_log_error(error, OutputMode::HumanPlain, &[]);
@@ -9792,6 +9798,7 @@ mod tests {
             code: "service_error",
             message: "Server rejected opaque- member-\nseven.".to_owned(),
             outcome_uncertain: true,
+            details: None,
         };
         let private_household_ids = vec!["opaque-member-seven".to_owned()];
 
@@ -9809,6 +9816,7 @@ mod tests {
             code: "service_error",
             message: "Server rejected opaque-member.".to_owned(),
             outcome_uncertain: true,
+            details: None,
         };
         let private_household_ids = vec!["opaque-member-seven".to_owned()];
 
@@ -9826,6 +9834,7 @@ mod tests {
             code: "agent_error",
             message: "Server rejected opaque- member-\nseven and _self.".to_owned(),
             outcome_uncertain: true,
+            details: None,
         };
         let private_household_ids = vec!["opaque-member-seven".to_owned()];
 

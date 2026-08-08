@@ -173,11 +173,41 @@ async fn covered_and_uncovered_detail_fixtures_preserve_their_distinct_success_s
 }
 
 #[tokio::test]
+async fn detail_response_must_match_the_exact_requested_id() {
+    let response = fixture(include_str!(
+        "../../../fixtures/contracts/diet-backend/v1/fixtures/diet/detail_covered.json"
+    ))["response"]
+        .clone();
+    let (listener, service) = fixture_service().await;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_request(&mut socket).await;
+        assert!(request.starts_with("GET /v1/diets/keto HTTP/1.1"));
+        respond(&mut socket, 200, &response).await;
+    });
+    let error = ReadDietDetail::new(&service)
+        .execute(
+            capabilities(DietCapability::V1),
+            credentials(),
+            OperationId::new(),
+            "keto".into(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "diet_contract_error");
+    assert!(error.details.is_none());
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn detail_ids_are_exactly_path_encoded_and_typed_errors_are_bounded() {
-    let unknown = fixture(include_str!(
+    let mut unknown = fixture(include_str!(
         "../../../fixtures/contracts/diet-backend/v1/fixtures/diet/unknown_diet_error.json"
     ))["rest"]["expected_error"]
         .clone();
+    unknown["details"]["diet_id"] = Value::from("Keto / DASH");
+    let expected_details = unknown["details"].clone();
     let (listener, service) = fixture_service().await;
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
@@ -196,6 +226,7 @@ async fn detail_ids_are_exactly_path_encoded_and_typed_errors_are_bounded() {
         .await
         .unwrap_err();
     assert_eq!(error.code, "diet_unknown_diet");
+    assert_eq!(error.details, Some(Box::new(expected_details)));
     server.await.unwrap();
 
     let (listener, service) = fixture_service().await;

@@ -3637,15 +3637,19 @@ fn display_values(values: &[String]) -> String {
 }
 
 fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
-    let command = model.draft.trim().to_owned();
+    let submitted = model.draft.clone();
+    let command = submitted.trim().to_owned();
+    let command_had_outer_whitespace = submitted != command;
     remember_prompt(model, &command);
     model.draft.clear();
     model.cursor = 0;
-    let (name, arguments) = command
+    let (name, raw_arguments) = command
         .split_once(char::is_whitespace)
         .map_or((command.as_str(), ""), |(name, arguments)| {
-            (name, arguments.trim())
+            (name, arguments)
         });
+    let arguments = raw_arguments.trim();
+    let arguments_were_trimmed = arguments != raw_arguments;
     if name == "/health" {
         push_notice(
             model,
@@ -3697,7 +3701,10 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
             return open_panel(model, PanelRequest::DietCatalog);
         }
         SlashCommandKind::Diet
-            if arguments.len() > 64 || arguments.chars().any(char::is_whitespace) =>
+            if command_had_outer_whitespace
+                || arguments_were_trimmed
+                || arguments.len() > 64
+                || arguments.chars().any(char::is_whitespace) =>
         {
             push_notice(model, &format!("Usage: {}", spec.usage));
         }
@@ -11734,6 +11741,20 @@ mod tests {
             invalid.scrollback.entries().back().unwrap().text,
             "Usage: /diet [DIET_ID]"
         );
+        for input in [
+            " /diet mediterranean",
+            "/diet  mediterranean",
+            "/diet mediterranean ",
+            "/diet mediterranean keto",
+        ] {
+            let mut invalid = AppModel::default();
+            assert!(submit_text(&mut invalid, input).is_empty(), "{input}");
+            assert_eq!(
+                invalid.scrollback.entries().back().unwrap().text,
+                "Usage: /diet [DIET_ID]",
+                "{input}"
+            );
+        }
     }
 
     #[test]

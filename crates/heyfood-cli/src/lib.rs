@@ -1034,6 +1034,8 @@ struct ErrorBody<'a> {
     hint: Option<&'a str>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     outcome_uncertain: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<&'a Value>,
 }
 
 pub fn render_registration_success(
@@ -1081,6 +1083,17 @@ pub fn render_error_with_outcome(
     machine: bool,
     outcome_uncertain: bool,
 ) -> Result<String, serde_json::Error> {
+    render_error_with_outcome_and_details(kind, message, hint, machine, outcome_uncertain, None)
+}
+
+pub fn render_error_with_outcome_and_details(
+    kind: &str,
+    message: &str,
+    hint: Option<&str>,
+    machine: bool,
+    outcome_uncertain: bool,
+    details: Option<&Value>,
+) -> Result<String, serde_json::Error> {
     if machine {
         let envelope = ErrorEnvelope {
             ok: false,
@@ -1089,6 +1102,7 @@ pub fn render_error_with_outcome(
                 message,
                 hint,
                 outcome_uncertain,
+                details,
             },
         };
         serde_json::to_string(&envelope).map(|value| format!("{value}\n"))
@@ -2456,6 +2470,38 @@ mod registration_tests {
         assert_eq!(value["error"]["type"], "registration_unavailable");
         assert_eq!(value["error"]["hint"], "Try again later.");
         assert!(value["error"].get("outcome_uncertain").is_none());
+    }
+
+    #[test]
+    fn machine_errors_preserve_bounded_diet_contract_details_only_when_present() {
+        let details = json!({
+            "reason": "unknown_diet",
+            "diet_id": "not_a_diet",
+            "accepted": ["keto", "mediterranean"]
+        });
+        let rendered = render_error_with_outcome_and_details(
+            "diet_unknown_diet",
+            "The requested diet is not in the served catalog.",
+            None,
+            true,
+            false,
+            Some(&details),
+        )
+        .unwrap();
+        let value: Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(value["error"]["details"], details);
+
+        let human = render_error_with_outcome_and_details(
+            "diet_unknown_diet",
+            "The requested diet is not in the served catalog.",
+            None,
+            false,
+            false,
+            Some(&details),
+        )
+        .unwrap();
+        assert!(!human.contains("not_a_diet"));
+        assert!(!human.contains("accepted"));
     }
 
     #[test]

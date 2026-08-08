@@ -89,6 +89,10 @@ struct DietErrorEnvelopeWire {
 struct DietErrorDetailsWire {
     #[serde(default)]
     reason: Option<String>,
+    #[serde(default)]
+    diet_id: Option<String>,
+    #[serde(default)]
+    accepted: Option<Vec<String>>,
 }
 
 impl ProfileConsentStatusWireV1 {
@@ -549,7 +553,8 @@ impl HttpService {
         let builder = self
             .request(Method::GET, "/v1/diets", Some(credentials), operation_id)?
             .header(header::ACCEPT, "application/json");
-        let wire: DietCatalogResponseWire = self.dispatch_diet_json(builder, cancellation).await?;
+        let wire: DietCatalogResponseWire =
+            self.dispatch_diet_json(builder, cancellation, None).await?;
         DietCatalog::try_from(wire).map_err(|_| {
             PortError::new(
                 "diet_contract_error",
@@ -572,7 +577,15 @@ impl HttpService {
         let builder = self
             .request(Method::GET, &path, Some(credentials), operation_id)?
             .header(header::ACCEPT, "application/json");
-        let wire: DietDetailResponseWire = self.dispatch_diet_json(builder, cancellation).await?;
+        let wire: DietDetailResponseWire = self
+            .dispatch_diet_json(builder, cancellation, Some(diet_id))
+            .await?;
+        if wire.id != diet_id {
+            return Err(PortError::new(
+                "diet_contract_error",
+                "the diet detail response does not match the requested diet id",
+            ));
+        }
         DietDetail::try_from(wire).map_err(|_| {
             PortError::new(
                 "diet_contract_error",
@@ -968,6 +981,7 @@ impl HttpService {
         &self,
         builder: RequestBuilder,
         cancellation: CancellationToken,
+        expected_diet_id: Option<&str>,
     ) -> Result<T, PortError> {
         if cancellation.is_cancelled() {
             return Err(PortError::new(
@@ -1008,10 +1022,7 @@ impl HttpService {
             });
         }
         let body = serde_json::from_slice::<DietErrorEnvelopeWire>(&bytes).unwrap_or_default();
-        Err(diet_http_error(
-            status,
-            body.details.and_then(|details| details.reason),
-        ))
+        Err(diet_http_error(status, body.details, expected_diet_id))
     }
 
     async fn dispatch_profile_consent_wire(
@@ -1686,12 +1697,64 @@ fn http_status_error(status: StatusCode) -> PortError {
     PortError::new(code, message)
 }
 
-fn diet_http_error(status: StatusCode, reason: Option<String>) -> PortError {
-    match (status, reason.as_deref()) {
-        (StatusCode::NOT_FOUND, Some("unknown_diet")) => PortError::new(
-            "diet_unknown_diet",
-            "the requested diet is not in the served catalog",
-        ),
+fn diet_http_error(
+    status: StatusCode,
+    details: Option<DietErrorDetailsWire>,
+    expected_diet_id: Option<&str>,
+) -> PortError {
+    let reason = details
+        .as_ref()
+        .and_then(|details| details.reason.as_deref());
+    match (status, reason) {
+        (StatusCode::NOT_FOUND, Some("unknown_diet")) => {
+            let Some(details) = details else {
+                return PortError::new(
+                    "diet_contract_error",
+                    "the unknown diet response omits its contract details",
+                );
+            };
+            let Some(expected_diet_id) = expected_diet_id else {
+                return PortError::new(
+                    "diet_contract_error",
+                    "the diet catalog returned an unexpected unknown diet error",
+                );
+            };
+            let (Some(diet_id), Some(accepted)) = (details.diet_id, details.accepted) else {
+                return PortError::new(
+                    "diet_contract_error",
+                    "the unknown diet response omits its requested or accepted diet ids",
+                );
+            };
+            let accepted_is_valid = !accepted.is_empty()
+                && accepted.len() <= 64
+                && accepted.iter().all(|value| {
+                    !value.is_empty()
+                        && value.len() <= 64
+                        && value.bytes().all(|byte| {
+                            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
+                        })
+                })
+                && accepted
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    == accepted.len();
+            if diet_id != expected_diet_id || !accepted_is_valid {
+                return PortError::new(
+                    "diet_contract_error",
+                    "the unknown diet response violates contract v1",
+                );
+            }
+            PortError::new(
+                "diet_unknown_diet",
+                "the requested diet is not in the served catalog",
+            )
+            .with_details(serde_json::json!({
+                "reason": "unknown_diet",
+                "diet_id": diet_id,
+                "accepted": accepted,
+            }))
+        }
         (StatusCode::NOT_FOUND, Some("feature_disabled")) => PortError::new(
             "diet_feature_disabled",
             "diet guidance is not available on this deployment",

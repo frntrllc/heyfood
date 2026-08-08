@@ -11,6 +11,7 @@ use heyfood_core::{
     HouseholdCommitEvidenceBindingV1, HouseholdRevision, MemberId, OperationId, RefreshOutcome,
     RefreshRequest, SessionCredentials, UnappliedHouseholdCommitProofV1,
 };
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::household_agent_phase0::{
@@ -31,6 +32,9 @@ pub struct PortError {
     pub code: &'static str,
     pub message: String,
     pub outcome_uncertain: bool,
+    /// Bounded, machine-readable service details. Human renderers must not
+    /// display this value implicitly.
+    pub details: Option<Box<Value>>,
 }
 
 impl fmt::Debug for PortError {
@@ -40,6 +44,7 @@ impl fmt::Debug for PortError {
             .field("code", &self.code)
             .field("message", &"[REDACTED]")
             .field("outcome_uncertain", &self.outcome_uncertain)
+            .field("details", &self.details.as_ref().map(|_| "[REDACTED]"))
             .finish()
     }
 }
@@ -51,6 +56,7 @@ impl PortError {
             code,
             message: message.into(),
             outcome_uncertain: false,
+            details: None,
         }
     }
 
@@ -60,7 +66,14 @@ impl PortError {
             code,
             message: message.into(),
             outcome_uncertain: true,
+            details: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_details(mut self, details: Value) -> Self {
+        self.details = Some(Box::new(details));
+        self
     }
 }
 

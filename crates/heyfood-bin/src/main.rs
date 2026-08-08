@@ -1589,12 +1589,13 @@ async fn one_shot(
             print!("{output}");
             ExitCode::SUCCESS
         }
-        Err(error) => failure(
+        Err(error) => failure_with_details(
             error.code,
             &terminal_safe_text(&error.message),
             one_shot_hint(error.code),
             machine,
             error.outcome_uncertain,
+            error.details.as_deref(),
         ),
     }
 }
@@ -2821,6 +2822,7 @@ fn registration_to_one_shot(error: RegistrationError) -> heyfood_bin::OneShotErr
         code: error.code,
         message: error.public_message,
         outcome_uncertain: error.outcome_uncertain,
+        details: None,
     }
 }
 
@@ -2829,6 +2831,7 @@ fn uncertain_one_shot(code: &'static str, message: impl Into<String>) -> heyfood
         code,
         message: message.into(),
         outcome_uncertain: true,
+        details: None,
     }
 }
 
@@ -3976,11 +3979,26 @@ fn failure(
     machine: bool,
     outcome_uncertain: bool,
 ) -> ExitCode {
-    let output =
-        heyfood_cli::render_error_with_outcome(kind, message, hint, machine, outcome_uncertain)
-            .unwrap_or_else(|_| {
-                "heyfood error: Could not render the requested operation.\n".into()
-            });
+    failure_with_details(kind, message, hint, machine, outcome_uncertain, None)
+}
+
+fn failure_with_details(
+    kind: &str,
+    message: &str,
+    hint: Option<&str>,
+    machine: bool,
+    outcome_uncertain: bool,
+    details: Option<&serde_json::Value>,
+) -> ExitCode {
+    let output = heyfood_cli::render_error_with_outcome_and_details(
+        kind,
+        message,
+        hint,
+        machine,
+        outcome_uncertain,
+        details,
+    )
+    .unwrap_or_else(|_| "heyfood error: Could not render the requested operation.\n".into());
     if machine {
         print!("{output}");
     } else {

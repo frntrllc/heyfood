@@ -807,7 +807,8 @@ fn structured_error(error: PortError) -> CallToolResult {
         | "reauthorization_reconciliation_required" => Some("heyfood login"),
         _ => None,
     };
-    let value = json!({
+    let details = error.details;
+    let mut value = json!({
         "schema_version": 1,
         "ok": false,
         "error": {
@@ -818,6 +819,9 @@ fn structured_error(error: PortError) -> CallToolResult {
             "user_action": user_action,
         }
     });
+    if let Some(details) = details {
+        value["error"]["details"] = *details;
+    }
     let mut result = CallToolResult::structured_error(value);
     result.content = vec![rmcp::model::ContentBlock::text(
         "The heyfood read did not complete. Inspect structuredContent for the typed error.",
@@ -958,7 +962,10 @@ fn tool_definition(name: &str) -> Option<Tool> {
         TOOL_GET_DIET => diet_detail_output_schema(),
         _ => unreachable!("tool description match already rejected unknown names"),
     };
-    let output_schema = object_schema(tool_output_schema(success_schema));
+    let output_schema = object_schema(tool_output_schema(
+        success_schema,
+        matches!(name, TOOL_LIST_DIETS | TOOL_GET_DIET),
+    ));
     let local = matches!(
         name,
         TOOL_GET_MANIFEST | TOOL_GET_HOUSEHOLD_CONTEXT | TOOL_GET_HOUSEHOLD_MEMBER
@@ -976,16 +983,17 @@ fn tool_definition(name: &str) -> Option<Tool> {
     )
 }
 
-fn tool_output_schema(success: Value) -> Value {
+fn tool_output_schema(success: Value, diet_error_details: bool) -> Value {
+    let error = tool_error_output_schema(diet_error_details);
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
-        "oneOf": [success, tool_error_output_schema()]
+        "oneOf": [success, error]
     })
 }
 
-fn tool_error_output_schema() -> Value {
-    json!({
+fn tool_error_output_schema(diet_error_details: bool) -> Value {
+    let mut schema = json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["schema_version", "ok", "error"],
@@ -1015,7 +1023,29 @@ fn tool_error_output_schema() -> Value {
                 }
             }
         }
-    })
+    });
+    if diet_error_details {
+        schema["properties"]["error"]["properties"]["details"] = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["reason", "diet_id", "accepted"],
+            "properties": {
+                "reason": {"const": "unknown_diet"},
+                "diet_id": {"type": "string", "minLength": 1, "maxLength": 64},
+                "accepted": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 64,
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9_]{1,64}$"
+                    }
+                }
+            }
+        });
+    }
+    schema
 }
 
 fn capabilities_output_schema() -> Value {
@@ -1996,7 +2026,12 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move {
                 if diet_id != "mediterranean" {
-                    return Err(PortError::new("diet_not_found", "test detail missing"));
+                    return Err(PortError::new("diet_unknown_diet", "test detail missing")
+                        .with_details(json!({
+                            "reason": "unknown_diet",
+                            "diet_id": diet_id,
+                            "accepted": ["keto", "mediterranean"]
+                        })));
                 }
                 Ok(diet_detail_fixture())
             })
@@ -2332,6 +2367,27 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .is_empty()
+        );
+
+        let unknown = server()
+            .execute(
+                CallToolRequestParams::new(TOOL_GET_DIET).with_arguments(
+                    json!({"diet_id": "not_a_diet"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unknown.is_error, Some(true));
+        let unknown = unknown.structured_content.unwrap();
+        assert_eq!(unknown["error"]["code"], "diet_unknown_diet");
+        assert_eq!(unknown["error"]["details"]["diet_id"], "not_a_diet");
+        assert_eq!(
+            unknown["error"]["details"]["accepted"],
+            json!(["keto", "mediterranean"])
         );
 
         let invalid = server()
