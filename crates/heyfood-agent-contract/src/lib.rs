@@ -1330,6 +1330,15 @@ pub fn manifest_v4() -> Value {
         "v1_v2_v3_omit_diet_agent_surface": true
     });
 
+    let windows_distribution = manifest["capabilities"]
+        .as_array_mut()
+        .expect("v4 capabilities are an array")
+        .iter_mut()
+        .find(|capability| capability["id"] == "windows-distribution")
+        .expect("Windows distribution capability");
+    windows_distribution["summary"] =
+        Value::from("Windows CI and public distribution are outside this release contract.");
+
     let commands = manifest["commands"]
         .as_array_mut()
         .expect("v4 commands are an array");
@@ -1876,6 +1885,23 @@ mod tests {
         let v4 = manifest_v4();
         assert_eq!(v3["schema_version"], 3);
         assert_eq!(v4["schema_version"], 4);
+        let windows_summary = |manifest: &Value| {
+            manifest["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|capability| capability["id"] == "windows-distribution")
+                .unwrap()["summary"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert!(windows_summary(&v3).contains("v0.8.0"));
+        assert!(!windows_summary(&v4).contains("v0.8.0"));
+        assert_eq!(
+            windows_summary(&v4),
+            "Windows CI and public distribution are outside this release contract."
+        );
         assert_eq!(
             v4["frozen_compatibility_views"]["v3_schema_sha256"],
             sha256_hex(MANIFEST_V3_SCHEMA.as_bytes())

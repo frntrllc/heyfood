@@ -158,7 +158,7 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<GroceryCommand>,
     },
-    /// Browse grounded diet guidance or update the diets declared on your profile.
+    /// Browse evidence-graded diet guidance.
     Diet {
         #[command(subcommand)]
         command: Option<DietCommand>,
@@ -3170,6 +3170,30 @@ mod diet_command_tests {
             diet_operation(&["heyfood", "diet", "list"]),
             DietOperation::List
         );
+    }
+
+    #[test]
+    fn diet_help_is_truthful_about_read_only_scope() {
+        let mut root = Vec::new();
+        Cli::command().write_long_help(&mut root).unwrap();
+        let root = String::from_utf8(root).unwrap();
+        let mut diet = Vec::new();
+        Cli::command()
+            .find_subcommand_mut("diet")
+            .unwrap()
+            .write_long_help(&mut diet)
+            .unwrap();
+        let diet = String::from_utf8(diet).unwrap();
+
+        assert!(root.contains("Browse evidence-graded diet guidance"));
+        for help in [&root, &diet] {
+            for unsupported in ["update", "set diet", "clear diet"] {
+                assert!(
+                    !help.to_ascii_lowercase().contains(unsupported),
+                    "help falsely advertises unsupported Diet mutation: {unsupported}"
+                );
+            }
+        }
     }
 
     #[test]
