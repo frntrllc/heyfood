@@ -1,0 +1,129 @@
+{
+  "description": "The unknown_diet error on both surfaces. An EXCLUDED vocabulary id (halal) returns the identical shape as a genuinely unknown one: the internal taxonomy distinction is deliberately not exposed.",
+  "rest": {
+    "request": {
+      "method": "GET",
+      "path": "/v1/diets/not_a_diet"
+    },
+    "expected_status": 404,
+    "expected_error": {
+      "error_code": "not_found",
+      "message": "'not_a_diet' is not a known diet.",
+      "trace_id": "00000000-0000-0000-0000-000000000000",
+      "details": {
+        "reason": "unknown_diet",
+        "diet_id": "not_a_diet",
+        "accepted": [
+          "vegetarian",
+          "vegan",
+          "keto",
+          "pescatarian",
+          "paleo",
+          "whole30",
+          "low_fodmap",
+          "mediterranean",
+          "low_carb",
+          "low_sodium",
+          "low_fat",
+          "high_protein",
+          "raw_food",
+          "carnivore",
+          "flexitarian",
+          "macrobiotic",
+          "anti_inflammatory",
+          "aip",
+          "scd",
+          "dash",
+          "okinawa",
+          "mind"
+        ]
+      },
+      "retry_after": null
+    }
+  },
+  "rest_excluded_id": {
+    "request": {
+      "method": "GET",
+      "path": "/v1/diets/halal"
+    },
+    "expected_status": 404,
+    "expected_error": {
+      "error_code": "not_found",
+      "message": "'halal' is not a known diet.",
+      "trace_id": "00000000-0000-0000-0000-000000000000",
+      "details": {
+        "reason": "unknown_diet",
+        "diet_id": "halal",
+        "accepted": [
+          "vegetarian",
+          "vegan",
+          "keto",
+          "pescatarian",
+          "paleo",
+          "whole30",
+          "low_fodmap",
+          "mediterranean",
+          "low_carb",
+          "low_sodium",
+          "low_fat",
+          "high_protein",
+          "raw_food",
+          "carnivore",
+          "flexitarian",
+          "macrobiotic",
+          "anti_inflammatory",
+          "aip",
+          "scd",
+          "dash",
+          "okinawa",
+          "mind"
+        ]
+      },
+      "retry_after": null
+    }
+  },
+  "agent_tool": {
+    "tool": "describe_diet",
+    "input": {
+      "diet_id": "not_a_diet"
+    },
+    "result": {
+      "error": "unknown_diet",
+      "values": [
+        "not_a_diet"
+      ],
+      "accepted": [
+        "vegetarian",
+        "vegan",
+        "keto",
+        "pescatarian",
+        "paleo",
+        "whole30",
+        "low_fodmap",
+        "mediterranean",
+        "low_carb",
+        "low_sodium",
+        "low_fat",
+        "high_protein",
+        "raw_food",
+        "carnivore",
+        "flexitarian",
+        "macrobiotic",
+        "anti_inflammatory",
+        "aip",
+        "scd",
+        "dash",
+        "okinawa",
+        "mind"
+      ]
+    }
+  },
+  "note": "`trace_id` is a real per-request value, normalized to a fixed placeholder here so the recorded payload is reproducible.",
+  "expect": {
+    "rest_accepted_is_the_served_catalog": 22,
+    "describe_diet_accepted_is_the_served_catalog": 22,
+    "update_dietary_profile_accepted_is_the_full_vocabulary": 26,
+    "accepted_asymmetry": "Two tools return `accepted` under the same `unknown_diet` code and the lists DIFFER, on purpose. `describe_diet` and the REST routes serve the CATALOG (22 ids): the excluded entries have no principle card to return. `update_dietary_profile` serves the full VOCABULARY (26 ids): you can declare halal or gluten-free on your profile even though you cannot ask the catalog about them. A client must read `accepted` from the response it actually received rather than caching one list for both.",
+    "client_action": "Do not retry the id; re-read the catalog. Never describe the diet from the client's own knowledge."
+  }
+}

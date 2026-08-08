@@ -1,0 +1,376 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/frntrllc/heyfood/blob/main/schemas/v1/diet-contract.json",
+  "title": "hello.food diet surface contract v1",
+  "description": "SOURCE OF TRUTH for the `heyfood diet` command surface: the named-diet catalog (GET /v1/diets), the principle card (GET /v1/diets/{diet_id}), the additive diet fields on describe_dietary_graph, the deterministic diet x condition caution emitted on a profile write, and the complete typed-error catalog. Written to be implemented WITHOUT reading the Python: every enum and entity block names the exact symbol or JSON pointer it derives from, and every field carries its type, nullability, and meaning. The backend parity test tests/test_diet_contract.py binds this file to the live Pydantic models, the scope-enforcement tables, the error enum, and the recorded fixtures under fixtures/diet/, so a drift here fails CI rather than reaching a client.",
+  "x-heyfood-contract-version": 1,
+
+  "feature_flag": {
+    "name": "DIET_GRAPH_ENABLED",
+    "source_of_truth": "app.core.config.Settings.DIET_GRAPH_ENABLED",
+    "default": false,
+    "description": "The entire diet surface is dark until this is on. With it OFF: both REST endpoints return 404 `feature_disabled`; the `describe_diet` agent tool is absent from the model's tool list entirely; `application_capabilities` omits the `diet` key; and `describe_dietary_graph` reports no diets — but HOW that reads differs by surface, see `graph_read_off_shape_by_surface`.",
+    "graph_read_off_shape_by_surface": {
+      "rest_and_channel_tool": "The `diets` and `custom_diets` keys are PRESENT AND EMPTY on the JSON body. The response model defaults them, and an additive field must never error or vanish from a typed payload.",
+      "mcp": "The keys are OMITTED from `structuredContent` when empty, matching the pre-existing `members` / `household` convention on this same tool. That is not a contradiction of the rule above: the MCP structured block is assembled key-by-key and only carries what it has, so a connector that predates these fields receives a byte-identical payload.",
+      "client_rule": "Treat an absent key and an empty array as the same answer — no declared diets. Never treat an absent key as an error or as unknown state."
+    },
+    "client_rule": "Detect the feature via GET /v1/auth/capabilities -> application_capabilities.diet == \"v1\". Do NOT infer it from a granted scope: `knowledge:read` is in the required converse envelope and has been grantable since long before this surface existed."
+  },
+
+  "diet_id": {
+    "description": "Canonical diet identifier. The whole surface keys on this, NEVER on the legacy `DietaryPreference` enum, whose LOW_FODMAP and HIGH_PROTEIN members are unreachable from a profile write. Adding a diet is a vocabulary + corpus change and never a schema change, so a client MUST treat this list as data it refreshes from GET /v1/diets rather than as a compiled-in enum.",
+    "source_of_truth": "shared/dietary_options.json#/sections/diet_style",
+    "type": "string",
+    "max_length": 64,
+    "served_ids": [
+      "vegetarian", "vegan", "keto", "pescatarian",
+      "paleo", "whole30", "low_fodmap", "mediterranean", "low_carb",
+      "low_sodium", "low_fat", "high_protein", "raw_food", "carnivore",
+      "flexitarian", "macrobiotic", "anti_inflammatory", "aip", "scd",
+      "dash", "okinawa", "mind"
+    ],
+    "served_count": 22,
+    "order": "Vocabulary order — tier 1 entries in authored order, then tier 2. Stable across processes; GET /v1/diets returns exactly this sequence.",
+    "excluded_ids": {
+      "description": "Present in the `diet_style` vocabulary section but NOT served by this surface. Requesting one returns the same 404 `unknown_diet` as a genuinely unknown id — the internal distinction is deliberately not exposed.",
+      "source_of_truth": "app.services.diet_catalog_service.EXCLUDED_DIET_IDS",
+      "sentinel": ["__none__"],
+      "restriction_class": ["halal", "kosher", "gluten_free", "dairy_free"],
+      "reason": "The sentinel is the chip wall's 'none of these'. The other four are RESTRICTIONS that render in the diet chip section: halal/kosher and gluten_free/dairy_free each derive a DietaryRestriction value and travel on the restriction axis, not the diet axis."
+    },
+    "matching": "EXACT, case-sensitive. `Keto` and `DASH diet` are rejected. Display labels are never accepted as ids on any diet surface."
+  },
+
+  "evidence_level": {
+    "description": "How well evidenced a diet is, rolled up from its corpus chunks. Null means the corpus does not cover the diet yet — it is never guessed, and a client MUST NOT render a default grade for null.",
+    "source_of_truth": "app.services.diet_catalog_service.EVIDENCE_LEVELS",
+    "type": ["string", "null"],
+    "values": ["strong", "moderate", "limited"],
+    "semantics": {
+      "strong": "RCT- or guideline-backed (e.g. Mediterranean, DASH, low-FODMAP, clinical keto).",
+      "moderate": "Moderate or observational evidence (e.g. Okinawa, MIND, paleo, low-carb).",
+      "limited": "Limited or popular-literature only (e.g. carnivore, Whole30, AIP, SCD, raw food). Honesty is the point: the surface says so rather than implying parity."
+    },
+    "rollup_rule": "Most frequently declared per-chunk level wins; a tie resolves to the WEAKER level; `safety`-section chunks never vote, because their grading describes the WARNING's evidence and is deliberately high even for a weakly evidenced diet.",
+    "client_rule": "Advisory presentation only. `evidence_level` never affects a SafetyStatus in either direction."
+  },
+
+  "tier": {
+    "description": "Vocabulary tier. Presentation ordering only — tier carries NO safety or evidence meaning, and a client must not sort or filter safety by it.",
+    "source_of_truth": "shared/dietary_options.json#/sections/diet_style (tier1 / tier2 arrays)",
+    "type": "integer",
+    "values": [1, 2]
+  },
+
+  "entities": {
+    "diet_catalog_entry": {
+      "description": "One row of the catalog.",
+      "source_of_truth": "app.schemas.diets.DietCatalogEntry",
+      "fields": ["id", "label", "tier", "evidence_level", "covered", "summary"],
+      "field_detail": {
+        "id": { "type": "string", "nullable": false, "$ref": "#/diet_id" },
+        "label": { "type": "string", "nullable": false, "max_length": 120, "description": "Display label from the vocabulary, e.g. \"DASH diet\". Render this, never the id." },
+        "tier": { "type": "integer", "nullable": false, "$ref": "#/tier" },
+        "evidence_level": { "type": ["string", "null"], "nullable": true, "$ref": "#/evidence_level" },
+        "covered": { "type": "boolean", "nullable": false, "description": "True when a grounding corpus exists for this diet. False means the id is valid and selectable but hello.food has no principle card for it yet." },
+        "summary": { "type": "string", "nullable": false, "max_length": 280, "description": "One deterministic sentence taken verbatim from the diet's first corpus chunk. NEVER model-authored. Empty string when covered is false." }
+      }
+    },
+
+    "diet_catalog_response": {
+      "description": "GET /v1/diets response body. An ENVELOPE, not a bare array — a top-level JSON array cannot grow a field.",
+      "source_of_truth": "app.schemas.diets.DietCatalogResponse",
+      "fields": ["diets", "count", "corpus_available"],
+      "field_detail": {
+        "diets": { "type": "array", "items": "#/entities/diet_catalog_entry", "description": "Every served diet, in vocabulary order. Uncovered diets ARE included — hiding them would hide the vocabulary." },
+        "count": { "type": "integer", "description": "len(diets). Present so a client can assert it read the whole catalog." },
+        "corpus_available": { "type": "boolean", "description": "True when the grounding corpus module is loaded in the serving process. False means every row reports covered=false for a deployment reason, not a per-diet one." }
+      }
+    },
+
+    "diet_principle_sections": {
+      "description": "The per-diet chunk taxonomy, rendered as ordered lists of plain-text paragraphs. EVERY key is always present; an absent section is an empty array, never a missing key, so a client never branches on key presence.",
+      "source_of_truth": "app.schemas.diets.DietPrincipleSections (ordering: app.services.diet_catalog_service.SECTION_ORDER)",
+      "fields": [
+        "principles", "foods_emphasized", "foods_limited", "evidence", "safety",
+        "nutrient_adequacy", "restaurant_application", "interactions", "misconceptions"
+      ],
+      "field_detail": {
+        "principles": { "type": "array", "items": "string", "description": "Definition and core mechanism." },
+        "foods_emphasized": { "type": "array", "items": "string", "description": "Foods the pattern prioritizes." },
+        "foods_limited": { "type": "array", "items": "string", "description": "Foods the pattern excludes or limits." },
+        "evidence": { "type": "array", "items": "string", "description": "What the science shows, graded, with named studies." },
+        "safety": { "type": "array", "items": "string", "description": "Contraindications, who should not follow it, medical-supervision triggers. Render this prominently." },
+        "nutrient_adequacy": { "type": "array", "items": "string", "description": "Gap risks and mitigations (vegan B12, keto fiber, carnivore vitamin C)." },
+        "restaurant_application": { "type": "array", "items": "string", "description": "How to order against this diet." },
+        "interactions": { "type": "array", "items": "string", "description": "Interactions with allergens, conditions, other diets. Optional in the authoring contract — commonly empty." },
+        "misconceptions": { "type": "array", "items": "string", "description": "Common errors. Optional in the authoring contract — commonly empty." }
+      },
+      "render_order": ["principles", "foods_emphasized", "foods_limited", "evidence", "safety", "nutrient_adequacy", "restaurant_application", "interactions", "misconceptions"]
+    },
+
+    "diet_contraindicated_condition": {
+      "description": "A condition the deterministic contraindication table flags against this diet. REFERENCE content ('who should not follow this'), present on every card regardless of what the caller has declared. Its personalized twin is #/entities/diet_condition_caution, and both read the SAME table, so they can never disagree.",
+      "source_of_truth": "app.schemas.diets.DietContraindicatedCondition (table: app.core.diet_condition_contraindications.DIET_CONDITION_CONTRAINDICATIONS)",
+      "fields": ["condition_id", "condition_label", "reason"],
+      "field_detail": {
+        "condition_id": { "type": "string", "max_length": 64, "description": "Canonical health-condition id from shared/dietary_options.json#/sections/health_conditions." },
+        "condition_label": { "type": "string", "max_length": 120 },
+        "reason": { "type": "string", "max_length": 400, "description": "One clinician-reviewed line. Never model-authored; render verbatim." }
+      }
+    },
+
+    "diet_detail_response": {
+      "description": "GET /v1/diets/{diet_id} response body — the principle card. Served for EVERY valid vocabulary diet, covered or not.",
+      "source_of_truth": "app.schemas.diets.DietDetailResponse",
+      "fields": ["id", "label", "tier", "evidence_level", "covered", "detail_status", "summary", "sections", "citations", "contraindicated_conditions"],
+      "field_detail": {
+        "id": { "type": "string", "$ref": "#/diet_id" },
+        "label": { "type": "string", "max_length": 120 },
+        "tier": { "type": "integer", "$ref": "#/tier" },
+        "evidence_level": { "type": ["string", "null"], "$ref": "#/evidence_level" },
+        "covered": { "type": "boolean" },
+        "detail_status": { "type": "string", "values": ["covered", "diet_not_covered"], "source_of_truth": "app.schemas.diets.DietDetailStatus", "description": "Explicit because emptiness is ambiguous: empty sections could equally mean 'a card with nothing in it'. `diet_not_covered` on a 200 is a SUCCESSFUL answer, never an error." },
+        "summary": { "type": "string", "max_length": 280 },
+        "sections": { "type": "object", "$ref": "#/entities/diet_principle_sections" },
+        "citations": { "type": "array", "items": "string", "description": "Named curation sources behind this diet's chunks, deduplicated in corpus order. Attribution strings, NOT URLs to fetch." },
+        "contraindicated_conditions": { "type": "array", "items": "#/entities/diet_contraindicated_condition", "description": "POPULATED EVEN WHEN covered IS FALSE — the safety table is deterministic and does not wait on the corpus." }
+      },
+      "not_covered_shape": "covered=false, detail_status=\"diet_not_covered\", evidence_level=null, summary=\"\", every sections array empty, citations empty, contraindicated_conditions populated from the table."
+    },
+
+    "diet_condition_caution": {
+      "description": "The PERSONALIZED twin of #/entities/diet_contraindicated_condition: emitted when the user's own declared diets conflict with their own declared conditions. Deterministic — a static table lookup with zero LLM and zero retrieval between the declaration and the warning. It WARNS, it never BLOCKS: the write has already succeeded when this is non-empty, because the user's clinician may have prescribed exactly this combination.",
+      "source_of_truth": "app.schemas.dietary_profile_sync.DietConditionCautionModel",
+      "fields": ["diet_id", "diet_label", "condition_id", "condition_label", "reason"],
+      "field_detail": {
+        "diet_id": { "type": "string", "max_length": 64, "$ref": "#/diet_id" },
+        "diet_label": { "type": "string", "max_length": 120 },
+        "condition_id": { "type": "string", "max_length": 64 },
+        "condition_label": { "type": "string", "max_length": 120 },
+        "reason": { "type": "string", "max_length": 400 }
+      },
+      "emitted_on": [
+        "PUT /v1/profile/sync -> ProfileUploadResponse.cautions (additive, defaults to [])",
+        "the update_dietary_profile agent tool result -> `cautions` (additive, defaults to [])"
+      ],
+      "ordering": "Declaration order — diets outer, conditions inner. Stable for the same profile."
+    },
+
+    "diet_summary": {
+      "description": "The smallest honest projection of a declared diet, used on dietary-graph reads. A client that wants the full card calls GET /v1/diets/{id}; inlining a principle card into every graph read would be gratuitous.",
+      "source_of_truth": "app.schemas.diets.DietSummary",
+      "fields": ["id", "label", "evidence_level", "covered"],
+      "field_detail": {
+        "id": { "type": "string", "$ref": "#/diet_id" },
+        "label": { "type": "string", "max_length": 120 },
+        "evidence_level": { "type": ["string", "null"], "$ref": "#/evidence_level" },
+        "covered": { "type": "boolean" }
+      }
+    }
+  },
+
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/v1/diets",
+      "scope": "knowledge:read",
+      "auth": "X-API-Key (all /v1/*) + an authenticated user session",
+      "response": "#/entities/diet_catalog_response",
+      "errors": ["feature_disabled"],
+      "pagination": {
+        "supported": false,
+        "reason": "The catalog is a hand-authored vocabulary of <=30 rows, and docs/schemas/v1 defines no pagination convention to follow. Deliberate, not an oversight — clients read the whole list in one call."
+      },
+      "rate_limit": {
+        "enforced": false,
+        "reason": "hello.food rate-limits POSTs that cost tokens or upstream calls. This is an in-process lookup over static content; a per-device counter would cost more than the answer. Deliberate, not an oversight."
+      },
+      "caching": "Deterministic per deployment. Safe for a client to cache for the life of a process; invalidate on a capability/version change."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/diets/{diet_id}",
+      "scope": "knowledge:read",
+      "auth": "X-API-Key (all /v1/*) + an authenticated user session",
+      "response": "#/entities/diet_detail_response",
+      "errors": ["unknown_diet", "feature_disabled"],
+      "note": "`diet_not_covered` is NOT an error on this route — it is a 200 with detail_status set. See #/errors."
+    }
+  ],
+
+  "errors": {
+    "description": "The complete typed-error catalog for the diet surface. REST returns the structured error envelope with `details.reason` set to one of these codes; the agent tool returns the same code as its result `error` key. One vocabulary for both surfaces.",
+    "source_of_truth": "app.schemas.diets.DietErrorCode",
+    "codes": ["unknown_diet", "diet_not_covered", "feature_disabled"],
+    "catalog": {
+      "unknown_diet": {
+        "surfaces": ["REST", "agent_tool"],
+        "http_status": 404,
+        "rest_envelope": {
+          "error_code": "not_found",
+          "details": { "reason": "unknown_diet", "diet_id": "<the requested id>", "accepted": "<array of served diet ids>" }
+        },
+        "tool_result": { "error": "unknown_diet", "values": ["<the rejected ids>"], "accepted": "<array of accepted diet ids>" },
+        "meaning": "The id is not a servable diet. Covers genuinely unknown ids AND the excluded vocabulary entries (see #/diet_id/excluded_ids).",
+        "client_action": "Do not retry the same id. Re-read the catalog or offer the user the `accepted` list. Never fall back to describing the diet from the client's own knowledge.",
+        "accepted_asymmetry": "TWO DIFFERENT `accepted` LISTS TRAVEL UNDER THIS ONE CODE, deliberately, because the two tools answer different questions. The REST routes and the `describe_diet` tool return the 22 CATALOG-SERVED ids (app.services.diet_catalog_service.CATALOG_DIET_IDS) — the excluded entries have no principle card to serve. The `update_dietary_profile` tool returns the full 26-id VOCABULARY (app.services.conversation.tools._dietary_enums.accepted_diet_style_ids) — you CAN declare halal, kosher, gluten_free or dairy_free on your profile, you just cannot ask the catalog about them, because they are restrictions rather than diet regimes. A client MUST read `accepted` off the response it actually received and must not cache one list for both call sites."
+      },
+      "diet_not_covered": {
+        "surfaces": ["REST", "agent_tool"],
+        "http_status": 200,
+        "rest_envelope": "NOT an error envelope. A normal 200 #/entities/diet_detail_response with covered=false and detail_status=\"diet_not_covered\".",
+        "tool_result": { "error": "diet_not_covered", "diet_id": "<id>", "label": "<label>", "declared_by": [], "contraindicated_conditions": [], "message": "<instruction not to describe the diet from memory>" },
+        "meaning": "The id is a valid vocabulary diet, but no grounding corpus exists for it yet. A VALID VOCABULARY ID IS NEVER A 404.",
+        "client_action": "Say plainly that hello.food has no grounded guidance for this diet yet. Do NOT substitute the client's own or a model's description — ungrounded diet guidance is the exact failure this surface exists to prevent. Still render contraindicated_conditions."
+      },
+      "feature_disabled": {
+        "surfaces": ["REST", "agent_tool"],
+        "http_status": 404,
+        "rest_envelope": {
+          "error_code": "not_found",
+          "details": { "reason": "feature_disabled", "path": "<the route>" }
+        },
+        "tool_result": { "error": "feature_disabled", "message": "<one line>" },
+        "meaning": "DIET_GRAPH_ENABLED is off on this deployment. 404 rather than 403/503: with the feature dark the route does not exist as far as a client is concerned, and the response deliberately does NOT carry `accepted`, so a dark feature cannot be used to enumerate the vocabulary.",
+        "client_action": "Hide the diet command surface. A client that checks application_capabilities.diet first should never observe this."
+      },
+      "scope_not_permitted": {
+        "surfaces": ["REST"],
+        "http_status": 403,
+        "source_of_truth": "app.core.scope_enforcement (shared with every other scoped surface — NOT a diet-specific code)",
+        "rest_envelope": { "error_code": "forbidden", "details": { "reason": "scope_not_permitted", "path": "<the route>", "token_type": "cli_session" } },
+        "meaning": "The session lacks `knowledge:read`. Listed here for completeness; it is the platform-wide denial shape documented in scopes-contract.json."
+      }
+    }
+  },
+
+  "graph_read_additions": {
+    "description": "Additive fields on the describe_dietary_graph result (channel tool, agent tool, and MCP). Both the channel and agent implementations project them through ONE shared formatter, so the two surfaces cannot describe the same account differently.",
+    "source_of_truth": "app.schemas.channel_tools.DescribeDietaryGraphResponse",
+    "fields": {
+      "diets": { "type": "array", "items": "#/entities/diet_summary", "default": [], "description": "Declared canonical diets across the resolved household scope, deduplicated in target order." },
+      "custom_diets": { "type": "array", "items": "string", "default": [], "description": "True free-text diet declarations with NO grounding corpus. Kept separate from `diets` so a client renders them honestly as unverified rather than promoting them to named diets." }
+    },
+    "gap_semantics": "\"No diet declared\" is NOT a gap and never appears in `gaps`. Dietlessness is a first-class valid state; nudging about it would be the app inventing a deficiency.",
+    "mcp_note": "On the MCP surface these keys are emitted only when non-empty, matching the existing `members` / `household` convention. The `describe_dietary_graph` MCP tool rides its existing `profile:read` grant; no MCP scope changed and no MCP tool was added."
+  },
+
+  "profile_write": {
+    "description": "Declaring diets through the agent. The REST twin is PUT /v1/profile/sync, whose `profile_data.diet_style_ids` is the authoritative array.",
+    "tool": "update_dietary_profile",
+    "input_field": {
+      "name": "diet_style_ids",
+      "type": "array",
+      "items": "string",
+      "semantics": "REPLACE-ON-SET, PRESERVE-ON-OMIT. Sending the field replaces the user's declared diets wholesale, so send the COMPLETE list. Omitting the field entirely leaves them untouched. An empty array is an explicit clear.",
+      "validation": "Every id must be a vocabulary diet (exact match). Any unknown id rejects the WHOLE patch with `unknown_diet` and writes nothing — a partially valid list never persists its valid half.",
+      "precedence": "When `preferences` and `diet_style_ids` arrive in one call, `diet_style_ids` wins: it is canonical and strictly more expressive (the legacy enum cannot express DASH, AIP, low-FODMAP and 11 others)."
+    },
+    "result_fields": {
+      "profile.diet_style_ids": "The surviving canonical declarations after the patch.",
+      "cautions": "Array of #/entities/diet_condition_caution — voice these in the same turn as the write."
+    }
+  },
+
+  "capability": {
+    "name": "diet",
+    "version": "v1",
+    "source_of_truth": "app.core.application_capabilities.APPLICATION_CAPABILITIES",
+    "advertised_on": "GET /v1/auth/capabilities -> application_capabilities",
+    "gating": "CONFIG-CONDITIONAL. The build declares diet:v1, but `deployed_application_capabilities()` omits the key while DIET_GRAPH_ENABLED is off, because deployed truth is code AND config. A client that trusts this map therefore never calls a route that would 404 `feature_disabled`.",
+    "unknown_versions_fail_closed": true
+  },
+
+  "diet_alignment": {
+    "description": "ADVISORY diet-adherence dimension on food evaluations (diet program D5). It answers 'does this fit the diets you declared', never 'is this safe'.",
+    "source_of_truth": "app.schemas.dietary.DietAlignment",
+    "type": "string",
+    "values": [
+      "aligned",
+      "partial",
+      "off_diet",
+      "not_assessed"
+    ],
+    "semantics": {
+      "aligned": "Consistent with every declared diet.",
+      "partial": "Consistent with some declared diets but not all, or only with modification. Multi-diet rule: off ANY declared diet caps the result at partial, and the reason names which diet.",
+      "off_diet": "Violates at least one declared diet.",
+      "not_assessed": "No judgement was made: the flag is off, no covered diet is declared, only free-text custom diets are declared, or the model omitted the field. NEVER a stand-in for aligned."
+    },
+    "reason_field": {
+      "name": "diet_alignment_reason",
+      "type": "string|null",
+      "max_length": 300,
+      "description": "One line naming the declared diet and why. Null when not assessed."
+    },
+    "feature_flag": {
+      "name": "DIET_ALIGNMENT_ENABLED",
+      "source_of_truth": "app.core.config.Settings",
+      "default": false,
+      "off_shape": "Both keys are ABSENT from every payload — dropped, not nulled — so a flag-off response is byte-identical to pre-D5. Present-when-computed on REST and channel surfaces; MCP omits them under the same rule, matching its omit-when-empty convention.",
+      "why_gated": "Owner ruling §9-D3: an advisory field no client renders invites third-party misrendering as a safety signal. D4's renderers flip this flag. Until then no shipped client reads it."
+    },
+    "non_mutating_client_rule": "Owner ruling §9-D4: diet_alignment is strictly NON-MUTATING in BOTH directions. It never upgrades and never downgrades a SafetyStatus. A client MUST render it subordinate to the safety verdict; MUST NOT derive a badge, colour, icon or ordering from it; and MUST NOT use it to filter or exclude options. `off_diet` on a `generally_safer` item means 'safe to eat, not on your diet' — it NEVER means 'be careful'. `aligned` on an `avoid` item does not make it safer.",
+    "household_rule": "Owner ruling §9-D9: only the identity-diet trio (vegetarian, vegan, pescatarian) acts as a compatibility filter on shared household options. Every other declared diet surfaces per-member as alignment and never removes an item from 'works for everyone'.",
+    "per_surface_emission": {
+      "POST /v1/verdict": "on the response and on each household_annotations entry",
+      "evaluate_menu (channel)": "on each item and on each member_annotation",
+      "evaluate_menu (MCP)": "same shape as the channel surface. The item dicts in structuredContent are hand-assembled field by field rather than model-dumped, so the pair is emitted explicitly and omitted when empty; member_annotations are model-dumped and follow the model's own present-when-computed rule.",
+      "check_food_safety": "on the tool result dict, plus member_alignments in household mode"
+    },
+    "computed_where": "Upstream in dietary_evaluation_service as part of the evaluation call's structured output, then normalized in the service exactly like `status`. NEVER model-authored through report_safety_verdict's input schema — that schema is deliberately not extended."
+  },
+  "wire_compatibility": {
+    "law": "ADDITIVE ONLY. Every field this contract adds to an EXISTING response is defaulted and optional; no existing field changed name, type, meaning, or nullability; no status code changed; no scope was minted.",
+    "released_clients_unaffected": [
+      "heyfood Python CLI v0.3.2 (retired, retained as historical compatibility evidence): sends none of these fields, calls none of these routes, and parses describe_dietary_graph exactly as before because `diets` and `custom_diets` are defaulted.",
+      "shipped iOS builds: unchanged — the diet fields are additive on responses they already parse leniently.",
+      "the ChatGPT MCP connector: `describe_dietary_graph`'s advertised output schema gains two defaulted properties; `ask_dietary_question` and `evaluate_menu` are byte-identical."
+    ],
+    "new_surface": ["GET /v1/diets", "GET /v1/diets/{diet_id}", "the describe_diet agent tool"],
+    "additive_fields": {
+      "EvaluateMenuItemResult": [
+        "diet_alignment",
+        "diet_alignment_reason"
+      ],
+      "ChannelMemberAnnotation": [
+        "diet_alignment",
+        "diet_alignment_reason"
+      ],
+      "VerdictResponse": [
+        "diet_alignment",
+        "diet_alignment_reason"
+      ],
+      "DescribeDietaryGraphResponse": ["diets", "custom_diets"],
+      "update_dietary_profile_input": ["diet_style_ids"],
+      "application_capabilities": ["diet"]
+    },
+    "no_new_scope": {
+      "ruling": "diet program plan §3.7 / §9-D7",
+      "detail": "The catalog rides `knowledge:read` (reference content, not user data); profile diet writes ride `profile:write`. `knowledge:read` gated zero REST endpoints before this change; these are its first, which is the scope used for exactly what it names. The CLI consent screen shows nothing new, which is honest: no new data class is accessed. app/core/cli_scopes.py is untouched.",
+      "if_overruled": "Minting diet:* later is purely additive on the wire — a new scope appears in the session envelope and the two endpoint-requirement rows change. No response shape in this contract moves."
+    },
+    "safety_boundary": "Diet adherence is NOT safety. Nothing in this contract mutates a SafetyStatus in either direction. Declared diets live in the `preference` band of the constraint precedence (safetyCritical > medicalAvoid > ethicalOrReligious > preference). A client MUST render diet content subordinate to any safety verdict, and MUST NOT present `evidence_level` or `covered` as safety signals. Diet program D5 adds `diet_alignment`, which is ADVISORY and strictly non-mutating in both directions (§9-D4); see the diet_alignment block for the binding client rule."
+  },
+
+  "fixtures": {
+    "directory": "fixtures/diet/",
+    "recorded_from": "The live endpoints, tools and services via tests/test_diet_contract.py, which REGENERATES each payload from the running code and asserts byte equality with the committed file. These are not hand-written examples and cannot silently rot.",
+    "corpus_state": "Every fixture pins its corpus state EXPLICITLY. Those recorded against the shipped corpus use `app.services.rag.diet_pattern_kb` at corpus_version 2026q4, which as of phase D2a covers ALL 22 served diets. `detail_not_covered.json` is recorded with the loader PATCHED ABSENT, because no uncovered diet remains to record it against. The corpus module is import-time static, so the payloads are reproducible byte-for-byte; a corpus change fails the parity test and forces a deliberate re-record and re-attestation rather than quietly moving what a client builds against.",
+    "files": {
+      "alignment_payload.json": "The advisory alignment pair as it appears on a verdict and on a member annotation, recorded with DIET_ALIGNMENT_ENABLED both OFF and ON from the real Pydantic models. The off-leg is the byte-identity evidence: both keys are absent, not null.",
+      "catalog.json": "GET /v1/diets, flag on, real corpus — the production catalog: 22 served diets, all 22 covered as of phase D2a.",
+      "detail_not_covered.json": "GET /v1/diets/keto with the corpus loader PATCHED ABSENT. Phase D2a completed the roster, so no diet is uncovered any more and this state cannot be recorded against the real corpus. It stays reachable for a future vocabulary addition whose chunks have not landed, or a corpus that fails to load. keto is used because it has contraindication rows, so the fixture still demonstrates that contraindicated_conditions is served from the deterministic table regardless of coverage.",
+      "detail_covered.json": "GET /v1/diets/mediterranean, flag on, real corpus — the real principle card a client renders, with its section counts, citation count and the evidence-rollup rule that produced its grade.",
+      "unknown_diet_error.json": "GET /v1/diets/not_a_diet -> the 404 envelope, the excluded-id (halal) twin proving the shapes are identical, and the agent tool's twin.",
+      "feature_disabled_error.json": "Both routes with the flag off -> the 404 envelope, plus the agent tool's twin.",
+      "caution_payload.json": "The deterministic diet x condition caution from the real table, in both its profile-sync and tool-result shapes.",
+      "graph_read_diets.json": "describe_dietary_graph with declared diets, plus the pre-D3 payload proving the additive fields default cleanly.",
+      "capability_present.json": "GET /v1/auth/capabilities -> application_capabilities in both flag states."
+    }
+  },
+
+  "pinning_rule": "The Rust client must validate this file's digest against diet-contract-provenance.json before generating wire DTOs, and must treat `served_ids` as documentation of the current vocabulary rather than as a compiled-in enum — the vocabulary grows without a contract-version bump."
+}

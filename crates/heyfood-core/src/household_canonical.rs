@@ -1568,7 +1568,7 @@ mod tests {
         );
         assert_eq!(
             profile["$defs"]["dietStyleIds"]["maxItems"].as_u64(),
-            Some(24)
+            Some(26)
         );
         assert_eq!(
             profile["$defs"]["allergyIds"]["maxItems"].as_u64(),

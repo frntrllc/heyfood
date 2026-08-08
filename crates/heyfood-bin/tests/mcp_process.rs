@@ -256,6 +256,8 @@ fn clean_profile_discovers_the_exact_protocol_and_gets_a_typed_auth_handoff() {
             "heyfood_list_menu_watches",
             "heyfood_get_household_context",
             "heyfood_get_household_member",
+            "heyfood_list_diets",
+            "heyfood_get_diet",
         ]
     );
 
@@ -266,12 +268,12 @@ fn clean_profile_discovers_the_exact_protocol_and_gets_a_typed_auth_handoff() {
         json!({"name": "heyfood_get_manifest", "arguments": {}}),
     );
     let manifest = response(&receiver, 3, Duration::from_secs(5));
-    assert_eq!(manifest["result"]["structuredContent"]["schema_version"], 3);
+    assert_eq!(manifest["result"]["structuredContent"]["schema_version"], 4);
     assert_eq!(
         manifest["result"]["structuredContent"]["mcp_inventory"]["tools"]
             .as_array()
             .map(Vec::len),
-        Some(8)
+        Some(10)
     );
     assert_eq!(manifest["result"]["isError"], false);
 

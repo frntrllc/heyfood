@@ -83,7 +83,7 @@
     },
     "dietStyleIds": {
       "type": "array",
-      "maxItems": 24,
+      "maxItems": 26,
       "items": {
         "enum": [
           "gluten_free",
@@ -108,6 +108,8 @@
           "aip",
           "scd",
           "dash",
+          "okinawa",
+          "mind",
           "halal",
           "kosher"
         ]

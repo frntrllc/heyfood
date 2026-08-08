@@ -1,0 +1,53 @@
+{
+  "description": "DIET_GRAPH_ENABLED=false. Both routes 404 feature_disabled and the agent tool returns the typed refusal. The response deliberately carries NO `accepted` list: a dark feature must not be usable to enumerate the vocabulary.",
+  "catalog": {
+    "request": {
+      "method": "GET",
+      "path": "/v1/diets"
+    },
+    "expected_status": 404,
+    "expected_error": {
+      "error_code": "not_found",
+      "message": "The diet catalog is not available on this deployment.",
+      "trace_id": "00000000-0000-0000-0000-000000000000",
+      "details": {
+        "reason": "feature_disabled",
+        "path": "/v1/diets"
+      },
+      "retry_after": null
+    }
+  },
+  "detail": {
+    "request": {
+      "method": "GET",
+      "path": "/v1/diets/keto"
+    },
+    "expected_status": 404,
+    "expected_error": {
+      "error_code": "not_found",
+      "message": "The diet catalog is not available on this deployment.",
+      "trace_id": "00000000-0000-0000-0000-000000000000",
+      "details": {
+        "reason": "feature_disabled",
+        "path": "/v1/diets/{diet_id}"
+      },
+      "retry_after": null
+    }
+  },
+  "agent_tool": {
+    "tool": "describe_diet",
+    "input": {
+      "diet_id": "keto"
+    },
+    "result": {
+      "error": "feature_disabled",
+      "message": "Diet guidance is not available on this deployment."
+    }
+  },
+  "note": "`trace_id` is a real per-request value, normalized to a fixed placeholder here so the recorded payload is reproducible.",
+  "expect": {
+    "tool_absent_from_definitions": true,
+    "graph_read_diet_fields_present_but_empty": true,
+    "capability_key_absent": true
+  }
+}

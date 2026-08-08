@@ -14,17 +14,25 @@ pub const MANIFEST_V2_SCHEMA: &str =
     include_str!("../../../schemas/v2/heyfood-agent-manifest.schema.json");
 pub const MANIFEST_V3_SCHEMA: &str =
     include_str!("../../../schemas/v3/heyfood-agent-manifest.schema.json");
+pub const MANIFEST_V4_SCHEMA: &str =
+    include_str!("../../../schemas/v4/heyfood-agent-manifest.schema.json");
 pub const SCHEMA_INDEX_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-agent-schema-index.schema.json");
+pub const SCHEMA_INDEX_V2_SCHEMA: &str =
+    include_str!("../../../schemas/v2/heyfood-agent-schema-index.schema.json");
 pub const DOCTOR_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-agent-doctor.schema.json");
 pub const DOCTOR_V2_SCHEMA: &str =
     include_str!("../../../schemas/v2/heyfood-agent-doctor.schema.json");
 pub const DOCTOR_V3_SCHEMA: &str =
     include_str!("../../../schemas/v3/heyfood-agent-doctor.schema.json");
+pub const DOCTOR_V4_SCHEMA: &str =
+    include_str!("../../../schemas/v4/heyfood-agent-doctor.schema.json");
 pub const GUIDE_SCHEMA: &str = include_str!("../../../schemas/v1/heyfood-agent-guide.schema.json");
 pub const SCHEMA_RESULT_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-agent-schema-result.schema.json");
+pub const SCHEMA_RESULT_V2_SCHEMA: &str =
+    include_str!("../../../schemas/v2/heyfood-agent-schema-result.schema.json");
 pub const CLI_ERROR_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-cli-error.schema.json");
 pub const PUBLIC_OUTPUT_SCHEMA: &str =
@@ -33,6 +41,8 @@ pub const PROPOSAL_PRESENTATION_SCHEMA: &str =
     include_str!("../../../schemas/v1/agent-proposal-presentation.schema.json");
 pub const SETUP_PLAN_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-agent-setup-plan.schema.json");
+pub const SETUP_PLAN_V2_SCHEMA: &str =
+    include_str!("../../../schemas/v2/heyfood-agent-setup-plan.schema.json");
 pub const AGENT_COMPATIBILITY_SCHEMA: &str =
     include_str!("../../../schemas/v1/heyfood-agent-compatibility.schema.json");
 pub const HOUSEHOLD_CONTEXT_INPUT_SCHEMA: &str =
@@ -56,16 +66,24 @@ pub const MANIFEST_V2_SCHEMA_ID: &str =
     "https://hey.food/schemas/v2/heyfood-agent-manifest.schema.json";
 pub const MANIFEST_V3_SCHEMA_ID: &str =
     "https://hey.food/schemas/v3/heyfood-agent-manifest.schema.json";
+pub const MANIFEST_V4_SCHEMA_ID: &str =
+    "https://hey.food/schemas/v4/heyfood-agent-manifest.schema.json";
 pub const SCHEMA_INDEX_SCHEMA_ID: &str =
     "https://hey.food/schemas/v1/heyfood-agent-schema-index.schema.json";
+pub const SCHEMA_INDEX_V2_SCHEMA_ID: &str =
+    "https://hey.food/schemas/v2/heyfood-agent-schema-index.schema.json";
 pub const DOCTOR_SCHEMA_ID: &str = "https://hey.food/schemas/v1/heyfood-agent-doctor.schema.json";
 pub const DOCTOR_V2_SCHEMA_ID: &str =
     "https://hey.food/schemas/v2/heyfood-agent-doctor.schema.json";
 pub const DOCTOR_V3_SCHEMA_ID: &str =
     "https://hey.food/schemas/v3/heyfood-agent-doctor.schema.json";
+pub const DOCTOR_V4_SCHEMA_ID: &str =
+    "https://hey.food/schemas/v4/heyfood-agent-doctor.schema.json";
 pub const GUIDE_SCHEMA_ID: &str = "https://hey.food/schemas/v1/heyfood-agent-guide.schema.json";
 pub const SCHEMA_RESULT_SCHEMA_ID: &str =
     "https://hey.food/schemas/v1/heyfood-agent-schema-result.schema.json";
+pub const SCHEMA_RESULT_V2_SCHEMA_ID: &str =
+    "https://hey.food/schemas/v2/heyfood-agent-schema-result.schema.json";
 pub const CLI_ERROR_SCHEMA_ID: &str = "https://hey.food/schemas/v1/heyfood-cli-error.schema.json";
 pub const PUBLIC_OUTPUT_SCHEMA_ID: &str =
     "https://github.com/frntrllc/heyfood/blob/main/schemas/v1/heyfood-output.schema.json";
@@ -73,6 +91,8 @@ pub const PROPOSAL_PRESENTATION_SCHEMA_ID: &str =
     "https://hey.food/schemas/v1/agent-proposal-presentation.schema.json";
 pub const SETUP_PLAN_SCHEMA_ID: &str =
     "https://hey.food/schemas/v1/heyfood-agent-setup-plan.schema.json";
+pub const SETUP_PLAN_V2_SCHEMA_ID: &str =
+    "https://hey.food/schemas/v2/heyfood-agent-setup-plan.schema.json";
 pub const AGENT_COMPATIBILITY_SCHEMA_ID: &str =
     "https://hey.food/schemas/v1/heyfood-agent-compatibility.schema.json";
 pub const HOUSEHOLD_CONTEXT_INPUT_SCHEMA_ID: &str =
@@ -147,16 +167,21 @@ pub enum EmbeddedSchema {
     Manifest,
     ManifestV2,
     ManifestV3,
+    ManifestV4,
     SchemaIndex,
+    SchemaIndexV2,
     Doctor,
     DoctorV2,
     DoctorV3,
+    DoctorV4,
     Guide,
     SchemaResult,
+    SchemaResultV2,
     CliError,
     PublicOutput,
     ProposalPresentation,
     SetupPlan,
+    SetupPlanV2,
     AgentCompatibility,
     HouseholdContextInput,
     HouseholdMemberInput,
@@ -174,16 +199,21 @@ impl EmbeddedSchema {
             Self::Manifest => "manifest",
             Self::ManifestV2 => "manifest-v2",
             Self::ManifestV3 => "manifest-v3",
+            Self::ManifestV4 => "manifest-v4",
             Self::SchemaIndex => "schema-index",
+            Self::SchemaIndexV2 => "schema-index-v2",
             Self::Doctor => "doctor",
             Self::DoctorV2 => "doctor-v2",
             Self::DoctorV3 => "doctor-v3",
+            Self::DoctorV4 => "doctor-v4",
             Self::Guide => "guide",
             Self::SchemaResult => "schema-result",
+            Self::SchemaResultV2 => "schema-result-v2",
             Self::CliError => "error",
             Self::PublicOutput => "output",
             Self::ProposalPresentation => "proposal-presentation",
             Self::SetupPlan => "setup-plan",
+            Self::SetupPlanV2 => "setup-plan-v2",
             Self::AgentCompatibility => "agent-compatibility",
             Self::HouseholdContextInput => "household-context-input",
             Self::HouseholdMemberInput => "household-member-input",
@@ -201,16 +231,21 @@ impl EmbeddedSchema {
             Self::Manifest => MANIFEST_SCHEMA_ID,
             Self::ManifestV2 => MANIFEST_V2_SCHEMA_ID,
             Self::ManifestV3 => MANIFEST_V3_SCHEMA_ID,
+            Self::ManifestV4 => MANIFEST_V4_SCHEMA_ID,
             Self::SchemaIndex => SCHEMA_INDEX_SCHEMA_ID,
+            Self::SchemaIndexV2 => SCHEMA_INDEX_V2_SCHEMA_ID,
             Self::Doctor => DOCTOR_SCHEMA_ID,
             Self::DoctorV2 => DOCTOR_V2_SCHEMA_ID,
             Self::DoctorV3 => DOCTOR_V3_SCHEMA_ID,
+            Self::DoctorV4 => DOCTOR_V4_SCHEMA_ID,
             Self::Guide => GUIDE_SCHEMA_ID,
             Self::SchemaResult => SCHEMA_RESULT_SCHEMA_ID,
+            Self::SchemaResultV2 => SCHEMA_RESULT_V2_SCHEMA_ID,
             Self::CliError => CLI_ERROR_SCHEMA_ID,
             Self::PublicOutput => PUBLIC_OUTPUT_SCHEMA_ID,
             Self::ProposalPresentation => PROPOSAL_PRESENTATION_SCHEMA_ID,
             Self::SetupPlan => SETUP_PLAN_SCHEMA_ID,
+            Self::SetupPlanV2 => SETUP_PLAN_V2_SCHEMA_ID,
             Self::AgentCompatibility => AGENT_COMPATIBILITY_SCHEMA_ID,
             Self::HouseholdContextInput => HOUSEHOLD_CONTEXT_INPUT_SCHEMA_ID,
             Self::HouseholdMemberInput => HOUSEHOLD_MEMBER_INPUT_SCHEMA_ID,
@@ -228,16 +263,21 @@ impl EmbeddedSchema {
             Self::Manifest => MANIFEST_SCHEMA,
             Self::ManifestV2 => MANIFEST_V2_SCHEMA,
             Self::ManifestV3 => MANIFEST_V3_SCHEMA,
+            Self::ManifestV4 => MANIFEST_V4_SCHEMA,
             Self::SchemaIndex => SCHEMA_INDEX_SCHEMA,
+            Self::SchemaIndexV2 => SCHEMA_INDEX_V2_SCHEMA,
             Self::Doctor => DOCTOR_SCHEMA,
             Self::DoctorV2 => DOCTOR_V2_SCHEMA,
             Self::DoctorV3 => DOCTOR_V3_SCHEMA,
+            Self::DoctorV4 => DOCTOR_V4_SCHEMA,
             Self::Guide => GUIDE_SCHEMA,
             Self::SchemaResult => SCHEMA_RESULT_SCHEMA,
+            Self::SchemaResultV2 => SCHEMA_RESULT_V2_SCHEMA,
             Self::CliError => CLI_ERROR_SCHEMA,
             Self::PublicOutput => PUBLIC_OUTPUT_SCHEMA,
             Self::ProposalPresentation => PROPOSAL_PRESENTATION_SCHEMA,
             Self::SetupPlan => SETUP_PLAN_SCHEMA,
+            Self::SetupPlanV2 => SETUP_PLAN_V2_SCHEMA,
             Self::AgentCompatibility => AGENT_COMPATIBILITY_SCHEMA,
             Self::HouseholdContextInput => HOUSEHOLD_CONTEXT_INPUT_SCHEMA,
             Self::HouseholdMemberInput => HOUSEHOLD_MEMBER_INPUT_SCHEMA,
@@ -250,7 +290,7 @@ impl EmbeddedSchema {
     }
 }
 
-pub const PUBLIC_SCHEMAS: [EmbeddedSchema; 16] = [
+pub const FROZEN_V1_PUBLIC_SCHEMAS: [EmbeddedSchema; 16] = [
     EmbeddedSchema::Manifest,
     EmbeddedSchema::ManifestV2,
     EmbeddedSchema::ManifestV3,
@@ -263,6 +303,31 @@ pub const PUBLIC_SCHEMAS: [EmbeddedSchema; 16] = [
     EmbeddedSchema::PublicOutput,
     EmbeddedSchema::ProposalPresentation,
     EmbeddedSchema::SetupPlan,
+    EmbeddedSchema::AgentCompatibility,
+    EmbeddedSchema::HouseholdContextInput,
+    EmbeddedSchema::HouseholdMemberInput,
+    EmbeddedSchema::HouseholdRead,
+];
+
+pub const PUBLIC_SCHEMAS: [EmbeddedSchema; 22] = [
+    EmbeddedSchema::Manifest,
+    EmbeddedSchema::ManifestV2,
+    EmbeddedSchema::ManifestV3,
+    EmbeddedSchema::ManifestV4,
+    EmbeddedSchema::SchemaIndex,
+    EmbeddedSchema::SchemaIndexV2,
+    EmbeddedSchema::Doctor,
+    EmbeddedSchema::DoctorV2,
+    EmbeddedSchema::DoctorV3,
+    EmbeddedSchema::DoctorV4,
+    EmbeddedSchema::Guide,
+    EmbeddedSchema::SchemaResult,
+    EmbeddedSchema::SchemaResultV2,
+    EmbeddedSchema::CliError,
+    EmbeddedSchema::PublicOutput,
+    EmbeddedSchema::ProposalPresentation,
+    EmbeddedSchema::SetupPlan,
+    EmbeddedSchema::SetupPlanV2,
     EmbeddedSchema::AgentCompatibility,
     EmbeddedSchema::HouseholdContextInput,
     EmbeddedSchema::HouseholdMemberInput,
@@ -1246,10 +1311,203 @@ pub fn manifest_v3() -> Value {
     manifest
 }
 
+/// Return the schema-v4 discovery contract. V4 adds only capability-gated,
+/// read-only Diet catalog/detail surfaces; the v1, v2, and v3 views remain
+/// byte-for-byte and semantically frozen.
+#[must_use]
+pub fn manifest_v4() -> Value {
+    let mut manifest = manifest_v3();
+    manifest["schema_version"] = Value::from(4);
+    manifest["compatibility"]["guide_version"] = Value::from(3);
+    manifest["compatibility"]["minimum_skill_contract_version"] = Value::from(3);
+    manifest["compatibility"]["maximum_skill_contract_version"] = Value::from(3);
+    manifest["mcp_inventory"]["tool_set_version"] = Value::from(3);
+    manifest["frozen_compatibility_views"] = json!({
+        "v1_schema_sha256": sha256_hex(MANIFEST_SCHEMA.as_bytes()),
+        "v2_schema_sha256": sha256_hex(MANIFEST_V2_SCHEMA.as_bytes()),
+        "v3_schema_sha256": sha256_hex(MANIFEST_V3_SCHEMA.as_bytes()),
+        "v1_and_v2_omit_household_agent_surface": true,
+        "v1_v2_v3_omit_diet_agent_surface": true
+    });
+
+    let commands = manifest["commands"]
+        .as_array_mut()
+        .expect("v4 commands are an array");
+    for command in commands.iter_mut() {
+        match command["path"].as_str().expect("command path") {
+            "agent" => {
+                command["output_family"] = Value::from("heyfood_agent_manifest_v4");
+                command["output_schema_id"] = Value::from(MANIFEST_V4_SCHEMA_ID);
+                command["output_schema_sha256"] =
+                    Value::from(sha256_hex(MANIFEST_V4_SCHEMA.as_bytes()));
+            }
+            "agent describe" => {
+                command["purpose"] = Value::from(
+                    "Describe the exact installed agent contract using v4 by default or an explicitly requested frozen compatibility view.",
+                );
+                command["output_family"] = Value::from("heyfood_agent_manifest_v1_v2_v3_or_v4");
+                command["examples"] = json!([
+                    "heyfood agent describe",
+                    "heyfood agent describe --schema-version 1",
+                    "heyfood agent describe --schema-version 2",
+                    "heyfood agent describe --schema-version 3",
+                    "heyfood agent describe --schema-version 4"
+                ]);
+            }
+            "agent doctor" => {
+                command["purpose"] = Value::from(
+                    "Inspect the local integration using v4 by default or an explicitly requested frozen compatibility view.",
+                );
+                command["output_family"] = Value::from("agent_doctor_v1_v2_v3_or_v4");
+                command["examples"] = json!([
+                    "heyfood agent doctor",
+                    "heyfood agent doctor --schema-version 1",
+                    "heyfood agent doctor --schema-version 2",
+                    "heyfood agent doctor --schema-version 3",
+                    "heyfood agent doctor --schema-version 4"
+                ]);
+            }
+            "agent schema" => {
+                command["output_schema_id"] = Value::from(SCHEMA_RESULT_V2_SCHEMA_ID);
+                command["output_schema_sha256"] =
+                    Value::from(sha256_hex(SCHEMA_RESULT_V2_SCHEMA.as_bytes()));
+            }
+            "agent setup" | "agent uninstall" => {
+                command["output_family"] = Value::from("agent_setup_plan_v2");
+                command["output_schema_id"] = Value::from(SETUP_PLAN_V2_SCHEMA_ID);
+                command["output_schema_sha256"] =
+                    Value::from(sha256_hex(SETUP_PLAN_V2_SCHEMA.as_bytes()));
+            }
+            "mcp serve" => {
+                command["purpose"] = Value::from(
+                    "Serve ten manifest-declared read/discovery tools over local MCP stdio.",
+                );
+            }
+            _ => {}
+        }
+    }
+
+    let template = commands
+        .iter()
+        .find(|command| command["path"] == "agent guide")
+        .expect("local read command template")
+        .clone();
+    for (path, purpose, family, example) in [
+        (
+            "diet",
+            "List the evidence-graded Diet guidance catalog when the deployment advertises exactly diet:v1.",
+            "diet_catalog_v1",
+            "heyfood --json diet",
+        ),
+        (
+            "diet list",
+            "List the evidence-graded Diet guidance catalog when the deployment advertises exactly diet:v1.",
+            "diet_catalog_v1",
+            "heyfood --json diet list",
+        ),
+        (
+            "diet show",
+            "Read one Diet guidance card by exact case-sensitive ID when the deployment advertises exactly diet:v1.",
+            "diet_detail_v1",
+            "heyfood --json diet show dash",
+        ),
+    ] {
+        let mut command = template.clone();
+        command["path"] = Value::from(path);
+        command["purpose"] = Value::from(purpose);
+        command["status"] = Value::from("active");
+        command["audience"] = Value::from("agent_safe");
+        command["input_channel"] = Value::from("arguments");
+        command["input_schema_id"] = Value::Null;
+        command["input_schema_sha256"] = Value::Null;
+        command["output_family"] = Value::from(family);
+        command["output_schema_id"] = Value::Null;
+        command["output_schema_sha256"] = Value::Null;
+        command["exit_behavior"] = Value::from("one_json_value");
+        command["operation_class"] = Value::from("remote_read");
+        command["network"] = Value::from(true);
+        command["product_state_mutation"] = Value::from(false);
+        command["credential_side_effect_possible"] = Value::from(true);
+        command["required_scopes"] = json!(["knowledge:read"]);
+        command["authorization_upgrade_command"] = Value::from("heyfood login");
+        command["retry_class"] = Value::from("safe_read");
+        command["reconciliation_command"] = Value::Null;
+        command["human_confirmation"] = Value::from("none");
+        command["interactivity"] = Value::from("none");
+        command["browser_handoff"] = Value::from("none");
+        command["examples"] = json!([example]);
+        commands.push(command);
+    }
+
+    let capabilities = manifest["capabilities"]
+        .as_array_mut()
+        .expect("v4 capabilities are an array");
+    capabilities.push(json!({
+        "id": "diet-guidance",
+        "status": "active",
+        "summary": "Read-only catalog and detail guidance are usable only when live capability discovery advertises exactly diet:v1; unknown versions fail closed.",
+        "contract_version": "v1",
+        "authority": "read_only",
+        "disclosure": "none"
+    }));
+    let agent_mcp = capabilities
+        .iter_mut()
+        .find(|capability| capability["id"] == "agent-mcp")
+        .expect("agent MCP capability");
+    agent_mcp["summary"] = Value::from(
+        "Ten bounded discovery and read tools, including two capability-gated Diet reads, are available over local stdio with native account credentials.",
+    );
+    agent_mcp["contract_version"] = Value::from("v3");
+
+    let tools = manifest["mcp_inventory"]["tools"]
+        .as_array_mut()
+        .expect("v4 MCP inventory tools");
+    tools.extend([
+        diet_mcp_inventory_row(
+            "heyfood_list_diets",
+            "urn:heyfood:mcp:v1:list-diets:input",
+            "urn:heyfood:mcp:v1:list-diets:result",
+            "5125c1a7d77fb5a748f1008689b52612a94bf6d3c64264d15c0a6edb7f6e596b",
+            "eb1d14bb8cff2febedfda01a41fcb94db13f63b4f27ef5865478b09a52e0b727",
+        ),
+        diet_mcp_inventory_row(
+            "heyfood_get_diet",
+            "urn:heyfood:mcp:v1:get-diet:input",
+            "urn:heyfood:mcp:v1:get-diet:result",
+            "bee96c1626e080faa34427e6e5b16415c6ed5da2fb3f3113aa87b8388ce14fef",
+            "264f3023dce9997158aa7c11e16ebe1ed2d52ce1363f20f30e690924db0096ad",
+        ),
+    ]);
+
+    debug_assert!(canonical_json(&manifest).len() <= MAX_MANIFEST_BYTES);
+    manifest
+}
+
+fn diet_mcp_inventory_row(
+    name: &'static str,
+    input_id: &'static str,
+    result_id: &'static str,
+    input_sha256: &'static str,
+    result_sha256: &'static str,
+) -> Value {
+    json!({
+        "name": name,
+        "status": "active",
+        "operation_class": "local_read",
+        "authority": "read_only",
+        "approval": "none",
+        "input_schema": {"id": input_id, "sha256": input_sha256},
+        "result_schema": {"id": result_id, "sha256": result_sha256},
+        "read_only_hint": false,
+        "destructive_hint": false,
+        "idempotent_hint": true
+    })
+}
+
 /// Return the current default discovery contract.
 #[must_use]
 pub fn manifest() -> Value {
-    manifest_v3()
+    manifest_v4()
 }
 
 #[must_use]
@@ -1301,8 +1559,23 @@ pub fn schema_by_name(name: &str) -> Option<EmbeddedSchema> {
 
 #[must_use]
 pub fn schema_index() -> Value {
-    let schemas = PUBLIC_SCHEMAS
-        .into_iter()
+    schema_index_v2()
+}
+
+#[must_use]
+pub fn schema_index_v1() -> Value {
+    schema_index_for(1, &FROZEN_V1_PUBLIC_SCHEMAS)
+}
+
+#[must_use]
+pub fn schema_index_v2() -> Value {
+    schema_index_for(2, &PUBLIC_SCHEMAS)
+}
+
+fn schema_index_for(schema_version: u16, public_schemas: &[EmbeddedSchema]) -> Value {
+    let schemas = public_schemas
+        .iter()
+        .copied()
         .map(|schema| {
             json!({
                 "name": schema.name(),
@@ -1313,40 +1586,70 @@ pub fn schema_index() -> Value {
         })
         .collect::<Vec<_>>();
     json!({
-        "schema_version": 1,
+        "schema_version": schema_version,
         "schemas": schemas
     })
 }
 
 #[must_use]
 pub fn embedded_digests() -> Value {
-    embedded_digests_v3()
+    embedded_digests_v4()
 }
 
 #[must_use]
 pub fn embedded_digests_v1() -> Value {
-    embedded_digests_for(MANIFEST_SCHEMA, DOCTOR_SCHEMA)
+    embedded_digests_for(
+        MANIFEST_SCHEMA,
+        DOCTOR_SCHEMA,
+        SCHEMA_INDEX_SCHEMA,
+        SCHEMA_RESULT_SCHEMA,
+    )
 }
 
 #[must_use]
 pub fn embedded_digests_v2() -> Value {
-    embedded_digests_for(MANIFEST_V2_SCHEMA, DOCTOR_V2_SCHEMA)
+    embedded_digests_for(
+        MANIFEST_V2_SCHEMA,
+        DOCTOR_V2_SCHEMA,
+        SCHEMA_INDEX_SCHEMA,
+        SCHEMA_RESULT_SCHEMA,
+    )
 }
 
 #[must_use]
 pub fn embedded_digests_v3() -> Value {
-    embedded_digests_for(MANIFEST_V3_SCHEMA, DOCTOR_V3_SCHEMA)
+    embedded_digests_for(
+        MANIFEST_V3_SCHEMA,
+        DOCTOR_V3_SCHEMA,
+        SCHEMA_INDEX_SCHEMA,
+        SCHEMA_RESULT_SCHEMA,
+    )
 }
 
-fn embedded_digests_for(manifest_schema: &str, doctor_schema: &str) -> Value {
+#[must_use]
+pub fn embedded_digests_v4() -> Value {
+    embedded_digests_for(
+        MANIFEST_V4_SCHEMA,
+        DOCTOR_V4_SCHEMA,
+        SCHEMA_INDEX_V2_SCHEMA,
+        SCHEMA_RESULT_V2_SCHEMA,
+    )
+}
+
+fn embedded_digests_for(
+    manifest_schema: &str,
+    doctor_schema: &str,
+    schema_index_schema: &str,
+    schema_result_schema: &str,
+) -> Value {
     json!({
         "guide_sha256": sha256_hex(GUIDE.as_bytes()),
         "safety_sha256": sha256_hex(SAFETY.as_bytes()),
         "manifest_schema_sha256": sha256_hex(manifest_schema.as_bytes()),
-        "schema_index_schema_sha256": sha256_hex(SCHEMA_INDEX_SCHEMA.as_bytes()),
+        "schema_index_schema_sha256": sha256_hex(schema_index_schema.as_bytes()),
         "doctor_schema_sha256": sha256_hex(doctor_schema.as_bytes()),
         "guide_schema_sha256": sha256_hex(GUIDE_SCHEMA.as_bytes()),
-        "schema_result_schema_sha256": sha256_hex(SCHEMA_RESULT_SCHEMA.as_bytes()),
+        "schema_result_schema_sha256": sha256_hex(schema_result_schema.as_bytes()),
         "cli_error_schema_sha256": sha256_hex(CLI_ERROR_SCHEMA.as_bytes()),
         "public_output_schema_sha256": sha256_hex(PUBLIC_OUTPUT_SCHEMA.as_bytes()),
         "proposal_presentation_schema_sha256": sha256_hex(PROPOSAL_PRESENTATION_SCHEMA.as_bytes()),
@@ -1369,25 +1672,55 @@ fn doctor_check(id: &'static str, passed: bool) -> Value {
 
 #[must_use]
 pub fn doctor_document() -> Value {
-    doctor_document_v3()
+    doctor_document_v4()
 }
 
 /// Return diagnostics bound to the frozen v1 manifest and schemas.
 #[must_use]
 pub fn doctor_document_v1() -> Value {
-    doctor_document_for(manifest_v1(), 1, embedded_digests_v1())
+    doctor_document_for(
+        manifest_v1(),
+        1,
+        embedded_digests_v1(),
+        &FROZEN_V1_PUBLIC_SCHEMAS,
+        schema_index_v1(),
+    )
 }
 
 /// Return diagnostics bound to the explicit v2 manifest and schemas.
 #[must_use]
 pub fn doctor_document_v2() -> Value {
-    doctor_document_for(manifest_v2(), 2, embedded_digests_v2())
+    doctor_document_for(
+        manifest_v2(),
+        2,
+        embedded_digests_v2(),
+        &FROZEN_V1_PUBLIC_SCHEMAS,
+        schema_index_v1(),
+    )
 }
 
 /// Return diagnostics bound to the current v3 manifest and schemas.
 #[must_use]
 pub fn doctor_document_v3() -> Value {
-    doctor_document_for(manifest_v3(), 3, embedded_digests_v3())
+    doctor_document_for(
+        manifest_v3(),
+        3,
+        embedded_digests_v3(),
+        &FROZEN_V1_PUBLIC_SCHEMAS,
+        schema_index_v1(),
+    )
+}
+
+/// Return diagnostics bound to the current v4 manifest and schemas.
+#[must_use]
+pub fn doctor_document_v4() -> Value {
+    doctor_document_for(
+        manifest_v4(),
+        4,
+        embedded_digests_v4(),
+        &PUBLIC_SCHEMAS,
+        schema_index_v2(),
+    )
 }
 
 /// Return a conservative, version-invariant compatibility diagnosis when no
@@ -1397,7 +1730,7 @@ pub fn compatibility_unknown_document() -> Value {
     let document = json!({
         "schema_version": 1,
         "binary_version": env!("CARGO_PKG_VERSION"),
-        "manifest_schema_version": 3,
+        "manifest_schema_version": 4,
         "compatible": false,
         "installations": [{
             "host": "codex",
@@ -1422,13 +1755,19 @@ pub fn compatibility_unknown_document() -> Value {
     document
 }
 
-fn doctor_document_for(manifest: Value, schema_version: u16, embedded: Value) -> Value {
+fn doctor_document_for(
+    manifest: Value,
+    schema_version: u16,
+    embedded: Value,
+    public_schemas: &[EmbeddedSchema],
+    index: Value,
+) -> Value {
     let canonical_manifest = canonical_json(&manifest);
     let manifest_round_trip = serde_json::from_str::<Value>(&canonical_manifest)
         .is_ok_and(|decoded| decoded == manifest)
         && canonical_manifest.len() <= MAX_MANIFEST_BYTES;
 
-    let schemas_valid = PUBLIC_SCHEMAS.into_iter().all(|schema| {
+    let schemas_valid = public_schemas.iter().copied().all(|schema| {
         schema.document().len() <= MAX_SCHEMA_BYTES
             && serde_json::from_str::<Value>(schema.document()).is_ok_and(|document| {
                 document["$schema"] == "https://json-schema.org/draft/2020-12/schema"
@@ -1436,15 +1775,17 @@ fn doctor_document_for(manifest: Value, schema_version: u16, embedded: Value) ->
             })
     });
 
-    let index = schema_index();
     let index_exact = index["schemas"].as_array().is_some_and(|entries| {
-        entries.len() == PUBLIC_SCHEMAS.len()
-            && entries.iter().zip(PUBLIC_SCHEMAS).all(|(entry, schema)| {
-                entry["name"] == schema.name()
-                    && entry["id"] == schema.id()
-                    && entry["sha256"] == sha256_hex(schema.document().as_bytes())
-                    && entry["bytes"] == schema.document().len()
-            })
+        entries.len() == public_schemas.len()
+            && entries
+                .iter()
+                .zip(public_schemas.iter().copied())
+                .all(|(entry, schema)| {
+                    entry["name"] == schema.name()
+                        && entry["id"] == schema.id()
+                        && entry["sha256"] == sha256_hex(schema.document().as_bytes())
+                        && entry["bytes"] == schema.document().len()
+                })
     });
 
     let command_bindings = manifest["commands"].as_array().is_some_and(|contracts| {
@@ -1530,6 +1871,101 @@ mod tests {
     }
 
     #[test]
+    fn manifest_v4_adds_only_read_only_diet_agent_surfaces() {
+        let v3 = manifest_v3();
+        let v4 = manifest_v4();
+        assert_eq!(v3["schema_version"], 3);
+        assert_eq!(v4["schema_version"], 4);
+        assert_eq!(
+            v4["frozen_compatibility_views"]["v3_schema_sha256"],
+            sha256_hex(MANIFEST_V3_SCHEMA.as_bytes())
+        );
+        let names = v4["mcp_inventory"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(names.len(), 10);
+        assert!(names.contains(&"heyfood_list_diets"));
+        assert!(names.contains(&"heyfood_get_diet"));
+        assert!(!names.iter().any(|name| {
+            name.contains("set_diet")
+                || name.contains("clear_diet")
+                || name.contains("profile_sync")
+        }));
+
+        let diet = v4["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|capability| capability["id"] == "diet-guidance")
+            .unwrap();
+        assert_eq!(diet["authority"], "read_only");
+        assert!(
+            diet["summary"]
+                .as_str()
+                .unwrap()
+                .contains("exactly diet:v1")
+        );
+    }
+
+    #[test]
+    fn legacy_schema_contracts_are_byte_frozen_and_v4_uses_v2_successors() {
+        assert_eq!(
+            sha256_hex(SCHEMA_INDEX_SCHEMA.as_bytes()),
+            "c60b0485effcbf00fc4be99d0e59556142de4a8ba1caae088f5ea5cd8db69ad3"
+        );
+        assert_eq!(
+            sha256_hex(SCHEMA_RESULT_SCHEMA.as_bytes()),
+            "fa0388782aa5aee14ba5822788cf34dffd2a70a31b616d614ab710a283f1a2e7"
+        );
+        assert_eq!(
+            sha256_hex(SETUP_PLAN_SCHEMA.as_bytes()),
+            "6f6250a57cdac6da35684bfa2be66ea43f88c94bcd7ac302e380b619a066d29e"
+        );
+        assert_eq!(schema_index_v1()["schema_version"], 1);
+        assert_eq!(schema_index_v1()["schemas"].as_array().unwrap().len(), 16);
+        assert_eq!(schema_index_v2()["schema_version"], 2);
+        assert_eq!(schema_index_v2()["schemas"].as_array().unwrap().len(), 22);
+
+        for manifest in [manifest_v1(), manifest_v2(), manifest_v3()] {
+            let commands = manifest["commands"].as_array().unwrap();
+            let schema = commands
+                .iter()
+                .find(|command| command["path"] == "agent schema")
+                .unwrap();
+            assert_eq!(schema["output_schema_id"], SCHEMA_RESULT_SCHEMA_ID);
+            assert_eq!(
+                schema["output_schema_sha256"],
+                sha256_hex(SCHEMA_RESULT_SCHEMA.as_bytes())
+            );
+            let setup = commands
+                .iter()
+                .find(|command| command["path"] == "agent setup")
+                .unwrap();
+            assert_eq!(setup["output_schema_id"], SETUP_PLAN_SCHEMA_ID);
+            assert_eq!(
+                setup["output_schema_sha256"],
+                sha256_hex(SETUP_PLAN_SCHEMA.as_bytes())
+            );
+        }
+
+        let v4 = manifest_v4();
+        let commands = v4["commands"].as_array().unwrap();
+        let schema = commands
+            .iter()
+            .find(|command| command["path"] == "agent schema")
+            .unwrap();
+        assert_eq!(schema["output_schema_id"], SCHEMA_RESULT_V2_SCHEMA_ID);
+        let setup = commands
+            .iter()
+            .find(|command| command["path"] == "agent setup")
+            .unwrap();
+        assert_eq!(setup["output_schema_id"], SETUP_PLAN_V2_SCHEMA_ID);
+    }
+
+    #[test]
     fn manifest_declares_exact_native_state_compatibility() {
         let frozen_v1 = manifest_v1();
         assert_eq!(frozen_v1["schema_version"], 1);
@@ -1553,8 +1989,8 @@ mod tests {
         );
 
         let default_manifest = manifest();
-        assert_eq!(default_manifest["schema_version"], 3);
-        assert_eq!(default_manifest, manifest_v3());
+        assert_eq!(default_manifest["schema_version"], 4);
+        assert_eq!(default_manifest, manifest_v4());
     }
 
     #[test]
@@ -1581,13 +2017,17 @@ mod tests {
             (EmbeddedSchema::Manifest, manifest_v1()),
             (EmbeddedSchema::ManifestV2, manifest_v2()),
             (EmbeddedSchema::ManifestV3, manifest_v3()),
-            (EmbeddedSchema::SchemaIndex, schema_index()),
+            (EmbeddedSchema::ManifestV4, manifest_v4()),
+            (EmbeddedSchema::SchemaIndex, schema_index_v1()),
+            (EmbeddedSchema::SchemaIndexV2, schema_index_v2()),
             (EmbeddedSchema::Doctor, doctor_document_v1()),
             (EmbeddedSchema::DoctorV2, doctor_document_v2()),
             (EmbeddedSchema::DoctorV3, doctor_document_v3()),
+            (EmbeddedSchema::DoctorV4, doctor_document_v4()),
             (EmbeddedSchema::Guide, guide_document()),
             (EmbeddedSchema::Guide, safety_document()),
-            (EmbeddedSchema::SchemaResult, schema_index()),
+            (EmbeddedSchema::SchemaResult, schema_index_v1()),
+            (EmbeddedSchema::SchemaResultV2, schema_index_v2()),
             (
                 EmbeddedSchema::SchemaResult,
                 schema_document(EmbeddedSchema::Manifest),
@@ -1608,9 +2048,9 @@ mod tests {
                 compatibility_unknown_document(),
             ),
             (
-                EmbeddedSchema::SetupPlan,
+                EmbeddedSchema::SetupPlanV2,
                 json!({
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "operation": "install",
                     "mode": "dry_run",
                     "target": "codex",
@@ -1619,13 +2059,13 @@ mod tests {
                     "binary": {
                         "path": "/absolute/heyfood",
                         "sha256": "0".repeat(64),
-                        "version": "0.8.0"
+                        "version": env!("CARGO_PKG_VERSION")
                     },
                     "package": {
                         "name": "heyfood",
-                        "version": "0.8.0",
+                        "version": env!("CARGO_PKG_VERSION"),
                         "sha256": "1".repeat(64),
-                        "files": 6
+                        "files": 7
                     },
                     "plan_sha256": "2".repeat(64),
                     "ready": true,
@@ -1678,15 +2118,21 @@ mod tests {
                 "manifest",
                 "manifest-v2",
                 "manifest-v3",
+                "manifest-v4",
                 "schema-index",
+                "schema-index-v2",
                 "doctor",
                 "doctor-v2",
+                "doctor-v3",
+                "doctor-v4",
                 "guide",
                 "schema-result",
+                "schema-result-v2",
                 "error",
                 "output",
                 "proposal-presentation",
                 "setup-plan",
+                "setup-plan-v2",
                 "agent-compatibility",
                 "household-context-input",
                 "household-member-input",
@@ -2144,7 +2590,7 @@ mod household_phase0_contract_tests {
         assert_eq!(v2["schema_version"], 2);
         assert_eq!(v1["commands"].as_array().map(Vec::len), Some(30));
         assert_eq!(v2["commands"].as_array().map(Vec::len), Some(30));
-        assert_eq!(PUBLIC_SCHEMAS.len(), 16);
+        assert_eq!(PUBLIC_SCHEMAS.len(), 22);
 
         let v2_commands = v2["commands"].as_array().expect("v2 commands");
         let v3_commands = v3["commands"].as_array().expect("v3 commands");

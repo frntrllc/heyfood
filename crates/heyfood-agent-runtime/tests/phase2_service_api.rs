@@ -9,9 +9,9 @@ use heyfood_application::{
     ReadActiveGroceryDisplay, ReadGroceryExclusions, RegistrationAvailability, StatusPort,
 };
 use heyfood_core::{
-    AccountId, AddItemsRequestWire, CredentialVersion, ExclusionMutationRequestWire,
-    GroceryCapability, GroceryConfirmationToken, GroceryDecisionWire, GroceryEntityId,
-    GroceryItemInputWire, GroceryItemStateWire, GroceryListVersion,
+    AccountId, AddItemsRequestWire, CredentialVersion, DietCapability,
+    ExclusionMutationRequestWire, GroceryCapability, GroceryConfirmationToken, GroceryDecisionWire,
+    GroceryEntityId, GroceryItemInputWire, GroceryItemStateWire, GroceryListVersion,
     GroceryMutationConfirmRequestWire, MenuWatchCreateRequestWire, NetworkPolicy, OperationId,
     RemoveItemsRequestWire, RestaurantId, SensitiveString, ServiceUrl, SessionCredentials,
     TranscriptionPurpose, UpdateItemStateRequestWire, WatchCadenceWire, WatchHour, WatchWeekday,
@@ -69,6 +69,7 @@ fn capabilities(version: Option<&str>) -> CapabilitySnapshot {
         loopback_pkce: true,
         device_code: true,
         grocery: GroceryCapability::from_advertised(version),
+        diet: DietCapability::Unavailable,
     }
 }
 
@@ -335,7 +336,7 @@ async fn capability_discovery_gates_typed_grocery_reads() {
                 "self_registration": {"status": "disabled", "regions": [], "identity_methods": []},
                 "authorization": {"loopback_pkce": true, "device_code": true, "identity_methods": []},
                 "profile_readiness": true,
-                "application_capabilities": {"grocery": "v1"}
+                "application_capabilities": {"grocery": "v1", "diet": "v1"}
             }),
         )
         .await;
@@ -365,6 +366,7 @@ async fn capability_discovery_gates_typed_grocery_reads() {
         .execute(CancellationToken::new())
         .await
         .unwrap();
+    assert_eq!(advertised.diet, DietCapability::V1);
     let list = ReadActiveGroceryDisplay::new(&service)
         .execute(
             advertised.clone(),

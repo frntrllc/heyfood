@@ -15,10 +15,10 @@ use heyfood_application::{
     render_household_evaluation, render_household_menu,
 };
 use heyfood_core::{
-    GroceryDecisionWire, GroceryItemStateWire, GroceryMutationOperationWire,
-    GroceryMutationProposalWire, GroceryMutationResultWire, GroceryMutationStatusWire,
-    GrocerySafetyStatus, HealthContextWire, HealthFreshnessStatus, HealthProvider, ProfileStatus,
-    WatchWeekday, terminal_safe_text,
+    DietCatalog, DietDetail, DietEvidenceLevel, GroceryDecisionWire, GroceryItemStateWire,
+    GroceryMutationOperationWire, GroceryMutationProposalWire, GroceryMutationResultWire,
+    GroceryMutationStatusWire, GrocerySafetyStatus, HealthContextWire, HealthFreshnessStatus,
+    HealthProvider, ProfileStatus, WatchWeekday, terminal_safe_text,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -158,10 +158,15 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<GroceryCommand>,
     },
-    /// Health integrations are deferred from the supported v0.8.0 contract.
+    /// Browse grounded diet guidance or update the diets declared on your profile.
+    Diet {
+        #[command(subcommand)]
+        command: Option<DietCommand>,
+    },
+    /// Health integrations are deferred from the supported v0.9.0 contract.
     #[command(
         hide = true,
-        about = "Health integrations are deferred from the supported v0.8.0 contract."
+        about = "Health integrations are deferred from the supported v0.9.0 contract."
     )]
     Health {
         #[command(subcommand)]
@@ -249,19 +254,19 @@ pub enum AgentCommand {
 
 #[derive(Clone, Debug, Eq, PartialEq, Args)]
 pub struct AgentDiscoveryArgs {
-    /// Explicit discovery schema; v3 is the current default.
+    /// Explicit discovery schema; v4 is the current default.
     #[arg(
         long,
-        value_name = "1|2|3",
-        default_value_t = 3,
-        value_parser = clap::value_parser!(u16).range(1..=3)
+        value_name = "1|2|3|4",
+        default_value_t = 4,
+        value_parser = clap::value_parser!(u16).range(1..=4)
     )]
     pub schema_version: u16,
 }
 
 impl Default for AgentDiscoveryArgs {
     fn default() -> Self {
-        Self { schema_version: 3 }
+        Self { schema_version: 4 }
     }
 }
 
@@ -573,6 +578,43 @@ pub enum GroceryCommand {
     Confirm(GroceryConfirmArgs),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
+pub enum DietCommand {
+    /// Browse the evidence-graded diet catalog.
+    List,
+    /// Read the grounded principle card for one exact diet ID.
+    Show(DietShowArgs),
+    /// Compatibility grammar for `heyfood diet <diet-id>`.
+    #[command(external_subcommand)]
+    Explain(Vec<String>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Args)]
+pub struct DietShowArgs {
+    /// Exact, case-sensitive diet ID from `heyfood diet list`.
+    #[arg(value_name = "DIET_ID")]
+    pub diet_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DietOperation {
+    List,
+    Show(String),
+}
+
+impl DietCommand {
+    pub fn into_operation(self) -> Result<DietOperation, &'static str> {
+        match self {
+            Self::List => Ok(DietOperation::List),
+            Self::Show(arguments) => Ok(DietOperation::Show(arguments.diet_id)),
+            Self::Explain(arguments) if arguments.len() == 1 => Ok(DietOperation::Show(
+                arguments.into_iter().next().expect("length checked"),
+            )),
+            Self::Explain(_) => Err("use `heyfood diet <diet-id>` with exactly one diet ID"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Args)]
 pub struct GroceryVersionArgs {
     #[arg(long, value_name = "UUID")]
@@ -696,19 +738,19 @@ impl From<GroceryDecisionArgument> for GroceryDecisionWire {
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum HealthCommand {
-    /// Retained for future compatibility; unavailable in v0.8.0.
+    /// Retained for future compatibility; unavailable in v0.9.0.
     #[command(hide = true)]
     Status,
-    /// Retained for future compatibility; unavailable in v0.8.0.
+    /// Retained for future compatibility; unavailable in v0.9.0.
     #[command(hide = true)]
     Show,
-    /// Retained for future compatibility; unavailable in v0.8.0.
+    /// Retained for future compatibility; unavailable in v0.9.0.
     #[command(hide = true)]
     Connect(HealthProviderArgs),
-    /// Retained for future compatibility; unavailable in v0.8.0.
+    /// Retained for future compatibility; unavailable in v0.9.0.
     #[command(hide = true)]
     Sync(HealthProviderArgs),
-    /// Retained for future compatibility; unavailable in v0.8.0.
+    /// Retained for future compatibility; unavailable in v0.9.0.
     #[command(hide = true)]
     Disconnect(HealthDisconnectArgs),
 }
@@ -1061,6 +1103,129 @@ pub fn render_json<T: Serialize>(value: &T) -> Result<String, serde_json::Error>
     output.push('\n');
     debug_assert!(!output.contains('\u{1b}'));
     Ok(output)
+}
+
+/// Render the authored Diet catalog without inferring evidence or coverage.
+#[must_use]
+pub fn render_diet_catalog(catalog: &DietCatalog, mode: OutputMode) -> String {
+    if mode == OutputMode::Json {
+        return render_json(catalog).expect("Diet catalog DTO is serializable");
+    }
+    let mut output = if mode.ansi() {
+        "\u{1b}[1mDiet guidance\u{1b}[0m\n".to_owned()
+    } else {
+        "Diet guidance\n".to_owned()
+    };
+    if !catalog.corpus_available {
+        output.push_str("Grounded diet guides are temporarily unavailable.\n");
+    }
+    for diet in &catalog.diets {
+        let evidence = diet
+            .evidence_level
+            .map_or("grounding pending", diet_evidence_label);
+        let _ = writeln!(
+            output,
+            "• {}  [{}]  id:{}",
+            terminal_safe_text(&diet.label),
+            evidence,
+            terminal_safe_text(&diet.id)
+        );
+        if !diet.summary.is_empty() {
+            let _ = writeln!(output, "  {}", terminal_safe_text(&diet.summary));
+        }
+    }
+    output.push_str("\nOpen a grounded guide with `heyfood diet show <id>`.\n");
+    output
+}
+
+/// Render one grounded Diet principle card in its authored section order.
+/// Safety remains visible even when a corpus card is not yet available.
+#[must_use]
+pub fn render_diet_detail(detail: &DietDetail, mode: OutputMode) -> String {
+    if mode == OutputMode::Json {
+        return render_json(detail).expect("Diet detail DTO is serializable");
+    }
+    let mut output = if mode.ansi() {
+        format!("\u{1b}[1m{}\u{1b}[0m\n", terminal_safe_text(&detail.label))
+    } else {
+        format!("{}\n", terminal_safe_text(&detail.label))
+    };
+    if let Some(evidence) = detail.evidence_level {
+        let _ = writeln!(output, "Evidence: {}", diet_evidence_label(evidence));
+    }
+    if detail.covered {
+        if !detail.summary.is_empty() {
+            let _ = writeln!(output, "\n{}", terminal_safe_text(&detail.summary));
+        }
+    } else {
+        output.push_str("\nA grounded guide for this diet is not available yet.\n");
+    }
+
+    append_diet_section(&mut output, "Principles", &detail.sections.principles);
+    append_diet_section(
+        &mut output,
+        "Foods emphasized",
+        &detail.sections.foods_emphasized,
+    );
+    append_diet_section(&mut output, "Foods limited", &detail.sections.foods_limited);
+    append_diet_section(&mut output, "Evidence", &detail.sections.evidence);
+
+    output.push_str("\nSafety\n");
+    if detail.sections.safety.is_empty() && detail.contraindicated_conditions.is_empty() {
+        output.push_str("No diet-specific safety cautions are documented. Your personal food safety guidance still takes precedence.\n");
+    } else {
+        for paragraph in &detail.sections.safety {
+            let _ = writeln!(output, "• {}", terminal_safe_text(paragraph));
+        }
+        for caution in &detail.contraindicated_conditions {
+            let _ = writeln!(
+                output,
+                "• {}: {}",
+                terminal_safe_text(&caution.condition_label),
+                terminal_safe_text(&caution.reason)
+            );
+        }
+    }
+
+    append_diet_section(
+        &mut output,
+        "Nutrient adequacy",
+        &detail.sections.nutrient_adequacy,
+    );
+    append_diet_section(
+        &mut output,
+        "At restaurants",
+        &detail.sections.restaurant_application,
+    );
+    append_diet_section(&mut output, "Interactions", &detail.sections.interactions);
+    append_diet_section(
+        &mut output,
+        "Common misconceptions",
+        &detail.sections.misconceptions,
+    );
+    append_diet_section(&mut output, "Sources", &detail.citations);
+    output.push_str(
+        "\nDiet fit is advisory. Allergy and medical safety guidance always takes precedence.\n",
+    );
+    output
+}
+
+const fn diet_evidence_label(evidence: DietEvidenceLevel) -> &'static str {
+    match evidence {
+        DietEvidenceLevel::Strong => "strong evidence",
+        DietEvidenceLevel::Moderate => "moderate evidence",
+        DietEvidenceLevel::Limited => "limited evidence",
+    }
+}
+
+fn append_diet_section(output: &mut String, heading: &str, paragraphs: &[String]) {
+    if paragraphs.is_empty() {
+        return;
+    }
+    let _ = writeln!(output, "\n{heading}");
+    for paragraph in paragraphs {
+        let _ = writeln!(output, "• {}", terminal_safe_text(paragraph));
+    }
 }
 
 #[must_use]
@@ -1975,6 +2140,7 @@ pub fn render_item_result(document: &Value, mode: OutputMode) -> String {
     if let Some(member) = member {
         let _ = writeln!(output, "Applies to: {member}");
     }
+    append_diet_alignment(&mut output, document);
     append_item_conflicts(&mut output, document);
     for (heading, keys) in [
         ("Ask staff", &["questions_to_ask"][..]),
@@ -2015,6 +2181,29 @@ pub fn render_item_result(document: &Value, mode: OutputMode) -> String {
         return format!("{UNPRESENTABLE_ITEM_RESULT_MESSAGE}\n");
     }
     output
+}
+
+fn append_diet_alignment(output: &mut String, document: &Value) {
+    let Some(alignment) = document.get("diet_alignment").and_then(Value::as_str) else {
+        return;
+    };
+    let label = match alignment {
+        "aligned" => "Aligned",
+        "partial" => "Partly aligned",
+        "off_diet" => "Off diet",
+        "not_assessed" => "Not assessed",
+        _ => return,
+    };
+    let reason = document
+        .get("diet_alignment_reason")
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.trim().is_empty() && reason.chars().count() <= 300)
+        .map(terminal_safe_text);
+    if let Some(reason) = reason {
+        let _ = writeln!(output, "Diet fit: {label} — {reason}");
+    } else if alignment == "not_assessed" {
+        let _ = writeln!(output, "Diet fit: {label}");
+    }
 }
 
 fn item_status_label(value: &str) -> String {
@@ -2846,6 +3035,33 @@ mod registration_tests {
     }
 
     #[test]
+    fn diet_alignment_is_subordinate_and_never_changes_item_safety() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/contracts/diet-backend/v1/fixtures/diet/alignment_payload.json"
+        )))
+        .unwrap();
+        for (key, safety, fit) in [
+            (
+                "flag_on_off_diet_but_safe",
+                "Generally safer",
+                "Diet fit: Off diet — Contains pasta, which is off keto.",
+            ),
+            (
+                "flag_on_aligned_but_unsafe",
+                "Avoid",
+                "Diet fit: Aligned — Fits the Mediterranean pattern.",
+            ),
+        ] {
+            let mut document = fixture[key].clone();
+            document["item_name"] = json!("Fixture item");
+            let rendered = render_item_result(&document, OutputMode::HumanPlain);
+            assert!(rendered.starts_with(&format!("Fixture item  {safety}\n")));
+            assert!(rendered.contains(fit));
+        }
+    }
+
+    #[test]
     fn item_renderer_rejects_nested_content_that_echoes_a_declared_household_id() {
         let member_id = "foreignOpaque7";
         let document = json!({
@@ -2929,5 +3145,116 @@ mod registration_tests {
         );
         let machine = render_item_result(&document, OutputMode::Json);
         assert_eq!(serde_json::from_str::<Value>(&machine).unwrap(), document);
+    }
+}
+
+#[cfg(test)]
+mod diet_command_tests {
+    use super::*;
+    use heyfood_core::{DietCatalogResponseWire, DietDetailResponseWire};
+
+    fn diet_operation(arguments: &[&str]) -> DietOperation {
+        let cli = Cli::try_parse_from(arguments).expect("diet command should parse");
+        let Some(Command::Diet { command }) = cli.command else {
+            panic!("expected diet command");
+        };
+        command
+            .map_or(Ok(DietOperation::List), DietCommand::into_operation)
+            .expect("diet command should resolve")
+    }
+
+    #[test]
+    fn diet_defaults_to_the_catalog() {
+        assert_eq!(diet_operation(&["heyfood", "diet"]), DietOperation::List);
+        assert_eq!(
+            diet_operation(&["heyfood", "diet", "list"]),
+            DietOperation::List
+        );
+    }
+
+    #[test]
+    fn diet_supports_explicit_and_short_explain_grammar() {
+        assert_eq!(
+            diet_operation(&["heyfood", "diet", "show", "dash"]),
+            DietOperation::Show("dash".into())
+        );
+        assert_eq!(
+            diet_operation(&["heyfood", "diet", "dash"]),
+            DietOperation::Show("dash".into())
+        );
+    }
+
+    #[test]
+    fn diet_short_explain_rejects_more_than_one_id() {
+        let cli = Cli::try_parse_from(["heyfood", "diet", "dash", "keto"]).unwrap();
+        let Some(Command::Diet {
+            command: Some(command),
+        }) = cli.command
+        else {
+            panic!("expected diet command");
+        };
+        assert!(command.into_operation().is_err());
+    }
+
+    #[test]
+    fn diet_catalog_renderer_uses_deployed_fixture_and_keeps_ids_actionable() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/contracts/diet-backend/v1/fixtures/diet/catalog.json"
+        )))
+        .unwrap();
+        let wire: DietCatalogResponseWire =
+            serde_json::from_value(fixture["response"].clone()).unwrap();
+        let catalog = DietCatalog::try_from(wire).unwrap();
+        let rendered = render_diet_catalog(&catalog, OutputMode::HumanPlain);
+        assert!(rendered.starts_with("Diet guidance\n"));
+        assert!(rendered.contains("Mediterranean"));
+        assert!(rendered.contains("[strong evidence]"));
+        assert!(rendered.contains("id:mediterranean"));
+        assert!(rendered.contains("heyfood diet show <id>"));
+        assert!(!rendered.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn diet_detail_renderer_preserves_authored_order_and_always_shows_safety() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/contracts/diet-backend/v1/fixtures/diet/detail_covered.json"
+        )))
+        .unwrap();
+        let wire: DietDetailResponseWire =
+            serde_json::from_value(fixture["response"].clone()).unwrap();
+        let detail = DietDetail::try_from(wire).unwrap();
+        let rendered = render_diet_detail(&detail, OutputMode::HumanPlain);
+        for (left, right) in [
+            ("\nPrinciples\n", "\nFoods emphasized\n"),
+            ("\nFoods emphasized\n", "\nFoods limited\n"),
+            ("\nFoods limited\n", "\nEvidence\n"),
+            ("\nEvidence\n", "\nSafety\n"),
+            ("\nSafety\n", "\nNutrient adequacy\n"),
+            ("\nNutrient adequacy\n", "\nAt restaurants\n"),
+            ("\nAt restaurants\n", "\nInteractions\n"),
+            ("\nInteractions\n", "\nCommon misconceptions\n"),
+        ] {
+            assert!(rendered.find(left).unwrap() < rendered.find(right).unwrap());
+        }
+        assert!(rendered.contains("Allergy and medical safety guidance always takes precedence"));
+    }
+
+    #[test]
+    fn uncovered_diet_is_successful_and_still_renders_deterministic_cautions() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/contracts/diet-backend/v1/fixtures/diet/detail_not_covered.json"
+        )))
+        .unwrap();
+        let wire: DietDetailResponseWire =
+            serde_json::from_value(fixture["response"].clone()).unwrap();
+        let detail = DietDetail::try_from(wire).unwrap();
+        let rendered = render_diet_detail(&detail, OutputMode::HumanPlain);
+        assert!(rendered.contains("grounded guide for this diet is not available yet"));
+        assert!(rendered.contains("Safety"));
+        assert!(rendered.contains("Type 1 diabetes"));
+        assert!(!rendered.contains("Evidence: limited"));
     }
 }

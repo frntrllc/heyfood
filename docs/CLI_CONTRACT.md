@@ -1,8 +1,9 @@
 # heyfood native CLI contract
 
-This document defines the process interface for the current Rust public cut.
-Its active product commands are `agent`, `register`, `login`, `logout`, `chat`,
-`onboard`, `ask`, `reply`, `log`, `item`, `grocery`, and `watch`. An
+This document defines the process interface for the current Rust public cut
+and identifies additions that exist only in the next source candidate. The
+supported `v0.8.0` product commands are `agent`, `register`, `login`, `logout`,
+`chat`, `onboard`, `ask`, `reply`, `log`, `item`, `grocery`, and `watch`. An
 interactive bare `heyfood`
 invocation opens the same native TUI as `heyfood chat`.
 Human rendering may improve between compatible releases; machine-facing changes
@@ -28,6 +29,7 @@ The following commands perform native product work:
 | `reply` | Runs one hosted-agent turn and requires `--conversation-id`. |
 | `log` | Sends meal-log text through the hosted-agent turn endpoint. |
 | `item` | Sends a food or menu-item assessment through the hosted-agent turn endpoint. |
+| `diet` | Source-candidate, read-only access to the hosted Diet v1 catalog and authored guide detail. This command is not included in the public v0.8.0 binary. |
 | `grocery` | Reads, prepares, exports, and explicitly confirms Grocery v1 operations after capability discovery. |
 | `watch` | Creates, lists, and removes recurring Menu Watch subscriptions. |
 
@@ -56,6 +58,25 @@ absent from the TUI command registry, and new grants do not request
 `capability_deferred` before credential access or network dispatch. Existing
 provider-neutral types, transports, and frozen fixtures are not a support claim
 and require no additional implementation or production canary for this release.
+
+The source-candidate Diet surface uses `heyfood diet`, `heyfood diet list`,
+`heyfood diet show DIET_ID`, and the equivalent short form `heyfood diet
+DIET_ID`. It dispatches only after capability discovery reports the exact value
+`application_capabilities.diet == "v1"` and the account grant contains
+`knowledge:read`; missing or unknown capability values fail closed. Runtime
+diet IDs are case-sensitive, are URL-segment encoded, and are sent exactly as
+returned by the service. The service currently exposes 22 authored guides,
+which are separate from the 26 diet options accepted by profile onboarding.
+
+A guide's `strong`, `moderate`, or `limited` evidence level is an advisory
+description of its sources, not a safety or clinical guarantee. The authored
+`render_order` controls guide presentation, and dietary safety stays visible.
+`diet_not_covered` is a successful bounded result; the client does not invent
+guidance for an uncovered diet. Optional item-level `diet_alignment` is
+rendered only as a subordinate explanation and cannot alter safety status,
+badge, color, ordering, filtering, or mutation state. Profile diet set/clear is
+not exposed in this candidate because its write contract remains pending in
+[hellofood #261](https://github.com/frntrllc/hellofood/issues/261).
 
 Native household management is a human-attached-TUI surface. In
 `NativeEnabled` mode, `/household`, `/household add`,

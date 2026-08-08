@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hey.food/schemas/v2/heyfood-agent-schema-result.schema.json",
+  "title": "heyfood public schema result v2",
+  "description": "Either the installed public schema index or one selected embedded JSON Schema.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "schemas"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "schemas": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "id",
+              "sha256",
+              "bytes"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "id": {
+                "type": "string",
+                "format": "uri",
+                "maxLength": 256
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048576
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "$schema",
+        "$id"
+      ],
+      "properties": {
+        "$schema": {
+          "const": "https://json-schema.org/draft/2020-12/schema"
+        },
+        "$id": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 256
+        }
+      }
+    }
+  ]
+}

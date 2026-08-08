@@ -1,0 +1,23 @@
+{
+  "description": "GET /v1/auth/capabilities -> application_capabilities in both flag states. The build declares diet:v1; the ADVERTISED map omits it while the flag is off, because deployed truth is code AND config. A client that checks this map never calls a route that would 404 feature_disabled.",
+  "build_declares": {
+    "grocery": "v1",
+    "diet": "v1"
+  },
+  "flag_on": {
+    "application_capabilities": {
+      "grocery": "v1",
+      "diet": "v1"
+    }
+  },
+  "flag_off": {
+    "application_capabilities": {
+      "grocery": "v1"
+    }
+  },
+  "expected_client_behavior": {
+    "flag_on": "offer the diet command surface",
+    "flag_off": "hide the diet command surface entirely"
+  },
+  "unknown_versions_fail_closed": true
+}

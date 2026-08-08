@@ -627,6 +627,7 @@ enum SlashCommandKind {
     Help,
     New,
     Grocery,
+    Diet,
     Watch,
     Household,
     For,
@@ -639,10 +640,12 @@ enum SlashCommandKind {
     Exit,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PanelRequest {
     Status,
     Grocery,
+    DietCatalog,
+    DietDetail(String),
     Watch,
     Health,
     Household,
@@ -652,10 +655,12 @@ pub enum PanelRequest {
 
 impl PanelRequest {
     #[must_use]
-    pub const fn title(self) -> &'static str {
+    pub const fn title(&self) -> &'static str {
         match self {
             Self::Status => "Status",
             Self::Grocery => "Grocery",
+            Self::DietCatalog => "Diet catalog",
+            Self::DietDetail(_) => "Diet guide",
             Self::Watch => "Menu Watch",
             Self::Health => "Health",
             Self::Household => "Household",
@@ -665,15 +670,17 @@ impl PanelRequest {
     }
 
     #[must_use]
-    pub const fn command(self) -> &'static str {
+    pub fn command(&self) -> String {
         match self {
-            Self::Status => "/status",
-            Self::Grocery => "/grocery",
-            Self::Watch => "/watch",
-            Self::Health => "/health",
-            Self::Household => "/household",
-            Self::Profile => "/profile",
-            Self::Location => "/location",
+            Self::Status => "/status".into(),
+            Self::Grocery => "/grocery".into(),
+            Self::DietCatalog => "/diet".into(),
+            Self::DietDetail(diet_id) => format!("/diet {diet_id}"),
+            Self::Watch => "/watch".into(),
+            Self::Health => "/health".into(),
+            Self::Household => "/household".into(),
+            Self::Profile => "/profile".into(),
+            Self::Location => "/location".into(),
         }
     }
 }
@@ -708,6 +715,13 @@ pub const SLASH_COMMAND_REGISTRY: &[SlashCommandSpec] = &[
         usage: "/grocery",
         description: "Open the screened active Grocery list",
         kind: SlashCommandKind::Grocery,
+    },
+    SlashCommandSpec {
+        name: "/diet",
+        aliases: &[],
+        usage: "/diet [DIET_ID]",
+        description: "Browse grounded diet guides",
+        kind: SlashCommandKind::Diet,
     },
     SlashCommandSpec {
         name: "/watch",
@@ -3635,7 +3649,7 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
     if name == "/health" {
         push_notice(
             model,
-            "Health integrations are deferred from the supported heyfood v0.8.0 contract.",
+            "Health integrations are deferred from the supported heyfood v0.9.0 contract.",
         );
         return Vec::new();
     }
@@ -3679,6 +3693,17 @@ fn submit_slash_command(model: &mut AppModel) -> Vec<Effect> {
         }
         SlashCommandKind::Status => return open_panel(model, PanelRequest::Status),
         SlashCommandKind::Grocery => return open_panel(model, PanelRequest::Grocery),
+        SlashCommandKind::Diet if arguments.is_empty() => {
+            return open_panel(model, PanelRequest::DietCatalog);
+        }
+        SlashCommandKind::Diet
+            if arguments.len() > 64 || arguments.chars().any(char::is_whitespace) =>
+        {
+            push_notice(model, &format!("Usage: {}", spec.usage));
+        }
+        SlashCommandKind::Diet => {
+            return open_panel(model, PanelRequest::DietDetail(arguments.to_owned()));
+        }
         SlashCommandKind::Watch => return open_panel(model, PanelRequest::Watch),
         SlashCommandKind::Household if arguments.is_empty() => {
             if model.household_generation.is_some() {
@@ -3998,7 +4023,7 @@ fn open_panel(model: &mut AppModel, panel: PanelRequest) -> Vec<Effect> {
     model.next_operation_id = model.next_operation_id.saturating_add(1);
     model.scrollback.push(SemanticEntry {
         speaker: Speaker::User,
-        text: panel.command().into(),
+        text: panel.command(),
         streaming: false,
     });
     model.scrollback.push(SemanticEntry {
@@ -11646,6 +11671,7 @@ mod tests {
         for (command, panel) in [
             ("/status", PanelRequest::Status),
             ("/grocery", PanelRequest::Grocery),
+            ("/diet", PanelRequest::DietCatalog),
             ("/watch", PanelRequest::Watch),
             ("/household", PanelRequest::Household),
             ("/location", PanelRequest::Location),
@@ -11659,7 +11685,7 @@ mod tests {
                 dispatch(&mut model, Action::Submit),
                 vec![Effect::OpenPanel {
                     operation_id: 1,
-                    panel,
+                    panel: panel.clone(),
                 }]
             );
             assert_eq!(model.operation, OperationState::Running(1));
@@ -11680,7 +11706,7 @@ mod tests {
                 &mut model,
                 Action::Runtime(RuntimeEvent::PanelReady {
                     operation_id: 1,
-                    panel,
+                    panel: panel.clone(),
                     body: "Live service result".into(),
                 }),
             );
@@ -11690,6 +11716,24 @@ mod tests {
             assert!(!result.streaming);
             assert_eq!(model.operation, OperationState::Idle);
         }
+    }
+
+    #[test]
+    fn diet_detail_dispatches_one_exact_runtime_identifier() {
+        let mut model = AppModel::default();
+        assert_eq!(
+            submit_text(&mut model, "/diet mediterranean"),
+            vec![Effect::OpenPanel {
+                operation_id: 1,
+                panel: PanelRequest::DietDetail("mediterranean".into()),
+            }]
+        );
+        let mut invalid = AppModel::default();
+        assert!(submit_text(&mut invalid, "/diet mediterranean keto").is_empty());
+        assert_eq!(
+            invalid.scrollback.entries().back().unwrap().text,
+            "Usage: /diet [DIET_ID]"
+        );
     }
 
     #[test]
@@ -11708,7 +11752,7 @@ mod tests {
         assert_eq!(model.operation, OperationState::Idle);
         assert_eq!(
             model.scrollback.entries().back().unwrap().text,
-            "Health integrations are deferred from the supported heyfood v0.8.0 contract."
+            "Health integrations are deferred from the supported heyfood v0.9.0 contract."
         );
     }
 

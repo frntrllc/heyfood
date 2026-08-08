@@ -1,8 +1,9 @@
 # Dietary option catalog
 
 This repository retains a generated hello.food dietary-option snapshot at
-`assets/dietary/dietary_options.v2.json`. The Rust TUI embeds and reads the
-exact reviewed v2 bytes to drive first-run dietary onboarding and the explicit
+`assets/dietary/dietary_options.v2.json`. The filename is retained as a stable
+packaging path; the Rust TUI embeds and reads the exact reviewed catalog-v3
+bytes to drive first-run dietary onboarding and the explicit
 `heyfood onboard` workflow.
 
 The catalog contains public client contract data: display labels, canonical
@@ -15,6 +16,20 @@ guidance.
 
 - `ask`, `item`, Grocery, and other hosted workflows use the dietary profile
   associated with the authenticated hello.food account.
+- The profile-writable catalog contains 26 selectable diet options. It is not
+  the same contract as the 22 authored guides currently returned by the Diet
+  v1 service.
+- The next source candidate adds read-only `heyfood diet`, `diet list`, `diet
+  show DIET_ID` (plus the single-ID short form), and TUI `/diet [DIET_ID]`.
+  These commands are not part of the public v0.8.0 binary.
+- Diet-guide reads require exact `diet:v1` capability discovery and the
+  `knowledge:read` scope. Runtime guide IDs are case-sensitive and are used
+  exactly as the service lists them.
+- Guide evidence levels are advisory. Food-safety details always remain
+  visible, and optional item-level `diet_alignment` cannot change safety
+  status, badge, color, ordering, filtering, or profile state.
+- Profile diet set/clear is deferred until the write contract in
+  [hellofood #261](https://github.com/frntrllc/hellofood/issues/261) is frozen.
 - The draft Rust TUI provides a local, eight-step catalog-selection flow for
   diets, allergies, health conditions, severity, avoided ingredients, activity,
   cuisines, notes, and final review.
@@ -50,4 +65,4 @@ deterministic migration.
 
 The Rust onboarding mapper preserves those source selections and provenance
 while deriving the compatibility fields expected by the frozen Python
-baseline. Exhaustive tests cover every retained v2 catalog option.
+baseline. Exhaustive tests cover every retained catalog-v3 option.

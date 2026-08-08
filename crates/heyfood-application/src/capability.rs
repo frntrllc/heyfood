@@ -1,6 +1,6 @@
 //! Renderer-neutral capability discovery.
 
-use heyfood_core::GroceryCapability;
+use heyfood_core::{DietCapability, GroceryCapability};
 use tokio_util::sync::CancellationToken;
 
 use crate::{BoxFuture, PortError};
@@ -20,6 +20,7 @@ pub struct CapabilitySnapshot {
     pub loopback_pkce: bool,
     pub device_code: bool,
     pub grocery: GroceryCapability,
+    pub diet: DietCapability,
 }
 
 pub trait CapabilityPort: Send + Sync {
@@ -83,6 +84,7 @@ mod tests {
             loopback_pkce: true,
             device_code: false,
             grocery: GroceryCapability::V1,
+            diet: DietCapability::V1,
         }
     }
 

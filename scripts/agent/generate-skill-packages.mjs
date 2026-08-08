@@ -15,6 +15,7 @@ const files = [
   "SKILL.md",
   "agents/openai.yaml",
   "references/authentication-and-capabilities.md",
+  "references/diet.md",
   "references/grocery.md",
   "references/safety-and-recovery.md",
   "references/workflow-selection.md",
@@ -32,7 +33,7 @@ const householdWorkflow = fs.readFileSync(
   "utf8",
 );
 const requiredCompatibilityRules = [
-  [canonicalSkill, "supports manifest schemas 1 through 3"],
+  [canonicalSkill, "supports manifest schemas 1 through 4"],
   [canonicalSkill, "Never duck-type familiar fields from"],
   [canonicalSkill, "heyfood agent compatibility --json --no-input"],
   [householdWorkflow, "discover the exact boundary"],

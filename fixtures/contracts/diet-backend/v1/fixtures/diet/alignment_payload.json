@@ -1,0 +1,69 @@
+{
+  "description": "The ADVISORY diet_alignment pair, recorded from the real ChannelMemberAnnotation model. Alignment never mutates a safety status in either direction (owner ruling §9-D4).",
+  "flag_off_annotation": {
+    "member_id": "_self",
+    "label": "Jordan",
+    "disposition": "flag",
+    "status": "generally_safer",
+    "confidence": 0.95,
+    "summary": "No concerns.",
+    "conflicts": [],
+    "allergen": null,
+    "reason": null,
+    "model_version": "stub-model-1",
+    "rules_version": "dietary-rules-1",
+    "context_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "context_hash_version": 2,
+    "member_profile_version": null
+  },
+  "flag_off_keys_absent": [
+    "diet_alignment",
+    "diet_alignment_reason"
+  ],
+  "flag_on_off_diet_but_safe": {
+    "member_id": "_self",
+    "label": "Jordan",
+    "disposition": "flag",
+    "status": "generally_safer",
+    "confidence": 0.95,
+    "summary": "No concerns.",
+    "conflicts": [],
+    "allergen": null,
+    "reason": null,
+    "model_version": "stub-model-1",
+    "rules_version": "dietary-rules-1",
+    "context_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "context_hash_version": 2,
+    "member_profile_version": null,
+    "diet_alignment": "off_diet",
+    "diet_alignment_reason": "Contains pasta, which is off keto."
+  },
+  "flag_on_aligned_but_unsafe": {
+    "member_id": "_self",
+    "label": "Jordan",
+    "disposition": "flag",
+    "status": "avoid",
+    "confidence": 0.93,
+    "summary": "Contains walnuts.",
+    "conflicts": [],
+    "allergen": null,
+    "reason": null,
+    "model_version": "stub-model-1",
+    "rules_version": "dietary-rules-1",
+    "context_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "context_hash_version": 2,
+    "member_profile_version": null,
+    "diet_alignment": "aligned",
+    "diet_alignment_reason": "Fits the Mediterranean pattern."
+  },
+  "expect": {
+    "off_diet_does_not_downgrade": "generally_safer",
+    "aligned_does_not_upgrade": "avoid",
+    "values": [
+      "aligned",
+      "partial",
+      "off_diet",
+      "not_assessed"
+    ]
+  }
+}

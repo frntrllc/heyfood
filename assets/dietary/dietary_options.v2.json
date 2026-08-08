@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "sections": {
     "health_conditions": {
       "label": "Health Conditions",
@@ -74,6 +74,8 @@
         { "label": "Autoimmune protocol (AIP)", "id": "aip", "enum_key": null },
         { "label": "Specific carbohydrate diet (SCD)", "id": "scd", "enum_key": null },
         { "label": "DASH diet", "id": "dash", "enum_key": null },
+        { "label": "Okinawa diet", "id": "okinawa", "enum_key": null },
+        { "label": "MIND diet", "id": "mind", "enum_key": null },
         { "label": "Halal", "id": "halal", "enum_key": null },
         { "label": "Kosher", "id": "kosher", "enum_key": null }
       ],

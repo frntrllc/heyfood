@@ -92,6 +92,7 @@ fn command_tree_retains_hidden_compatibility_and_authorized_phase2_families() {
         "context",
         "conversation",
         "daily",
+        "diet",
         "doctor",
         "get-menu",
         "grocery",
@@ -135,7 +136,7 @@ fn release_help_and_completions_hide_deferred_health_integrations() {
     let health_help = CommandLine::try_parse_from(["heyfood", "health", "--help"])
         .unwrap_err()
         .to_string();
-    assert!(health_help.contains("deferred from the supported v0.8.0 contract"));
+    assert!(health_help.contains("deferred from the supported v0.9.0 contract"));
     assert!(!health_help.contains("connect"));
     assert!(!health_help.contains("sync"));
 

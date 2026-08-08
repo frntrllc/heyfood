@@ -1,7 +1,7 @@
 # heyfood local MCP contract
 
-**Status:** v2 eight-tool read/discovery contract supported in the qualified public
-`v0.8.0` release
+**Status:** v3 ten-tool read/discovery contract for the Diet-capable candidate;
+the v2 eight-tool inventory remains frozen in manifest schema v3
 
 ## Transport
 
@@ -60,7 +60,15 @@ heyfood_get_grocery_exclusions
 heyfood_list_menu_watches
 heyfood_get_household_context
 heyfood_get_household_member
+heyfood_list_diets
+heyfood_get_diet
 ```
+
+The two Diet tools are authenticated, read-only application surfaces. They
+rediscover capabilities for every call and dispatch only when the deployment
+advertises exactly `diet:v1`; missing and unknown versions fail closed. The
+catalog accepts bounded pagination. Detail accepts one exact, case-sensitive
+`diet_id`. Neither tool sets or clears a profile diet.
 
 The two household tools are local, account-bound reads. They call the same
 application controller as the one-shot household commands, never acquire the
@@ -99,7 +107,7 @@ once and at most one cancellation notification for each active request.
 Duplicate lifecycle notifications and client notification classes this server
 does not consume are dropped before the SDK can spawn handler work.
 
-The three hosted collection tools accept a closed optional input object with
+The four hosted collection tools accept a closed optional input object with
 `limit` (1 through 100) and an opaque, snapshot-bound `cursor`. Results include
 a `page` object with `returned` and `next_cursor`. Each page is a fresh
 authenticated read; changed collection bytes produce `mcp_cursor_stale`, and

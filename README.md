@@ -153,6 +153,8 @@ heyfood ask "What can I eat?"
 heyfood reply --conversation-id CONVERSATION_ID "The second option"
 heyfood log "I ate the first option"
 heyfood item "pad thai at Pismo's"
+heyfood diet
+heyfood diet show dash
 heyfood grocery show
 heyfood grocery exclusions
 heyfood grocery never --list-id UUID --version 4 "raw onion"
@@ -160,6 +162,23 @@ heyfood watch list
 heyfood watch add RESTAURANT_UUID --weekday thursday --hour 9 --notify
 heyfood logout
 ```
+
+The current source candidate adds a bounded, read-only Diet guide. It is not
+part of the installed public `v0.8.0` release yet. `heyfood diet` and
+`heyfood diet list` browse the 22 guides currently served by hello.food;
+`heyfood diet show DIET_ID` (or the short form `heyfood diet DIET_ID`) opens
+one guide. The interactive equivalent is `/diet [DIET_ID]`.
+
+Diet reads require both the exact hosted capability `diet:v1` and the
+`knowledge:read` authorization scope. Runtime diet IDs are case-sensitive and
+are used exactly as returned by the service. Evidence levels describe the
+strength of the guide's sources; the guidance remains advisory and never
+overrides visible food-safety information. When an item includes optional
+`diet_alignment`, the client presents it as a secondary explanation only: it
+does not change safety status, color, ordering, filtering, or mutation state.
+Setting or clearing a profile diet is intentionally deferred until the backend
+write contract in [hellofood #261](https://github.com/frntrllc/hellofood/issues/261)
+is frozen.
 
 `reply` requires an explicit `--conversation-id` in this cut because native
 conversation persistence is not active. `ask`, `log`, and `item` may also use
@@ -271,6 +290,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 cargo xtask verify-stable-contracts
 cargo xtask verify-grocery-contracts
+cargo xtask verify-diet-contracts
 cargo xtask verify-assets
 ```
 

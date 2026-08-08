@@ -332,6 +332,9 @@ fn command_network_authority_matches_dg_r2_and_runtime_routes() {
         ),
         ("log", vec!["POST /v1/agent/converse"]),
         ("item", vec!["POST /v1/channel/tools/explain_item"]),
+        ("diet", vec!["GET /v1/diets"]),
+        ("diet list", vec!["GET /v1/diets"]),
+        ("diet show", vec!["GET /v1/diets/{diet_id}"]),
         (
             "login",
             vec![

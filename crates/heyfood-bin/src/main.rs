@@ -1290,6 +1290,7 @@ const fn is_native_one_shot(command: &Command) -> bool {
             | Command::Reply(_)
             | Command::Log(_)
             | Command::Item(_)
+            | Command::Diet { .. }
             | Command::Grocery { .. }
             | Command::Watch { .. }
     )
@@ -1558,8 +1559,8 @@ fn pending_command(machine: bool) -> ExitCode {
 fn deferred_health_command(machine: bool) -> ExitCode {
     failure(
         "capability_deferred",
-        "Health integrations are deferred from the supported heyfood v0.8.0 contract.",
-        Some("Use `heyfood --help` to see the supported v0.8.0 commands."),
+        "Health integrations are deferred from the supported heyfood v0.9.0 contract.",
+        Some("Use `heyfood --help` to see the supported v0.9.0 commands."),
         machine,
         false,
     )
@@ -1632,6 +1633,7 @@ struct PreparedNativeLogReviewPhase {
 #[derive(Clone, Copy)]
 enum ScopeCapability {
     None,
+    KnowledgeRead,
     GroceryRead,
     GroceryReadWrite,
     MenuWatch,
@@ -2869,6 +2871,7 @@ fn one_shot_hint(code: &str) -> Option<&'static str> {
 
 fn scope_capability_for_command(command: &Command) -> ScopeCapability {
     match command {
+        Command::Diet { .. } => ScopeCapability::KnowledgeRead,
         Command::Grocery {
             command:
                 None
@@ -2890,6 +2893,7 @@ fn ensure_command_scopes(
 ) -> Result<(), heyfood_bin::OneShotError> {
     let required: &[&str] = match capability {
         ScopeCapability::None => &[],
+        ScopeCapability::KnowledgeRead => &["knowledge:read"],
         ScopeCapability::GroceryRead => &["grocery:read"],
         ScopeCapability::GroceryReadWrite => &["grocery:read", "grocery:write"],
         ScopeCapability::MenuWatch => &["menu:watch"],

@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod capability;
+pub mod diet;
 pub mod ensure_session;
 pub mod grocery;
 pub mod health;
@@ -25,6 +26,7 @@ pub mod supervisor;
 pub use capability::{
     CapabilityPort, CapabilitySnapshot, DiscoverCapabilities, RegistrationAvailability,
 };
+pub use diet::{DietPort, ReadDietCatalog, ReadDietDetail};
 pub use ensure_session::{EnsureSession, EnsureSessionError, EnsureSessionOutcome};
 pub use grocery::{
     ConfirmGroceryMutation, DeployedGroceryMutationRequest, ExportGroceryList, GroceryCacheKey,

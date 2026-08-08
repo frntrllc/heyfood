@@ -21,7 +21,8 @@ pub fn run(command: Option<AgentCommand>, machine: bool) -> ExitCode {
             1 => heyfood_agent_contract::manifest_v1(),
             2 => heyfood_agent_contract::manifest_v2(),
             3 => heyfood_agent_contract::manifest_v3(),
-            _ => unreachable!("clap limits discovery schemas to 1..=3"),
+            4 => heyfood_agent_contract::manifest_v4(),
+            _ => unreachable!("clap limits discovery schemas to 1..=4"),
         }),
         AgentCommand::Guide(arguments) => {
             if machine {
@@ -63,7 +64,8 @@ pub fn run(command: Option<AgentCommand>, machine: bool) -> ExitCode {
             1 => heyfood_agent_contract::doctor_document_v1(),
             2 => heyfood_agent_contract::doctor_document_v2(),
             3 => heyfood_agent_contract::doctor_document_v3(),
-            _ => unreachable!("clap limits discovery schemas to 1..=3"),
+            4 => heyfood_agent_contract::doctor_document_v4(),
+            _ => unreachable!("clap limits discovery schemas to 1..=4"),
         }),
         AgentCommand::Compatibility => {
             write_json(&compatibility_document());
@@ -111,7 +113,7 @@ fn compatibility_document_from_plan(plan: &SetupPlan) -> Value {
                 "skill_package_version": if verified { Some(plan.package.version) } else { None },
                 "skill_sha256": if verified { Some(plan.package.sha256.as_str()) } else { None },
                 "supported_manifest_minimum": if verified { Some(1_u16) } else { None },
-                "supported_manifest_maximum": if verified { Some(3_u16) } else { None },
+                "supported_manifest_maximum": if verified { Some(4_u16) } else { None },
                 "status": if verified { "compatible" } else if missing { "skill_identity_unknown" } else { "incompatible" },
                 "reason": if verified { "supported_manifest_range" } else if missing { "receipt_missing" } else { "receipt_invalid" },
                 "remediation": {
@@ -130,7 +132,7 @@ fn compatibility_document_from_plan(plan: &SetupPlan) -> Value {
     let document = json!({
         "schema_version": 1,
         "binary_version": env!("CARGO_PKG_VERSION"),
-        "manifest_schema_version": 3,
+        "manifest_schema_version": 4,
         "compatible": compatible,
         "installations": installations,
         "network_accessed": false,
@@ -348,7 +350,7 @@ mod tests {
                 name: "heyfood",
                 version: "0.8.0",
                 sha256: "b".repeat(64),
-                files: 6,
+                files: 7,
             },
             plan_sha256: "c".repeat(64),
             ready: false,
@@ -405,7 +407,7 @@ mod tests {
                 name: "heyfood",
                 version: "1.0.5",
                 sha256: "b".repeat(64),
-                files: 6,
+                files: 7,
             },
             plan_sha256: "c".repeat(64),
             ready: true,
@@ -443,7 +445,7 @@ mod tests {
         );
         assert_eq!(
             document["installations"][0]["supported_manifest_maximum"],
-            3
+            4
         );
         assert!(heyfood_agent_contract::validate_agent_compatibility_semantics(&document).is_ok());
 

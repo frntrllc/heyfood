@@ -45,6 +45,7 @@
     "conversation list": ["<arguments>"],
     "conversation resume": ["<arguments>"],
     "daily": ["<arguments>"],
+    "diet show": ["<diet_id>"],
     "doctor": ["<arguments>"],
     "get-menu": ["<arguments>"],
     "grocery add": ["--intended-for", "--list-id", "--version", "<items>"],
@@ -254,7 +255,7 @@
         "menu:read"
       ],
       "retry": "no_automatic_retry",
-      "product_state": "no_product_mutation_but_session_may_rotate",
+      "product_state": "product_state_unchanged_session_may_rotate",
       "json_output_family": "item_explanation_v1",
       "error_output_family": "one_json_error_or_human_stderr",
       "error_types": [
@@ -266,6 +267,59 @@
       "remote_side_effects": "none",
       "controlling_terminal": "not_used",
       "phase0_gap": "Dedicated bounded agent presentation remains Phase 1 work."
+    },
+    "diet_catalog_read": {
+      "audience": "agent_safe",
+      "operation_class": "remote_read",
+      "input_transport": "arguments",
+      "output_transport": "human_or_one_json_result",
+      "network": "get",
+      "network_calls": [
+        "GET /v1/diets"
+      ],
+      "required_scopes": [
+        "knowledge:read"
+      ],
+      "retry": "safe_only_before_or_as_defined_by_get_contract",
+      "product_state": "product_state_unchanged_session_may_rotate",
+      "json_output_family": "diet_catalog_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "diet_capability",
+        "diet_contract",
+        "scope_required"
+      ],
+      "local_side_effects": "session_rotation",
+      "remote_side_effects": "none",
+      "controlling_terminal": "not_used",
+      "phase0_gap": null
+    },
+    "diet_detail_read": {
+      "audience": "agent_safe",
+      "operation_class": "remote_read",
+      "input_transport": "arguments",
+      "output_transport": "human_or_one_json_result",
+      "network": "get",
+      "network_calls": [
+        "GET /v1/diets/{diet_id}"
+      ],
+      "required_scopes": [
+        "knowledge:read"
+      ],
+      "retry": "safe_only_before_or_as_defined_by_get_contract",
+      "product_state": "product_state_unchanged_session_may_rotate",
+      "json_output_family": "diet_detail_v1",
+      "error_output_family": "one_json_error_or_human_stderr",
+      "error_types": [
+        "diet_capability",
+        "diet_contract",
+        "unknown_diet",
+        "scope_required"
+      ],
+      "local_side_effects": "session_rotation",
+      "remote_side_effects": "none",
+      "controlling_terminal": "not_used",
+      "phase0_gap": null
     },
     "grocery_list_read": {
       "audience": "agent_unsupported",
@@ -705,6 +759,21 @@
       "path": "recommend",
       "visibility": "hidden",
       "policy": "unavailable_legacy"
+    },
+    {
+      "path": "diet",
+      "visibility": "active",
+      "policy": "diet_catalog_read"
+    },
+    {
+      "path": "diet list",
+      "visibility": "active",
+      "policy": "diet_catalog_read"
+    },
+    {
+      "path": "diet show",
+      "visibility": "active",
+      "policy": "diet_detail_read"
     },
     {
       "path": "grocery",

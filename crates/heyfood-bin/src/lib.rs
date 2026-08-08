@@ -25,19 +25,19 @@ use heyfood_application::{
     EnsureSessionError, EnsureSessionOutcome, ExportGroceryList, GroceryExport,
     HouseholdAgentDisclosureControlPort, HouseholdLoad, HouseholdSession, ListMenuWatches,
     NativeMemberAgeEvidenceV1, OptionalCapabilityStatus, OwnerSyncTransitionEventV1, PortError,
-    PrepareGroceryMutation, ProfileReadinessStatus, ReadActiveGroceryDisplay,
-    ReadGroceryExclusions, ReadStatus, RefreshPolicy, RemoveMenuWatch, RunTurnOutcome,
-    SaveMemberDeclaredProfileV1, SaveOwnerProfileAndSyncIntentV1, SelectedHouseholdTargetV1,
-    ServicePort, TransitionOwnerSyncIntentV1, TurnContext, TurnFailure, TurnFailureKind,
-    TurnRequest, UNRENDERABLE_AGENT_RESULT_MESSAGE, VoiceReadinessStatus, execute_one_shot_turn,
-    owner_profile_action_eligibility_v1,
+    PrepareGroceryMutation, ProfileReadinessStatus, ReadActiveGroceryDisplay, ReadDietCatalog,
+    ReadDietDetail, ReadGroceryExclusions, ReadStatus, RefreshPolicy, RemoveMenuWatch,
+    RunTurnOutcome, SaveMemberDeclaredProfileV1, SaveOwnerProfileAndSyncIntentV1,
+    SelectedHouseholdTargetV1, ServicePort, TransitionOwnerSyncIntentV1, TurnContext, TurnFailure,
+    TurnFailureKind, TurnRequest, UNRENDERABLE_AGENT_RESULT_MESSAGE, VoiceReadinessStatus,
+    execute_one_shot_turn, owner_profile_action_eligibility_v1,
 };
 use heyfood_cli::{
-    AskArgs, Command, GroceryCommand, HealthCommand, ItemArgs, LogArgs, MealType, MenuWatchCommand,
-    OutputMode, render_agent_result_with_private_authorities, render_grocery_exclusions,
-    render_grocery_list, render_grocery_mutation_result, render_grocery_proposal,
-    render_health_context, render_item_result, render_json, render_menu_watch,
-    render_menu_watch_list,
+    AskArgs, Command, DietCommand, DietOperation, GroceryCommand, HealthCommand, ItemArgs, LogArgs,
+    MealType, MenuWatchCommand, OutputMode, render_agent_result_with_private_authorities,
+    render_diet_catalog, render_diet_detail, render_grocery_exclusions, render_grocery_list,
+    render_grocery_mutation_result, render_grocery_proposal, render_health_context,
+    render_item_result, render_json, render_menu_watch, render_menu_watch_list,
 };
 use heyfood_core::{
     AddItemsRequestWire, AgentConfirmationCommandWire, AgentDisclosureGrantSubjectV1, AgentEvent,
@@ -2617,6 +2617,12 @@ impl<'a> OneShotExecutor<'a> {
                 self.execute_grocery(command.unwrap_or(GroceryCommand::List), stdin, cancellation)
                     .await
             }
+            Command::Diet { command } => {
+                let operation = command
+                    .map_or(Ok(DietOperation::List), DietCommand::into_operation)
+                    .map_err(|message| OneShotError::new("diet_command", message))?;
+                self.execute_diet(operation, cancellation).await
+            }
             Command::Health { command } => self.execute_health(command, cancellation).await,
             Command::Watch { command } => {
                 self.execute_menu_watch(command.unwrap_or(MenuWatchCommand::List), cancellation)
@@ -3033,6 +3039,41 @@ impl<'a> OneShotExecutor<'a> {
                     )
                     .await?;
                 Ok(render_grocery_mutation_result(&result, self.output_mode))
+            }
+        }
+    }
+
+    async fn execute_diet(
+        &self,
+        operation: DietOperation,
+        cancellation: CancellationToken,
+    ) -> Result<String, OneShotError> {
+        let capabilities = DiscoverCapabilities::new(self.service)
+            .execute(cancellation.child_token())
+            .await?;
+        match operation {
+            DietOperation::List => {
+                let catalog = ReadDietCatalog::new(self.service)
+                    .execute(
+                        capabilities,
+                        self.credentials.clone(),
+                        OperationId::new(),
+                        cancellation,
+                    )
+                    .await?;
+                Ok(render_diet_catalog(&catalog, self.output_mode))
+            }
+            DietOperation::Show(diet_id) => {
+                let detail = ReadDietDetail::new(self.service)
+                    .execute(
+                        capabilities,
+                        self.credentials.clone(),
+                        OperationId::new(),
+                        diet_id,
+                        cancellation,
+                    )
+                    .await?;
+                Ok(render_diet_detail(&detail, self.output_mode))
             }
         }
     }
@@ -6955,7 +6996,7 @@ impl QualifiedTurnDriver for InteractiveTurnDriver {
                 Ok(prepared) => match prepared.http_service {
                     Some(service) => {
                         run_interactive_panel(
-                            panel,
+                            panel.clone(),
                             service,
                             prepared.ensure_session,
                             session,
@@ -8599,8 +8640,9 @@ async fn run_interactive_panel(
     environment: InteractivePanelEnvironment,
     cancellation: CancellationToken,
 ) -> Result<String, String> {
-    let required_scope = match panel {
+    let required_scope = match &panel {
         PanelRequest::Grocery => Some("grocery:read"),
+        PanelRequest::DietCatalog | PanelRequest::DietDetail(_) => Some("knowledge:read"),
         PanelRequest::Watch => Some("menu:watch"),
         PanelRequest::Health => Some("health:read"),
         PanelRequest::Profile => Some("profile:read"),
@@ -8617,7 +8659,7 @@ async fn run_interactive_panel(
     }
 
     let snapshot = session.lock().await.clone();
-    if matches!(panel, PanelRequest::Household | PanelRequest::Location) {
+    if matches!(&panel, PanelRequest::Household | PanelRequest::Location) {
         if environment.local_state.as_ref().is_some_and(|state| {
             state.account_user_id.as_deref() != Some(snapshot.credentials.account_id.as_str())
         }) {
@@ -8630,6 +8672,8 @@ async fn run_interactive_panel(
             PanelRequest::Location => Ok(render_location_panel(environment.local_state.as_deref())),
             PanelRequest::Status
             | PanelRequest::Grocery
+            | PanelRequest::DietCatalog
+            | PanelRequest::DietDetail(_)
             | PanelRequest::Watch
             | PanelRequest::Health
             | PanelRequest::Profile => unreachable!(),
@@ -8682,6 +8726,13 @@ async fn run_interactive_panel(
                 }
                 OptionalCapabilityStatus::NotAdvertised => "not advertised by service",
             };
+            let diet = match status.diet {
+                OptionalCapabilityStatus::Authorized => "available · authorized",
+                OptionalCapabilityStatus::AuthorizationRequired => {
+                    "available · authorization required"
+                }
+                OptionalCapabilityStatus::NotAdvertised => "not advertised by service",
+            };
             let menu_watch = match status.menu_watch {
                 OptionalCapabilityStatus::Authorized => "authorized · create/list/remove available",
                 OptionalCapabilityStatus::AuthorizationRequired
@@ -8702,7 +8753,7 @@ async fn run_interactive_panel(
                 }
             };
             Ok(format!(
-                "Session: active\nService: reachable\nProfile: {profile}\nGrocery: {grocery}\nMenu Watch: {menu_watch}\nHealth integrations: deferred from v0.8.0\nVoice: {voice}"
+                "Session: active\nService: reachable\nProfile: {profile}\nGrocery: {grocery}\nDiet guidance: {diet}\nMenu Watch: {menu_watch}\nHealth integrations: deferred from v0.9.0\nVoice: {voice}"
             ))
         }
         PanelRequest::Grocery => {
@@ -8730,6 +8781,34 @@ async fn run_interactive_panel(
                 OutputMode::HumanPlain,
             ));
             Ok(output)
+        }
+        PanelRequest::DietCatalog => {
+            let capabilities = DiscoverCapabilities::new(service.as_ref())
+                .execute(cancellation.child_token())
+                .await
+                .map_err(panel_error)?;
+            let catalog = ReadDietCatalog::new(service.as_ref())
+                .execute(capabilities, credentials, OperationId::new(), cancellation)
+                .await
+                .map_err(panel_error)?;
+            Ok(render_diet_catalog(&catalog, OutputMode::HumanPlain))
+        }
+        PanelRequest::DietDetail(diet_id) => {
+            let capabilities = DiscoverCapabilities::new(service.as_ref())
+                .execute(cancellation.child_token())
+                .await
+                .map_err(panel_error)?;
+            let detail = ReadDietDetail::new(service.as_ref())
+                .execute(
+                    capabilities,
+                    credentials,
+                    OperationId::new(),
+                    diet_id,
+                    cancellation,
+                )
+                .await
+                .map_err(panel_error)?;
+            Ok(render_diet_detail(&detail, OutputMode::HumanPlain))
         }
         PanelRequest::Watch => {
             let watches = ListMenuWatches::new(service.as_ref())
@@ -12041,7 +12120,7 @@ mod tests {
         assert!(status.contains("Profile: authorized · sync consent granted"));
         assert!(status.contains("Grocery: available · authorized"));
         assert!(status.contains("Menu Watch: authorized · create/list/remove available"));
-        assert!(status.contains("Health integrations: deferred from v0.8.0"));
+        assert!(status.contains("Health integrations: deferred from v0.9.0"));
         assert!(status.contains(
             "Voice: native capture available · transcription authorized · permission checked on use"
         ));

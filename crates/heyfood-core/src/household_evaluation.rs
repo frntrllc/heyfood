@@ -511,6 +511,10 @@ pub struct MemberAnnotation {
     pub context_hash: EvaluationContextHash,
     pub context_hash_version: EvaluationContextHashVersion,
     pub member_profile_version: Option<EvaluationProfileVersion>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diet_alignment: Option<DietAlignment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diet_alignment_reason: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -533,6 +537,10 @@ struct MemberAnnotationWire {
     context_hash: EvaluationContextHash,
     context_hash_version: EvaluationContextHashVersion,
     member_profile_version: Option<EvaluationProfileVersion>,
+    #[serde(default)]
+    diet_alignment: Option<DietAlignment>,
+    #[serde(default)]
+    diet_alignment_reason: Option<String>,
     #[serde(default, flatten)]
     extra: Map<String, Value>,
 }
@@ -556,6 +564,8 @@ impl TryFrom<MemberAnnotationWire> for MemberAnnotation {
             context_hash: value.context_hash,
             context_hash_version: value.context_hash_version,
             member_profile_version: value.member_profile_version,
+            diet_alignment: value.diet_alignment,
+            diet_alignment_reason: value.diet_alignment_reason,
             extra: value.extra,
         };
         annotation.validate()?;
@@ -585,6 +595,16 @@ impl MemberAnnotation {
         for conflict in &self.conflicts {
             conflict.validate()?;
         }
+        match (self.diet_alignment, self.diet_alignment_reason.as_deref()) {
+            (None, None) | (Some(DietAlignment::NotAssessed), None) => {}
+            (Some(_), Some(reason))
+                if !reason.trim().is_empty() && reason.chars().count() <= 300 => {}
+            _ => {
+                return Err(
+                    "diet alignment and its bounded explanation must be present together".into(),
+                );
+            }
+        }
         match self.disposition {
             AnnotationDisposition::Flag => {
                 if self.allergen.is_some() || self.reason.is_some() {
@@ -613,6 +633,16 @@ impl MemberAnnotation {
         }
         Ok(())
     }
+}
+
+/// Advisory fit against a declared diet. This value never changes safety.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DietAlignment {
+    Aligned,
+    Partial,
+    OffDiet,
+    NotAssessed,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1002,6 +1032,36 @@ mod tests {
             "the less-confident owner reading wins the equal-status tie"
         );
         assert_eq!(serde_json::to_value(response).unwrap(), founding_result());
+    }
+
+    #[test]
+    fn diet_alignment_parses_additively_without_mutating_safety() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/contracts/diet-backend/v1/fixtures/diet/alignment_payload.json"
+        )))
+        .unwrap();
+        let mut result = founding_result();
+        for (item_index, fixture_key) in [
+            (1, "flag_on_off_diet_but_safe"),
+            (0, "flag_on_aligned_but_unsafe"),
+        ] {
+            let source = &fixture[fixture_key];
+            let annotation = &mut result["items"][item_index]["member_annotations"][0];
+            annotation["diet_alignment"] = source["diet_alignment"].clone();
+            annotation["diet_alignment_reason"] = source["diet_alignment_reason"].clone();
+        }
+        let response = EvaluateMenuResponse::parse_value(result).unwrap();
+        assert_eq!(response.items[1].status, SafetyStatus::GenerallySafer);
+        assert_eq!(
+            response.items[1].member_annotations[0].diet_alignment,
+            Some(DietAlignment::OffDiet)
+        );
+        assert_eq!(response.items[0].status, SafetyStatus::Avoid);
+        assert_eq!(
+            response.items[0].member_annotations[0].diet_alignment,
+            Some(DietAlignment::Aligned)
+        );
     }
 
     #[test]

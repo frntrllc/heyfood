@@ -18,8 +18,12 @@ log           log a meal through the hosted agent
 item          assess a food or menu item
 grocery       read, prepare, export, and confirm Grocery operations
 watch         create, list, and remove recurring Menu Watch subscriptions
+diet          browse the read-only hosted Diet guide (source candidate)
 completion    print shell completion syntax
 ```
+
+`diet` is present in the next source candidate, not the installed public
+`v0.8.0` release.
 
 ## Offline agent discovery
 
@@ -233,6 +237,33 @@ removal requires `REMOVE` on the controlling terminal. The creation review
 includes `--confirm-menu-url` because that flag is the human's explicit menu
 identity assertion.
 
+## Diet guide (source candidate)
+
+```bash
+heyfood diet
+heyfood diet list
+heyfood diet show dash
+heyfood diet dash
+```
+
+Bare `diet` defaults to `list`. `show DIET_ID` and the single-ID short form are
+equivalent; more than one short-form ID is rejected during argument parsing.
+Runtime diet IDs are case-sensitive and must be passed exactly as listed.
+
+Every Diet request requires `knowledge:read` and exact capability discovery of
+`application_capabilities.diet == "v1"`. Missing or unknown values fail closed.
+The list is service-owned and currently contains 22 authored guides; it is not
+the same contract as the 26 profile-writable onboarding options. Guide evidence
+levels are advisory, authored section order is preserved, and an uncovered
+diet returns a truthful `diet_not_covered` result rather than generated
+guidance. Safety remains visible. Optional `diet_alignment` is secondary
+presentation only and cannot change safety status, badges, color, ordering,
+filtering, or profile state.
+
+`diet set` and `diet clear` are deliberately unavailable while the backend
+write target, optimistic-version, reconciliation, and response contracts are
+being frozen in [hellofood #261](https://github.com/frntrllc/hellofood/issues/261).
+
 ## Global process controls
 
 ```text
@@ -253,6 +284,7 @@ the same TUI process.
 
 ```text
 /grocery             open the capability-gated active Grocery list
+/diet [DIET_ID]      browse the Diet guide or open one authored guide
 /watch               open recurring Menu Watch subscriptions
 /profile             read consent and synchronized dietary profile state
 /household           show account-bound encrypted local household context

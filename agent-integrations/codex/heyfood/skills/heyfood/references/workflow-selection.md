@@ -31,10 +31,17 @@ When present, prefer:
 - `heyfood_get_status` for service, authorization, and local readiness;
 - `heyfood_get_capabilities` for server-advertised support;
 - `heyfood_get_grocery_list` for the active household-aware list;
-- `heyfood_get_grocery_exclusions` for never-buy exclusions; and
-- `heyfood_list_menu_watches` for recurring watch summaries.
+- `heyfood_get_grocery_exclusions` for never-buy exclusions;
+- `heyfood_list_menu_watches` for recurring watch summaries;
+- `heyfood_list_diets` for the evidence-graded Diet catalog; and
+- `heyfood_get_diet` for one Diet card by exact, case-sensitive catalog ID.
 
 Do not guess that a service failure means an empty result.
+
+Diet tools are usable only when capability discovery reports exactly `diet:v1`
+and the corresponding manifest/tool row is active. Missing or unknown Diet
+capability versions fail closed. Read [diet.md](diet.md) before presenting Diet
+guidance.
 
 Collection tools return at most 100 records. When `page.next_cursor` is
 present, pass it back unchanged with an optional `limit` from 1 through 100.

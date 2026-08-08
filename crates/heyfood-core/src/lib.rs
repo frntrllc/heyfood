@@ -6,6 +6,7 @@ pub mod agent;
 pub mod agent_household;
 pub mod auth;
 pub mod config;
+pub mod diet;
 pub mod error;
 pub mod grocery;
 pub mod health;
@@ -57,6 +58,12 @@ pub use config::{
     CURRENT_CONFIG_SCHEMA, ClientConfig, ConfigRevision, ConfigSchemaVersion,
     NativeHouseholdRolloutV1,
 };
+pub use diet::{
+    DIET_CONTRACT_VERSION, DietCapability, DietCatalog, DietCatalogEntry, DietContractError,
+    DietContraindicatedCondition, DietDetail, DietDetailStatus, DietEvidenceLevel,
+    DietPrincipleSections, MAX_DIET_CATALOG_ENTRIES, MAX_DIET_CITATIONS,
+    MAX_DIET_SECTION_PARAGRAPHS,
+};
 pub use error::{ClientError, ErrorCategory, ErrorCode};
 pub use grocery::{
     ContextFingerprint, FrozenGroceryPreconditions, GroceryCapability, GroceryConfirmation,
@@ -81,14 +88,14 @@ pub use household_effect::{
     effect_fingerprint_v1,
 };
 pub use household_evaluation::{
-    AnnotationDisposition, EvaluateMenuItem, EvaluateMenuResponse, EvaluationConfidence,
-    EvaluationConsentState, EvaluationContextHash, EvaluationContextHashVersion,
-    EvaluationMemberId, EvaluationProfileSource, EvaluationProfileVersion, EvaluationScope,
-    HOUSEHOLD_EVALUATION_AGGREGATE_SHA256, HOUSEHOLD_EVALUATION_CONTRACT_SHA256,
-    HOUSEHOLD_EVALUATION_CONTRACT_VERSION, HOUSEHOLD_EVALUATION_FIXTURE_SHA256,
-    HOUSEHOLD_EVALUATION_SOURCE_COMMIT, HOUSEHOLD_EVALUATION_SOURCE_TREE, HouseholdContext,
-    HouseholdEvaluationError, HouseholdMemberRef, HumanLabel, MealAttribution, MemberAnnotation,
-    SafetyStatus,
+    AnnotationDisposition, DietAlignment, EvaluateMenuItem, EvaluateMenuResponse,
+    EvaluationConfidence, EvaluationConsentState, EvaluationContextHash,
+    EvaluationContextHashVersion, EvaluationMemberId, EvaluationProfileSource,
+    EvaluationProfileVersion, EvaluationScope, HOUSEHOLD_EVALUATION_AGGREGATE_SHA256,
+    HOUSEHOLD_EVALUATION_CONTRACT_SHA256, HOUSEHOLD_EVALUATION_CONTRACT_VERSION,
+    HOUSEHOLD_EVALUATION_FIXTURE_SHA256, HOUSEHOLD_EVALUATION_SOURCE_COMMIT,
+    HOUSEHOLD_EVALUATION_SOURCE_TREE, HouseholdContext, HouseholdEvaluationError,
+    HouseholdMemberRef, HumanLabel, MealAttribution, MemberAnnotation, SafetyStatus,
 };
 pub use household_state::{
     AgeBandV1, AgeEvidenceSourceV1, AgeEvidenceV1, AppliedCommitOutcomeV1, AppliedCommitRecordV1,
@@ -152,12 +159,14 @@ pub use validation::{
 pub use wire::{
     ActionConfirmationEnvelopeWire, AddItemsRequestWire, AgentConfirmationCommandWire,
     ApplicationCapabilitiesWire, AuthorizationCapabilityWire, AuthorizationServerMetadataWire,
-    ConfirmationDecisionWire, ExclusionListResponseWire, ExclusionMutationRequestWire,
-    GROCERY_WIRE_CONTRACT_VERSION, GROCERY_WIRE_SCHEMA_SHA256, GroceryConfirmationToken,
-    GroceryDecisionWire, GroceryItemInputWire, GroceryItemStateWire, GroceryItemWire,
-    GroceryListWire, GroceryMutationConfirmRequestWire, GroceryMutationOperationWire,
-    GroceryMutationProposalWire, GroceryMutationResultWire, GroceryMutationStatusWire,
-    HEALTH_H1_H2_SOURCE_COMMIT, HealthContextWire, IdentityMethodWire,
+    ConfirmationDecisionWire, DietCatalogEntryWire, DietCatalogResponseWire,
+    DietContraindicatedConditionWire, DietDetailResponseWire, DietDetailStatusWire,
+    DietEvidenceLevelWire, DietPrincipleSectionsWire, ExclusionListResponseWire,
+    ExclusionMutationRequestWire, GROCERY_WIRE_CONTRACT_VERSION, GROCERY_WIRE_SCHEMA_SHA256,
+    GroceryConfirmationToken, GroceryDecisionWire, GroceryItemInputWire, GroceryItemStateWire,
+    GroceryItemWire, GroceryListWire, GroceryMutationConfirmRequestWire,
+    GroceryMutationOperationWire, GroceryMutationProposalWire, GroceryMutationResultWire,
+    GroceryMutationStatusWire, HEALTH_H1_H2_SOURCE_COMMIT, HealthContextWire, IdentityMethodWire,
     IntegrationAuthorizeRequestWire, IntegrationAuthorizeResponseWire,
     IntegrationDisconnectResponseWire, IntegrationListWire, IntegrationRedirectTargetWire,
     IntegrationStatusWire, IntegrationSyncResponseWire, ItemSourceWire, MemberFlagWire,

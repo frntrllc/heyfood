@@ -1,0 +1,220 @@
+{
+  "description": "GET /v1/diets recorded from the live endpoint against the SHIPPED corpus. This is the production catalog: all 22 served diets, ALL of them covered as of phase D2a, which completed the roster. Uncovered rows are still RETURNED rather than hidden whenever they occur — `covered: false` is a first-class state that a future vocabulary addition will produce again before its corpus lands, and hiding such rows would hide the vocabulary. See detail_not_covered.json, which records that state against a deliberately absent corpus now that no uncovered diet remains.",
+  "request": {
+    "method": "GET",
+    "path": "/v1/diets",
+    "scope": "knowledge:read"
+  },
+  "expected_status": 200,
+  "response": {
+    "diets": [
+      {
+        "id": "vegetarian",
+        "label": "Vegetarian",
+        "tier": 1,
+        "evidence_level": "strong",
+        "covered": true,
+        "summary": "A vegetarian diet excludes meat, poultry, fish and shellfish while permitting foods that come from animals without their slaughter."
+      },
+      {
+        "id": "vegan",
+        "label": "Vegan",
+        "tier": 1,
+        "evidence_level": "strong",
+        "covered": true,
+        "summary": "A vegan diet excludes all foods of animal origin: meat, poultry, fish and shellfish, dairy, eggs, honey, and animal-derived ingredients such as gelatin, casein, whey, albumin, carmine, lard, tallow, isinglass and rennet from animal sources."
+      },
+      {
+        "id": "keto",
+        "label": "Keto",
+        "tier": 1,
+        "evidence_level": "moderate",
+        "covered": true,
+        "summary": "The ketogenic diet is a high-fat, adequate-protein, very-low-carbohydrate pattern whose goal is nutritional ketosis — a metabolic state in which the liver converts fatty acids to ketone bodies that supply energy in place of glucose."
+      },
+      {
+        "id": "pescatarian",
+        "label": "Pescatarian",
+        "tier": 1,
+        "evidence_level": "moderate",
+        "covered": true,
+        "summary": "A pescatarian diet excludes meat and poultry but includes fish and shellfish, alongside dairy, eggs and plant foods."
+      },
+      {
+        "id": "paleo",
+        "label": "Paleo",
+        "tier": 2,
+        "evidence_level": "moderate",
+        "covered": true,
+        "summary": "The paleo diet is built on a premise about food categories rather than about nutrients: it includes foods argued to predate agriculture — meat, fish, eggs, vegetables, fruit, nuts and seeds — and excludes the categories introduced by farmi…"
+      },
+      {
+        "id": "whole30",
+        "label": "Whole30",
+        "tier": 2,
+        "evidence_level": "limited",
+        "covered": true,
+        "summary": "Whole30 is a 30-day elimination protocol followed by a structured reintroduction, not a long-term diet."
+      },
+      {
+        "id": "low_fodmap",
+        "label": "Low-FODMAP",
+        "tier": 2,
+        "evidence_level": "strong",
+        "covered": true,
+        "summary": "The low-FODMAP diet is a structured, temporary diagnostic protocol developed at Monash University, not a permanent way of eating."
+      },
+      {
+        "id": "mediterranean",
+        "label": "Mediterranean",
+        "tier": 2,
+        "evidence_level": "strong",
+        "covered": true,
+        "summary": "The Mediterranean pattern is a whole-diet pattern rather than a macronutrient prescription."
+      },
+      {
+        "id": "low_carb",
+        "label": "Low-carb",
+        "tier": 2,
+        "evidence_level": "moderate",
+        "covered": true,
+        "summary": "A low-carbohydrate diet reduces carbohydrate intake below typical levels and replaces those calories with protein and fat, without targeting ketosis."
+      },
+      {
+        "id": "low_sodium",
+        "label": "Low-sodium",
+        "tier": 2,
+        "evidence_level": "strong",
+        "covered": true,
+        "summary": "A low-sodium diet limits total daily sodium rather than restricting food groups."
+      },
+      {
+        "id": "low_fat",
+        "label": "Low-fat",
+        "tier": 2,
+        "evidence_level": "moderate",
+        "covered": true,
+        "summary": "A low-fat diet reduces total dietary fat, conventionally to under about 30% of energy, with stricter therapeutic versions going to 20% or lower."
+      },
+      {
+        "id": "high_protein",
+        "label": "High-protein",
+        "tier": 2,
+        "evidence_level": "moderate",
+        "covered": true,
+        "summary": "A high-protein pattern raises protein intake above the Dietary Reference Intake while leaving the rest of the diet largely intact — it is a protein emphasis, not an exclusion diet, which distinguishes it from most other declared diets."
+      },
+      {
+        "id": "raw_food",
+        "label": "Raw food",
+        "tier": 2,
+        "evidence_level": "limited",
+        "covered": true,
+        "summary": "A raw food diet consists of foods that have not been heated above roughly 40-48 degrees Celsius, on the premise that cooking destroys enzymes and nutrients."
+      },
+      {
+        "id": "carnivore",
+        "label": "Carnivore",
+        "tier": 2,
+        "evidence_level": "limited",
+        "covered": true,
+        "summary": "A carnivore diet consists exclusively of animal foods — meat, fish, eggs and, in most versions, some dairy — and excludes all plant foods without exception."
+      },
+      {
+        "id": "flexitarian",
+        "label": "Flexitarian",
+        "tier": 2,
+        "evidence_level": "moderate",
+        "covered": true,
+        "summary": "A flexitarian diet is primarily vegetarian with meat, poultry or fish eaten occasionally and deliberately rather than by default."
+      },
+      {
+        "id": "macrobiotic",
+        "label": "Macrobiotic",
+        "tier": 2,
+        "evidence_level": "limited",
+        "covered": true,
+        "summary": "The macrobiotic diet is a plant-forward pattern derived from a philosophical system rather than from nutritional science, organized around balancing yin and yang qualities in food and eating locally and seasonally."
+      },
+      {
+        "id": "anti_inflammatory",
+        "label": "Anti-inflammatory",
+        "tier": 2,
+        "evidence_level": "limited",
+        "covered": true,
+        "summary": "An anti-inflammatory diet is not a standardized diet."
+      },
+      {
+        "id": "aip",
+        "label": "Autoimmune protocol (AIP)",
+        "tier": 2,
+        "evidence_level": "limited",
+        "covered": true,
+        "summary": "The autoimmune protocol (AIP) is a two-phase elimination diet aimed at autoimmune conditions."
+      },
+      {
+        "id": "scd",
+        "label": "Specific carbohydrate diet (SCD)",
+        "tier": 2,
+        "evidence_level": "limited",
+        "covered": true,
+        "summary": "The Specific Carbohydrate Diet (SCD) permits only monosaccharides — single sugars — and excludes disaccharides and polysaccharides."
+      },
+      {
+        "id": "dash",
+        "label": "DASH diet",
+        "tier": 2,
+        "evidence_level": "strong",
+        "covered": true,
+        "summary": "DASH — Dietary Approaches to Stop Hypertension — is a whole-pattern eating plan developed for the NHLBI-funded feeding trials of the same name."
+      },
+      {
+        "id": "okinawa",
+        "label": "Okinawa diet",
+        "tier": 2,
+        "evidence_level": "moderate",
+        "covered": true,
+        "summary": "The Okinawa diet describes the traditional eating pattern of Okinawa, Japan, as recorded in surveys from roughly the 1940s to the 1970s, when the prefecture had one of the world's highest concentrations of centenarians."
+      },
+      {
+        "id": "mind",
+        "label": "MIND diet",
+        "tier": 2,
+        "evidence_level": "moderate",
+        "covered": true,
+        "summary": "The MIND diet — Mediterranean-DASH Intervention for Neurodegenerative Delay — is a hybrid of the Mediterranean and DASH patterns, modified to emphasise the foods that observational research had associated with slower cognitive decline."
+      }
+    ],
+    "count": 22,
+    "corpus_available": true
+  },
+  "expect": {
+    "corpus_version": "2026q4",
+    "covered_ids": [
+      "vegetarian",
+      "vegan",
+      "keto",
+      "pescatarian",
+      "paleo",
+      "whole30",
+      "low_fodmap",
+      "mediterranean",
+      "low_carb",
+      "low_sodium",
+      "low_fat",
+      "high_protein",
+      "raw_food",
+      "carnivore",
+      "flexitarian",
+      "macrobiotic",
+      "anti_inflammatory",
+      "aip",
+      "scd",
+      "dash",
+      "okinawa",
+      "mind"
+    ],
+    "uncovered_ids": [],
+    "client_rule": "Render every row. `covered: false` means 'no principle card yet', never 'not a real diet' — the user can still declare it."
+  }
+}

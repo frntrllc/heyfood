@@ -1,0 +1,88 @@
+{
+  "description": "GET /v1/diets/mediterranean against the SHIPPED phase-D1 corpus — the real principle card a client renders. Recorded from the live endpoint over the real `diet_pattern_kb`, not a stand-in: the pre-merge revision of this fixture carried a hand-authored input chunk set because D1 was still in flight, and it has been replaced wholesale now that the corpus is on main. The card builder itself never changed.",
+  "corpus": {
+    "source_id": "diet_pattern_kb",
+    "corpus_version": "2026q4",
+    "source_of_truth": "app.services.rag.diet_pattern_kb",
+    "note": "Chunks are grouped by (diet id from the `diet:*` tag, `metadata.section`); `metadata.evidence_level` and `metadata.citations` feed the rolled-up grade and the citation list. The corpus module is import-time static, so this payload is reproducible byte-for-byte."
+  },
+  "request": {
+    "method": "GET",
+    "path": "/v1/diets/mediterranean",
+    "scope": "knowledge:read"
+  },
+  "expected_status": 200,
+  "response": {
+    "id": "mediterranean",
+    "label": "Mediterranean",
+    "tier": 2,
+    "evidence_level": "strong",
+    "covered": true,
+    "detail_status": "covered",
+    "summary": "The Mediterranean pattern is a whole-diet pattern rather than a macronutrient prescription.",
+    "sections": {
+      "principles": [
+        "The Mediterranean pattern is a whole-diet pattern rather than a macronutrient prescription. Its defining features are extra-virgin olive oil as the primary added fat, vegetables and fruit at most meals, legumes and whole grains as staples, fish and seafood several times a week, nuts most days, dairy mainly as yogurt and cheese, and red and processed meat in small and infrequent portions. It is not a low-fat pattern: roughly 35-40% of energy comes from fat, predominantly monounsaturated fat from olive oil. In the PREDIMED trial the intervention was specified as food targets rather than calorie or fat limits — at least 4 tablespoons (50 mL) of extra-virgin olive oil daily or 30 g/day of mixed nuts, 3 or more servings of fish per week, 3 or more servings of legumes per week, and sofrito twice weekly, with white meat preferred over red. The Dietary Guidelines for Americans 2025-2030 recognize a Mediterranean-Style Pattern as one of three healthy patterns.",
+        "Mediterranean-Style Pattern servings, Dietary Guidelines for Americans 2025-2030. At the 2,000-calorie level: fruits 2.5 cups, vegetables 2.5 cups, grains 6 oz-equivalents with at least half whole grains, dairy 2 cups, protein foods 6.5 oz-equivalents with seafood at 15 oz per week, and oils 27 g with emphasis on olive oil. At 1,600 calories: fruits 2 cups, vegetables 2 cups, grains 5 oz-eq, dairy 1.5 cups, protein 5.5 oz-eq, oils 22 g. At 2,600 calories: fruits 2.5 cups, vegetables 3.5 cups, grains 8 oz-eq, dairy 2.5 cups, protein 7 oz-eq, oils 34 g. The distinctions from the Healthy U.S.-Style Pattern are almost twice the seafood (15 oz/week versus 8 oz/week), olive oil as the primary fat, less dairy (2 cups versus 3 cups) and that dairy weighted toward cheese and yogurt, and red meat limited to small amounts. Moderate wine is acknowledged in the cultural description of the pattern but is not recommended to non-drinkers."
+      ],
+      "foods_emphasized": [
+        "Foods emphasized on a Mediterranean pattern: extra-virgin olive oil for both cooking and dressing; vegetables at both main meals, including tomatoes, peppers, eggplant, zucchini, onions, artichokes and leafy greens; fresh fruit as the default dessert (3 or more servings a day in the PREDIMED protocol); legumes at least three times a week — lentils, chickpeas, white beans, fava beans; whole grains including farro, barley, bulgur, whole-wheat bread and pasta; fish and seafood three or more times a week with emphasis on oily fish such as sardines, anchovies, mackerel, salmon and trout; tree nuts and peanuts, about 30 g a day (walnuts, almonds, hazelnuts); yogurt and modest amounts of cheese; eggs and poultry in moderate portions; and herbs, garlic, lemon and sofrito used in place of salt for flavour."
+      ],
+      "foods_limited": [
+        "Foods limited on a Mediterranean pattern: red meat and processed meat (the PREDIMED target was under one serving a day combined, and lower is generally encouraged); commercial baked goods such as cookies, cakes and pastries; sugar-sweetened drinks and commercial fruit beverages; spreadable fats such as butter and margarine, which olive oil is meant to displace; cream-based sauces and butter-heavy preparations; and deep-fried foods. Refined grains are limited rather than excluded — white bread and white pasta are not forbidden, but whole grains are the intended default. Nothing in the pattern is an absolute exclusion, which is why an item that is off-pattern is an adherence question and not a safety question. A dish being off-pattern says nothing about whether it suits a given person'sallergies or medical conditions; those are assessed separately and take precedence."
+      ],
+      "evidence": [
+        "Cardiovascular evidence for the Mediterranean pattern is the strongest of any named dietary pattern. PREDIMED randomized 7,447 adults at high cardiovascular risk to a Mediterranean diet supplemented with extra-virgin olive oil, the same diet supplemented with mixed nuts, or a control advised to reduce dietary fat, and reported roughly a 30% relative reduction in major cardiovascular events over a median 4.8 years. The 2013 publication was retracted in 2018 because some participants were not individually randomized; it was republished the same year after reanalysis, and the effect estimates were materially unchanged, though the randomization irregularity is a real limitation. The Lyon Diet Heart Study reported large reductions in recurrent cardiac events in post-myocardial-infarction patients, and CORDIOPREV (2022) found a Mediterranean diet superior to a low-fat diet for secondary prevention in coronary heart disease. Proposed mechanisms include improved endothelial function, lower inflammatory markers, a more favourable lipid profile and better insulin sensitivity.",
+        "Evidence beyond cardiovascular outcomes is supportive but weaker than the cardiovascular evidence and should be described that way. A PREDIMED substudy reported a substantial reduction in new-onset type 2 diabetes in the olive-oil-supplemented group. Observational cohorts and meta-analyses associate higher Mediterranean adherence with modestly lower overall cancer incidence, with the most consistent signal for colorectal and breast cancer, but these are associations rather than randomized outcomes. Cognitive findings are mixed: observational work associates adherence with slower cognitive decline, while the randomized MIND trial of a closely related pattern was neutral over three years. Trials generally do not show weight gain on the pattern despite its fat content, which is usually attributed to satiety from fat, fibre and protein. The honest summary is strong evidence for cardiovascular prevention, moderate evidence for type 2 diabetes prevention, and suggestive evidence elsewhere."
+      ],
+      "safety": [
+        "The Mediterranean pattern has no general contraindication and is one of the few patterns that guideline bodies recommend broadly, but four specific cautions apply. First, wine: moderate consumption appears in descriptions of the pattern, but no guideline recommends that a non-drinker start drinking, and anyone with liver disease, pancreatitis, a history of alcohol use disorder, or who is pregnant should not drink at all. Second, the pattern leans heavily on tree nuts, fish and sesame, so it can conflict directly with those allergies — the allergy governs and the pattern is adapted around it. Third, olives, cured fish, anchovies and feta are salty, so someone managing hypertension, heart failure or chronic kidney disease should not assume Mediterranean means low sodium. Fourth, anyone taking warfarin should keep vitamin-K-rich leafy green intake consistent rather than suddenly increasing it, and discuss the change with the prescriber. None of these make the pattern unsuitable; they are adjustments, not exclusions."
+      ],
+      "nutrient_adequacy": [
+        "Nutrient adequacy on a well-constructed Mediterranean pattern is generally good: it meets or exceeds fibre, potassium, magnesium, folate, vitamin E and long-chain omega-3 targets, and the DGA models it at every calorie level from 1,600 to 3,200 kcal. Three gaps are worth checking. Calcium can fall short because dairy is lower than in the Healthy U.S.-Style Pattern (2 cups versus 3 cups) — yogurt, cheese, canned fish with bones, and calcium-set tofu or fortified plant milks cover it. Vitamin B12 is adequate when fish, dairy and eggs are eaten regularly, but a person who has drifted toward a nearly plant-only version of the pattern needs to check it. Energy density is a practical rather than nutritional issue: olive oil and nuts are calorie-dense, so portion awareness matters for anyone managing weight. Iron status is worth monitoring in menstruating adults because red meat intake is low."
+      ],
+      "restaurant_application": [
+        "Ordering strategy for a declared Mediterranean diet. The pattern is defined by what it emphasizes rather than what it forbids, so it adapts to restaurants better than most declared diets and rarely requires the kitchen to change anything. Lead with the protein: choose grilled, baked, poached or roasted seafood, then poultry, and treat red meat as an occasional and small choice. Build the plate around vegetables and legumes — a vegetable appetizer, a bean or lentil soup, or a side salad turns almost any entree into a closer match. Ask for olive oil and lemon or oil and vinegar instead of butter or a creamy dressing; this is the single highest-yield request. Choose whole-grain bread or a grain side where offered, and fresh fruit or nuts instead of a dessert built on refined flour and sugar. Greek, Turkish, Levantine, Spanish and southern Italian menus align most naturally. Because nothing here is an exclusion, an off-pattern order is a preference miss, not a risk — any safety constraint the diner also has is assessed on its own terms first."
+      ],
+      "interactions": [
+        "Interactions to be aware of when someone declares a Mediterranean diet. Tree nut, peanut, fish, shellfish and sesame allergies collide with the pattern's core emphases; the allergy is safety-critical and governs, and the pattern is rebuilt around olive oil, legumes, seeds tolerated by the individual, and poultry. Hypertension and chronic kidney disease interact through sodium: olives, capers, anchovies, cured fish and brined cheese are Mediterranean staples and are also high-sodium, so the condition guidance in the hypertension and CKD material takes precedence over the pattern's food list. Warfarin therapy interacts through vitamin K in leafy greens — consistency matters more than quantity. The pattern layers comfortably with DASH, the MIND diet and flexitarian eating, which share most of their food lists; it conflicts structurally with ketogenic and very-low-carbohydrate eating, because fruit, legumes and whole grains are central here and restricted there. Someone declaring both should be told plainly that the two patterns pull in opposite directions rather than being given a blended answer."
+      ],
+      "misconceptions": [
+        "Common misconceptions about the Mediterranean diet. It is not a low-fat diet — roughly 35-40% of energy comes from fat, and the trials that produced its evidence compared it against low-fat control diets and favoured the Mediterranean arm. It is not 'Italian restaurant food': large portions of pasta, pizza, cream sauces, breaded cutlets and tiramisu are not what the pattern describes, and southern Italian home cooking is a much closer match than an Italian-American menu. It does not require wine, and no version of the guidance recommends starting to drink. It is not automatically low in sodium. Finally, it is not a weight-loss protocol — it was studied as a long-term eating pattern for cardiovascular prevention, and while trial participants generally did not gain weight, weight loss is not what the evidence base is about."
+      ]
+    },
+    "citations": [
+      "PREDIMED trial (Estruch et al., N Engl J Med 2013; retracted 2018 and republished the same year after reanalysis excluding participants with irregular randomization — the effect estimates were materially unchanged)",
+      "Dietary Guidelines for Americans, 2025-2030 (USDA/HHS)",
+      "Mediterranean Diet Foundation",
+      "Lyon Diet Heart Study (de Lorgeril et al., Circulation 1999)",
+      "CORDIOPREV trial (Delgado-Lista et al., Lancet 2022)",
+      "Three-year randomized trial of the MIND diet versus a control diet with mild caloric restriction (Barnes et al., N Engl J Med 2023) — no significant between-group difference in global cognition",
+      "Meta-analyses of Mediterranean adherence and cancer incidence (observational)",
+      "2017 ACC/AHA guideline for the prevention, detection, evaluation and management of high blood pressure in adults (Whelton et al.)",
+      "FDA labeling guidance on warfarin and vitamin K intake",
+      "Academy of Nutrition and Dietetics position paper: Vegetarian Diets (Melina, Craig & Levin, J Acad Nutr Diet 2016)",
+      "NHLBI DASH Eating Plan",
+      "KDOQI Clinical Practice Guideline for Nutrition in CKD: 2020 Update (National Kidney Foundation / Academy of Nutrition and Dietetics)",
+      "DIETFITS randomized trial of healthy low-fat versus healthy low-carbohydrate diets (Gardner et al., JAMA 2018)"
+    ],
+    "contraindicated_conditions": []
+  },
+  "expect": {
+    "section_counts": {
+      "principles": 2,
+      "foods_emphasized": 1,
+      "foods_limited": 1,
+      "evidence": 2,
+      "safety": 1,
+      "nutrient_adequacy": 1,
+      "restaurant_application": 1,
+      "interactions": 1,
+      "misconceptions": 1
+    },
+    "citation_count": 13,
+    "evidence_rollup": "Most frequent per-chunk `evidence_level` wins; ties resolve to the WEAKER level; `safety` chunks never vote, because their grading describes the warning's evidence and is deliberately high even for a weakly evidenced diet.",
+    "summary_source": "First sentence of the first `principles` chunk.",
+    "citations_deduplicated_in_corpus_order": true
+  }
+}

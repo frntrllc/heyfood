@@ -44,6 +44,12 @@ pub struct GroceryContractReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DietContractReport {
+    pub files: usize,
+    pub aggregate_digest: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Phase0EvidenceReport {
     pub requirements: usize,
     pub blockers: usize,
@@ -159,6 +165,13 @@ const GROCERY_PHASE_A_SOURCE_ROOT: &str = "backend/docs/schemas/v1";
 const GROCERY_PHASE_A_TARGET_ROOT: &str = "fixtures/contracts/grocery-backend/phase-a";
 const GROCERY_PHASE_A_AGGREGATE_DIGEST: &str =
     "781a14b9d05d70a4da245e2d80c24b0b040aa7ec742f852c65ca3815cc583911";
+
+const DIET_CONTRACT_ROOT: &str = "fixtures/contracts/diet-backend/v1";
+const DIET_CONTRACT_SOURCE_COMMIT: &str = "3dbbeee1bd9eb82ef04b75eb3ac8451cb7b3b8fb";
+const DIET_CONTRACT_PROVENANCE_SHA256: &str =
+    "82e93bc275ce4499e78cd86dd28fc59a018e68b6824b9496a97d5955e4b71de0";
+const DIET_CONTRACT_AGGREGATE: &str =
+    "e9b25bcd44bbe2aa045411ade6afc572e1d54e6fc9112ce842de203adc6e051a";
 
 const GROCERY_PHASE_A_FILES: [GroceryPhaseAFileSpec; 14] = [
     GroceryPhaseAFileSpec {
@@ -873,6 +886,147 @@ fn validate_phase_a_authority(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Verify the deployed diet v1 contract mirror byte-for-byte against its
+/// checked-in provenance. This validator deliberately performs no network
+/// access: runtime activation remains separately gated by `diet == "v1"`.
+pub fn verify_diet_contracts(root: &Path) -> Result<DietContractReport, String> {
+    let provenance_path = format!("{DIET_CONTRACT_ROOT}/diet-contract-provenance.json");
+    let provenance_bytes = read_bytes(root, Path::new(&provenance_path))?;
+    let actual_provenance = sha256::repository_text_digest_hex(&provenance_bytes)
+        .map_err(|error| format!("diet contract provenance is not UTF-8: {error}"))?;
+    if actual_provenance != DIET_CONTRACT_PROVENANCE_SHA256 {
+        return Err(format!(
+            "diet contract provenance expected {DIET_CONTRACT_PROVENANCE_SHA256}, found {actual_provenance}"
+        ));
+    }
+    let provenance: serde_json::Value = serde_json::from_slice(&provenance_bytes)
+        .map_err(|error| format!("diet contract provenance is invalid JSON: {error}"))?;
+    let object = provenance
+        .as_object()
+        .ok_or_else(|| "diet contract provenance must be an object".to_owned())?;
+
+    let string = |name: &str| -> Result<&str, String> {
+        object
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("diet contract provenance.{name} must be a string"))
+    };
+    if string("contract_family")? != "hellofood-diet"
+        || object
+            .get("contract_version")
+            .and_then(serde_json::Value::as_u64)
+            != Some(1)
+        || string("status")? != "approved_deployed"
+        || string("source_repository")? != "https://github.com/frntrllc/hellofood"
+        || string("source_commit")? != DIET_CONTRACT_SOURCE_COMMIT
+        || string("deployed_commit")? != DIET_CONTRACT_SOURCE_COMMIT
+        || string("hash_algorithm")? != "sha256"
+        || !object
+            .get("migration_revision")
+            .is_some_and(serde_json::Value::is_null)
+    {
+        return Err("diet contract provenance identity or deployed status differs".to_owned());
+    }
+    validate_git_sha(string("source_commit")?, "diet provenance.source_commit")?;
+    validate_git_sha(
+        string("deployed_commit")?,
+        "diet provenance.deployed_commit",
+    )?;
+    let capability = object
+        .get("capability")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "diet contract provenance.capability must be an object".to_owned())?;
+    if capability.get("name").and_then(serde_json::Value::as_str) != Some("diet")
+        || capability
+            .get("version")
+            .and_then(serde_json::Value::as_str)
+            != Some("v1")
+    {
+        return Err("diet contract provenance capability must be diet v1".to_owned());
+    }
+
+    let files = object
+        .get("files")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "diet contract provenance.files must be an object".to_owned())?;
+    if files.len() != 10 {
+        return Err(format!(
+            "diet contract provenance must bind exactly 10 files, found {}",
+            files.len()
+        ));
+    }
+    let mut entries: Vec<_> = files.iter().collect();
+    entries.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    let mut aggregate_payload = Vec::new();
+    for (relative, expected) in entries {
+        let expected = expected
+            .as_str()
+            .ok_or_else(|| format!("diet contract hash for {relative} must be a string"))?;
+        validate_sha256(expected, &format!("diet contract file {relative}"))?;
+        let relative_path = safe_relative_path(relative)?;
+        let path = Path::new(DIET_CONTRACT_ROOT).join(&relative_path);
+        let bytes = read_bytes(root, &path)?;
+        let actual = sha256::repository_text_digest_hex(&bytes)
+            .map_err(|error| format!("{} is not UTF-8 repository text: {error}", path.display()))?;
+        if actual != expected {
+            return Err(format!(
+                "diet contract file {} expected {expected}, found {actual}",
+                path.display()
+            ));
+        }
+        aggregate_payload.extend_from_slice(relative.as_bytes());
+        aggregate_payload.push(b'\t');
+        aggregate_payload.extend_from_slice(expected.as_bytes());
+        aggregate_payload.push(b'\n');
+    }
+    let actual_aggregate = sha256::digest_hex(&aggregate_payload);
+    let aggregate = object
+        .get("aggregate")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "diet contract provenance.aggregate must be an object".to_owned())?;
+    if aggregate
+        .get("algorithm")
+        .and_then(serde_json::Value::as_str)
+        != Some("sha256")
+        || aggregate
+            .get("file_count")
+            .and_then(serde_json::Value::as_u64)
+            != Some(10)
+        || aggregate.get("digest").and_then(serde_json::Value::as_str)
+            != Some(DIET_CONTRACT_AGGREGATE)
+        || actual_aggregate != DIET_CONTRACT_AGGREGATE
+    {
+        return Err(format!(
+            "diet contract aggregate differs: expected {DIET_CONTRACT_AGGREGATE}, found {actual_aggregate}"
+        ));
+    }
+
+    let contract_path = format!("{DIET_CONTRACT_ROOT}/diet-contract.json");
+    let contract: serde_json::Value =
+        serde_json::from_slice(&read_bytes(root, Path::new(&contract_path))?)
+            .map_err(|error| format!("diet contract is invalid JSON: {error}"))?;
+    if contract
+        .get("x-heyfood-contract-version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+        || contract
+            .pointer("/capability/name")
+            .and_then(serde_json::Value::as_str)
+            != Some("diet")
+        || contract
+            .pointer("/capability/version")
+            .and_then(serde_json::Value::as_str)
+            != Some("v1")
+    {
+        return Err("diet contract identity must be contract v1 and capability diet v1".to_owned());
+    }
+
+    Ok(DietContractReport {
+        files: files.len(),
+        aggregate_digest: actual_aggregate,
+    })
+}
+
 /// Reproduce the checked-in Platform P0 C3/C4 and deployed Grocery Phase A
 /// contract freezes from exact companion-repository history. The importer
 /// validates the reviewed source/deploy relationship and all 14 aggregate
@@ -1322,7 +1476,7 @@ pub fn verify_assets(root: &Path) -> Result<AssetReport, String> {
         &["version", "sections", "household_diet_extras"],
         "dietary asset",
     )?;
-    expect_usize(dietary, "version", 2, "dietary asset")?;
+    expect_usize(dietary, "version", 3, "dietary asset")?;
     let sections = field(dietary, "sections", "dietary asset")?.object("dietary sections")?;
     exact_keys(
         sections,
@@ -2848,9 +3002,9 @@ fn validate_metadata(metadata: &Metadata) -> Result<(), String> {
         .iter()
         .filter(|package| workspace_ids.contains(&package.id))
     {
-        if package.version.to_string() != "0.8.0" {
+        if package.version.to_string() != "0.9.0" {
             return Err(format!(
-                "{} has internal version {}; expected exact workspace version 0.8.0",
+                "{} has internal version {}; expected exact workspace version 0.9.0",
                 package.name, package.version
             ));
         }
@@ -2885,9 +3039,9 @@ fn validate_metadata(metadata: &Metadata) -> Result<(), String> {
             .iter()
             .filter(|dependency| workspace_names.contains(dependency.name.as_str()))
         {
-            if dependency.req.to_string() != "=0.8.0" {
+            if dependency.req.to_string() != "=0.9.0" {
                 return Err(format!(
-                    "{} -> {} must use exact internal version =0.8.0; found {}",
+                    "{} -> {} must use exact internal version =0.9.0; found {}",
                     package.name, dependency.name, dependency.req
                 ));
             }
@@ -3007,7 +3161,7 @@ fn validate_dietary_provenance(root: &Path) -> Result<bool, String> {
     expect_usize(
         provenance,
         "asset_contract_version",
-        2,
+        3,
         "dietary provenance",
     )?;
     validate_git_sha(
@@ -3788,15 +3942,16 @@ fn set_difference(context: &str, expected: &BTreeSet<String>, actual: &BTreeSet<
 #[cfg(test)]
 mod tests {
     use super::{
-        FROZEN_COMPATIBILITY_DIGEST, FROZEN_COMPATIBILITY_SHA, FROZEN_COMPATIBILITY_TREE,
-        GROCERY_CONTRACTS, GROCERY_PHASE_A_FILES, GROCERY_PHASE_A_PROVENANCE_TARGET,
-        GROCERY_PHASE_A_TARGET_ROOT, import_grocery_contracts, native_state_declaration,
-        validate_agent_phase1_evidence_separation, validate_agent_phase1_hosted,
-        validate_agent_phase1_requirements, validate_agent_phase1_review, validate_dependency_dag,
-        validate_grok_pattern_provenance, validate_health_contract_provenance,
-        verify_agent_phase1_evidence, verify_assets, verify_assets_approved,
-        verify_grocery_contracts, verify_migration_ledger, verify_phase0_evidence,
-        verify_phase1_evidence, verify_stable_contracts,
+        DIET_CONTRACT_ROOT, FROZEN_COMPATIBILITY_DIGEST, FROZEN_COMPATIBILITY_SHA,
+        FROZEN_COMPATIBILITY_TREE, GROCERY_CONTRACTS, GROCERY_PHASE_A_FILES,
+        GROCERY_PHASE_A_PROVENANCE_TARGET, GROCERY_PHASE_A_TARGET_ROOT, import_grocery_contracts,
+        native_state_declaration, validate_agent_phase1_evidence_separation,
+        validate_agent_phase1_hosted, validate_agent_phase1_requirements,
+        validate_agent_phase1_review, validate_dependency_dag, validate_grok_pattern_provenance,
+        validate_health_contract_provenance, verify_agent_phase1_evidence, verify_assets,
+        verify_assets_approved, verify_diet_contracts, verify_grocery_contracts,
+        verify_migration_ledger, verify_phase0_evidence, verify_phase1_evidence,
+        verify_stable_contracts,
     };
     use crate::json::Json;
     use std::fs;
@@ -3888,11 +4043,73 @@ mod tests {
         assert_eq!(ledger.unmapped, ledger.entries);
         assert_eq!(verify_stable_contracts(&root()).unwrap().endpoints, 27);
         assert_eq!(verify_grocery_contracts(&root()).unwrap().contracts, 17);
+        assert_eq!(verify_diet_contracts(&root()).unwrap().files, 10);
         assert_eq!(verify_assets(&root()).unwrap().pending_reviews, 0);
         verify_assets_approved(&root()).expect("specialist-approved assets must validate");
         let phase0 = verify_phase0_evidence(&root()).expect("Phase 0 inventory must validate");
         assert_eq!(phase0.blockers, 0);
         assert_eq!(phase0.review_status, "approved");
+    }
+
+    fn diet_contract_paths() -> Vec<String> {
+        let provenance = root()
+            .join(DIET_CONTRACT_ROOT)
+            .join("diet-contract-provenance.json");
+        let document: serde_json::Value =
+            serde_json::from_slice(&fs::read(provenance).unwrap()).unwrap();
+        let mut paths = vec![format!(
+            "{DIET_CONTRACT_ROOT}/diet-contract-provenance.json"
+        )];
+        paths.extend(
+            document["files"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(|path| format!("{DIET_CONTRACT_ROOT}/{path}")),
+        );
+        paths
+    }
+
+    #[test]
+    fn diet_contract_validator_rejects_byte_corruption() {
+        let scratch = scratch("diet-contract-corruption");
+        for path in diet_contract_paths() {
+            copy(&path, &scratch);
+        }
+        verify_diet_contracts(&scratch).expect("checked-in diet contract must validate");
+        let target = scratch
+            .join(DIET_CONTRACT_ROOT)
+            .join("fixtures/diet/catalog.json");
+        let mut bytes = fs::read(&target).unwrap();
+        bytes.extend_from_slice(b"\n");
+        fs::write(target, bytes).unwrap();
+        assert!(verify_diet_contracts(&scratch).is_err());
+
+        copy(
+            &format!("{DIET_CONTRACT_ROOT}/fixtures/diet/catalog.json"),
+            &scratch,
+        );
+        let provenance = scratch
+            .join(DIET_CONTRACT_ROOT)
+            .join("diet-contract-provenance.json");
+        let corrupted = fs::read_to_string(&provenance).unwrap().replacen(
+            "approved_deployed",
+            "pending_deployment",
+            1,
+        );
+        fs::write(provenance, corrupted).unwrap();
+        assert!(verify_diet_contracts(&scratch).is_err());
+        fs::remove_dir_all(scratch).unwrap();
+    }
+
+    #[test]
+    fn diet_contract_validator_accepts_windows_checkout_line_endings() {
+        let scratch = scratch("diet-contract-crlf");
+        for path in diet_contract_paths() {
+            convert_to_crlf(&path, &scratch);
+        }
+        verify_diet_contracts(&scratch).expect("CRLF checkout must preserve diet digests");
+        fs::remove_dir_all(scratch).unwrap();
     }
 
     #[test]
@@ -4343,7 +4560,7 @@ mod tests {
         let corrupted =
             fs::read_to_string(&asset)
                 .unwrap()
-                .replacen("\"version\": 2", "\"version\": 3", 1);
+                .replacen("\"version\": 3", "\"version\": 4", 1);
         fs::write(asset, corrupted).unwrap();
         assert!(verify_assets(&scratch).is_err());
 

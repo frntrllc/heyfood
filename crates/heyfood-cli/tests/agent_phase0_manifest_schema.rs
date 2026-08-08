@@ -15,9 +15,9 @@ const V2_SCHEMA: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../schemas/v2/heyfood-agent-manifest.schema.json"
 ));
-const V3_SCHEMA: &str = include_str!(concat!(
+const V4_SCHEMA: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../schemas/v3/heyfood-agent-manifest.schema.json"
+    "/../../schemas/v4/heyfood-agent-manifest.schema.json"
 ));
 const GOLDEN: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -91,12 +91,12 @@ fn manifest_schema_freezes_public_status_and_audience_vocabulary() {
 
 #[test]
 fn runtime_manifest_validates_and_exactly_matches_active_command_authority() {
-    let schema: Value = serde_json::from_str(V3_SCHEMA).expect("v3 manifest schema JSON");
+    let schema: Value = serde_json::from_str(V4_SCHEMA).expect("v4 manifest schema JSON");
     let proposal_schema: Value =
         serde_json::from_str(PROPOSAL_PRESENTATION_SCHEMA).expect("proposal schema JSON");
     let manifest = heyfood_agent_contract::manifest();
     validate_schema_instance(&schema, &proposal_schema, &schema, &manifest)
-        .expect("runtime manifest must validate against the embedded v3 schema");
+        .expect("runtime manifest must validate against the embedded v4 schema");
 
     let mut active_paths = BTreeSet::new();
     visible_command_paths(&CommandLine::command_tree(), "", &mut active_paths);
@@ -288,9 +288,9 @@ fn guide_format_is_typed_and_matches_the_approved_spelling() {
 }
 
 #[test]
-fn discovery_schema_version_defaults_to_v3_and_preserves_explicit_v1_v2() {
+fn discovery_schema_version_defaults_to_v4_and_preserves_explicit_v1_v2_v3() {
     for (arguments, expected) in [
-        (vec!["heyfood", "agent", "describe"], 3),
+        (vec!["heyfood", "agent", "describe"], 4),
         (
             vec!["heyfood", "agent", "describe", "--schema-version", "1"],
             1,
@@ -302,6 +302,10 @@ fn discovery_schema_version_defaults_to_v3_and_preserves_explicit_v1_v2() {
         (
             vec!["heyfood", "agent", "describe", "--schema-version", "3"],
             3,
+        ),
+        (
+            vec!["heyfood", "agent", "describe", "--schema-version", "4"],
+            4,
         ),
     ] {
         let parsed = CommandLine::try_parse_from(arguments).unwrap();
@@ -326,7 +330,7 @@ fn discovery_schema_version_defaults_to_v3_and_preserves_explicit_v1_v2() {
     assert_eq!(arguments.schema_version, 2);
 
     assert!(
-        CommandLine::try_parse_from(["heyfood", "agent", "describe", "--schema-version", "4"])
+        CommandLine::try_parse_from(["heyfood", "agent", "describe", "--schema-version", "5"])
             .is_err()
     );
 }
@@ -797,6 +801,7 @@ fn closed_v1_golden_and_current_v2_manifest_freeze_the_complete_surface() {
     let golden: Value = serde_json::from_str(GOLDEN).expect("golden manifest JSON");
     let mut runtime_v1 = heyfood_agent_contract::manifest_v1();
     runtime_v1["build"] = golden["build"].clone();
+    runtime_v1["binary_version"] = golden["binary_version"].clone();
 
     validate_schema_instance(&v1_schema, &proposal_schema, &v1_schema, &golden)
         .expect("published v1 golden must retain the closed v1 contract");
@@ -832,6 +837,7 @@ fn closed_v1_golden_and_current_v2_manifest_freeze_the_complete_surface() {
 
     let mut expected_v2 = golden.clone();
     expected_v2["schema_version"] = Value::from(2);
+    expected_v2["binary_version"] = Value::from(env!("CARGO_PKG_VERSION"));
     expected_v2.as_object_mut().unwrap().insert(
         "native_state_compatibility".to_owned(),
         serde_json::json!({

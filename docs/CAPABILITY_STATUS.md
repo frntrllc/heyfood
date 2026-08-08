@@ -17,6 +17,7 @@ specific `capability_deferred`.
 | Native v0.7.0 | Previous supported release | Added responsive dietary setup, complete slash-command discovery, terminal-native restaurant/menu presentation, typed slow-turn recovery, crash-safe logout, and the encrypted local household lifecycle. Superseded by v0.7.1. |
 | Native v0.7.1 | Previous supported release | Redesigned the interactive terminal with a calm responsive frame, branded startup view, bordered composer, and contextual working, location, household-scope, version, and release-channel cues. Superseded by v0.8.0. |
 | Native v0.8.0 | Current supported release | Adds manifest-v3 discovery and bounded, explicitly authorized read-only agent understanding of the encrypted local household roster and additional-member profiles. Agent household mutations remain unavailable. |
+| Native v0.9.0 source candidate | Under development; not released | Adds a capability-gated, read-only Diet guide across the CLI and TUI. The public installer remains on v0.8.0 until candidate qualification and release authorization are complete. |
 | Hosted installer | Supported | Installs the checksum-verified native `v0.8.0` archive for macOS or Linux. |
 | Source | Available | Public for inspection and contributor evaluation under Apache 2.0. |
 | Windows x86-64 | Deferred | Windows distribution and Windows CI are outside the v0.8.0 release train. The retained Windows source is not a support claim. |
@@ -37,6 +38,7 @@ specific `capability_deferred`.
 | Conversation continuation | `heyfood reply --conversation-id …` | Hosted conversation state | Current source command |
 | Meal logging | `heyfood log` | Hosted agent and meal memory; direct use requires controlling-terminal `LOG` authorization | Current human-terminal-only source command |
 | Item evaluation | `heyfood item` | Restaurant/menu evidence and dietary evaluation | Current source command |
+| Diet guide | `heyfood diet`, `diet list`, `diet show DIET_ID`, short-form `diet DIET_ID`, plus TUI `/diet [DIET_ID]` | 22 runtime-served Diet v1 guides with authored ordering and evidence levels | Read-only source candidate; requires exact `diet:v1` discovery and `knowledge:read`. Runtime IDs are case-sensitive. Profile set/clear is deferred pending [hellofood #261](https://github.com/frntrllc/hellofood/issues/261). |
 | Grocery | `heyfood grocery` plus TUI confirmation cards | Read/export; direct preparation and confirm/cancel require exact controlling-terminal review phrases | Supported v0.8.0 command with human-only mutations |
 | Oura health integrations | Not advertised; retained command spelling fails closed with `capability_deferred` | Future provider-neutral integration work | Deferred from the supported `v0.8.0` contract; no implementation or canary release gate |
 | Apple Health | No CLI command or TUI panel | Mobile/backend work remains outside this release | Deferred from the supported `v0.8.0` contract |
@@ -51,6 +53,16 @@ specific `capability_deferred`.
 | Codex/Claude Agent Skill setup | `heyfood agent setup` / `agent uninstall` | N/A | Supported in v0.8.0 for the exact qualified host versions; dry-run is default, apply requires the reviewed plan digest, and setup registers MCP through host-owned commands. |
 | Local read-only MCP | `heyfood mcp serve` | Existing authenticated read controllers plus account-bound local household reads | Supported in v0.8.0 with the original six tools plus two capability-gated household read tools, bounded cursor pagination, and no agent mutation surface. |
 | Agent household mutations | No command or MCP tool | None | Deferred. Add, edit, archive, restore, persistent scope changes, proposal preparation, approval, commit, and TUI automation remain human-only or absent. |
+
+Diet guides and the dietary onboarding catalog are related but distinct. The
+service currently returns 22 authored guides, while the profile-writable
+catalog contains 26 selectable diet options. A missing guide is not permission
+to invent an explanation: `diet_not_covered` is rendered as a successful,
+truthful result. Evidence levels (`strong`, `moderate`, or `limited`) describe
+source support and are advisory rather than clinical or safety guarantees.
+Safety remains visible on evaluated food, and optional `diet_alignment` is
+strictly subordinate: it never changes a safety badge, color, order, filter,
+or status and never mutates the profile.
 
 ## Process contract
 

@@ -35,3 +35,7 @@ Treat these states distinctly:
 Never guess one into another. In particular, never report a capability that
 does not exist on your surface as a permission problem the user could fix by
 authorizing again.
+
+Local Diet reads require `knowledge:read` and live capability value exactly
+`diet:v1`. A missing Diet capability is unavailable, and an unknown Diet
+version is unsupported; neither becomes usable through a scope upgrade.

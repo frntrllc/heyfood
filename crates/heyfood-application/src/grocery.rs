@@ -640,6 +640,7 @@ mod tests {
             loopback_pkce: true,
             device_code: true,
             grocery: GroceryCapability::V1,
+            diet: heyfood_core::DietCapability::Unavailable,
         }
     }
 

@@ -566,7 +566,7 @@ fn assert_internal_manifest() {
 }
 
 #[test]
-fn phase0_legacy_public_surface_remains_frozen_after_read_activation() {
+fn frozen_v1_manifest_and_current_v4_mcp_schema_delta_are_exact() {
     let manifest = heyfood_agent_contract::manifest_v1();
     assert_eq!(manifest["schema_version"], 1);
     assert_eq!(manifest["commands"].as_array().map(Vec::len), Some(30));
@@ -578,7 +578,7 @@ fn phase0_legacy_public_surface_remains_frozen_after_read_activation() {
         (
             "heyfood_get_manifest",
             "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
-            "7a866f9f96cfa46318b5f95f043b72501f706dd2a2402ce3f48c22568a0bad69",
+            "6f1409eb74120c6cfe80ef386f1b5f628a70a0a6e9e0559b157c9649d383d059",
         ),
         (
             "heyfood_get_status",
@@ -588,7 +588,7 @@ fn phase0_legacy_public_surface_remains_frozen_after_read_activation() {
         (
             "heyfood_get_capabilities",
             "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
-            "5e9d9e43208aa8a5fc529d86b015652fe113ea1031c7f88fad3198e404d5b510",
+            "72006571d3f4430ee74d47338c9597906b10f2360ad374e6018ce67015f5c555",
         ),
         (
             "heyfood_get_grocery_list",
@@ -607,17 +607,27 @@ fn phase0_legacy_public_surface_remains_frozen_after_read_activation() {
         ),
     ];
     let tools = heyfood_mcp::HeyfoodMcpServer::tools();
-    assert_eq!(tools.len(), 8);
+    assert_eq!(tools.len(), 10);
     for (tool, (name, input_sha256, result_sha256)) in tools.iter().take(6).zip(expected) {
         assert_eq!(tool.name, name);
         let input = serde_json::to_vec(tool.input_schema.as_ref()).expect("tool input schema");
         let result = serde_json::to_vec(tool.output_schema.as_deref().expect("tool result schema"))
             .expect("tool result schema");
-        assert_eq!(format!("{:x}", Sha256::digest(input)), input_sha256);
-        assert_eq!(format!("{:x}", Sha256::digest(result)), result_sha256);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(input)),
+            input_sha256,
+            "{name} input schema"
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(result)),
+            result_sha256,
+            "{name} result schema"
+        );
     }
     assert_eq!(tools[6].name, "heyfood_get_household_context");
     assert_eq!(tools[7].name, "heyfood_get_household_member");
+    assert_eq!(tools[8].name, "heyfood_list_diets");
+    assert_eq!(tools[9].name, "heyfood_get_diet");
 }
 
 #[tokio::test]

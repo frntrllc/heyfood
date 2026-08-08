@@ -4,6 +4,22 @@ All notable changes to heyfood will be documented in this file. The project
 uses semantic versioning while the public command, machine-output, config, and
 authentication contracts are stabilized.
 
+## 0.9.0 - Unreleased
+
+- Add capability-gated, read-only Diet catalog and guide detail across the
+  one-shot CLI, interactive TUI, and local MCP integration.
+- Pin the deployed Diet v1 wire contract and fixtures byte-for-byte, fail
+  closed on unknown capability versions, and preserve typed backend errors.
+- Surface optional diet alignment as advisory context beneath dietary safety;
+  alignment never changes a safety badge, ordering, or recommendation.
+- Expand the packaged Agent Skill and manifest schema v4 with two bounded Diet
+  read tools while retaining frozen schema-v1, schema-v2, and schema-v3
+  compatibility views.
+- Refresh the canonical profile-writing diet vocabulary to its reviewed
+  26-option version while keeping the 22-guide runtime catalog distinct.
+- Defer Diet profile mutation until the backend freezes its write envelope,
+  targeting, version-conflict, reconciliation, and writable-ID contracts.
+
 ## 0.8.0 - 2026-08-03
 
 - Add manifest schema v3 with capability-derived household discovery while

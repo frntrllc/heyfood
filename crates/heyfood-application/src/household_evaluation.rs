@@ -10,8 +10,8 @@
 use std::fmt;
 
 use heyfood_core::{
-    AnnotationDisposition, EvaluateMenuResponse, EvaluationMemberId, EvaluationScope,
-    MemberAnnotation, SafetyStatus, terminal_safe_text,
+    AnnotationDisposition, DietAlignment, EvaluateMenuResponse, EvaluationMemberId,
+    EvaluationScope, MemberAnnotation, SafetyStatus, terminal_safe_text,
 };
 use serde_json::{Value, json};
 
@@ -350,6 +350,19 @@ fn append_member_annotation(output: &mut String, annotation: &MemberAnnotation, 
             width,
         );
     }
+    if let Some(alignment) = annotation.diet_alignment {
+        let fit = match alignment {
+            DietAlignment::Aligned => "Aligned",
+            DietAlignment::Partial => "Partly aligned",
+            DietAlignment::OffDiet => "Off diet",
+            DietAlignment::NotAssessed => "Not assessed",
+        };
+        let text = annotation.diet_alignment_reason.as_deref().map_or_else(
+            || format!("Diet fit: {fit}"),
+            |reason| format!("Diet fit: {fit} — {}", inline_text(reason)),
+        );
+        push_wrapped(output, "    ", "      ", &text, width);
+    }
 }
 
 fn status_label(status: SafetyStatus) -> &'static str {
@@ -559,6 +572,30 @@ mod tests {
                 "missing {expected:?}:\n{rendered}"
             );
         }
+    }
+
+    #[test]
+    fn household_diet_alignment_is_advisory_below_each_safety_result() {
+        let mut result = founding_result();
+        let generally_safer = &mut result["items"][1]["member_annotations"][0];
+        generally_safer["diet_alignment"] = json!("off_diet");
+        generally_safer["diet_alignment_reason"] =
+            json!("This preparation is outside the declared keto pattern.");
+        let avoid = &mut result["items"][0]["member_annotations"][1];
+        avoid["diet_alignment"] = json!("aligned");
+        avoid["diet_alignment_reason"] =
+            json!("This preparation fits the declared Mediterranean pattern.");
+
+        let rendered = render_household_evaluation(&result).unwrap().unwrap();
+        let semantic = inline_text(&rendered);
+        assert!(semantic.contains("Jordan: Generally safer — No concerns."));
+        assert!(semantic.contains(
+            "Diet fit: Off diet — This preparation is outside the declared keto pattern."
+        ));
+        assert!(semantic.contains("Maya: Avoid — Garlic and onion are high-FODMAP."));
+        assert!(semantic.contains(
+            "Diet fit: Aligned — This preparation fits the declared Mediterranean pattern."
+        ));
     }
 
     #[test]

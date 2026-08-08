@@ -69,7 +69,7 @@ static CATALOG: LazyLock<OnboardingCatalog> = LazyLock::new(|| {
     let document: CatalogDocument =
         serde_json::from_str(CATALOG_JSON).expect("embedded dietary catalog must be valid JSON");
     assert_eq!(
-        document.version, 2,
+        document.version, 3,
         "embedded dietary catalog version changed"
     );
     OnboardingCatalog {
@@ -488,16 +488,16 @@ mod tests {
     }
 
     #[test]
-    fn embedded_catalog_keeps_full_v2_option_inventory() {
+    fn embedded_catalog_keeps_full_v3_option_inventory() {
         assert_eq!(condition_options().len(), 31);
-        assert_eq!(diet_options().len(), 24);
+        assert_eq!(diet_options().len(), 26);
         assert_eq!(allergy_options().len(), 28);
         assert_eq!(activity_options().len(), 5);
         assert_eq!(cuisine_options().len(), 28);
     }
 
     #[test]
-    fn frozen_python_payload_oracle_covers_every_v2_catalog_option() {
+    fn frozen_python_payload_oracle_covers_every_v3_catalog_option() {
         // This is an independent transcription of the derivation tables in
         // archive/python-cli-73494a57:src/heyfood_cli/onboarding.py. Iterating
         // every retained catalog entry prevents representative-only parity.

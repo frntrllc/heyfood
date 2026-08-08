@@ -22,6 +22,74 @@ pub const GROCERY_WIRE_SCHEMA_SHA256: &str =
     "783472779f3f1209c1daca6d33088b36415e5ea8b51ec6113750d453e0654930";
 pub const HEALTH_H1_H2_SOURCE_COMMIT: &str = "7cfadc55c103257b588b237c65fe7b5031a3f745";
 
+/// Diet DTOs intentionally tolerate unknown object fields. Diet contract v1
+/// is additive-only, so a field added within v1 must not break an older CLI.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct DietCatalogEntryWire {
+    pub id: String,
+    pub label: String,
+    pub tier: u8,
+    pub evidence_level: Option<DietEvidenceLevelWire>,
+    pub covered: bool,
+    pub summary: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct DietCatalogResponseWire {
+    pub diets: Vec<DietCatalogEntryWire>,
+    pub count: usize,
+    pub corpus_available: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DietEvidenceLevelWire {
+    Strong,
+    Moderate,
+    Limited,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DietDetailStatusWire {
+    Covered,
+    DietNotCovered,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct DietPrincipleSectionsWire {
+    pub principles: Vec<String>,
+    pub foods_emphasized: Vec<String>,
+    pub foods_limited: Vec<String>,
+    pub evidence: Vec<String>,
+    pub safety: Vec<String>,
+    pub nutrient_adequacy: Vec<String>,
+    pub restaurant_application: Vec<String>,
+    pub interactions: Vec<String>,
+    pub misconceptions: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct DietContraindicatedConditionWire {
+    pub condition_id: String,
+    pub condition_label: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct DietDetailResponseWire {
+    pub id: String,
+    pub label: String,
+    pub tier: u8,
+    pub evidence_level: Option<DietEvidenceLevelWire>,
+    pub covered: bool,
+    pub detail_status: DietDetailStatusWire,
+    pub summary: String,
+    pub sections: DietPrincipleSectionsWire,
+    pub citations: Vec<String>,
+    pub contraindicated_conditions: Vec<DietContraindicatedConditionWire>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 pub struct AuthorizationServerMetadataWire {
     #[serde(default)]

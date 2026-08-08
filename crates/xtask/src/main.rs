@@ -62,6 +62,15 @@ fn main() {
                 )
             })
         }
+        Some("verify-diet-contracts") => {
+            no_extra_arguments(&mut arguments);
+            xtask::verify_diet_contracts(root).map(|report| {
+                format!(
+                    "diet contract freeze valid: {} files; aggregate {}",
+                    report.files, report.aggregate_digest
+                )
+            })
+        }
         Some("import-grocery-contracts") => {
             if arguments.next().as_deref() != Some("--source-repo") {
                 usage();
@@ -178,7 +187,7 @@ fn required_option(arguments: &mut impl Iterator<Item = String>, expected: &str)
 
 fn usage() -> ! {
     eprintln!(
-        "usage: cargo xtask <native-state-declaration VERSION|dependency-dag|verify-migration-ledger|verify-contracts|verify-grocery-contracts|import-grocery-contracts --source-repo PATH|verify-assets|verify-assets-approved|verify-phase0-evidence|verify-phase1-evidence|verify-agent-phase1-evidence|evaluate-post-release --evidence-dir PATH --rubric PATH --output PATH>"
+        "usage: cargo xtask <native-state-declaration VERSION|dependency-dag|verify-migration-ledger|verify-contracts|verify-grocery-contracts|verify-diet-contracts|import-grocery-contracts --source-repo PATH|verify-assets|verify-assets-approved|verify-phase0-evidence|verify-phase1-evidence|verify-agent-phase1-evidence|evaluate-post-release --evidence-dir PATH --rubric PATH --output PATH>"
     );
     std::process::exit(2);
 }

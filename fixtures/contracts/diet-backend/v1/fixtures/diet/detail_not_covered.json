@@ -1,0 +1,58 @@
+{
+  "description": "GET /v1/diets/keto with the corpus FORCED ABSENT (the loader is patched to return no module). Phase D2a completed the roster, so no diet is uncovered any more and this state can no longer be recorded against the real corpus — it is reachable only for a future vocabulary addition whose chunks have not landed yet, or if the corpus module fails to load. The absence is forced rather than inferred, so this fixture cannot silently start recording real corpus text. A valid vocabulary id is NEVER a 404 — this is a 200 whose detail_status says the grounding is pending, and contraindicated_conditions is populated regardless because the safety table is deterministic and does not depend on the corpus.",
+  "request": {
+    "method": "GET",
+    "path": "/v1/diets/keto",
+    "scope": "knowledge:read"
+  },
+  "expected_status": 200,
+  "response": {
+    "id": "keto",
+    "label": "Keto",
+    "tier": 1,
+    "evidence_level": null,
+    "covered": false,
+    "detail_status": "diet_not_covered",
+    "summary": "",
+    "sections": {
+      "principles": [],
+      "foods_emphasized": [],
+      "foods_limited": [],
+      "evidence": [],
+      "safety": [],
+      "nutrient_adequacy": [],
+      "restaurant_application": [],
+      "interactions": [],
+      "misconceptions": []
+    },
+    "citations": [],
+    "contraindicated_conditions": [
+      {
+        "condition_id": "diabetes_type_1",
+        "condition_label": "Type 1 diabetes",
+        "reason": "Ketogenic eating raises diabetic ketoacidosis risk in type 1 diabetes and needs insulin management by the care team."
+      },
+      {
+        "condition_id": "pancreatitis",
+        "condition_label": "Pancreatitis (chronic)",
+        "reason": "Very high fat intake is a known trigger for chronic pancreatitis flares."
+      },
+      {
+        "condition_id": "liver_disease",
+        "condition_label": "Liver disease",
+        "reason": "High fat and protein loads add metabolic burden to an impaired liver."
+      },
+      {
+        "condition_id": "gestational_diabetes",
+        "condition_label": "Gestational diabetes",
+        "reason": "Carbohydrate restriction in pregnancy requires obstetric supervision rather than self-directed ketosis."
+      }
+    ]
+  },
+  "expect": {
+    "sections_all_empty": true,
+    "evidence_level_is_null_not_guessed": true,
+    "contraindicated_conditions_still_served": true,
+    "client_rule": "Say plainly that hello.food has no grounded guidance for this diet yet. Never substitute the client's own or a model's description — ungrounded diet guidance is the exact failure this surface exists to prevent."
+  }
+}

@@ -33,6 +33,7 @@ pub struct StatusSnapshot {
     pub registration: RegistrationAvailability,
     pub profile: ProfileReadinessStatus,
     pub grocery: OptionalCapabilityStatus,
+    pub diet: OptionalCapabilityStatus,
     pub menu_watch: OptionalCapabilityStatus,
     pub voice: VoiceReadinessStatus,
 }
@@ -111,6 +112,13 @@ fn compose_status(
     } else {
         OptionalCapabilityStatus::AuthorizationRequired
     };
+    let diet = if !capabilities.diet.is_usable() {
+        OptionalCapabilityStatus::NotAdvertised
+    } else if has_scope(authorization_scope, "knowledge:read") {
+        OptionalCapabilityStatus::Authorized
+    } else {
+        OptionalCapabilityStatus::AuthorizationRequired
+    };
     let menu_watch = if has_scope(authorization_scope, "menu:watch") {
         OptionalCapabilityStatus::Authorized
     } else {
@@ -130,6 +138,7 @@ fn compose_status(
         registration: capabilities.registration,
         profile,
         grocery,
+        diet,
         menu_watch,
         voice,
     }
@@ -200,6 +209,7 @@ mod tests {
                 loopback_pkce: true,
                 device_code: true,
                 grocery: GroceryCapability::V1,
+                diet: heyfood_core::DietCapability::V1,
             },
             consent,
             discovery_reads: AtomicUsize::new(0),
@@ -213,7 +223,7 @@ mod tests {
         let snapshot = ReadStatus::new(&port)
             .execute(
                 credentials(),
-                "profile:read grocery:read menu:watch audio:transcribe",
+                "profile:read grocery:read knowledge:read menu:watch audio:transcribe",
                 false,
                 CancellationToken::new(),
             )
@@ -225,6 +235,7 @@ mod tests {
             ProfileReadinessStatus::AuthorizedConsentGranted
         );
         assert_eq!(snapshot.grocery, OptionalCapabilityStatus::Authorized);
+        assert_eq!(snapshot.diet, OptionalCapabilityStatus::Authorized);
         assert_eq!(snapshot.menu_watch, OptionalCapabilityStatus::Authorized);
         assert_eq!(
             snapshot.voice,
@@ -244,6 +255,10 @@ mod tests {
         assert_eq!(snapshot.profile, ProfileReadinessStatus::NotAuthorized);
         assert_eq!(
             snapshot.grocery,
+            OptionalCapabilityStatus::AuthorizationRequired
+        );
+        assert_eq!(
+            snapshot.diet,
             OptionalCapabilityStatus::AuthorizationRequired
         );
         assert_eq!(

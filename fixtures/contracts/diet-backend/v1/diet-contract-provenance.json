@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "contract_family": "hellofood-diet",
+  "contract_version": 1,
+  "status": "approved_deployed",
+  "source_repository": "https://github.com/frntrllc/hellofood",
+  "source_commit": "3dbbeee1bd9eb82ef04b75eb3ac8451cb7b3b8fb",
+  "deployed_commit": "3dbbeee1bd9eb82ef04b75eb3ac8451cb7b3b8fb",
+  "migration_revision": null,
+  "contributing_merges": {
+    "note": "The diet contract was created by D3 and amended by two later phases, so it has no single authoring merge. `source_commit` above is the merge whose tree the digests below describe — the most recent re-attestation. These are the merges that produced the surface it attests, all verified present on origin/main.",
+    "D0": {"sha": "0565ec669a617ac13df44cd231c11aa157513933", "pr": 232, "contribution": "diet graph plumbing behind DIET_GRAPH_ENABLED; the vocabulary, the flag and the D0-13 contraindication table the card's contraindicated_conditions is served from"},
+    "D1": {"sha": "1848426ef27295d31fb876d8e5ad17ce9d659bad", "pr": 237, "contribution": "diet_pattern_kb corpus v1 — the 13-diet grounding the covered cards are built from"},
+    "D3": {"sha": "ad14228bba4a54a4b23e8aa222cf91a36aaf1da0", "pr": 238, "contribution": "AUTHORED this contract, its fixtures and this provenance mechanism; the REST catalog, the describe_diet tool, the additive graph-read fields and the capability entry"},
+    "D5": {"sha": "7a9a98551379ce66e2c3fe6e234c0c343e29a8e5", "pr": 246, "contribution": "the diet_alignment block and the alignment_payload fixture; re-attested"},
+    "D2a": {"sha": "3dbbeee1bd9eb82ef04b75eb3ac8451cb7b3b8fb", "pr": 255, "contribution": "long-tail corpus completing the roster at 22 diets / 203 chunks, corpus_version 2026q4; re-recorded four fixtures and re-attested — this is the tree the digests describe"}
+  },
+  "capability": {
+    "name": "diet",
+    "version": "v1"
+  },
+  "hash_algorithm": "sha256",
+  "files": {
+    "diet-contract.json": "7a2394c6d8e5b0fc8121ba968bffc98cba4d9134c64305ee20fd44259ff036a8",
+    "fixtures/diet/alignment_payload.json": "e1b2f74372169b1e5a05c99b9b72b490f3ed29ed78c1b8c67bc1c1d0bfd3071a",
+    "fixtures/diet/capability_present.json": "44a6865f16a17e9908f436fe374b31a816ebf6b3fa6393dc2c20d53a7d425995",
+    "fixtures/diet/catalog.json": "305b68e78b91a94c3e0ff880af490a1adee7a784440afd2901b4af2e4393d97d",
+    "fixtures/diet/caution_payload.json": "1c66b56bc75270326c02f4ef03b93e6f9f37dbb55de1e5891f850efdae797bbe",
+    "fixtures/diet/detail_covered.json": "715a9e0dcf3c44f38cab9763512065827ff4febb8292b1f23a5f5c86a922e3d3",
+    "fixtures/diet/detail_not_covered.json": "76fb6ac4202f5894b4954cfb927956203ca22857a469587fc163527a45d2d6b3",
+    "fixtures/diet/feature_disabled_error.json": "a8c628dffb69aa06f3350186fb12ad73397226d986e402ba3aa7025764832b32",
+    "fixtures/diet/graph_read_diets.json": "e9674e329ae1cd8b003c7e490bcd913836442a434ba41ded4284b25f304b386e",
+    "fixtures/diet/unknown_diet_error.json": "30896c2b6cf74cc68b925b4c7a6c43617757f064083714bb2030f8405417af19"
+  },
+  "aggregate": {
+    "algorithm": "sha256",
+    "file_count": 10,
+    "canonicalization": "Sort files by UTF-8 path ascending; for each entry append <path>, one TAB byte, the lowercase SHA-256 hex digest, and one LF byte; SHA-256 the resulting UTF-8 byte sequence including the final LF.",
+    "digest": "e9b25bcd44bbe2aa045411ade6afc572e1d54e6fc9112ce842de203adc6e051a"
+  },
+  "mechanism_note": "Mirrors grocery-contract-provenance.json. The digest mechanism is PER-DOMAIN — that file's capability, migration_revision and deployment evidence are grocery's — so the diet contract ships its own provenance rather than appending to it. The canonicalization string is byte-identical to grocery's on purpose: one verifier implementation serves both contract families.",
+  "attestation_status": "DEPLOYED AND VERIFIED 2026-08-07. The file digests and the aggregate above describe THIS tree, and every deployment claim below was checked against the live fleet rather than inferred: the two deploy ids were read back from Render (the D2a deploy is the only one with status \"live\"), the five contributing merges were each confirmed to be ancestors of origin/main, and the capability claim was read from the live unauthenticated endpoint. `migration_revision` stays null because it is TRUE — none of the five diet merges added a migration file, verified across all five. Everything grocery's evidence block carries that this one cannot is named explicitly under evidence.not_recorded rather than omitted, because the previous revision of this file earned its trust by refusing to claim a deployment it did not have, and that property is only preserved if the deployed revision is equally exact about the edges of what it verified.",
+  "evidence": {
+    "recorded_date": "2026-08-07",
+    "deployment": {
+      "service_id": "srv-d5jugj24d50c73d9hh30",
+      "api_deploy_id": "dep-d9r602dckfvc73e7illg",
+      "deployed_commit": "3dbbeee1bd9eb82ef04b75eb3ac8451cb7b3b8fb",
+      "deploy_status": "live",
+      "deploy_finished_at": "2026-08-07T22:47:49Z",
+      "surface_first_live_deploy_id": "dep-d9pvkvjncjis73f97d80",
+      "surface_first_live_commit": "ad14228bba4a54a4b23e8aa222cf91a36aaf1da0",
+      "surface_first_live_finished_at": "2026-08-06T03:10:08Z",
+      "note": "The diet SURFACE first went live with the D3 merge on 2026-08-06; that deploy is now `deactivated`, which means superseded by a later deploy, not rolled back. The currently live deploy is the D2a corpus completion, and it is the one the digests and the corpus_attestation describe."
+    },
+    "schema": {
+      "revision": null,
+      "schema_ready": true,
+      "note": "No diet phase shipped a migration — verified across all five contributing merges, each of which changed zero files under backend/migrations/versions/. There is therefore no migration-runner deploy and no schema-verifier job to record, and grocery's `migration_runner_deploy_id` / `verifier_job_id` / `verifier_source_sha256` have no diet counterpart. `schema_ready` is true because the surface requires no schema change, not because a verifier asserted it."
+    },
+    "capability": {
+      "endpoint": "https://api.hello.food/v1/auth/capabilities",
+      "observed_response_application_capabilities": {"grocery": "v1", "diet": "v1"},
+      "claim": {"diet": "v1"},
+      "observed_status": 200,
+      "note": "Read from the live unauthenticated endpoint on the recorded date. This is the load-bearing check for this contract family: `application_capabilities.diet` is CONFIG-conditional, so a deployed build with DIET_GRAPH_ENABLED off omits the key entirely. Observing it present is what makes `approved_deployed` a fact about the running fleet rather than about the merge."
+    },
+    "negative_scope": {
+      "request": "GET /v1/diets and GET /v1/diets/{diet_id}, no X-API-Key header",
+      "observed_status": 401,
+      "message": "Missing API key. Include X-API-Key header.",
+      "note": "Observed live on the recorded date. This confirms the routes exist and are gated, which is the useful negative for an unauthenticated prober. It is NOT grocery's negative — see not_recorded."
+    },
+    "not_recorded": {
+      "scope_denial_from_a_released_client": "Grocery's evidence carries an observed 403 `missing required scope(s): grocery:read` from heyfood 0.3.2. No equivalent is recorded here: the diet routes ride `knowledge:read`, which every CLI session already holds, so no released client can produce a scope denial against them. The 403 path is covered by tests (`test_cli_session_without_knowledge_read_gets_the_typed_denial`, `test_route_level_require_scope_denies_a_principal_without_knowledge_read`), not by a field observation.",
+      "authenticated_response_body": "The 200 catalog and card bodies were not re-read from prod for this attestation; the recorded fixtures are the authority for response shape and are digest-pinned above."
+    }
+  },
+  "pinning_rule": "Rust must validate every file hash and the deterministic aggregate digest before generating wire DTOs from diet-contract.json, and must independently validate source_commit as the reviewed diet merge on origin/main and deployed_commit as the Production fleet source. Status is now \"approved_deployed\", but that is NECESSARY AND NOT SUFFICIENT: the client must STILL check at runtime that GET /v1/auth/capabilities advertises application_capabilities.diet == \"v1\" before offering the diet command surface. The capability map is config-conditional, so a deployed build with DIET_GRAPH_ENABLED off omits the key and the surface must stay hidden — a build-time attestation cannot answer a runtime configuration question, which is exactly why the capability check is a separate gate rather than a restatement of this one.",
+  "attestation_note_source_equals_deployed": "source_commit and deployed_commit are the SAME SHA here, unlike grocery's file where they differ. That is a fact, not a copy error: the merge whose tree these digests describe (D2a, the most recent re-attestation) is also the commit running in production at the recorded date. Later commits exist on origin/main and none of them touches any digested artifact, so the digests remain valid at main's tip — stated as that invariant rather than as a list of SHAs, because an enumeration goes stale on every unrelated merge and a provenance file must not carry a claim that rots. The invariant is the checkable one: `git diff --name-only <source_commit>..origin/main -- backend/docs/schemas/v1/diet-contract.json backend/docs/schemas/v1/fixtures/diet/` must be empty, and the digest assertions in tests/test_diet_contract.py fail if it is not.",
+  "corpus_attestation": {
+    "source_id": "diet_pattern_kb",
+    "corpus_version": "2026q4",
+    "source_of_truth": "app.services.rag.diet_pattern_kb",
+    "covered_roster": "all 22 catalog-served diets (phase D2a completed the roster; UNCOVERED_DIET_IDS is empty)",
+    "note": "Every fixture above is recorded against this corpus. The corpus module is import-time static and lives in the same repository, so the digests pin the served CONTENT as well as the wire shape. Any corpus change is a re-attestation event; phase D2a was one. detail_not_covered.json is the one fixture recorded with the loader patched absent, because no uncovered diet remains."
+  }
+}

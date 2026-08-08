@@ -1,0 +1,64 @@
+{
+  "description": "The deterministic diet x condition caution, recorded from the real DIET_CONDITION_CONTRAINDICATIONS table. It WARNS and never BLOCKS — the profile write has already succeeded when `cautions` is non-empty. No LLM and no retrieval sit between the declaration and the warning.",
+  "declared": {
+    "diet_style_ids": [
+      "keto",
+      "carnivore"
+    ],
+    "health_condition_ids": [
+      "diabetes_type_1",
+      "arfid"
+    ]
+  },
+  "profile_sync_response": {
+    "member_id": "_self",
+    "version": 8,
+    "updated_at": "2026-08-04T12:00:00Z",
+    "cautions": [
+      {
+        "diet_id": "keto",
+        "diet_label": "Keto",
+        "condition_id": "diabetes_type_1",
+        "condition_label": "Type 1 diabetes",
+        "reason": "Ketogenic eating raises diabetic ketoacidosis risk in type 1 diabetes and needs insulin management by the care team."
+      },
+      {
+        "diet_id": "carnivore",
+        "diet_label": "Carnivore",
+        "condition_id": "arfid",
+        "condition_label": "ARFID",
+        "reason": "Eliminating entire food groups narrows an already restricted intake in ARFID."
+      }
+    ]
+  },
+  "tool_result_cautions": [
+    {
+      "diet_id": "keto",
+      "diet_label": "Keto",
+      "condition_id": "diabetes_type_1",
+      "condition_label": "Type 1 diabetes",
+      "reason": "Ketogenic eating raises diabetic ketoacidosis risk in type 1 diabetes and needs insulin management by the care team."
+    },
+    {
+      "diet_id": "carnivore",
+      "diet_label": "Carnivore",
+      "condition_id": "arfid",
+      "condition_label": "ARFID",
+      "reason": "Eliminating entire food groups narrows an already restricted intake in ARFID."
+    }
+  ],
+  "expect": {
+    "ordering": "declaration order, diets outer then conditions inner",
+    "blocks_the_write": false,
+    "table_diets": [
+      "aip",
+      "carnivore",
+      "keto",
+      "low_fodmap",
+      "macrobiotic",
+      "raw_food",
+      "scd",
+      "whole30"
+    ]
+  }
+}

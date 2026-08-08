@@ -39,7 +39,7 @@ fn describe_is_deterministic_ansi_free_and_offline() {
     assert_eq!(first.stdout, bare.stdout);
     assert!(!first.stdout.contains(&0x1b));
     let manifest: Value = serde_json::from_slice(&first.stdout).unwrap();
-    assert_eq!(manifest["schema_version"], 3);
+    assert_eq!(manifest["schema_version"], 4);
     assert_eq!(manifest["product"], "heyfood");
     assert_eq!(manifest["binary_version"], heyfood_core::VERSION);
     assert_eq!(
@@ -115,7 +115,7 @@ fn compatibility_bootstrap_fails_closed_without_receipts_and_stays_offline() {
     assert!(output.status.success(), "{:?}", output.stderr);
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["schema_version"], 1);
-    assert_eq!(result["manifest_schema_version"], 3);
+    assert_eq!(result["manifest_schema_version"], 4);
     assert_eq!(result["compatible"], false);
     assert_eq!(result["network_accessed"], false);
     assert_eq!(result["credentials_accessed"], false);
@@ -272,8 +272,8 @@ fn doctor_is_local_bounded_and_credential_free() {
     assert!(output.stderr.is_empty());
     assert!(output.stdout.len() < 16 * 1024);
     let doctor: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(doctor["schema_version"], 3);
-    assert_eq!(doctor["manifest_schema_version"], 3);
+    assert_eq!(doctor["schema_version"], 4);
+    assert_eq!(doctor["manifest_schema_version"], 4);
     assert_eq!(doctor["ok"], true);
     assert_eq!(doctor["network_accessed"], false);
     assert_eq!(doctor["credentials_accessed"], false);

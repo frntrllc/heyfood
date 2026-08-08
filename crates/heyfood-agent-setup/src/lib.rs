@@ -23,7 +23,7 @@ use heyfood_platform::OwnerOnlyPath;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const PACKAGE_VERSION: &str = "0.8.0";
+const PACKAGE_VERSION: &str = "0.9.0";
 // A replacement can legitimately perform up to six sequential bounded
 // host-command/probe pairs while applying and restoring MCP state. Keep lock
 // contention bounded, but longer than that 78-second host-owned budget plus
@@ -74,6 +74,10 @@ const SKILL_FILES: &[(&str, &str)] = &[
         include_str!(
             "../../../agent-integrations/skills/heyfood/references/authentication-and-capabilities.md"
         ),
+    ),
+    (
+        "references/diet.md",
+        include_str!("../../../agent-integrations/skills/heyfood/references/diet.md"),
     ),
     (
         "references/grocery.md",
@@ -507,7 +511,7 @@ fn build_plan(
             && matches!(host.action, "install" | "replace" | "uninstall" | "none")
     });
     let mut plan = SetupPlan {
-        schema_version: 1,
+        schema_version: 2,
         operation: options.operation,
         mode: options.mode,
         target: options.target,
@@ -3612,7 +3616,7 @@ exit 2
         .unwrap();
         let instance = serde_json::to_value(plan).unwrap();
         let schema: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../schemas/v1/heyfood-agent-setup-plan.schema.json"
+            "../../../schemas/v2/heyfood-agent-setup-plan.schema.json"
         ))
         .unwrap();
         jsonschema::draft202012::validate(&schema, &instance).unwrap();

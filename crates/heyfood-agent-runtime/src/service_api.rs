@@ -2,15 +2,16 @@
 
 use heyfood_application::{
     AuthoritativeConsentStateV1, BoxFuture, CapabilityPort, CapabilitySnapshot,
-    CreateMenuWatchRequest, DeployedGroceryMutationRequest, GroceryDisplayItem, GroceryDisplayList,
-    GroceryDisplayMemberFlag, GroceryDisplaySafety, GroceryDisplaySource, GroceryExclusions,
-    GroceryExport, GroceryExportPort, GroceryMutationPort, GroceryReadPort, LogoutRemotePort,
-    MenuWatchChangeEvent, MenuWatchChangeSummary, MenuWatchList, MenuWatchPort, MenuWatchReadPort,
-    MenuWatchSnapshot, PortError, RegistrationAvailability, StatusPort,
+    CreateMenuWatchRequest, DeployedGroceryMutationRequest, DietPort, GroceryDisplayItem,
+    GroceryDisplayList, GroceryDisplayMemberFlag, GroceryDisplaySafety, GroceryDisplaySource,
+    GroceryExclusions, GroceryExport, GroceryExportPort, GroceryMutationPort, GroceryReadPort,
+    LogoutRemotePort, MenuWatchChangeEvent, MenuWatchChangeSummary, MenuWatchList, MenuWatchPort,
+    MenuWatchReadPort, MenuWatchSnapshot, PortError, RegistrationAvailability, StatusPort,
 };
 use heyfood_core::{
     AddItemsRequestWire, ApplicationCapabilitiesWire, AuthCredentialBundle,
-    AuthorizationServerMetadataWire, ConsentVersionV1, ExclusionListResponseWire,
+    AuthorizationServerMetadataWire, ConsentVersionV1, DietCapability, DietCatalog,
+    DietCatalogResponseWire, DietDetail, DietDetailResponseWire, ExclusionListResponseWire,
     ExclusionMutationRequestWire, GroceryCapability, GroceryEntityId, GroceryListWire,
     GroceryMutationConfirmRequestWire, GroceryMutationProposalWire, GroceryMutationResultWire,
     HealthContextWire, IntegrationAuthorizeRequestWire, IntegrationAuthorizeResponseWire,
@@ -38,6 +39,8 @@ const MAX_EXPORT_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TRANSCRIPTION_RESPONSE_BYTES: usize = 128 * 1024;
 const MAX_TRANSCRIPTION_ERROR_BYTES: usize = 16 * 1024;
 const MAX_MENU_WATCH_ERROR_BYTES: usize = 16 * 1024;
+const MAX_DIET_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_DIET_ERROR_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy)]
 enum DispatchKind {
@@ -74,6 +77,18 @@ struct ProfileConsentStatusWireV1 {
     granted_at: Option<String>,
     #[serde(default)]
     consent_version: Option<ConsentVersionV1>,
+}
+
+#[derive(Default, Deserialize)]
+struct DietErrorEnvelopeWire {
+    #[serde(default)]
+    details: Option<DietErrorDetailsWire>,
+}
+
+#[derive(Default, Deserialize)]
+struct DietErrorDetailsWire {
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 impl ProfileConsentStatusWireV1 {
@@ -509,6 +524,63 @@ impl HttpService {
         }
     }
 
+    pub fn require_diet_v1(capabilities: &CapabilitySnapshot) -> Result<(), PortError> {
+        match &capabilities.diet {
+            DietCapability::V1 => Ok(()),
+            DietCapability::Unavailable => Err(PortError::new(
+                "diet_capability_unavailable",
+                "Diet guidance is not advertised by this deployment",
+            )),
+            DietCapability::UnsupportedVersion(_) => Err(PortError::new(
+                "diet_capability_unsupported",
+                "Diet guidance advertises an unsupported contract version",
+            )),
+        }
+    }
+
+    pub async fn diet_catalog(
+        &self,
+        capabilities: &CapabilitySnapshot,
+        credentials: &SessionCredentials,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> Result<DietCatalog, PortError> {
+        Self::require_diet_v1(capabilities)?;
+        let builder = self
+            .request(Method::GET, "/v1/diets", Some(credentials), operation_id)?
+            .header(header::ACCEPT, "application/json");
+        let wire: DietCatalogResponseWire = self.dispatch_diet_json(builder, cancellation).await?;
+        DietCatalog::try_from(wire).map_err(|_| {
+            PortError::new(
+                "diet_contract_error",
+                "the diet catalog response violates contract v1",
+            )
+        })
+    }
+
+    pub async fn diet_detail(
+        &self,
+        capabilities: &CapabilitySnapshot,
+        credentials: &SessionCredentials,
+        operation_id: OperationId,
+        diet_id: &str,
+        cancellation: CancellationToken,
+    ) -> Result<DietDetail, PortError> {
+        Self::require_diet_v1(capabilities)?;
+        let segment = encode_diet_path_segment(diet_id)?;
+        let path = format!("/v1/diets/{segment}");
+        let builder = self
+            .request(Method::GET, &path, Some(credentials), operation_id)?
+            .header(header::ACCEPT, "application/json");
+        let wire: DietDetailResponseWire = self.dispatch_diet_json(builder, cancellation).await?;
+        DietDetail::try_from(wire).map_err(|_| {
+            PortError::new(
+                "diet_contract_error",
+                "the diet detail response violates contract v1",
+            )
+        })
+    }
+
     pub async fn grocery_list(
         &self,
         capabilities: &CapabilitySnapshot,
@@ -892,6 +964,56 @@ impl HttpService {
             .map_err(|_| dispatch_error(kind, "response_json", "service response is invalid JSON"))
     }
 
+    async fn dispatch_diet_json<T: DeserializeOwned>(
+        &self,
+        builder: RequestBuilder,
+        cancellation: CancellationToken,
+    ) -> Result<T, PortError> {
+        if cancellation.is_cancelled() {
+            return Err(PortError::new(
+                "request_cancelled_before_dispatch",
+                "request was cancelled before dispatch",
+            ));
+        }
+        let response = tokio::select! {
+            () = cancellation.cancelled() => {
+                return Err(PortError::new(
+                    "request_cancelled_after_dispatch",
+                    "service response was not observed after request dispatch",
+                ));
+            }
+            result = builder.send() => result.map_err(|error| {
+                PortError::new("request_transport", crate::sanitized_reqwest_error(&error))
+            })?,
+        };
+        let status = response.status();
+        if !is_json_media_type(&media_type(&response)) {
+            return Err(PortError::new(
+                "response_content_type",
+                "diet service response is not JSON",
+            ));
+        }
+        let maximum = if status.is_success() {
+            MAX_DIET_RESPONSE_BYTES
+        } else {
+            MAX_DIET_ERROR_BYTES
+        };
+        let bytes = read_limited(response, &cancellation, DispatchKind::Safe, maximum).await?;
+        if status.is_success() {
+            return serde_json::from_slice(&bytes).map_err(|_| {
+                PortError::new(
+                    "diet_contract_error",
+                    "diet service response is invalid JSON",
+                )
+            });
+        }
+        let body = serde_json::from_slice::<DietErrorEnvelopeWire>(&bytes).unwrap_or_default();
+        Err(diet_http_error(
+            status,
+            body.details.and_then(|details| details.reason),
+        ))
+    }
+
     async fn dispatch_profile_consent_wire(
         &self,
         builder: RequestBuilder,
@@ -1251,6 +1373,41 @@ impl GroceryReadPort for HttpService {
     }
 }
 
+impl DietPort for HttpService {
+    fn list(
+        &self,
+        capabilities: CapabilitySnapshot,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<DietCatalog, PortError>> {
+        Box::pin(async move {
+            self.diet_catalog(&capabilities, &credentials, operation_id, cancellation)
+                .await
+        })
+    }
+
+    fn detail(
+        &self,
+        capabilities: CapabilitySnapshot,
+        credentials: SessionCredentials,
+        operation_id: OperationId,
+        diet_id: String,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<DietDetail, PortError>> {
+        Box::pin(async move {
+            self.diet_detail(
+                &capabilities,
+                &credentials,
+                operation_id,
+                &diet_id,
+                cancellation,
+            )
+            .await
+        })
+    }
+}
+
 impl GroceryExportPort for HttpService {
     fn export(
         &self,
@@ -1363,6 +1520,7 @@ impl GroceryMutationPort for HttpService {
 
 fn capability_snapshot_from_wire(wire: ApplicationCapabilitiesWire) -> CapabilitySnapshot {
     let grocery = GroceryCapability::from_advertised(wire.application_version("grocery"));
+    let diet = DietCapability::from_advertised(wire.application_version("diet"));
     let registration = match wire.self_registration.status {
         SelfRegistrationStatusWire::Available => RegistrationAvailability::Available,
         SelfRegistrationStatusWire::Disabled => RegistrationAvailability::Disabled,
@@ -1375,6 +1533,7 @@ fn capability_snapshot_from_wire(wire: ApplicationCapabilitiesWire) -> Capabilit
         loopback_pkce: wire.authorization.loopback_pkce,
         device_code: wire.authorization.device_code,
         grocery,
+        diet,
     }
 }
 
@@ -1525,6 +1684,45 @@ fn http_status_error(status: StatusCode) -> PortError {
         _ => ("http_status", "the service returned an unsuccessful status"),
     };
     PortError::new(code, message)
+}
+
+fn diet_http_error(status: StatusCode, reason: Option<String>) -> PortError {
+    match (status, reason.as_deref()) {
+        (StatusCode::NOT_FOUND, Some("unknown_diet")) => PortError::new(
+            "diet_unknown_diet",
+            "the requested diet is not in the served catalog",
+        ),
+        (StatusCode::NOT_FOUND, Some("feature_disabled")) => PortError::new(
+            "diet_feature_disabled",
+            "diet guidance is not available on this deployment",
+        ),
+        (StatusCode::FORBIDDEN, Some("scope_not_permitted")) => PortError::new(
+            "scope_required",
+            "the session lacks the knowledge:read scope required for diet guidance",
+        ),
+        _ => http_status_error(status),
+    }
+}
+
+fn encode_diet_path_segment(value: &str) -> Result<String, PortError> {
+    if value.is_empty() || value.chars().count() > 64 || value.chars().any(char::is_control) {
+        return Err(PortError::new(
+            "diet_id_invalid",
+            "diet id must contain 1 to 64 non-control characters",
+        ));
+    }
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(*byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    Ok(encoded)
 }
 
 #[derive(Default, Deserialize)]
