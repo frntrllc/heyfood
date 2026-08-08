@@ -42,7 +42,7 @@ fi
 
 assert_contains "$ROOT/install.sh" "SUPPORTED_VERSION=\"$version\""
 assert_contains "$ROOT/crates/heyfood-installer/src/main.rs" \
-  "const SUPPORTED_RELEASE_VERSION: &str = \"$version\";"
+  "const DEFAULT_SUPPORTED_RELEASE_VERSION: &str = \"$version\";"
 assert_contains "$ROOT/README.md" "supported release is \`$version\`"
 assert_contains "$ROOT/README.md" "supported native \`v$version\` binary"
 assert_contains "$ROOT/docs/CAPABILITY_STATUS.md" \

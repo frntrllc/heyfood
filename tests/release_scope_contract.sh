@@ -188,6 +188,9 @@ if [[ -z "$v2_manifest_line" || -z "$verifier_line" ||
 fi
 grep -Fq '.schema_version == 2' "$protected_slice" ||
   fail "protected qualification must assert the explicit candidate manifest schema"
+grep -Fq 'export HEYFOOD_INSTALLER_RELEASE_VERSION="$version"' \
+  "$protected_slice" ||
+  fail "protected qualification must bind verifier identity to the candidate version"
 if grep -Fq 'agent describe >candidate-agent-manifest.json' "$protected_slice"; then
   fail "protected qualification must not pass the default v1 manifest to the v2-only verifier"
 fi
@@ -640,6 +643,9 @@ sed -n '/^  native-release-contract:/,/^  protected-candidate-preflight:/p' \
   "$CANDIDATE_WORKFLOW" >"$ordinary_distribution_slice"
 grep -Fq -- '--package heyfood-installer' "$ordinary_distribution_slice" ||
   fail "ordinary distribution CI must build the standalone verifier"
+grep -Fq 'export HEYFOOD_INSTALLER_RELEASE_VERSION="$version"' \
+  "$ordinary_distribution_slice" ||
+  fail "ordinary distribution CI must bind verifier identity to the candidate version"
 grep -Fq 'scripts/release/package-installer.sh' "$ordinary_distribution_slice" ||
   fail "ordinary distribution CI must package verifier fixtures"
 grep -Fq 'scripts/release/verify-assets.sh dist "$version" --native-state' \

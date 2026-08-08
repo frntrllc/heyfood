@@ -15,7 +15,11 @@ const MAX_DECLARATION_BYTES: usize = 4 * 1024;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 // This verifier is distributed with the currently supported public installer.
 // Candidate workspace version bumps must not silently cut that installer over.
-const SUPPORTED_RELEASE_VERSION: &str = "0.8.0";
+const DEFAULT_SUPPORTED_RELEASE_VERSION: &str = "0.8.0";
+const SUPPORTED_RELEASE_VERSION: &str = match option_env!("HEYFOOD_INSTALLER_RELEASE_VERSION") {
+    Some(version) => version,
+    None => DEFAULT_SUPPORTED_RELEASE_VERSION,
+};
 const NATIVE_STATE_VERSION: u64 = 2;
 const CAPABILITIES: &str = concat!(
     "[\"household-account-slot-v1\",",
@@ -314,8 +318,8 @@ fn failure(message: &str) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        CAPABILITIES, expected_declaration, expected_floor, parse_unique_json,
-        valid_lower_hex_digest, valid_release_version,
+        CAPABILITIES, SUPPORTED_RELEASE_VERSION, expected_declaration, expected_floor,
+        parse_unique_json, valid_lower_hex_digest, valid_release_version,
     };
     use serde_json::json;
 
@@ -338,6 +342,7 @@ mod tests {
 
     #[test]
     fn version_and_digest_inputs_are_closed() {
+        assert!(valid_release_version(SUPPORTED_RELEASE_VERSION));
         assert!(valid_release_version("0.6.2"));
         assert!(!valid_release_version("0.06.2"));
         assert!(!valid_release_version("0.6.2-beta"));

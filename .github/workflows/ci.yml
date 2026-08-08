@@ -175,6 +175,7 @@ jobs:
           set -euo pipefail
           version=$(cargo metadata --locked --no-deps --format-version 1 |
             jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
+          export HEYFOOD_INSTALLER_RELEASE_VERSION="$version"
           cargo build --release --locked \
             --package heyfood-bin \
             --package heyfood-installer
@@ -319,14 +320,15 @@ jobs:
           export CARGO_INCREMENTAL=0
           export SOURCE_DATE_EPOCH
           SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
+          version=$(cargo metadata --locked --no-deps --format-version 1 |
+            jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
+          export HEYFOOD_INSTALLER_RELEASE_VERSION="$version"
           cargo build --locked --release \
             --package heyfood-bin \
             --package heyfood-installer \
             --target "$TARGET"
           binary="target/$TARGET/release/heyfood"
           verifier="target/$TARGET/release/heyfood-installer"
-          version=$(cargo metadata --locked --no-deps --format-version 1 |
-            jq -er '.packages[] | select(.name == "heyfood-bin") | .version')
           test "$($binary --version)" = "heyfood $version"
           test "$($verifier --version)" = "heyfood-installer $version"
           "$binary" agent describe --schema-version 2 \
