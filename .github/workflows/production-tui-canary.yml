@@ -85,6 +85,12 @@ jobs:
                 credentials_retained: false
               }
             }' >canary-evidence/production-canary.json
+      - name: Install the Linux Secret Service runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes dbus-x11 gnome-keyring
       - name: Require the isolated protected credential bundle
         shell: bash
         env:
@@ -152,7 +158,10 @@ jobs:
           set -euo pipefail
           export HEYFOOD_CANARY_ARCHIVE_SHA256
           HEYFOOD_CANARY_ARCHIVE_SHA256=$(cat canary-release/archive.sha256)
-          scripts/eval/run-production-canary.sh
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "\n" | gnome-keyring-daemon --unlock
+            scripts/eval/run-production-canary.sh
+          '
       - name: Mint a short-lived non-personal environment-writer token
         id: rotator-token
         if: always()

@@ -27,10 +27,16 @@ grep -Fq "HEYFOOD_CANARY_ROTATOR_APP_ID" "$workflow"
 grep -Fq "HEYFOOD_CANARY_ROTATOR_APP_PRIVATE_KEY" "$workflow"
 grep -Fq "permission-environments: write" "$workflow"
 grep -Fq "gh attestation verify" "$workflow"
+grep -Fq "sudo apt-get install --yes dbus-x11 gnome-keyring" "$workflow"
+grep -Fq "dbus-run-session -- bash -euo pipefail -c" "$workflow"
+grep -Fq "gnome-keyring-daemon --unlock" "$workflow"
 grep -Fq "scripts/eval/run-production-canary.sh" "$workflow"
 grep -Fq "scripts/eval/triage-production-canary.sh" "$workflow"
 grep -Fq "scripts/eval/finalize-production-canary.sh" "$workflow"
 grep -Fq "scripts/eval/rotate-production-canary-state.sh" "$workflow"
+initialize_line=$(grep -nF "name: Initialize fail-safe evidence" "$workflow" | cut -d: -f1)
+secret_service_line=$(grep -nF "name: Install the Linux Secret Service runtime" "$workflow" | cut -d: -f1)
+test "$initialize_line" -lt "$secret_service_line"
 if grep -Eq -- \
   'grocery[[:space:]]+(add|remove|state|never|confirm)|--decision[[:space:]]+(accept|cancel)' \
   "$workflow" "$runner"; then
