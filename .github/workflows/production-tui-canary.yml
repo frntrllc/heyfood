@@ -22,16 +22,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  recurrence-gate:
+    name: Decide whether scheduled recurrence may run
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      run: ${{ steps.decision.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Block scheduled recurrence while an incident is open
+        id: decision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE_ENABLED: ${{ vars.HEYFOOD_PRODUCTION_CANARY_ENABLED }}
+          VERSION: ${{ inputs.version || '0.9.0' }}
+        run: |
+          set -euo pipefail
+          run=$(
+            scripts/eval/check-production-canary-recurrence.sh \
+              "$EVENT_NAME" \
+              "$SCHEDULE_ENABLED" \
+              "$VERSION" \
+              "$GITHUB_REPOSITORY"
+          )
+          echo "run=$run" >>"$GITHUB_OUTPUT"
+
   production-canary:
     name: Public Linux x64 against production
-    if: >-
-      ${{
-        github.ref == 'refs/heads/main' &&
-        (
-          github.event_name == 'workflow_dispatch' ||
-          vars.HEYFOOD_PRODUCTION_CANARY_ENABLED == 'true'
-        )
-      }}
+    needs: recurrence-gate
+    if: ${{ needs.recurrence-gate.outputs.run == 'true' }}
     runs-on: ubuntu-22.04
     environment: native-eval
     env:
@@ -236,10 +261,10 @@ jobs:
   triage:
     name: Triage production canary
     if: ${{ always() && needs.production-canary.result != 'skipped' }}
-    needs: production-canary
+    needs: [recurrence-gate, production-canary]
     runs-on: ubuntu-22.04
     permissions:
-      actions: write
+      actions: read
       contents: read
       issues: write
     steps:
@@ -279,7 +304,6 @@ jobs:
           VERSION: ${{ inputs.version || '0.9.0' }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           HEYFOOD_CANARY_JOB_RESULT: ${{ needs.production-canary.result }}
-          HEYFOOD_CANARY_ENABLEMENT_VARIABLE: HEYFOOD_PRODUCTION_CANARY_ENABLED
           HEYFOOD_CANARY_INCIDENT_ASSIGNEE: ${{ vars.HEYFOOD_PRODUCTION_CANARY_ASSIGNEE }}
         run: |
           set -euo pipefail
