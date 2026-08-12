@@ -108,8 +108,11 @@ deterministic contract, credential, rotation, cleanup, or safety failure opens
 an incident immediately. Because those failures cannot self-heal through an
 identical invocation, triage assigns an explicit owner. An open production-
 canary incident is the suspension authority: the recurrence gate blocks every
-scheduled production invocation while one is open, but manual qualification
-remains available. A passing manual run closes exact-artifact incidents; an
+scheduled production invocation while one is open and authenticated by the
+GitHub Actions bot identity, `bug` label, private triage marker, and exact
+versioned fingerprint grammar. Publicly authored lookalike issues carry no
+suspension authority. Manual qualification remains available. A passing manual
+run closes exact-artifact incidents; an
 operator may re-enable the administrative schedule flag only after reviewing
 that recovery evidence. An availability failure must occur in
 two consecutive completed canary runs for the same public release version,

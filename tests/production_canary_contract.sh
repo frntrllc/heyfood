@@ -60,15 +60,37 @@ cat >"$recurrence_bin/gh" <<'GH'
 #!/usr/bin/env bash
 set -euo pipefail
 test "$1 $2" = "issue list"
-printf '%s\n' "${HEYFOOD_CANARY_OPEN_INCIDENTS:-0}"
+case "${HEYFOOD_CANARY_ISSUE_FIXTURE:-none}" in
+  none) printf '%s\n' '[]' ;;
+  authentic)
+    printf '%s\n' '[{"author":{"is_bot":true,"login":"app/github-actions"},"labels":[{"name":"bug"}],"body":"<!-- heyfood-production-canary -->\nincident","title":"[Production canary][P0] credential (heyfood-production-canary-v1:v0.9.0:x86_64-unknown-linux-gnu:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:credential)"}]'
+    ;;
+  spoof)
+    printf '%s\n' '[{"author":{"is_bot":false,"login":"external-user"},"labels":[{"name":"bug"}],"body":"<!-- heyfood-production-canary -->\nincident","title":"[Production canary][P0] credential (heyfood-production-canary-v1:v0.9.0:x86_64-unknown-linux-gnu:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:credential)"}]'
+    ;;
+  malformed)
+    printf '%s\n' '[{"author":{"is_bot":true,"login":"app/github-actions"},"labels":[{"name":"bug"}],"body":"<!-- heyfood-production-canary -->\nincident","title":"[Production canary] heyfood-production-canary-v1:v0.9.0:"}]'
+    ;;
+  api_error) exit 1 ;;
+  *) exit 64 ;;
+esac
 GH
 chmod 0700 "$recurrence_bin/gh"
 test "$(PATH="$recurrence_bin:$PATH" "$recurrence" workflow_dispatch false 0.9.0 frntrllc/heyfood)" = true
 test "$(PATH="$recurrence_bin:$PATH" "$recurrence" schedule false 0.9.0 frntrllc/heyfood)" = false
-test "$(PATH="$recurrence_bin:$PATH" HEYFOOD_CANARY_OPEN_INCIDENTS=1 \
+test "$(PATH="$recurrence_bin:$PATH" HEYFOOD_CANARY_ISSUE_FIXTURE=authentic \
   "$recurrence" schedule true 0.9.0 frntrllc/heyfood)" = false
-test "$(PATH="$recurrence_bin:$PATH" HEYFOOD_CANARY_OPEN_INCIDENTS=0 \
+test "$(PATH="$recurrence_bin:$PATH" HEYFOOD_CANARY_ISSUE_FIXTURE=none \
   "$recurrence" schedule true 0.9.0 frntrllc/heyfood)" = true
+test "$(PATH="$recurrence_bin:$PATH" HEYFOOD_CANARY_ISSUE_FIXTURE=spoof \
+  "$recurrence" schedule true 0.9.0 frntrllc/heyfood)" = true
+test "$(PATH="$recurrence_bin:$PATH" HEYFOOD_CANARY_ISSUE_FIXTURE=malformed \
+  "$recurrence" schedule true 0.9.0 frntrllc/heyfood)" = true
+if PATH="$recurrence_bin:$PATH" HEYFOOD_CANARY_ISSUE_FIXTURE=api_error \
+  "$recurrence" schedule true 0.9.0 frntrllc/heyfood; then
+  echo "production recurrence gate failed open on an issue API error" >&2
+  exit 1
+fi
 if ! command -v timeout >/dev/null 2>&1; then
   cat >"$scratch/timeout" <<'TIMEOUT'
 #!/usr/bin/env bash

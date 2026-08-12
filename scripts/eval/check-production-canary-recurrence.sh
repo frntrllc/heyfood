@@ -33,13 +33,25 @@ if [[ "$schedule_enabled" != "true" ]]; then
   exit 0
 fi
 
-open_incidents=$(gh issue list \
+issues=$(gh issue list \
   --repo "$repository" \
   --state open \
   --search "\"heyfood-production-canary-v1:v$version:\" in:title" \
   --limit 100 \
-  --json title \
-  --jq "map(select(.title | startswith(\"[Production canary]\") and contains(\"heyfood-production-canary-v1:v$version:\"))) | length")
+  --json title,body,author,labels)
+open_incidents=$(jq -r --arg version "$version" '
+  map(select(
+    .author.is_bot == true and
+    .author.login == "app/github-actions" and
+    any(.labels[]?; .name == "bug") and
+    (.body | startswith("<!-- heyfood-production-canary -->")) and
+    (.title | capture(
+      "^\\[Production canary\\]\\[P[01]\\] (?<category>availability|contract|credential|safety|evaluation_infrastructure) \\(heyfood-production-canary-v1:v(?<version>[0-9]+\\.[0-9]+\\.[0-9]+):(?<target>[a-z0-9_][a-z0-9_.-]{1,79}):(?<digest>[0-9a-f]{64}|unavailable):(?<fingerprint_category>availability|contract|credential|safety|evaluation_infrastructure)\\)$"
+    )) as $match |
+    $match.version == $version and
+    $match.category == $match.fingerprint_category
+  )) | length
+' <<<"$issues")
 [[ "$open_incidents" =~ ^[0-9]+$ ]] || {
   echo "invalid open-incident count" >&2
   exit 65
