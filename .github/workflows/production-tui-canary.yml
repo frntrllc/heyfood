@@ -239,7 +239,7 @@ jobs:
     needs: production-canary
     runs-on: ubuntu-22.04
     permissions:
-      actions: read
+      actions: write
       contents: read
       issues: write
     steps:
@@ -279,6 +279,8 @@ jobs:
           VERSION: ${{ inputs.version || '0.9.0' }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           HEYFOOD_CANARY_JOB_RESULT: ${{ needs.production-canary.result }}
+          HEYFOOD_CANARY_ENABLEMENT_VARIABLE: HEYFOOD_PRODUCTION_CANARY_ENABLED
+          HEYFOOD_CANARY_INCIDENT_ASSIGNEE: ${{ vars.HEYFOOD_PRODUCTION_CANARY_ASSIGNEE }}
         run: |
           set -euo pipefail
           current=$(find current-evidence -type f -name production-canary.json -print -quit)

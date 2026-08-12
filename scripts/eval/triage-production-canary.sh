@@ -11,10 +11,22 @@ previous=$2
 version=$3
 run_url=$4
 repository=${5:-${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}}
+enablement_variable=${HEYFOOD_CANARY_ENABLEMENT_VARIABLE:-}
+incident_assignee=${HEYFOOD_CANARY_INCIDENT_ASSIGNEE:-}
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
   echo "invalid public version" >&2
   exit 64
 }
+if [[ -n "$enablement_variable" &&
+  ! "$enablement_variable" =~ ^[A-Z][A-Z0-9_]{0,79}$ ]]; then
+  echo "invalid production canary enablement variable" >&2
+  exit 64
+fi
+if [[ -n "$incident_assignee" &&
+  ! "$incident_assignee" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]]; then
+  echo "invalid production canary incident assignee" >&2
+  exit 64
+fi
 
 jq -e --arg version "$version" '
   .schema_version == 1 and
@@ -81,6 +93,26 @@ close_category_for_digest() {
       --repo "$repository" \
       --comment "Recovered in the production canary for public v$version: $run_url"
   fi
+}
+
+suspend_non_self_healing_recurrence() {
+  local number=$1
+  local current
+  [[ -n "$enablement_variable" ]] || return 0
+  current=$(gh variable get "$enablement_variable" --repo "$repository")
+  case "$current" in
+    true)
+      gh variable set "$enablement_variable" --repo "$repository" --body false
+      gh issue comment "$number" \
+        --repo "$repository" \
+        --body "Scheduled recurrence was suspended after this deterministic, non-self-healing failure. Manual qualification remains available. Re-enable only after a passing manual production canary: $run_url"
+      ;;
+    false) ;;
+    *)
+      echo "production canary enablement variable has an invalid value" >&2
+      exit 65
+      ;;
+  esac
 }
 
 if [[ "$status" == "passed" ]]; then
@@ -160,9 +192,29 @@ if [[ -n "$number" ]]; then
     --title "$title" \
     --body-file "$body"
 else
-  gh issue create \
+  created=$(gh issue create \
     --repo "$repository" \
     --label bug \
     --title "$title" \
-    --body-file "$body"
+    --body-file "$body")
+  number=${created##*/}
+  [[ "$number" =~ ^[0-9]+$ ]] || {
+    echo "could not resolve the created production canary issue" >&2
+    exit 65
+  }
 fi
+
+if [[ -n "$incident_assignee" ]]; then
+  gh issue edit "$number" --repo "$repository" --add-assignee "$incident_assignee"
+fi
+
+case "$category" in
+  contract | credential | safety | evaluation_infrastructure)
+    suspend_non_self_healing_recurrence "$number"
+    ;;
+  availability) ;;
+  *)
+    echo "unknown production canary failure category" >&2
+    exit 65
+    ;;
+esac

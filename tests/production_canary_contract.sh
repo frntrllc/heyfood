@@ -26,6 +26,9 @@ grep -Fq "HEYFOOD_CANARY_STATE_BUNDLE_B64" "$workflow"
 grep -Fq "HEYFOOD_CANARY_ROTATOR_APP_ID" "$workflow"
 grep -Fq "HEYFOOD_CANARY_ROTATOR_APP_PRIVATE_KEY" "$workflow"
 grep -Fq "permission-environments: write" "$workflow"
+grep -Fq "actions: write" "$workflow"
+grep -Fq "HEYFOOD_CANARY_ENABLEMENT_VARIABLE: HEYFOOD_PRODUCTION_CANARY_ENABLED" "$workflow"
+grep -Fq "HEYFOOD_CANARY_INCIDENT_ASSIGNEE: \${{ vars.HEYFOOD_PRODUCTION_CANARY_ASSIGNEE }}" "$workflow"
 grep -Fq "gh attestation verify" "$workflow"
 grep -Fq "sudo apt-get install --yes dbus-x11 gnome-keyring" "$workflow"
 grep -Fq "dbus-run-session -- bash -euo pipefail -c" "$workflow"
@@ -182,6 +185,16 @@ cat >"$triage_bin/gh" <<'GH'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1 $2" == "issue list" ]]; then
+  printf '%s' "${HEYFOOD_CANARY_EXISTING_ISSUE:-}"
+  exit 0
+fi
+if [[ "$1 $2" == "issue create" ]]; then
+  printf '%s\n' "$1 $2" >>"${HEYFOOD_CANARY_TRIAGE_LOG:?}"
+  printf '%s\n' "https://example.invalid/issues/123"
+  exit 0
+fi
+if [[ "$1 $2" == "variable get" ]]; then
+  printf '%s\n' "${HEYFOOD_CANARY_ENABLEMENT_STATE:-true}"
   exit 0
 fi
 printf '%s\n' "$1 $2" >>"${HEYFOOD_CANARY_TRIAGE_LOG:?}"
@@ -190,6 +203,8 @@ chmod 0700 "$triage_bin/gh"
 
 PATH="$triage_bin:$PATH" \
   HEYFOOD_CANARY_TRIAGE_LOG="$triage_log" \
+  HEYFOOD_CANARY_ENABLEMENT_VARIABLE=HEYFOOD_PRODUCTION_CANARY_ENABLED \
+  HEYFOOD_CANARY_INCIDENT_ASSIGNEE=release-owner \
   "$triage" \
   "$evidence-availability/production-canary.json" \
   - \
@@ -237,6 +252,8 @@ grep -Fqx "issue create" "$triage_log"
 : >"$triage_log"
 PATH="$triage_bin:$PATH" \
   HEYFOOD_CANARY_TRIAGE_LOG="$triage_log" \
+  HEYFOOD_CANARY_ENABLEMENT_VARIABLE=HEYFOOD_PRODUCTION_CANARY_ENABLED \
+  HEYFOOD_CANARY_INCIDENT_ASSIGNEE=release-owner \
   "$triage" \
   "$evidence-mutation/production-canary.json" \
   - \
@@ -244,6 +261,28 @@ PATH="$triage_bin:$PATH" \
   https://example.invalid/safety \
   frntrllc/heyfood
 grep -Fqx "issue create" "$triage_log"
+grep -Fqx "issue edit" "$triage_log"
+grep -Fqx "variable set" "$triage_log"
+grep -Fqx "issue comment" "$triage_log"
+
+: >"$triage_log"
+PATH="$triage_bin:$PATH" \
+  HEYFOOD_CANARY_TRIAGE_LOG="$triage_log" \
+  HEYFOOD_CANARY_ENABLEMENT_STATE=false \
+  HEYFOOD_CANARY_EXISTING_ISSUE=123 \
+  HEYFOOD_CANARY_ENABLEMENT_VARIABLE=HEYFOOD_PRODUCTION_CANARY_ENABLED \
+  HEYFOOD_CANARY_INCIDENT_ASSIGNEE=release-owner \
+  "$triage" \
+  "$evidence-mutation/production-canary.json" \
+  - \
+  0.5.0 \
+  https://example.invalid/safety-repeat \
+  frntrllc/heyfood
+grep -Fqx "issue edit" "$triage_log"
+if grep -Eq '^(variable set|issue comment)$' "$triage_log"; then
+  echo "a suspended deterministic incident produced repeat recurrence noise" >&2
+  exit 1
+fi
 
 : >"$triage_log"
 postcondition_failure="$scratch/postcondition-failure.json"
@@ -259,6 +298,8 @@ jq -e '
 PATH="$triage_bin:$PATH" \
   HEYFOOD_CANARY_TRIAGE_LOG="$triage_log" \
   HEYFOOD_CANARY_JOB_RESULT=failure \
+  HEYFOOD_CANARY_ENABLEMENT_VARIABLE=HEYFOOD_PRODUCTION_CANARY_ENABLED \
+  HEYFOOD_CANARY_INCIDENT_ASSIGNEE=release-owner \
   "$triage" \
   "$postcondition_failure" \
   - \
@@ -266,6 +307,9 @@ PATH="$triage_bin:$PATH" \
   https://example.invalid/rotation \
   frntrllc/heyfood
 grep -Fqx "issue create" "$triage_log"
+grep -Fqx "issue edit" "$triage_log"
+grep -Fqx "variable set" "$triage_log"
+grep -Fqx "issue comment" "$triage_log"
 
 rotation_bin="$scratch/rotation-bin"
 rotation_capture="$scratch/rotation-bundle"
