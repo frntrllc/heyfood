@@ -105,11 +105,22 @@ and sanitized error type enter uploaded evidence. Raw prompts, responses,
 names, emails, dietary details, tokens, conversation IDs, household IDs, and
 list IDs remain in a private temporary directory and are destroyed. A
 deterministic contract, credential, rotation, cleanup, or safety failure opens
-an incident immediately. An availability failure must occur in two consecutive
-completed canary runs for the same public release version, target, and archive
-digest before it opens a product incident. Incident fingerprints and recovery
-are exact-artifact-bound so a replaced or different archive cannot satisfy the
-consecutive-failure or closure rule.
+an incident immediately. Because those failures cannot self-heal through an
+identical invocation, triage assigns an explicit owner and suspends scheduled
+recurrence after preserving the first failure evidence. Manual qualification
+remains available. Recurrence may be re-enabled only after a manual run passes
+and its recovery evidence is reviewed. An availability failure must occur in
+two consecutive completed canary runs for the same public release version,
+target, and archive digest before it opens a product incident. Incident
+fingerprints and recovery are exact-artifact-bound so a replaced or different
+archive cannot satisfy the consecutive-failure or closure rule.
+
+The triage job receives a short-lived, job-scoped `actions: write` GitHub token
+because GitHub does not offer a narrower repository-variable permission. The
+workflow uses that authority only to set
+`HEYFOOD_PRODUCTION_CANARY_ENABLED=false`; incident assignment and comments use
+`issues: write`. The token is never exposed to the public artifact or the
+protected canary-credential job.
 
 Activation order is deliberately strict:
 
@@ -124,8 +135,12 @@ Activation order is deliberately strict:
 6. Install the repository-only canary-rotator GitHub App and its protected
    private key; acknowledge the documented `Environments: write` residual
    scope.
-7. Dispatch the workflow from `main` and inspect the privacy-safe evidence.
-8. Set `HEYFOOD_PRODUCTION_CANARY_ENABLED=true` only after that first run
+7. Set `HEYFOOD_PRODUCTION_CANARY_ASSIGNEE` to an active repository member who
+   owns production-canary incidents. Triage treats a missing or unassignable
+   owner as an operational failure, but disables recurrence before attempting
+   assignment so that the defect cannot create repeated scheduled failures.
+8. Dispatch the workflow from `main` and inspect the privacy-safe evidence.
+9. Set `HEYFOOD_PRODUCTION_CANARY_ENABLED=true` only after that first run
    passes; the six-hour schedule then becomes authoritative.
 
 To revoke the canary, first set
