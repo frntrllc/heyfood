@@ -22,10 +22,12 @@ if [[ -n "$enablement_variable" &&
   echo "invalid production canary enablement variable" >&2
   exit 64
 fi
-if [[ -n "$incident_assignee" &&
+assignee_configuration_error=
+if [[ -n "$enablement_variable" && -z "$incident_assignee" ]]; then
+  assignee_configuration_error="production canary incident assignee is required when recurrence suspension is configured"
+elif [[ -n "$incident_assignee" &&
   ! "$incident_assignee" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]]; then
-  echo "invalid production canary incident assignee" >&2
-  exit 64
+  assignee_configuration_error="invalid production canary incident assignee"
 fi
 
 jq -e --arg version "$version" '
@@ -204,10 +206,6 @@ else
   }
 fi
 
-if [[ -n "$incident_assignee" ]]; then
-  gh issue edit "$number" --repo "$repository" --add-assignee "$incident_assignee"
-fi
-
 case "$category" in
   contract | credential | safety | evaluation_infrastructure)
     suspend_non_self_healing_recurrence "$number"
@@ -218,3 +216,11 @@ case "$category" in
     exit 65
     ;;
 esac
+
+if [[ -n "$assignee_configuration_error" ]]; then
+  echo "$assignee_configuration_error" >&2
+  exit 65
+fi
+if [[ -n "$incident_assignee" ]]; then
+  gh issue edit "$number" --repo "$repository" --add-assignee "$incident_assignee"
+fi

@@ -135,8 +135,12 @@ Activation order is deliberately strict:
 6. Install the repository-only canary-rotator GitHub App and its protected
    private key; acknowledge the documented `Environments: write` residual
    scope.
-7. Dispatch the workflow from `main` and inspect the privacy-safe evidence.
-8. Set `HEYFOOD_PRODUCTION_CANARY_ENABLED=true` only after that first run
+7. Set `HEYFOOD_PRODUCTION_CANARY_ASSIGNEE` to an active repository member who
+   owns production-canary incidents. Triage treats a missing or unassignable
+   owner as an operational failure, but disables recurrence before attempting
+   assignment so that the defect cannot create repeated scheduled failures.
+8. Dispatch the workflow from `main` and inspect the privacy-safe evidence.
+9. Set `HEYFOOD_PRODUCTION_CANARY_ENABLED=true` only after that first run
    passes; the six-hour schedule then becomes authoritative.
 
 To revoke the canary, first set
