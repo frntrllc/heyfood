@@ -57,10 +57,14 @@ case "$target" in
     ;;
 esac
 readonly expected_machine expected_interpreter expected_loader_needed
-expected_needed_text=$(
-  printf '%s\n%s\n' "$expected_loader_needed" "$base_expected_needed" |
-    LC_ALL=C sort -u
-)
+if [[ "$kind" == "product" ]]; then
+  expected_needed_text=$(
+    printf '%s\n%s\n' "$expected_loader_needed" "$base_expected_needed" |
+      LC_ALL=C sort -u
+  )
+else
+  expected_needed_text=$(printf '%s\n' "$base_expected_needed" | LC_ALL=C sort -u)
+fi
 readonly expected_needed_text
 
 machine=$(readelf -h -- "$binary" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')

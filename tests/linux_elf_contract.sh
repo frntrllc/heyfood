@@ -33,9 +33,9 @@ case "$1" in
     printf '      [Requesting program interpreter: %s]\n' "${MOCK_INTERPRETER:-/lib64/ld-linux-x86-64.so.2}"
     ;;
   -d)
-    printf ' 0x0000000000000001 (NEEDED) Shared library: [%s]\n' \
-      "${MOCK_LOADER_NEEDED:-ld-linux-x86-64.so.2}"
     if [[ "${MOCK_KIND:-product}" == "product" ]]; then
+      printf ' 0x0000000000000001 (NEEDED) Shared library: [%s]\n' \
+        "${MOCK_LOADER_NEEDED:-ld-linux-x86-64.so.2}"
       for library in libc.so.6 libdbus-1.so.3 libgcc_s.so.1 libm.so.6; do
         printf ' 0x0000000000000001 (NEEDED) Shared library: [%s]\n' "$library"
       done
@@ -75,7 +75,7 @@ jq -e '
 
 MOCK_KIND=verifier PATH="$CASE_DIR/bin:$PATH" "$VERIFIER" \
   "$CASE_DIR/heyfood" verifier x86_64-unknown-linux-gnu "$CASE_DIR/verifier.json"
-jq -e '.needed == ["ld-linux-x86-64.so.2", "libc.so.6", "libgcc_s.so.1"]' \
+jq -e '.needed == ["libc.so.6", "libgcc_s.so.1"]' \
   "$CASE_DIR/verifier.json" >/dev/null || fail "verifier boundary is incomplete"
 
 if MOCK_GLIBC=2.35 PATH="$CASE_DIR/bin:$PATH" "$VERIFIER" \
