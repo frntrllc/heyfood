@@ -9,7 +9,7 @@ artifact or the protected release environment already exists.
 | Platform | Minimum | GA targets | Native dependencies and fallback |
 |---|---|---|---|
 | macOS | macOS 13 | `aarch64-apple-darwin`, `x86_64-apple-darwin` | Keychain/Security framework; CoreAudio for native voice. Typed input remains available when microphone permission or audio is unavailable. |
-| Linux | glibc 2.28 | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | AlmaLinux 8/manylinux-class build baseline; Secret Service requires a D-Bus session; native voice declares its ALSA/Pulse/PipeWire bridge. Missing services must fail boundedly to owner-only credentials and typed input. Musl is not a GA claim. |
+| Linux | glibc 2.34 | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | Native Ubuntu runners; default credentials use Secret Service and require D-Bus. Missing or locked native storage fails closed; owner-only file storage is a separate explicit opt-in. Native voice and musl are not default-release claims. |
 | Windows | Windows 11 23H2 or Windows Server 2022 | `x86_64-pc-windows-msvc` | ConPTY, Credential Manager, owner-only DACLs, and the selected native audio backend. Windows ARM64 is not a GA claim. |
 
 The Rust toolchain floor is `1.94.0`. Reqwest uses Rustls; OpenSSL and

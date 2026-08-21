@@ -255,7 +255,7 @@ fn render_window(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     let window = Block::default()
         .borders(Borders::ALL)
         .border_set(theme::BORDER)
-        .border_style(semantic_style(model, Color::DarkGray));
+        .border_style(semantic_style(model, theme::CHROME));
     let inner = window.inner(area);
     frame.render_widget(window, area);
 
@@ -282,7 +282,7 @@ fn render_window(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
 }
 
 fn render_window_header(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
-    let style = semantic_style(model, Color::DarkGray);
+    let style = semantic_style(model, theme::CHROME);
     frame.render_widget(
         Paragraph::new(Span::styled(format!(" {}", model.location), style)),
         area,
@@ -323,7 +323,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Ask a question when you’re ready.",
-            semantic_style(model, Color::DarkGray),
+            semantic_style(model, theme::CHROME),
         )));
     }
     for entry in model.scrollback.entries() {
@@ -334,9 +334,9 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
             latest_assistant_start = Some(wrapped_line_count(&lines, content_width));
         }
         let (label, color) = match entry.speaker {
-            Speaker::User => ("You", Color::Cyan),
+            Speaker::User => ("You", theme::USER),
             Speaker::Assistant => ("hey.food", theme::ACCENT),
-            Speaker::Notice => ("Notice", Color::Yellow),
+            Speaker::Notice => ("Notice", theme::NOTICE),
         };
         lines.push(Line::from(Span::styled(
             label,
@@ -345,7 +345,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         if entry.text.is_empty() && entry.streaming {
             lines.push(Line::from(Span::styled(
                 "…",
-                semantic_style(model, Color::DarkGray),
+                semantic_style(model, theme::CHROME),
             )));
         } else {
             lines.extend(entry.text.lines().map(|line| Line::from(line.to_owned())));
@@ -355,7 +355,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             activity.clone(),
-            semantic_style(model, Color::Yellow),
+            semantic_style(model, theme::NOTICE),
         )));
     }
     let total = wrapped_line_count(&lines, content_width);
@@ -411,7 +411,7 @@ fn render_onboarding_choice_panel(
     let header = vec![
         Line::from(Span::styled(
             context,
-            semantic_style(model, Color::Cyan).add_modifier(Modifier::BOLD),
+            semantic_style(model, theme::FOCUS).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             panel.title.clone(),
@@ -419,7 +419,7 @@ fn render_onboarding_choice_panel(
         )),
         Line::from(Span::styled(
             truncate_to_width(&panel.instruction, area.width as usize),
-            semantic_style(model, Color::DarkGray),
+            semantic_style(model, theme::CHROME),
         )),
     ];
     frame.render_widget(Paragraph::new(header), regions[0]);
@@ -456,9 +456,9 @@ fn render_onboarding_choice_panel(
             let label = truncate_to_width(&choice.label, cell_width.saturating_sub(prefix_width));
             let content = pad_to_width(&format!("{prefix}{label}"), cell_width);
             let style = if focused {
-                semantic_style(model, Color::Cyan).add_modifier(Modifier::BOLD)
+                semantic_style(model, theme::FOCUS).add_modifier(Modifier::BOLD)
             } else if choice.selected {
-                semantic_style(model, Color::Green)
+                semantic_style(model, theme::SELECTED)
             } else {
                 Style::default()
             };
@@ -490,11 +490,11 @@ fn render_onboarding_choice_panel(
         Paragraph::new(vec![
             Line::from(Span::styled(
                 truncate_to_width(&focused, area.width as usize),
-                semantic_style(model, Color::Green),
+                semantic_style(model, theme::SELECTED),
             )),
             Line::from(Span::styled(
                 truncate_to_width(&summary, area.width as usize),
-                semantic_style(model, Color::DarkGray),
+                semantic_style(model, theme::CHROME),
             )),
         ]),
         regions[2],
@@ -544,11 +544,11 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(theme::BORDER)
-        .border_style(semantic_style(model, Color::DarkGray))
+        .border_style(semantic_style(model, theme::CHROME))
         .title_bottom(
             Line::from(Span::styled(
                 format!(" hey.food ({status}) "),
-                semantic_style(model, Color::DarkGray),
+                semantic_style(model, theme::CHROME),
             ))
             .right_aligned(),
         );
@@ -568,7 +568,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         &model.draft
     };
     let style = if model.draft.is_empty() {
-        semantic_style(model, Color::DarkGray)
+        semantic_style(model, theme::CHROME)
     } else {
         Style::default()
     };
@@ -591,7 +591,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
                 } else {
                     format!("{:<cell_width$}", spec.name)
                 };
-                spans.push(Span::styled(command, semantic_style(model, Color::Cyan)));
+                spans.push(Span::styled(command, semantic_style(model, theme::FOCUS)));
             }
             lines.push(Line::from(spans));
         }
@@ -600,9 +600,9 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("  {:<14}", spec.usage),
-                    semantic_style(model, Color::Cyan),
+                    semantic_style(model, theme::FOCUS),
                 ),
-                Span::styled(spec.description, semantic_style(model, Color::DarkGray)),
+                Span::styled(spec.description, semantic_style(model, theme::CHROME)),
             ]));
         }
     }
@@ -648,7 +648,7 @@ fn render_tip(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         .to_owned()
     };
     frame.render_widget(
-        Paragraph::new(text).style(semantic_style(model, Color::DarkGray)),
+        Paragraph::new(text).style(semantic_style(model, theme::CHROME)),
         area,
     );
 }
@@ -658,11 +658,11 @@ fn render_version_footer(frame: &mut Frame<'_>, area: Rect, model: &AppModel) {
         Span::styled("heyfood", Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(
             format!("  {} ", crate::VERSION),
-            semantic_style(model, Color::DarkGray),
+            semantic_style(model, theme::CHROME),
         ),
         Span::styled(
             format!("[{CHANNEL}] "),
-            semantic_style(model, Color::DarkGray),
+            semantic_style(model, theme::CHROME),
         ),
     ]);
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), area);

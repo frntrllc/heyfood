@@ -52,7 +52,7 @@ jobs:
           fi
       - name: Lint distribution scripts
         shell: bash
-        run: shellcheck install.sh tests/installer_contract.sh tests/release_scope_contract.sh tests/version_documentation_contract.sh tests/continuous_eval_contract.sh scripts/eval/*.sh scripts/release/*.sh packaging/macos/*.sh
+        run: shellcheck install.sh tests/installer_contract.sh tests/linux_elf_contract.sh tests/linux_omarchy_contract.sh tests/release_scope_contract.sh tests/version_documentation_contract.sh tests/continuous_eval_contract.sh scripts/eval/*.sh scripts/release/*.sh packaging/macos/*.sh
       - name: Test the hosted-installer contract
         shell: bash
         run: bash tests/installer_contract.sh
@@ -71,6 +71,14 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: bash tests/production_canary_contract.sh
+      - name: Test the Linux ELF policy contract
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash tests/linux_elf_contract.sh
+      - name: Test the Linux and Omarchy release contract
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash tests/linux_omarchy_contract.sh
 
   native-cli-smoke:
     name: Native CLI / ${{ matrix.os }}
@@ -166,9 +174,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify release helper executable modes
         shell: bash
-        run: test -x scripts/release/native-state-declaration.sh
+        run: |
+          test -x scripts/release/native-state-declaration.sh
+          test -x scripts/release/verify-linux-elf.sh
       - name: Install Linux native credential build dependencies
-        run: sudo apt-get update && sudo apt-get install --yes libdbus-1-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install --yes binutils libdbus-1-dev pkg-config
       - name: Build and package the complete native-state fixture set
         shell: bash
         run: |
@@ -298,7 +308,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes dbus-x11 gnome-keyring libdbus-1-dev pkg-config
+          sudo apt-get install --yes binutils dbus-x11 gnome-keyring libdbus-1-dev pkg-config
       - name: Install deterministic macOS archive tooling
         if: runner.os == 'macOS'
         run: brew install gnu-tar
@@ -397,6 +407,22 @@ jobs:
             echo "HEYFOOD_CANDIDATE_ARCHIVE=$GITHUB_WORKSPACE/candidate-dist/$archive"
             echo "HEYFOOD_CANDIDATE_VERIFIER_ARCHIVE=$GITHUB_WORKSPACE/candidate-dist/$verifier_archive"
           } >>"$GITHUB_ENV"
+      - name: Record the protected Linux ELF boundary
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          scripts/release/verify-linux-elf.sh \
+            "target/$TARGET/release/heyfood" \
+            product \
+            "$TARGET" \
+            "candidate-evidence/linux-elf-product-$TARGET.json"
+          scripts/release/verify-linux-elf.sh \
+            "target/$TARGET/release/heyfood-installer" \
+            verifier \
+            "$TARGET" \
+            "candidate-evidence/linux-elf-verifier-$TARGET.json"
       - name: Create an ephemeral macOS qualification keychain
         if: runner.os == 'macOS'
         shell: bash

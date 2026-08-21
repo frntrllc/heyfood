@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+readonly ROOT
+
 if [[ $# -lt 3 || $# -gt 5 ]]; then
   echo "usage: smoke-archive.sh RELEASE_DIRECTORY VERSION TARGET [--complete-set-verified] [--native-state]" >&2
   exit 64
@@ -130,6 +133,12 @@ if [[ "$native_state_release" == "true" ]]; then
   verifier="$staging/installer/heyfood-installer"
   test -f "$verifier"
   test -x "$verifier"
+fi
+if [[ "$target" == *-unknown-linux-gnu ]]; then
+  "$ROOT/scripts/release/verify-linux-elf.sh" "$binary" product "$target"
+  if [[ "$native_state_release" == "true" ]]; then
+    "$ROOT/scripts/release/verify-linux-elf.sh" "$verifier" verifier "$target"
+  fi
 fi
 if [[ "$target" == *-apple-darwin ]]; then
   if [[ -z "${HEYFOOD_APPLE_TEAM_ID:-}" ]]; then

@@ -53,6 +53,9 @@ jobs:
       VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Linux ELF inspection tooling
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes binutils
       - name: Download the complete public release set
         shell: bash
         run: |
