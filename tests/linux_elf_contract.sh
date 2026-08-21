@@ -33,6 +33,8 @@ case "$1" in
     printf '      [Requesting program interpreter: %s]\n' "${MOCK_INTERPRETER:-/lib64/ld-linux-x86-64.so.2}"
     ;;
   -d)
+    printf ' 0x0000000000000001 (NEEDED) Shared library: [%s]\n' \
+      "${MOCK_LOADER_NEEDED:-ld-linux-x86-64.so.2}"
     if [[ "${MOCK_KIND:-product}" == "product" ]]; then
       for library in libc.so.6 libdbus-1.so.3 libgcc_s.so.1 libm.so.6; do
         printf ' 0x0000000000000001 (NEEDED) Shared library: [%s]\n' "$library"
@@ -62,12 +64,18 @@ jq -e '
   .target == "x86_64-unknown-linux-gnu" and
   .maximum_supported_glibc == "2.34" and
   .maximum_observed_glibc == "2.34" and
-  .needed == ["libc.so.6", "libdbus-1.so.3", "libgcc_s.so.1", "libm.so.6"]
+  .needed == [
+    "ld-linux-x86-64.so.2",
+    "libc.so.6",
+    "libdbus-1.so.3",
+    "libgcc_s.so.1",
+    "libm.so.6"
+  ]
 ' "$CASE_DIR/product.json" >/dev/null || fail "product evidence is incomplete"
 
 MOCK_KIND=verifier PATH="$CASE_DIR/bin:$PATH" "$VERIFIER" \
   "$CASE_DIR/heyfood" verifier x86_64-unknown-linux-gnu "$CASE_DIR/verifier.json"
-jq -e '.needed == ["libc.so.6", "libgcc_s.so.1"]' \
+jq -e '.needed == ["ld-linux-x86-64.so.2", "libc.so.6", "libgcc_s.so.1"]' \
   "$CASE_DIR/verifier.json" >/dev/null || fail "verifier boundary is incomplete"
 
 if MOCK_GLIBC=2.35 PATH="$CASE_DIR/bin:$PATH" "$VERIFIER" \
@@ -87,5 +95,5 @@ fi
 
 grep -Fq 'maximum_glibc="2.34"' "$VERIFIER" ||
   fail "the glibc ceiling must remain explicit"
-grep -Fq "expected_needed_text=\$'libc.so.6\\nlibdbus-1.so.3\\nlibgcc_s.so.1\\nlibm.so.6'" \
+grep -Fq "base_expected_needed=\$'libc.so.6\\nlibdbus-1.so.3\\nlibgcc_s.so.1\\nlibm.so.6'" \
   "$VERIFIER" || fail "the product DT_NEEDED allowlist must remain explicit"

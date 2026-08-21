@@ -31,30 +31,37 @@ command -v jq >/dev/null 2>&1 || {
 
 case "$kind" in
   product)
-    expected_needed_text=$'libc.so.6\nlibdbus-1.so.3\nlibgcc_s.so.1\nlibm.so.6'
+    base_expected_needed=$'libc.so.6\nlibdbus-1.so.3\nlibgcc_s.so.1\nlibm.so.6'
     ;;
   verifier)
-    expected_needed_text=$'libc.so.6\nlibgcc_s.so.1'
+    base_expected_needed=$'libc.so.6\nlibgcc_s.so.1'
     ;;
   *) usage ;;
 esac
-readonly expected_needed_text
+readonly base_expected_needed
 
 case "$target" in
   x86_64-unknown-linux-gnu)
     expected_machine="Advanced Micro Devices X86-64"
     expected_interpreter="/lib64/ld-linux-x86-64.so.2"
+    expected_loader_needed="ld-linux-x86-64.so.2"
     ;;
   aarch64-unknown-linux-gnu)
     expected_machine="AArch64"
     expected_interpreter="/lib/ld-linux-aarch64.so.1"
+    expected_loader_needed="ld-linux-aarch64.so.1"
     ;;
   *)
     printf 'unsupported Linux ELF target: %s\n' "$target" >&2
     exit 64
     ;;
 esac
-readonly expected_machine expected_interpreter
+readonly expected_machine expected_interpreter expected_loader_needed
+expected_needed_text=$(
+  printf '%s\n%s\n' "$expected_loader_needed" "$base_expected_needed" |
+    LC_ALL=C sort -u
+)
+readonly expected_needed_text
 
 machine=$(readelf -h -- "$binary" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')
 interpreter=$(readelf -l -- "$binary" |

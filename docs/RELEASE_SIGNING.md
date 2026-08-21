@@ -38,7 +38,8 @@ manifest are covered by GitHub artifact attestations. Public smoke verifies
 every attestation and the complete asset boundary before executing the product
 and verifier for its target. Linux candidate and public-archive smoke also
 enforce the declared glibc 2.34 symbol ceiling, target interpreter, and exact
-product/verifier `DT_NEEDED` allowlists before execution.
+product/verifier `DT_NEEDED` allowlists—including the architecture's dynamic
+loader—before execution.
 
 Before the standalone verifier runs, each protected candidate build invokes
 `heyfood agent describe --schema-version 2`, requires the closed v2 manifest,

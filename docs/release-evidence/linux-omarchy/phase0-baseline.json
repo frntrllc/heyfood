@@ -34,6 +34,7 @@
       "x86_64-unknown-linux-gnu"
     ],
     "maximum_glibc": "2.34",
+    "dynamic_loader_is_needed": true,
     "musl": "deferred",
     "voice": "deferred",
     "clipboard_product_feature": "deferred",
