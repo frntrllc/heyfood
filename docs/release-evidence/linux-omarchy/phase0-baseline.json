@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-08-20",
+  "authority": {
+    "plan_repository": "frntrllc/hellofood",
+    "plan_commit": "bf0c703d08da1507458cde4942f7a204bdda9f16",
+    "execution_issue": "https://github.com/frntrllc/heyfood/issues/84"
+  },
+  "source_baseline": {
+    "repository": "frntrllc/heyfood",
+    "reviewed_main": "8de41393c7f8324417688611800d8c7db716c08f",
+    "version": "0.9.0"
+  },
+  "public_release_baseline": {
+    "tag": "v0.9.0",
+    "source_commit": "1bb155fdfae7146fbc7d0f02e87e82468ccd949a",
+    "published_at": "2026-08-08T18:01:01Z",
+    "immutable": true,
+    "sha256sums_sha256": "291b0c7d4bd22beff33c3074e1aa62ef5bf635372837c8c3859af9e080af1525",
+    "linux": {
+      "aarch64-unknown-linux-gnu": {
+        "product_sha256": "ed09da75d2a02c0795430cb28856f2d36e99d2ddb7d49b07db5fb3623e52a42b",
+        "verifier_sha256": "cdf16405b1f806eddc57f43301b69b17d77fc4af6400540260f9d4e65aaec08b"
+      },
+      "x86_64-unknown-linux-gnu": {
+        "product_sha256": "4689a8797270e0873b116ef174a2d58b409ba26f8858b83e201b3ec38c441788",
+        "verifier_sha256": "b65bfed29c57ea30b219ab053cdf0bea07582625ce5da97f2cac8be165e03371"
+      }
+    }
+  },
+  "locked_boundaries": {
+    "linux_targets": [
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-gnu"
+    ],
+    "maximum_glibc": "2.34",
+    "musl": "deferred",
+    "voice": "deferred",
+    "clipboard_product_feature": "deferred",
+    "authentication": "device_authorization",
+    "native_credentials": "secret_service_fail_closed",
+    "file_credentials": "explicit_opt_in_only",
+    "aur_package": "heyfood-bin"
+  },
+  "existing_work": {
+    "native_linux_builds": true,
+    "linux_release_archives": true,
+    "hosted_linux_installer": true,
+    "public_linux_smoke": true
+  },
+  "new_work": {
+    "elf_abi_and_dependency_gates": "in_progress",
+    "terminal_palette_roles": "in_progress",
+    "aur_package": "not_started",
+    "omarchy_exact_artifact_qualification": "not_started",
+    "omarchy_documentation": "not_started",
+    "xdg_and_credential_matrix": "not_started"
+  },
+  "ownership": {
+    "implementation_issue_assignee": "justinhambleton",
+    "aur_maintainer": null,
+    "aur_co_maintainer": null,
+    "protected_environment_owner": null,
+    "incident_owner": null
+  },
+  "phase0_complete": false,
+  "phase0_blocker": "Named AUR maintainer, co-maintainer, protected-environment owner, and incident owner are required before protected AUR publication is enabled."
+}

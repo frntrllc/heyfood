@@ -1200,17 +1200,17 @@ dependency qualification. GA documentation must not claim them early.
 
 - macOS 13 or newer on Apple Silicon and Intel. Both architectures receive a
   real-hardware RC smoke; cross-compilation alone is insufficient.
-- Linux glibc 2.28 or newer, built on a controlled AlmaLinux 8/manylinux-class
-  baseline, for x86-64 and ARM64. Both architectures receive real-hardware
-  install, auth, TUI, keyring/fallback, and typed-turn smoke.
+- Linux glibc 2.34 or newer, built natively for x86-64 and ARM64. Both
+  architectures receive installed-artifact, auth, TUI, and credential smoke;
+  exact ELF symbol and runtime-library boundaries are release gates.
 - Windows 11 23H2 or newer and Windows Server 2022 or newer on x86-64, using
   ConPTY where available and documented classic fallback otherwise.
 - Standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` behavior plus the
   explicit `HEYFOOD_CA_BUNDLE` path are qualified on every platform.
-- Linux native voice documents its ALSA/Pulse/PipeWire runtime bridge and Linux
-  Secret Service documents its D-Bus/session requirement. Missing services
-  produce bounded browser/typed and owner-only credential fallbacks rather than
-  a hang or misleading support claim.
+- Native voice is excluded from the default Linux artifact. Linux Secret
+  Service documents its D-Bus/session requirement; missing native credential
+  services fail closed, while owner-only file storage remains a separate,
+  explicit opt-in rather than an automatic fallback.
 
 ### Canonical installation
 

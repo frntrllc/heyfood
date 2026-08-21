@@ -36,7 +36,9 @@ The Linux archives do not require a platform code-signing identity. The exact
 bytes of all eight archives, the declaration, and the canonical `SHA256SUMS`
 manifest are covered by GitHub artifact attestations. Public smoke verifies
 every attestation and the complete asset boundary before executing the product
-and verifier for its target.
+and verifier for its target. Linux candidate and public-archive smoke also
+enforce the declared glibc 2.34 symbol ceiling, target interpreter, and exact
+product/verifier `DT_NEEDED` allowlists before execution.
 
 Before the standalone verifier runs, each protected candidate build invokes
 `heyfood agent describe --schema-version 2`, requires the closed v2 manifest,

@@ -23,7 +23,7 @@ specific `capability_deferred`.
 | Windows x86-64 | Deferred | Windows distribution and Windows CI are outside the v0.9.0 release train. The retained Windows source is not a support claim. |
 | v0.9.0 release asset set | Supported | Exactly four product archives, four matching standalone-verifier archives, one canonical native-state declaration, and `SHA256SUMS`; every asset is attested and verified again after public download. |
 | macOS v0.9.0 archives | Supported | The product and verifier executables for both architectures are Developer ID signed with hardened runtime, Apple notarized, attested, and installed-artifact qualified. |
-| Linux v0.9.0 archives | Supported | The product and verifier archives for both architectures are checksum verified, attested, and installed-artifact qualified. |
+| Linux v0.9.0 archives | Supported | The GNU product and verifier archives for both architectures are checksum verified, attested, and installed-artifact qualified. The declared runtime floor is glibc 2.34; default credentials use Secret Service and the owner-only file store is an explicit opt-in, never an automatic fallback. |
 | Current native release | v0.9.0 | Supported on the four macOS/Linux targets listed above. |
 
 ## Product capabilities
